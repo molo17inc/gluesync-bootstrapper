@@ -15,7 +15,7 @@ deploy:
 
     - apk add --no-cache bash
 
-    - docker build -t ${DOCKER_REGISTRY}/${APP_NAME}:latest ./commons/test_suite/
+    - docker build -t ${DOCKER_REGISTRY}/${APP_NAME}:latest .
 
     - docker login -u danieleangeli -p "$CI_REGISTRY_PASSWORD"
     - docker push "${DOCKER_REGISTRY}/${APP_NAME}:latest"
