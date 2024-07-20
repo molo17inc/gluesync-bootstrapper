@@ -1,0 +1,21 @@
+stages:
+  - deploy
+
+deploy:
+  stage: deploy
+  image: docker:latest
+  # rules:
+  #   - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_TAG != /^tag-/'
+  services:
+    - name: docker:dind
+      variables:
+        DOCKER_TLS_CERTDIR: ""
+  script:
+    - echo "Building & deploying started..."
+
+    - apk add --no-cache bash
+
+    - docker build -t ${DOCKER_REGISTRY}/${APP_NAME}:latest ./commons/test_suite/
+
+    - docker login -u danieleangeli -p "$CI_REGISTRY_PASSWORD"
+    - docker push "${DOCKER_REGISTRY}/${APP_NAME}:latest"
