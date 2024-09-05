@@ -107,7 +107,7 @@ def create_source_entity(token, pipeline_id, agent_id, schema, table, columns):
     return fetch_core_hub(f"/pipelines/{pipeline_id}/agents/{agent_id}/config/entities", method="PUT", token=token, body=entity_data)
 
 def create_target_entity(token, pipeline_id, agent_id, schema, table, columns, source_agent_id, target_type):
-    entity_type = "NoSqlEntity" if target_type.lower() == "nosql" else "SqlEntity"
+    entity_type = "NoSqlEntity" if target_type.lower() == "nosql" else "SingleTable"
     
     entity_data = {
         "entities": [
