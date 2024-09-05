@@ -9,7 +9,7 @@ from urllib.parse import urlencode, quote
 CORE_HUB_URL = os.getenv('CORE_HUB_URL', 'http://localhost:1717')
 DEFAULT_USER = os.getenv('DEFAULT_USER', 'admin')
 DEFAULT_PASSWORD = os.getenv('DEFAULT_PASSWORD', 'admin')
-ENTITY_START_TIMEOUT = int(os.getenv('ENTITY_START_TIMEOUT', '2'))
+ENTITY_START_TIMEOUT = int(os.getenv('ENTITY_START_TIMEOUT', '1'))
 
 def fetch_core_hub(path, method='GET', token=None, body=None, params=None):
     url = f"{CORE_HUB_URL}{path}"
@@ -97,10 +97,7 @@ def create_source_entity(token, pipeline_id, agent_id, schema, table, columns):
             }
         ],
         "customEntitiesProperties": {
-            f"{schema}.{table}": {
-                "usePartition": "false",
-                "maxConcurrentPartitionsPerSnapshot": "2"
-            }
+            f"{schema}.{table}": {}
         },
         "customTableProperties": {
             f"{schema}.{table}": {}
@@ -144,10 +141,7 @@ def create_target_entity(token, pipeline_id, agent_id, schema, table, columns, s
             }
         ],
         "customEntitiesProperties": {
-            f"{schema}.{table}": {
-                "usePartition": "false",
-                "maxConcurrentPartitionsPerSnapshot": "2"
-            }
+            f"{schema}.{table}": {}
         },
         "customTableProperties": {
             f"{schema}.{table}": {}
