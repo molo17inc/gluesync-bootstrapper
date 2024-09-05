@@ -2,7 +2,7 @@ import os
 import json
 import requests
 from faker import Faker
-from urllib.parse import urlencode
+from urllib.parse import urlencode, quote_plus
 import time
 import subprocess
 
@@ -44,6 +44,18 @@ def fetch_core_hub(path, method='GET', token=None, body=None):
     except json.JSONDecodeError:
         print(f"Non-JSON response from {url}: {response.text}")
         return response.text
+
+def get_entities(token, pipeline_id):
+    response = fetch_core_hub(f"/pipelines/{pipeline_id}/entities", token=token)
+    entities = []
+
+    if isinstance(response, list):
+        for item in response:
+            if isinstance(item, dict) and 'entityName' in item:
+                entities.append(item['entityName'])
+
+    print(f"Total entities found: {len(entities)}")
+    return entities
 
 def main():
     with open(file_conf_path, 'r') as file:
@@ -146,18 +158,16 @@ def main():
                 body={'configurationCompleted': True, 'name': fancy_names[0]}
         )
         
-        # Get entity names from SOURCE agent
-        source_agent = next((agent for agent in agents_to_conf if agent['agentType'] == 'SOURCE'), None)
-        if not source_agent:
-            raise Exception('No SOURCE agent found')
-        
-        entity_names = [entity['entityName'] for entity in source_agent['entities']]
+        # Get entities directly from the pipeline
+        entity_names = get_entities(token, pipeline_id)
         
         time.sleep(ENTITY_START_TIMEOUT)
 
         # Start pipeline entities with individual API calls for each entity
         for index, entity_name in enumerate(entity_names):
-            query_params = urlencode([('entity', entity_name)])
+            encoded_entity_name = quote_plus(entity_name)
+            encoded_entity_name = encoded_entity_name.replace(".", "%2E")
+            query_params = f"entity={encoded_entity_name}"
             fetch_core_hub(
                 f"/pipelines/{pipeline_id}/commands/sync/start?withSnapshot=true&{query_params}",
                 method='POST',
@@ -169,17 +179,6 @@ def main():
             if index < len(entity_names) - 1:
                 print(f"Waiting for {ENTITY_START_TIMEOUT} seconds before starting the next entity...")
                 time.sleep(ENTITY_START_TIMEOUT)
-
-        # SINGLE CALL COMMAND - NOT WORKING YET DUE TO https://molo17.atlassian.net/browse/GS2-292
-        # # Prepare query parameters
-        # query_params = urlencode([('entity', name) for name in entity_names], doseq=True)
-        
-        # # Start pipeline entities with correct entity names
-        # fetch_core_hub(
-        #     f"/pipelines/{pipeline_id}/commands/sync/start?withSnapshot=true&{query_params}",
-        #     method='POST',
-        #     token=token
-        # )
 
     except Exception as error:
         print(f"Error: {error}")
