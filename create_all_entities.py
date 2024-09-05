@@ -121,6 +121,10 @@ def create_target_entity(token, pipeline_id, agent_id, schema, table, columns, s
                     "scope": schema,
                     "collection": table
                 },
+                "table": {
+                    "schema": schema,
+                    "name": table
+                },
                 "columns": [
                     {
                         "name": col["name"],
