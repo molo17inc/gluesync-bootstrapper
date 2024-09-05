@@ -162,12 +162,12 @@ def main():
                 token=token,
                 body={'configurationCompleted': True, 'name': fancy_names[0]}
         )
+
+        time.sleep(5)
         
         # Get entities directly from the pipeline
         entity_names = get_entities(token, pipeline_id)
         
-        time.sleep(ENTITY_START_TIMEOUT)
-
         # Start pipeline entities with individual API calls for each entity
         for index, entity_name in enumerate(entity_names):
             encoded_entity_name = quote_plus(entity_name)
