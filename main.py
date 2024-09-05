@@ -4,6 +4,7 @@ import requests
 from faker import Faker
 from urllib.parse import urlencode
 import time
+import subprocess
 
 fake = Faker()
 
@@ -13,6 +14,8 @@ core_hub_url = os.getenv('CORE_HUB_URL', 'http://localhost:1717')
 default_user = 'admin'
 default_password = 'admin'
 user_defined_password = os.getenv('DEFAULT_PASSWORD', default_password)
+create_entities_from_schema = os.getenv('CREATE_ENTITIES_FROM_SCHEMA')
+target_type = os.getenv('TARGET_TYPE', 'NoSQL')
 
 ENTITY_START_TIMEOUT = 5  # Timeout in seconds between entity start calls
 
@@ -116,6 +119,24 @@ def main():
                 token=token,
                 body={'entities': agent['entities']}
             )
+
+        if create_entities_from_schema:
+            # Use create_entities_from_schema as the schema name
+            schema_name = create_entities_from_schema
+
+            # Invoke the entity creation script
+            entity_creation_script = 'create_all_entities.py' 
+            try:
+                subprocess.run([
+                    'python',
+                    entity_creation_script,
+                    '--pipeline', pipeline_id,
+                    '--schema', schema_name,
+                    '--target-type', target_type
+                ], check=True)
+                print(f"Entity creation completed for pipeline {pipeline_id}, schema {schema_name}, target type {target_type}")
+            except subprocess.CalledProcessError as e:
+                print(f"Error running entity creation script: {e}")
 
         # Set pipeline as ready (exiting from Draft status)
         fetch_core_hub(
