@@ -55,6 +55,11 @@ def get_entities(token, pipeline_id):
                 entities.append(item['entityName'])
 
     print(f"Total entities found: {len(entities)}")
+
+    print(f"Retrieved entities for pipeline {pipeline_id}:")
+    for entity in entities:
+        print(f"  - {entity}")
+
     return entities
 
 def main():
