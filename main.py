@@ -101,7 +101,6 @@ def main():
                 **agent,
                 'hostCredentials': conf_agent['hostCredentials'],
                 'specificConfiguration': conf_agent['specificConfiguration'],
-                'customHostCredentials': conf_agent['hostCredentialsCustomProperties'],
                 'entities': conf_agent['entities']
             }
             for conf_agent in conf_test['agents']
@@ -125,7 +124,6 @@ def main():
                 token=token,
                 body={
                     'hostCredentials': agent['hostCredentials'],
-                    'customHostCredentials': agent['hostCredentialsCustomProperties'],
                     'specificConfiguration': agent['specificConfiguration']
                 }
             )
