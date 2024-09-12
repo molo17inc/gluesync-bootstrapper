@@ -132,7 +132,7 @@ def main():
             {
                 **agent,
                 'hostCredentials': conf_agent['hostCredentials'],
-                'hostCredentialsCustomProperties': agent['hostCredentialsCustomProperties'],
+                'customHostCredentials': agent['hostCredentialsCustomProperties'],
                 'specificConfiguration': conf_agent['specificConfiguration'],
                 'entities': conf_agent['entities']
             }
@@ -157,7 +157,7 @@ def main():
                 token=token,
                 body={
                     'hostCredentials': agent['hostCredentials'],
-                    'hostCredentialsCustomProperties': agent['hostCredentialsCustomProperties'],
+                    'customHostCredentials': agent['customHostCredentials'],
                     'specificConfiguration': agent['specificConfiguration']
                 }
             )
