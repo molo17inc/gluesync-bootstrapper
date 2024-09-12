@@ -72,14 +72,22 @@ def get_entities(token, pipeline_id):
 
     if isinstance(response, list):
         for item in response:
-            if isinstance(item, dict) and 'entity' in item and 'entityName' in item['entity']:
-                entities.append(item['entity']['entityName'])
+            if isinstance(item, dict) and 'entityName' in item:
+                entity_name = item['entityName']
+                agents = item.get('agents', {})
+
+                for agent_id, config in agents.items():
+                    if 'entity' in config and 'entityName' in config['entity']:
+                        entities.append({
+                            'entityName': entity_name,
+                            'agentId': agent_id,
+                            'entityConfig': config['entity']
+                        })
 
     print(f"Total entities found: {len(entities)}")
 
-    print(f"Retrieved entities for pipeline {pipeline_id}:")
     for entity in entities:
-        print(f"  - {entity}")
+        print(f"  - Entity: {entity['entityName']}, Agent: {entity['agentId']}")
 
     return entities
 
