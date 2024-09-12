@@ -23,7 +23,7 @@ import os
 import json
 import requests
 from faker import Faker
-from urllib.parse import urlencode, quote_plus
+import urllib.parse
 import time
 import subprocess
 
@@ -42,6 +42,9 @@ ENTITY_START_TIMEOUT = 2  # Timeout in seconds between entity start calls
 
 def generate_fancy_names(length):
     return [fake.catch_phrase() for _ in range(length)]
+
+def safe_encode(s):
+    return urllib.parse.quote(s, safe='')
 
 def fetch_core_hub(path, method='GET', token=None, body=None):
     url = f"{core_hub_url}{path}"
@@ -75,7 +78,7 @@ def get_entities(token, pipeline_id):
             if isinstance(item, dict) and 'entityName' in item:
                 entity_name = item['entityName']
                 agents = item.get('agents', {})
-
+                
                 for agent_id, config in agents.items():
                     if 'entity' in config and 'entityName' in config['entity']:
                         entities.append({
@@ -85,7 +88,7 @@ def get_entities(token, pipeline_id):
                         })
 
     print(f"Total entities found: {len(entities)}")
-
+    
     for entity in entities:
         print(f"  - Entity: {entity['entityName']}, Agent: {entity['agentId']}")
 
@@ -182,8 +185,6 @@ def main():
             # Use create_entities_from_schema as the schema name
             schema_name = create_entities_from_schema
 
-            print(f"Invoking bulk entity creation script for schema: {schema_name}")
-
             # Invoke the entity creation script
             entity_creation_script = 'create_all_entities.py' 
             try:
@@ -198,8 +199,6 @@ def main():
             except subprocess.CalledProcessError as e:
                 print(f"Error running entity creation script: {e}")
 
-        print(f"Completing pipeline configuration for pipeline: {pipeline_id}")
-
         # Set pipeline as ready (exiting from Draft status)
         fetch_core_hub(
                 f"/pipelines/{pipeline_id}",
@@ -208,29 +207,27 @@ def main():
                 body={'configurationCompleted': True, 'name': fancy_names[0]}
         )
 
-        print(f"Pipeline configuration completed for pipeline: {pipeline_id}")
-
-        time.sleep(1)
+        time.sleep(5)
         
         # Get entities directly from the pipeline
-        entity_names = get_entities(token, pipeline_id)
+        entity_configs = get_entities(token, pipeline_id)
         
         # Start pipeline entities with individual API calls for each entity
-        for index, entity_name in enumerate(entity_names):
-            encoded_entity_name = quote_plus(entity_name)
-            encoded_entity_name = encoded_entity_name.replace(".", "%2E")
-            query_params = f"entity={encoded_entity_name}"
-            fetch_core_hub(
-                f"/pipelines/{pipeline_id}/commands/sync/start?withSnapshot=true&{query_params}",
-                method='POST',
-                token=token
-            )
-            print(f"Started sync for entity: {entity_name}")
-            
-            # Add timeout between entity start calls, except for the last one
-            if index < len(entity_names) - 1:
-                print(f"Waiting for {ENTITY_START_TIMEOUT} seconds before starting the next entity...")
+        for config in entity_configs:
+            try:
+                encoded_entity_name = safe_encode(config['entityName'])
+                
+                fetch_core_hub(
+                    f"/pipelines/{pipeline_id}/config/entities/{encoded_entity_name}/commands/start",
+                    method='POST',
+                    token=token,
+                    body={'withSnapshot': True}
+                )
+                print(f"Started sync for entity: {config['entityName']} on agent: {config['agentId']}")
+                
                 time.sleep(ENTITY_START_TIMEOUT)
+            except Exception as e:
+                print(f"Error starting sync for entity {config['entityName']}: {str(e)}")
 
     except Exception as error:
         print(f"Error: {error}")
