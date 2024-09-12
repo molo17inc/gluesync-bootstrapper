@@ -216,12 +216,12 @@ def main():
         for config in entity_configs:
             try:
                 encoded_entity_name = safe_encode(config['entityName'])
+                query_params = f"entity={encoded_entity_name}"
                 
                 fetch_core_hub(
-                    f"/pipelines/{pipeline_id}/entities/{encoded_entity_name}/commands/start",
+                    f"/pipelines/{pipeline_id}/commands/sync/start?withSnapshot=true&{query_params}",
                     method='POST',
-                    token=token,
-                    body={'withSnapshot': True}
+                    token=token
                 )
                 print(f"Started sync for entity: {config['entityName']} on agent: {config['agentId']}")
                 
