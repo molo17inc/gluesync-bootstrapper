@@ -38,7 +38,7 @@ user_defined_password = os.getenv('DEFAULT_PASSWORD', default_password)
 create_entities_from_schema = os.getenv('CREATE_ENTITIES_FROM_SCHEMA')
 target_type = os.getenv('TARGET_TYPE', 'NoSQL')
 
-ENTITY_START_TIMEOUT = 2  # Timeout in seconds between entity start calls
+ENTITY_START_TIMEOUT = 1  # Timeout in seconds between entity start calls
 
 def generate_fancy_names(length):
     return [fake.catch_phrase() for _ in range(length)]
@@ -207,7 +207,7 @@ def main():
                 body={'configurationCompleted': True, 'name': fancy_names[0]}
         )
 
-        time.sleep(5)
+        time.sleep(ENTITY_START_TIMEOUT)
         
         # Get entities directly from the pipeline
         entity_configs = get_entities(token, pipeline_id)
@@ -218,7 +218,7 @@ def main():
                 encoded_entity_name = safe_encode(config['entityName'])
                 
                 fetch_core_hub(
-                    f"/pipelines/{pipeline_id}/config/entities/{encoded_entity_name}/commands/start",
+                    f"/pipelines/{pipeline_id}/entities/{encoded_entity_name}/commands/start",
                     method='POST',
                     token=token,
                     body={'withSnapshot': True}
