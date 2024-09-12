@@ -67,7 +67,7 @@ def fetch_core_hub(path, method='GET', token=None, body=None):
         return response.text
 
 def get_entities(token, pipeline_id):
-    response = fetch_core_hub(f"/pipelines/{pipeline_id}/config/entities", token=token)
+    response = fetch_core_hub(f"/pipelines/{pipeline_id}/entities", token=token)
     entities = []
 
     if isinstance(response, list):
@@ -174,6 +174,8 @@ def main():
             # Use create_entities_from_schema as the schema name
             schema_name = create_entities_from_schema
 
+            print(f"Invoking bulk entity creation script for schema: {schema_name}")
+
             # Invoke the entity creation script
             entity_creation_script = 'create_all_entities.py' 
             try:
@@ -188,6 +190,8 @@ def main():
             except subprocess.CalledProcessError as e:
                 print(f"Error running entity creation script: {e}")
 
+        print(f"Completing pipeline configuration for pipeline: {pipeline_id}")
+
         # Set pipeline as ready (exiting from Draft status)
         fetch_core_hub(
                 f"/pipelines/{pipeline_id}",
@@ -196,7 +200,9 @@ def main():
                 body={'configurationCompleted': True, 'name': fancy_names[0]}
         )
 
-        time.sleep(5)
+        print(f"Pipeline configuration completed for pipeline: {pipeline_id}")
+
+        time.sleep(1)
         
         # Get entities directly from the pipeline
         entity_names = get_entities(token, pipeline_id)

@@ -173,13 +173,12 @@ def create_target_entity(token, pipeline_id, agent_id, schema, table, columns, s
     
     return fetch_core_hub(f"/pipelines/{pipeline_id}/config/entities", method="PUT", token=token, body=entity_data)
 
-def delete_entity(token, pipeline_id, entity_name):
-    return fetch_core_hub(f"/pipelines/{pipeline_id}/config/entities/{quote(entity_name)}", method="DELETE", token=token)
-
 def create_entity_on_both_sides(token, pipeline_id, source_agent_id, target_agent_id, schema, table, columns, target_type):
     source_response = create_source_entity(token, pipeline_id, source_agent_id, schema, table, columns)
     print(f"Source entity creation response: {source_response}")
     
+    time.sleep(ENTITY_START_TIMEOUT)
+
     if source_response is not None:
         target_response = create_target_entity(token, pipeline_id, target_agent_id, schema, table, columns, source_agent_id, target_type)
         print(f"Target entity creation response: {target_response}")
