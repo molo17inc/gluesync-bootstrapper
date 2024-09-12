@@ -67,13 +67,13 @@ def fetch_core_hub(path, method='GET', token=None, body=None):
         return response.text
 
 def get_entities(token, pipeline_id):
-    response = fetch_core_hub(f"/pipelines/{pipeline_id}/entities", token=token)
+    response = fetch_core_hub(f"/pipelines/{pipeline_id}/config/entities", token=token)
     entities = []
 
     if isinstance(response, list):
         for item in response:
-            if isinstance(item, dict) and 'entityName' in item:
-                entities.append(item['entityName'])
+            if isinstance(item, dict) and 'entity' in item and 'entityName' in item['entity']:
+                entities.append(item['entity']['entityName'])
 
     print(f"Total entities found: {len(entities)}")
 
@@ -153,11 +153,21 @@ def main():
 
         # Apply agent entities
         for agent in agents_to_conf:
+            entity_data = {
+                "entities": [
+                    {
+                        "agentId": agent['id'],
+                        "entity": entity,
+                        "customEntitiesProperties": {},
+                        "customTableProperties": {}
+                    } for entity in agent['entities']
+                ]
+            }
             fetch_core_hub(
-                f"/pipelines/{pipeline_id}/agents/{agent['id']}/config/entities",
+                f"/pipelines/{pipeline_id}/config/entities",
                 method='PUT',
                 token=token,
-                body={'entities': agent['entities']}
+                body=entity_data
             )
 
         if create_entities_from_schema:

@@ -89,43 +89,42 @@ def create_source_entity(token, pipeline_id, agent_id, schema, table, columns):
     entity_data = {
         "entities": [
             {
-                "type": "SingleTable",
-                "entityName": f"{schema}.{table}",
-                "entityType": {
-                    "type": "Source",
-                    "maxItemsCountPerIteration": 1000,
-                    "maxMigrationItemsCountPerIteration": 1000,
-                    "pollingIntervalMilliseconds": 100
+                "agentId": agent_id,
+                "entity": {
+                    "type": "SingleTable",
+                    "entityName": f"{schema}.{table}",
+                    "entityType": {
+                        "type": "Source",
+                        "maxItemsCountPerIteration": 1000,
+                        "maxMigrationItemsCountPerIteration": 1000,
+                        "pollingIntervalMilliseconds": 100
+                    },
+                    "table": {
+                        "name": table,
+                        "schema": schema
+                    },
+                    "columns": [
+                        {
+                            "name": col["name"],
+                            "alias": col["name"],
+                            "type": col["type"]
+                        } for col in columns["columns"]
+                    ],
+                    "keys": [
+                        {
+                            "name": col["name"],
+                            "alias": col["name"],
+                            "type": col["type"]
+                        } for col in columns["columns"] if col["isPrimaryKey"]
+                    ]
                 },
-                "table": {
-                    "name": table,
-                    "schema": schema
-                },
-                "columns": [
-                    {
-                        "name": col["name"],
-                        "alias": col["name"],
-                        "type": col["type"]
-                    } for col in columns["columns"]
-                ],
-                "keys": [
-                    {
-                        "name": col["name"],
-                        "alias": col["name"],
-                        "type": col["type"]
-                    } for col in columns["columns"] if col["isPrimaryKey"]
-                ]
+                "customEntitiesProperties": {},
+                "customTableProperties": {}
             }
-        ],
-        "customEntitiesProperties": {
-            f"{schema}.{table}": {}
-        },
-        "customTableProperties": {
-            f"{schema}.{table}": {}
-        }
+        ]
     }
     
-    return fetch_core_hub(f"/pipelines/{pipeline_id}/agents/{agent_id}/config/entities", method="PUT", token=token, body=entity_data)
+    return fetch_core_hub(f"/pipelines/{pipeline_id}/config/entities", method="PUT", token=token, body=entity_data)
 
 def create_target_entity(token, pipeline_id, agent_id, schema, table, columns, source_agent_id, target_type):
     entity_type = "NoSqlEntity" if target_type.lower() == "nosql" else "SingleTable"
@@ -133,47 +132,49 @@ def create_target_entity(token, pipeline_id, agent_id, schema, table, columns, s
     entity_data = {
         "entities": [
             {
-                "type": entity_type,
-                "entityName": f"{schema}.{table}",
-                "entityType": {
-                    "type": "Target"
+                "agentId": agent_id,
+                "entity": {
+                    "type": entity_type,
+                    "entityName": f"{schema}.{table}",
+                    "entityType": {
+                        "type": "Target"
+                    },
+                    "entityObject": {
+                        "scope": schema,
+                        "collection": table
+                    },
+                    "table": {
+                        "schema": schema,
+                        "name": table
+                    },
+                    "columns": [
+                        {
+                            "name": col["name"],
+                            "type": col["type"]
+                        } for col in columns["columns"]
+                    ],
+                    "keys": [
+                        {
+                            "name": col["name"],
+                            "type": col["type"]
+                        } for col in columns["columns"] if col["isPrimaryKey"]
+                    ],
+                    "sourceAgent": source_agent_id,
+                    "sourceTable": {
+                        "schema": schema,
+                        "name": table
+                    }
                 },
-                "entityObject": {
-                    "scope": schema,
-                    "collection": table
-                },
-                "table": {
-                    "schema": schema,
-                    "name": table
-                },
-                "columns": [
-                    {
-                        "name": col["name"],
-                        "type": col["type"]
-                    } for col in columns["columns"]
-                ],
-                "keys": [
-                    {
-                        "name": col["name"],
-                        "type": col["type"]
-                    } for col in columns["columns"] if col["isPrimaryKey"]
-                ],
-                "sourceAgent": source_agent_id,
-                "sourceTable": {
-                    "schema": schema,
-                    "name": table
-                }
+                "customEntitiesProperties": {},
+                "customTableProperties": {}
             }
-        ],
-        "customEntitiesProperties": {
-            f"{schema}.{table}": {}
-        },
-        "customTableProperties": {
-            f"{schema}.{table}": {}
-        }
+        ]
     }
     
-    return fetch_core_hub(f"/pipelines/{pipeline_id}/agents/{agent_id}/config/entities", method="PUT", token=token, body=entity_data)
+    return fetch_core_hub(f"/pipelines/{pipeline_id}/config/entities", method="PUT", token=token, body=entity_data)
+
+def delete_entity(token, pipeline_id, entity_name):
+    return fetch_core_hub(f"/pipelines/{pipeline_id}/config/entities/{quote(entity_name)}", method="DELETE", token=token)
 
 def create_entity_on_both_sides(token, pipeline_id, source_agent_id, target_agent_id, schema, table, columns, target_type):
     source_response = create_source_entity(token, pipeline_id, source_agent_id, schema, table, columns)
