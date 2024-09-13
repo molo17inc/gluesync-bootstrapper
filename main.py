@@ -157,9 +157,17 @@ def main():
                 token=token,
                 body={
                     'hostCredentials': agent['hostCredentials'],
-                    'customHostCredentials': agent['customHostCredentials'],
-                    'specificConfiguration': agent['specificConfiguration']
+                    'customHostCredentials': agent['customHostCredentials']
                 }
+            )
+        
+        # Apply agent specific configuration
+        for agent in agents_to_conf:
+            fetch_core_hub(
+                f"/pipelines/{pipeline_id}/agents/{agent['id']}/config/specific",
+                method='PUT',
+                token=token,
+                body=agent['specificConfiguration']
             )
 
         # Apply agent entities
