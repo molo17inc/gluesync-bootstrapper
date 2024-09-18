@@ -1,0 +1,18 @@
+#
+# USE THIS AS A LOCAL BOOTSTRAPPER FOR DEBUG LOCAL APIs/Services
+#
+services:
+  gluesync-bootstrapper:
+    # image: molo17/gluesync-bootstrapper
+    platform: linux/amd64
+    build: .
+    environment:
+      - FILE_CONF_PATH=/opt/custom-folder/config.json
+      - CORE_HUB_URL=http://host.docker.internal:1717
+      - DEFAULT_PASSWORD=admin
+      - CREATE_ENTITIES_FROM_SCHEMA=dbo
+      - TARGET_TYPE=NoSQL
+    volumes:
+      - ./example-config.json:/opt/custom-folder/config.json
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

@@ -1,162 +1,48 @@
 {
   "agents": [
     {
-      "agentTag": "mssql-ct",
       "agentType": "SOURCE",
+      "agentTag": "mssql-ct",
       "hostCredentials": {
         "connectionName": "MS SQL Server source",
-        "host": "mssql",
+        "host": "localhost",
         "port": 1433,
-        "username": "sa",
-        "password": "P@ssword123",
         "databaseName": "demo",
-        "additionalHosts": []
+        "username": "gluesync",
+        "password": "password",
+        "disableAuth": false,
+        "enableTls": false,
+        "trustServerCertificate": false,
+        "additionalHosts": [],
+        "maxConnectionsCount": 100
       },
+      "hostCredentialsCustomProperties": {},
       "specificConfiguration": {},
-      "entities": [
-        {
-          "entityName": "CUSTOMERS",
-          "entityType": {
-            "type": "Source",
-            "isActive": true
-          },
-          "type": "SingleTable",
-          "table": {
-            "schema": "dbo",
-            "name": "CUSTOMERS"
-          },
-          "columns": [
-            {
-              "name": "ID",
-              "type": "int",
-              "alias": "id"
-            },
-            {
-              "name": "NAME",
-              "type": "varchar(1000)"
-            },
-            {
-              "name": "SURNAME",
-              "type": "varchar(1000)"
-            },
-            {
-              "name": "ADDRESS",
-              "type": "varchar(1000)"
-            },
-            {
-              "name": "GENDER",
-              "type": "varchar(1000)"
-            },
-            {
-              "name": "PHONE",
-              "type": "varchar(1000)"
-            },
-            {
-              "name": "EMAIL",
-              "type": "varchar(1000)"
-            }
-          ],
-          "keys": [
-            {
-              "name": "id",
-              "type": "int",
-              "alias": "id"
-            }
-          ]
-        },
-        {
-          "entityName": "DRIVERS",
-          "entityType": {
-            "type": "Source",
-            "isActive": true
-          },
-          "type": "SingleTable",
-          "table": {
-            "schema": "dbo",
-            "name": "DRIVERS"
-          },
-          "columns": [
-            {
-              "name": "ID",
-              "type": "int",
-              "alias": "id"
-            },
-            {
-              "name": "FIRST_NAME",
-              "type": "varchar(1000)"
-            },
-            {
-              "name": "LAST_NAME",
-              "type": "varchar(1000)"
-            },
-            {
-              "name": "EMAIL",
-              "type": "varchar(1000)"
-            },
-            {
-              "name": "GENDER",
-              "type": "varchar(1000)"
-            },
-            {
-              "name": "DRIVING_LICENSE_ID",
-              "type": "varchar(1000)"
-            },
-            {
-              "name": "DRIVING_LICENSE_EXPIRE_DATE",
-              "type": "varchar(1000)"
-            }
-          ],
-          "keys": [
-            {
-              "name": "ID",
-              "type": "int",
-              "alias": "id"
-            }
-          ]
-        }
-      ]
+      "entitiesConfiguration": {},
+      "tablesConfiguration": {},
+      "entities": []
     },
     {
-      "agentTag": "couchbase",
       "agentType": "TARGET",
+      "agentTag": "couchbase",
       "hostCredentials": {
         "connectionName": "Couchbase target",
-        "host": "couchbase",
+        "host": "localhost",
         "port": 8091,
-        "username": "Administrator",
-        "password": "password",
         "databaseName": "demo",
-        "additionalHosts": []
+        "username": "gluesync",
+        "password": "password",
+        "disableAuth": false,
+        "enableTls": false,
+        "trustServerCertificate": false,
+        "additionalHosts": [],
+        "maxConnectionsCount": 100
       },
+      "hostCredentialsCustomProperties": {},
       "specificConfiguration": {},
-      "entities": [
-        {
-          "entityName": "CUSTOMERS",
-          "entityType": {
-            "type": "Target"
-          },
-          "type": "NoSqlEntity",
-          "entityObject": {
-            "scope": "dbo_scope",
-            "collection": "customers_collection"
-          },
-          "columns": [],
-          "keys": []
-        },
-        {
-          "entityName": "DRIVERS",
-          "entityType": {
-            "type": "Target"
-          },
-          "type": "NoSqlEntity",
-          "entityObject": {
-            "scope": "dbo_scope",
-            "collection": "drivers_collection"
-          },
-          "columns": [],
-          "keys": []
-        }
-      ]
+      "entitiesConfiguration": {},
+      "tablesConfiguration": {},
+      "entities": []
     }
   ]
 }
