@@ -24,6 +24,7 @@ import json
 import requests
 import argparse
 import time
+import uuid
 from urllib.parse import urlencode, quote
 
 # Environment variables with default values
@@ -31,6 +32,9 @@ CORE_HUB_URL = os.getenv('CORE_HUB_URL', 'http://localhost:1717')
 DEFAULT_USER = os.getenv('DEFAULT_USER', 'admin')
 DEFAULT_PASSWORD = os.getenv('DEFAULT_PASSWORD', 'admin')
 ENTITY_START_TIMEOUT = int(os.getenv('ENTITY_START_TIMEOUT', '1'))
+
+def generate_short_guid():
+    return str(uuid.uuid4()).split('-')[0]
 
 def fetch_core_hub(path, method='GET', token=None, body=None, params=None):
     url = f"{CORE_HUB_URL}{path}"
@@ -85,22 +89,27 @@ def get_table_columns(token, pipeline_id, agent_id, schema_name, table_name):
     params = {'tableschema': schema_name, 'tablename': table_name}
     return fetch_core_hub(f"/pipelines/{pipeline_id}/agents/{agent_id}/discovery/columns", token=token, params=params)
 
-def create_source_entity(token, pipeline_id, agent_id, schema, table, columns):
-    entity_data = {
-        "entities": [
-            {
-                "agentId": agent_id,
-                "entity": {
+def create_entities(token, pipeline_id, schema, tables, source_agent_id, target_agent_id, target_type):
+    entities = []
+    
+    for table in tables:
+        table_name = table["name"]
+        columns = get_table_columns(token, pipeline_id, source_agent_id, schema, table_name)
+        
+        entity = {
+            "entityName": f"{schema}.{table_name}",
+            "agentEntities": [
+                {
                     "type": "SingleTable",
-                    "entityName": f"{schema}.{table}",
                     "entityType": {
                         "type": "Source",
                         "maxItemsCountPerIteration": 1000,
                         "maxMigrationItemsCountPerIteration": 1000,
                         "pollingIntervalMilliseconds": 100
                     },
+                    "agentId": source_agent_id,
                     "table": {
-                        "name": table,
+                        "name": table_name,
                         "schema": schema
                     },
                     "columns": [
@@ -118,34 +127,19 @@ def create_source_entity(token, pipeline_id, agent_id, schema, table, columns):
                         } for col in columns["columns"] if col["isPrimaryKey"]
                     ]
                 },
-                "customEntitiesProperties": {},
-                "customTableProperties": {}
-            }
-        ]
-    }
-    
-    return fetch_core_hub(f"/pipelines/{pipeline_id}/config/entities", method="PUT", token=token, body=entity_data)
-
-def create_target_entity(token, pipeline_id, agent_id, schema, table, columns, source_agent_id, target_type):
-    entity_type = "NoSqlEntity" if target_type.lower() == "nosql" else "SingleTable"
-    
-    entity_data = {
-        "entities": [
-            {
-                "agentId": agent_id,
-                "entity": {
-                    "type": entity_type,
-                    "entityName": f"{schema}.{table}",
+                {
+                    "type": "NoSqlEntity" if target_type.lower() == "nosql" else "SingleTable",
                     "entityType": {
                         "type": "Target"
                     },
+                    "agentId": target_agent_id,
                     "entityObject": {
                         "scope": schema,
-                        "collection": table
+                        "collection": table_name
                     },
                     "table": {
                         "schema": schema,
-                        "name": table
+                        "name": table_name
                     },
                     "columns": [
                         {
@@ -162,29 +156,15 @@ def create_target_entity(token, pipeline_id, agent_id, schema, table, columns, s
                     "sourceAgent": source_agent_id,
                     "sourceTable": {
                         "schema": schema,
-                        "name": table
+                        "name": table_name
                     }
-                },
-                "customEntitiesProperties": {},
-                "customTableProperties": {}
-            }
-        ]
-    }
+                }
+            ]
+        }
+        entities.append(entity)
     
+    entity_data = {"entities": entities}
     return fetch_core_hub(f"/pipelines/{pipeline_id}/config/entities", method="PUT", token=token, body=entity_data)
-
-def create_entity_on_both_sides(token, pipeline_id, source_agent_id, target_agent_id, schema, table, columns, target_type):
-    source_response = create_source_entity(token, pipeline_id, source_agent_id, schema, table, columns)
-    print(f"Source entity creation response: {source_response}")
-    
-    time.sleep(ENTITY_START_TIMEOUT)
-
-    if source_response is not None:
-        target_response = create_target_entity(token, pipeline_id, target_agent_id, schema, table, columns, source_agent_id, target_type)
-        print(f"Target entity creation response: {target_response}")
-        return source_response, target_response
-    else:
-        return None, None
 
 def main(pipeline_id, schema_name, target_type):
     token = authenticate()
@@ -202,26 +182,13 @@ def main(pipeline_id, schema_name, target_type):
     # Get tables for the given schema
     tables = get_agent_tables(token, pipeline_id, source_agent['id'], schema_name)
     
-    for table in tables["tables"]:
-        table_name = table["name"]
-        print(f"Processing table: {table_name}")
-        
-        try:
-            # Get columns for the table
-            columns = get_table_columns(token, pipeline_id, source_agent['id'], schema_name, table_name)
-            
-            # Create entity for the table on both sides
-            source_response, target_response = create_entity_on_both_sides(token, pipeline_id, source_agent['id'], target_agent['id'], schema_name, table_name, columns, target_type)
-            
-            if source_response and target_response:
-                print(f"Entity created for table: {table_name} on both source and target")
-            else:
-                print(f"Failed to create entity for table: {table_name}")
-        except Exception as e:
-            print(f"Error processing table {table_name}: {str(e)}")
-        
-        print(f"Waiting for {ENTITY_START_TIMEOUT} seconds before processing the next entity...")
-        time.sleep(ENTITY_START_TIMEOUT)
+    # Create all entities in a single call
+    response = create_entities(token, pipeline_id, schema_name, tables["tables"], source_agent['id'], target_agent['id'], target_type)
+    
+    if response:
+        print(f"Entities created successfully for schema: {schema_name}")
+    else:
+        print(f"Failed to create entities for schema: {schema_name}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="GlueSync Entity Creation Script")

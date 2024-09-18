@@ -26,6 +26,7 @@ from faker import Faker
 import urllib.parse
 import time
 import subprocess
+import uuid
 
 fake = Faker()
 
@@ -45,6 +46,9 @@ def generate_fancy_names(length):
 
 def safe_encode(s):
     return urllib.parse.quote(s, safe='')
+
+def generate_short_guid():
+    return str(uuid.uuid4()).split('-')[0]
 
 def fetch_core_hub(path, method='GET', token=None, body=None):
     url = f"{core_hub_url}{path}"
@@ -93,6 +97,69 @@ def get_entities(token, pipeline_id):
         print(f"  - Entity: {entity['entityName']}, Agent: {entity['agentId']}")
 
     return entities
+
+def configure_entities(agents_to_conf, pipeline_id, token):
+    entities_payload = {"entities": []}
+
+    for agent in agents_to_conf:
+        for entity in agent['entities']:
+            entities_payload["entities"].append({
+                "entityName": entity["entityName"],
+                "agentEntities": [{
+                    "type": entity["type"],
+                    "entityType": entity["entityType"],
+                    "agentId": agent['id'],
+                    "customProperties": entity.get("customProperties", {}),
+                    "tablesProperties": entity.get("tablesProperties", {}),
+                    "table": entity.get("table", {}),
+                    "columns": entity.get("columns", []),
+                    "keys": entity.get("keys", [])
+                }]
+            })
+
+    # Send the consolidated payload to configure all entities at once
+    fetch_core_hub(
+        f"/pipelines/{pipeline_id}/config/entities",
+        method='PUT',
+        token=token,
+        body=entities_payload
+    )
+
+def get_entities(token, pipeline_id):
+    response = fetch_core_hub(f"/pipelines/{pipeline_id}/entities", token=token)
+    if not isinstance(response, list):
+        print(f"Unexpected response when fetching entities: {response}")
+        return []
+    return response
+
+def start_entity_syncs(token, pipeline_id):
+    entities = get_entities(token, pipeline_id)
+    print(f"Retrieved the following entities: {entities}")
+    
+    for entity_wrapper in entities:
+        entity = entity_wrapper.get('entity', {})
+        entityId = entity.get('entityId')
+        entityName = entity.get('entityName')
+        
+        if not entityId:
+            print(f"Skipping entity with no ID: {entity}")
+            continue
+        
+        try:
+            encoded_entity_id = safe_encode(entityId)
+            query_params = f"entity={encoded_entity_id}"
+            
+            response = fetch_core_hub(
+                f"/pipelines/{pipeline_id}/commands/sync/start?withSnapshot=true&{query_params}",
+                method='POST',
+                token=token
+            )
+            print(f"Started sync for entity: {entityName} (ID: {entityId})")
+            print(f"Response: {response}")
+            
+            time.sleep(ENTITY_START_TIMEOUT)
+        except Exception as e:
+            print(f"Error starting sync for entity {entityName} (ID: {entityId}): {str(e)}")
 
 def main():
     with open(file_conf_path, 'r') as file:
@@ -170,24 +237,7 @@ def main():
                 body=agent['specificConfiguration']
             )
 
-        # Apply agent entities
-        for agent in agents_to_conf:
-            entity_data = {
-                "entities": [
-                    {
-                        "agentId": agent['id'],
-                        "entity": entity,
-                        "customEntitiesProperties": {},
-                        "customTableProperties": {}
-                    } for entity in agent['entities']
-                ]
-            }
-            fetch_core_hub(
-                f"/pipelines/{pipeline_id}/config/entities",
-                method='PUT',
-                token=token,
-                body=entity_data
-            )
+        configure_entities(agents_to_conf, pipeline_id, token)
 
         if create_entities_from_schema:
             # Use create_entities_from_schema as the schema name
@@ -216,26 +266,8 @@ def main():
         )
 
         time.sleep(ENTITY_START_TIMEOUT)
-        
-        # Get entities directly from the pipeline
-        entity_configs = get_entities(token, pipeline_id)
-        
-        # Start pipeline entities with individual API calls for each entity
-        for config in entity_configs:
-            try:
-                encoded_entity_name = safe_encode(config['entityName'])
-                query_params = f"entity={encoded_entity_name}"
                 
-                fetch_core_hub(
-                    f"/pipelines/{pipeline_id}/commands/sync/start?withSnapshot=true&{query_params}",
-                    method='POST',
-                    token=token
-                )
-                print(f"Started sync for entity: {config['entityName']} on agent: {config['agentId']}")
-                
-                time.sleep(ENTITY_START_TIMEOUT)
-            except Exception as e:
-                print(f"Error starting sync for entity {config['entityName']}: {str(e)}")
+        start_entity_syncs(token, pipeline_id)
 
     except Exception as error:
         print(f"Error: {error}")
