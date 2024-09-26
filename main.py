@@ -230,12 +230,13 @@ def main():
         
         # Apply agent specific configuration
         for agent in agents_to_conf:
-            fetch_core_hub(
-                f"/pipelines/{pipeline_id}/agents/{agent['id']}/config/specific",
-                method='PUT',
-                token=token,
-                body=agent['specificConfiguration']
-            )
+            if agent['specificConfiguration']:
+                fetch_core_hub(
+                    f"/pipelines/{pipeline_id}/agents/{agent['id']}/config/specific",
+                    method='PUT',
+                    token=token,
+                    body=agent['specificConfiguration']
+                )
 
         configure_entities(agents_to_conf, pipeline_id, token)
 
