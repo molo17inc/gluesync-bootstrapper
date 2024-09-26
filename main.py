@@ -235,7 +235,7 @@ def main():
                     f"/pipelines/{pipeline_id}/agents/{agent['id']}/config/specific",
                     method='PUT',
                     token=token,
-                    body=agent['specificConfiguration']
+                    body={"configuration": agent['specificConfiguration']}
                 )
 
         configure_entities(agents_to_conf, pipeline_id, token)
