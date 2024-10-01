@@ -94,6 +94,12 @@ def create_entities(token, pipeline_id, schema, tables, source_agent_id, target_
     
     for table in tables:
         table_name = table["name"]
+
+        # Skip tables that start with "sys"
+        if table_name.startswith("sys"):
+            print(f"Skipping table: {table_name} (starts with 'sys')")
+            continue
+
         columns = get_table_columns(token, pipeline_id, source_agent_id, schema, table_name)
         
         entity = {
