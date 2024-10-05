@@ -26,6 +26,8 @@ import argparse
 import time
 import uuid
 from urllib.parse import urlencode, quote
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Environment variables with default values
 CORE_HUB_URL = os.getenv('CORE_HUB_URL', 'http://localhost:1717')

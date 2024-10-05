@@ -27,6 +27,8 @@ import urllib.parse
 import time
 import subprocess
 import uuid
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 fake = Faker()
 
