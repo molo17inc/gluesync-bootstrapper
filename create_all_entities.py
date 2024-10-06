@@ -27,13 +27,33 @@ import time
 import uuid
 from urllib.parse import urlencode, quote
 import urllib3
+import ssl
+from requests.adapters import HTTPAdapter
+from urllib3.util.ssl_ import create_urllib3_context
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Environment variables with default values
-CORE_HUB_URL = os.getenv('CORE_HUB_URL', 'http://localhost:1717')
+CORE_HUB_URL = os.getenv('CORE_HUB_URL', 'https://localhost:1717')
 DEFAULT_USER = os.getenv('DEFAULT_USER', 'admin')
 DEFAULT_PASSWORD = os.getenv('DEFAULT_PASSWORD', 'admin')
 ENTITY_START_TIMEOUT = int(os.getenv('ENTITY_START_TIMEOUT', '1'))
+
+class CustomHttpAdapter(HTTPAdapter):
+    def __init__(self, *args, **kwargs):
+        self.ssl_context = create_urllib3_context(
+            cert_reqs=ssl.CERT_NONE,
+            ssl_version=ssl.PROTOCOL_TLS
+        )
+        super().__init__(*args, **kwargs)
+
+    def init_poolmanager(self, *args, **kwargs):
+        kwargs['ssl_context'] = self.ssl_context
+        return super().init_poolmanager(*args, **kwargs)
+
+    def proxy_manager_for(self, *args, **kwargs):
+        kwargs['ssl_context'] = self.ssl_context
+        return super().proxy_manager_for(*args, **kwargs)
 
 def generate_short_guid():
     return str(uuid.uuid4()).split('-')[0]
@@ -51,7 +71,11 @@ def fetch_core_hub(path, method='GET', token=None, body=None, params=None):
     print(f"Body: {body}")
     print(f"Params: {params}")
 
-    response = requests.request(method, url, headers=headers, json=body, params=params)
+    session = requests.Session()
+    adapter = CustomHttpAdapter()
+    session.mount('https://', adapter)
+
+    response = session.request(method, url, headers=headers, json=body, params=params, verify=False)
 
     print(f"Response status code: {response.status_code}")
     print(f"Response content: {response.text}")

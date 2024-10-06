@@ -28,13 +28,17 @@ import time
 import subprocess
 import uuid
 import urllib3
+import ssl
+from requests.adapters import HTTPAdapter
+from urllib3.util.ssl_ import create_urllib3_context
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 fake = Faker()
 
 # Environment variables and constants
 file_conf_path = os.getenv('FILE_CONF_PATH', './config.json')
-core_hub_url = os.getenv('CORE_HUB_URL', 'http://localhost:1717')
+core_hub_url = os.getenv('CORE_HUB_URL', 'https://localhost:1717')
 default_user = 'admin'
 default_password = 'admin'
 user_defined_password = os.getenv('DEFAULT_PASSWORD', default_password)
@@ -42,6 +46,22 @@ create_entities_from_schema = os.getenv('CREATE_ENTITIES_FROM_SCHEMA')
 target_type = os.getenv('TARGET_TYPE', 'NoSQL')
 
 ENTITY_START_TIMEOUT = 1  # Timeout in seconds between entity start calls
+
+class CustomHttpAdapter(HTTPAdapter):
+    def __init__(self, *args, **kwargs):
+        self.ssl_context = create_urllib3_context(
+            cert_reqs=ssl.CERT_NONE,
+            ssl_version=ssl.PROTOCOL_TLS
+        )
+        super().__init__(*args, **kwargs)
+
+    def init_poolmanager(self, *args, **kwargs):
+        kwargs['ssl_context'] = self.ssl_context
+        return super().init_poolmanager(*args, **kwargs)
+
+    def proxy_manager_for(self, *args, **kwargs):
+        kwargs['ssl_context'] = self.ssl_context
+        return super().proxy_manager_for(*args, **kwargs)
 
 def generate_fancy_names(length):
     return [fake.catch_phrase() for _ in range(length)]
@@ -60,7 +80,12 @@ def fetch_core_hub(path, method='GET', token=None, body=None):
     }
 
     print(f"Loading: {url} with: {body}")
-    response = requests.request(method, url, headers=headers, json=body)
+    
+    session = requests.Session()
+    adapter = CustomHttpAdapter()
+    session.mount('https://', adapter)
+    
+    response = session.request(method, url, headers=headers, json=body, verify=False)
     
     if response.status_code < 200 or response.status_code >= 300:
         print(f"Request to {url} failed with status code {response.status_code}: {response.text}")
