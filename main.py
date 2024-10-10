@@ -103,22 +103,10 @@ def fetch_core_hub(path, method='GET', token=None, body=None):
 
 def get_entities(token, pipeline_id):
     response = fetch_core_hub(f"/pipelines/{pipeline_id}/entities", token=token)
-    entities = []
-
-    if isinstance(response, list):
-        for item in response:
-            if isinstance(item, dict) and 'entityName' in item and 'entityId' in item:
-                entities.append({
-                    'entityName': item['entityName'],
-                    'entityId': item['entityId']
-                })
-
-    print(f"Total entities found: {len(entities)}")
-    
-    for entity in entities:
-        print(f"  - Entity: {entity['entityName']}, ID: {entity['entityId']}")
-
-    return entities
+    if not isinstance(response, list):
+        print(f"Unexpected response when fetching entities: {response}")
+        return []
+    return response
 
 def configure_entities(agents_to_conf, pipeline_id, token):
     entities_payload = {"entities": []}
