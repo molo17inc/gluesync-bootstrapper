@@ -13,6 +13,7 @@ services:
       - CREATE_ENTITIES_FROM_SCHEMA=dbo
       - TARGET_TYPE=NoSQL
       - TARGET_SCHEMA=dbo
+      - ENTITY_START_TIMEOUT=4
     volumes:
       - ./example-config.json:/opt/custom-folder/config.json
     extra_hosts:
