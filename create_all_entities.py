@@ -115,7 +115,7 @@ def get_table_columns(token, pipeline_id, agent_id, schema_name, table_name):
     params = {'tableschema': schema_name, 'tablename': table_name}
     return fetch_core_hub(f"/pipelines/{pipeline_id}/agents/{agent_id}/discovery/columns", token=token, params=params)
 
-def create_entities(token, pipeline_id, schema, tables, source_agent_id, target_agent_id, target_type):
+def create_entities(token, pipeline_id, source_schema, target_schema, tables, source_agent_id, target_agent_id, target_type):
     entities = []
     
     for table in tables:
@@ -126,10 +126,10 @@ def create_entities(token, pipeline_id, schema, tables, source_agent_id, target_
             print(f"Skipping table: {table_name} (starts with 'sys')")
             continue
 
-        columns = get_table_columns(token, pipeline_id, source_agent_id, schema, table_name)
+        columns = get_table_columns(token, pipeline_id, source_agent_id, source_schema, table_name)
         
         entity = {
-            "entityName": f"{schema}.{table_name}",
+            "entityName": f"{source_schema}.{table_name}",
             "agentEntities": [
                 {
                     "type": "SingleTable",
@@ -142,7 +142,7 @@ def create_entities(token, pipeline_id, schema, tables, source_agent_id, target_
                     "agentId": source_agent_id,
                     "table": {
                         "name": table_name,
-                        "schema": schema
+                        "schema": source_schema
                     },
                     "columns": [
                         {
@@ -166,11 +166,11 @@ def create_entities(token, pipeline_id, schema, tables, source_agent_id, target_
                     },
                     "agentId": target_agent_id,
                     "entityObject": {
-                        "scope": schema,
+                        "scope": target_schema,
                         "collection": table_name
                     },
                     "table": {
-                        "schema": schema,
+                        "schema": target_schema,
                         "name": table_name
                     },
                     "columns": [
@@ -187,7 +187,7 @@ def create_entities(token, pipeline_id, schema, tables, source_agent_id, target_
                     ],
                     "sourceAgent": source_agent_id,
                     "sourceTable": {
-                        "schema": schema,
+                        "schema": source_schema,
                         "name": table_name
                     }
                 }
@@ -198,7 +198,7 @@ def create_entities(token, pipeline_id, schema, tables, source_agent_id, target_
     entity_data = {"entities": entities}
     return fetch_core_hub(f"/pipelines/{pipeline_id}/config/entities", method="PUT", token=token, body=entity_data)
 
-def main(pipeline_id, schema_name, target_type):
+def main(pipeline_id, source_schema, target_schema, target_type):
     token = authenticate()
     
     # Get pipeline agents
@@ -211,22 +211,23 @@ def main(pipeline_id, schema_name, target_type):
     if not source_agent or not target_agent:
         raise Exception("Could not find both source and target agents in the pipeline configuration")
     
-    # Get tables for the given schema
-    tables = get_agent_tables(token, pipeline_id, source_agent['id'], schema_name)
+    # Get tables for the given source schema
+    tables = get_agent_tables(token, pipeline_id, source_agent['id'], source_schema)
     
     # Create all entities in a single call
-    response = create_entities(token, pipeline_id, schema_name, tables["tables"], source_agent['id'], target_agent['id'], target_type)
+    response = create_entities(token, pipeline_id, source_schema, target_schema, tables["tables"], source_agent['id'], target_agent['id'], target_type)
     
     if response:
-        print(f"Entities created successfully for schema: {schema_name}")
+        print(f"Entities created successfully for source schema: {source_schema} and target schema: {target_schema}")
     else:
-        print(f"Failed to create entities for schema: {schema_name}")
+        print(f"Failed to create entities for source schema: {source_schema} and target schema: {target_schema}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="GlueSync Entity Creation Script")
     parser.add_argument('--pipeline', required=True, help="Pipeline ID")
-    parser.add_argument('--schema', required=True, help="Schema name")
+    parser.add_argument('--source-schema', required=True, help="Source schema name")
+    parser.add_argument('--target-schema', required=True, help="Target schema name")
     parser.add_argument('--target-type', required=True, choices=['SQL', 'NoSQL'], help="Target type (SQL or NoSQL)")
     args = parser.parse_args()
 
-    main(args.pipeline, args.schema, args.target_type)
+    main(args.pipeline, args.source_schema, args.target_schema, args.target_type)

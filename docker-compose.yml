@@ -12,6 +12,7 @@ services:
       - DEFAULT_PASSWORD=admin
       - CREATE_ENTITIES_FROM_SCHEMA=dbo
       - TARGET_TYPE=NoSQL
+      - TARGET_SCHEMA=dbo
     volumes:
       - ./example-config.json:/opt/custom-folder/config.json
     extra_hosts:

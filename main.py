@@ -43,6 +43,7 @@ default_user = 'admin'
 default_password = 'admin'
 user_defined_password = os.getenv('DEFAULT_PASSWORD', default_password)
 create_entities_from_schema = os.getenv('CREATE_ENTITIES_FROM_SCHEMA')
+target_schema = os.getenv('TARGET_SCHEMA')  # New environment variable for target schema
 target_type = os.getenv('TARGET_TYPE', 'NoSQL')
 
 ENTITY_START_TIMEOUT = 1  # Timeout in seconds between entity start calls
@@ -151,13 +152,6 @@ def configure_entities(agents_to_conf, pipeline_id, token):
         token=token,
         body=entities_payload
     )
-
-def get_entities(token, pipeline_id):
-    response = fetch_core_hub(f"/pipelines/{pipeline_id}/entities", token=token)
-    if not isinstance(response, list):
-        print(f"Unexpected response when fetching entities: {response}")
-        return []
-    return response
 
 def start_entity_syncs(token, pipeline_id):
     entities = get_entities(token, pipeline_id)
@@ -268,20 +262,29 @@ def main():
         configure_entities(agents_to_conf, pipeline_id, token)
 
         if create_entities_from_schema:
-            # Use create_entities_from_schema as the schema name
-            schema_name = create_entities_from_schema
+            # Use create_entities_from_schema as the source schema name
+            source_schema = create_entities_from_schema
 
             # Invoke the entity creation script
             entity_creation_script = 'create_all_entities.py' 
             try:
-                subprocess.run([
+                cmd = [
                     'python',
                     entity_creation_script,
                     '--pipeline', pipeline_id,
-                    '--schema', schema_name,
+                    '--source-schema', source_schema,
                     '--target-type', target_type
-                ], check=True)
-                print(f"Entity creation completed for pipeline {pipeline_id}, schema {schema_name}, target type {target_type}")
+                ]
+                
+                # Add target schema if provided
+                if target_schema:
+                    cmd.extend(['--target-schema', target_schema])
+                else:
+                    # If target_schema is not provided, use source_schema as target_schema
+                    cmd.extend(['--target-schema', source_schema])
+
+                subprocess.run(cmd, check=True)
+                print(f"Entity creation completed for pipeline {pipeline_id}, source schema {source_schema}, target schema {target_schema or source_schema}, target type {target_type}")
             except subprocess.CalledProcessError as e:
                 print(f"Error running entity creation script: {e}")
 
