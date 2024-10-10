@@ -1,6 +1,10 @@
 stages:
   - deploy
 
+default:
+  tags:
+    - gs-docker-performance-test
+
 deploy:
   stage: deploy
   image: docker:latest
