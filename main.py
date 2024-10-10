@@ -107,22 +107,16 @@ def get_entities(token, pipeline_id):
 
     if isinstance(response, list):
         for item in response:
-            if isinstance(item, dict) and 'entityName' in item:
-                entity_name = item['entityName']
-                agents = item.get('agents', {})
-                
-                for agent_id, config in agents.items():
-                    if 'entity' in config and 'entityName' in config['entity']:
-                        entities.append({
-                            'entityName': entity_name,
-                            'agentId': agent_id,
-                            'entityConfig': config['entity']
-                        })
+            if isinstance(item, dict) and 'entityName' in item and 'entityId' in item:
+                entities.append({
+                    'entityName': item['entityName'],
+                    'entityId': item['entityId']
+                })
 
     print(f"Total entities found: {len(entities)}")
     
     for entity in entities:
-        print(f"  - Entity: {entity['entityName']}, Agent: {entity['agentId']}")
+        print(f"  - Entity: {entity['entityName']}, ID: {entity['entityId']}")
 
     return entities
 
@@ -157,14 +151,9 @@ def start_entity_syncs(token, pipeline_id):
     entities = get_entities(token, pipeline_id)
     print(f"Retrieved the following entities: {entities}")
     
-    for entity_wrapper in entities:
-        entity = entity_wrapper.get('entity', {})
-        entityId = entity.get('entityId')
-        entityName = entity.get('entityName')
-        
-        if not entityId:
-            print(f"Skipping entity with no ID: {entity}")
-            continue
+    for entity in entities:
+        entityId = entity['entityId']
+        entityName = entity['entityName']
         
         try:
             encoded_entity_id = safe_encode(entityId)
