@@ -125,6 +125,8 @@ def map_data_type(source_type, source_node_info, target_node_info):
     # Normalize the source type (remove any size specifiers, e.g., varchar(255) -> varchar)
     normalized_source_type = source_type.split('(')[0].lower()
 
+    print(f"Mapping source type: {source_type} (normalized: {normalized_source_type})")
+
     # Special handling for some types
     if normalized_source_type == 'mediumblob':
         normalized_source_type = 'blob'
@@ -139,7 +141,8 @@ def map_data_type(source_type, source_node_info, target_node_info):
         return source_type
 
     source_gluesync_type = source_item['gluesyncDataType']
-    
+    print(f"Matched GlueSync data type: {source_gluesync_type}")
+
     # Find the corresponding target type
     target_item = next((item for item in target_matrix if item['gluesyncDataType'] == source_gluesync_type), None)
     
@@ -147,22 +150,27 @@ def map_data_type(source_type, source_node_info, target_node_info):
         # Check if there's a direct match in supported types
         normalized_target_types = [t.lower() for t in target_item['supportedTypes']]
         if normalized_source_type in normalized_target_types:
+            print(f"Direct match found: {source_type}")
             return source_type  # Use the original source type if it's supported in the target
         
         # Special handling for specific types
         if normalized_source_type == 'geometry':
-            # Check if 'geometry' is in any of the target's supported types
-            if any('geometry' in [t.lower() for t in item['supportedTypes']] for item in target_matrix):
-                return 'geometry'
-            else:
-                print(f"Warning: Target does not support geometry type. Mapping {source_type} to varchar.")
-                return 'varchar'
+            print(f"Mapping geometry type: {source_type} -> geometry")
+            return 'geometry'
         elif normalized_source_type in ['enum', 'set']:
-            return 'varchar'  # Map enum and set to varchar in the target
+            print(f"Mapping {normalized_source_type} to varchar")
+            return 'varchar'
         elif normalized_source_type == 'json':
-            return 'json' if 'json' in normalized_target_types else 'varchar'
+            mapped_type = 'json' if 'json' in normalized_target_types else 'varchar'
+            print(f"Mapping json to {mapped_type}")
+            return mapped_type
         elif normalized_source_type == 'bit':
-            return 'boolean' if 'boolean' in normalized_target_types else 'smallint'
+            mapped_type = 'boolean' if 'boolean' in normalized_target_types else 'smallint'
+            print(f"Mapping bit to {mapped_type}")
+            return mapped_type
+        elif normalized_source_type in ['tinyint', 'smallint', 'mediumint']:
+            print(f"Mapping {normalized_source_type} to int")
+            return 'int'
         
         # If no direct match, use the default type for this GlueSync data type in the target
         print(f"Mapping {source_type} to {target_item['defaultType']} (no direct match in target)")
@@ -176,6 +184,11 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
     
     source_node_info = get_node_info(token, pipeline_id, source_agent_id)
     target_node_info = get_node_info(token, pipeline_id, target_agent_id)
+    
+    print("Source Node Info:")
+    print(json.dumps(source_node_info, indent=2))
+    print("Target Node Info:")
+    print(json.dumps(target_node_info, indent=2))
     
     for table in tables:
         table_name = table["name"]
