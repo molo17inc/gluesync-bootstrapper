@@ -151,11 +151,16 @@ def map_data_type(source_type, source_node_info, target_node_info):
         
         # Special handling for specific types
         if normalized_source_type == 'geometry':
-            return 'geometry'  # Assuming target supports geometry type
+            # Check if 'geometry' is in any of the target's supported types
+            if any('geometry' in [t.lower() for t in item['supportedTypes']] for item in target_matrix):
+                return 'geometry'
+            else:
+                print(f"Warning: Target does not support geometry type. Mapping {source_type} to varchar.")
+                return 'varchar'
         elif normalized_source_type in ['enum', 'set']:
             return 'varchar'  # Map enum and set to varchar in the target
         elif normalized_source_type == 'json':
-            return 'json' if 'json' in normalized_target_types else 'text'
+            return 'json' if 'json' in normalized_target_types else 'varchar'
         elif normalized_source_type == 'bit':
             return 'boolean' if 'boolean' in normalized_target_types else 'smallint'
         
