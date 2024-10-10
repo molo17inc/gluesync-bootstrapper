@@ -115,8 +115,36 @@ def get_table_columns(token, pipeline_id, agent_id, schema_name, table_name):
     params = {'tableschema': schema_name, 'tablename': table_name}
     return fetch_core_hub(f"/pipelines/{pipeline_id}/agents/{agent_id}/discovery/columns", token=token, params=params)
 
+def get_node_info(token, pipeline_id, agent_id):
+    return fetch_core_hub(f"/pipelines/{pipeline_id}/agents/{agent_id}/discovery/node-info", token=token)
+
+def map_data_type(source_type, source_node_info, target_node_info):
+    source_matrix = source_node_info['dataTypesMatrix']
+    target_matrix = target_node_info['dataTypesMatrix']
+    
+    # Find the matching GlueSync data type for the source type
+    source_gluesync_type = next((item['gluesyncDataType'] for item in source_matrix if source_type in item['supportedTypes']), None)
+    
+    if not source_gluesync_type:
+        return source_type  # If no mapping found, return the original type
+    
+    # Find the corresponding target type
+    target_item = next((item for item in target_matrix if item['gluesyncDataType'] == source_gluesync_type), None)
+    
+    if target_item:
+        # Check if there's a direct match in supported types
+        if source_type in target_item['supportedTypes']:
+            return source_type
+        # Otherwise, return the default type for this GlueSync data type
+        return target_item['defaultType']
+    
+    return source_type  # If no mapping found, return the original type
+
 def create_entities(token, pipeline_id, source_schema, target_schema, tables, source_agent_id, target_agent_id, target_type):
     entities = []
+    
+    source_node_info = get_node_info(token, pipeline_id, source_agent_id)
+    target_node_info = get_node_info(token, pipeline_id, target_agent_id)
     
     for table in tables:
         table_name = table["name"]
@@ -127,7 +155,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             continue
 
         columns = get_table_columns(token, pipeline_id, source_agent_id, source_schema, table_name)
-        
+
         entity = {
             "entityName": f"{source_schema}.{table_name}",
             "agentEntities": [
@@ -176,13 +204,13 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     "columns": [
                         {
                             "name": col["name"],
-                            "type": col["type"]
+                            "type": map_data_type(col["type"], source_node_info, target_node_info)
                         } for col in columns["columns"]
                     ],
                     "keys": [
                         {
                             "name": col["name"],
-                            "type": col["type"]
+                            "type": map_data_type(col["type"], source_node_info, target_node_info)
                         } for col in columns["columns"] if col["isPrimaryKey"]
                     ],
                     "sourceAgent": source_agent_id,
