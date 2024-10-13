@@ -179,7 +179,11 @@ def map_data_type(source_type, source_node_info, target_node_info):
     print(f"Warning: No target mapping found for GlueSync type {source_gluesync_type}. Using source type {source_type} as is.")
     return source_type  # If no mapping found, return the original type
 
-def create_entities(token, pipeline_id, source_schema, target_schema, tables, source_agent_id, target_agent_id, target_type):
+def load_yaml_config(file_path):
+    with open(file_path, 'r') as file:
+        return yaml.safe_load(file)
+
+def create_entities(token, pipeline_id, source_schema, target_schema, tables, source_agent_id, target_agent_id, target_type, yaml_config):
     entities = []
     
     source_node_info = get_node_info(token, pipeline_id, source_agent_id)
@@ -190,15 +194,43 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
     print("Target Node Info:")
     print(json.dumps(target_node_info, indent=2))
     
+    schema_config = yaml_config.get('schemas', {}).get(source_schema, {})
+    yaml_target_schema = schema_config.get('target', target_schema)
+    blacklist = schema_config.get('tables', {}).get('blacklist', [])
+    custom_tables = schema_config.get('tables', {}).get('custom', [])
+    
     for table in tables:
         table_name = table["name"]
 
-        # Skip tables that start with "sys"
-        if table_name.startswith("sys"):
-            print(f"Skipping table: {table_name} (starts with 'sys')")
+        # Skip tables that start with "sys" or are in the blacklist
+        if table_name.startswith("sys") or table_name in blacklist:
+            print(f"Skipping table: {table_name}")
             continue
 
         columns = get_table_columns(token, pipeline_id, source_agent_id, source_schema, table_name)
+
+        # Check if this table has custom key configuration
+        custom_config = next((t for t in custom_tables if t['name'] == table_name), None)
+        
+        if custom_config and 'keys' in custom_config:
+            keys = []
+            for key_name in custom_config['keys']:
+                key_column = next((col for col in columns["columns"] if col["name"] == key_name), None)
+                if key_column:
+                    keys.append({
+                        "name": key_column["name"],
+                        "alias": key_column["name"],
+                        "type": key_column["type"]
+                    })
+        else:
+            # Fallback to default behavior if no custom configuration
+            keys = [
+                {
+                    "name": col["name"],
+                    "alias": col["name"],
+                    "type": col["type"]
+                } for col in columns["columns"] if col["isPrimaryKey"]
+            ]
 
         entity = {
             "entityName": f"{source_schema}.{table_name}",
@@ -223,13 +255,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             "type": col["type"]
                         } for col in columns["columns"]
                     ],
-                    "keys": [
-                        {
-                            "name": col["name"],
-                            "alias": col["name"],
-                            "type": col["type"]
-                        } for col in columns["columns"] if col["isPrimaryKey"]
-                    ]
+                    "keys": keys
                 },
                 {
                     "type": "NoSqlEntity" if target_type.lower() == "nosql" else "SingleTable",
@@ -238,11 +264,11 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     },
                     "agentId": target_agent_id,
                     "entityObject": {
-                        "scope": target_schema,
+                        "scope": yaml_target_schema,
                         "collection": table_name
                     },
                     "table": {
-                        "schema": target_schema,
+                        "schema": yaml_target_schema,
                         "name": table_name
                     },
                     "columns": [
@@ -253,9 +279,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     ],
                     "keys": [
                         {
-                            "name": col["name"],
-                            "type": map_data_type(col["type"], source_node_info, target_node_info)
-                        } for col in columns["columns"] if col["isPrimaryKey"]
+                            "name": key["name"],
+                            "type": map_data_type(key["type"], source_node_info, target_node_info)
+                        } for key in keys
                     ],
                     "sourceAgent": source_agent_id,
                     "sourceTable": {
@@ -270,8 +296,11 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
     entity_data = {"entities": entities}
     return fetch_core_hub(f"/pipelines/{pipeline_id}/config/entities", method="PUT", token=token, body=entity_data)
 
-def main(pipeline_id, source_schema, target_schema, target_type):
+def main(pipeline_id, source_schema, target_schema, target_type, yaml_file):
     token = authenticate()
+    
+    # Load YAML configuration
+    yaml_config = load_yaml_config(yaml_file) if yaml_file else {}
     
     # Get pipeline agents
     agents = get_pipeline_agents(token, pipeline_id)
@@ -287,7 +316,7 @@ def main(pipeline_id, source_schema, target_schema, target_type):
     tables = get_agent_tables(token, pipeline_id, source_agent['id'], source_schema)
     
     # Create all entities in a single call
-    response = create_entities(token, pipeline_id, source_schema, target_schema, tables["tables"], source_agent['id'], target_agent['id'], target_type)
+    response = create_entities(token, pipeline_id, source_schema, target_schema, tables["tables"], source_agent['id'], target_agent['id'], target_type, yaml_config)
     
     if response:
         print(f"Entities created successfully for source schema: {source_schema} and target schema: {target_schema}")
@@ -300,6 +329,7 @@ if __name__ == "__main__":
     parser.add_argument('--source-schema', required=True, help="Source schema name")
     parser.add_argument('--target-schema', required=True, help="Target schema name")
     parser.add_argument('--target-type', required=True, choices=['SQL', 'NoSQL'], help="Target type (SQL or NoSQL)")
+    parser.add_argument('--yaml-file', help="Path to the YAML configuration file")
     args = parser.parse_args()
 
-    main(args.pipeline, args.source_schema, args.target_schema, args.target_type)
+    main(args.pipeline, args.source_schema, args.target_schema, args.target_type, args.yaml_file)

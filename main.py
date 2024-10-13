@@ -43,8 +43,9 @@ default_user = 'admin'
 default_password = 'admin'
 user_defined_password = os.getenv('DEFAULT_PASSWORD', default_password)
 create_entities_from_schema = os.getenv('CREATE_ENTITIES_FROM_SCHEMA')
-target_schema = os.getenv('TARGET_SCHEMA')  # New environment variable for target schema
+target_schema = os.getenv('TARGET_SCHEMA')  # Environment variable for target schema
 target_type = os.getenv('TARGET_TYPE', 'NoSQL')
+TABLE_LIST_YAML = os.getenv('TABLE_LIST_YAML', 'TABLE_LIST.yaml')
 
 ENTITY_START_TIMEOUT = 1  # Timeout in seconds between entity start calls
 
@@ -272,6 +273,13 @@ def main():
                 else:
                     # If target_schema is not provided, use source_schema as target_schema
                     cmd.extend(['--target-schema', source_schema])
+
+                # Add TABLE_LIST.yaml file parameter if the file exists
+                if os.path.exists(TABLE_LIST_YAML):
+                    cmd.extend(['--yaml-file', TABLE_LIST_YAML])
+                    print(f"Using TABLE_LIST.yaml: {TABLE_LIST_YAML}")
+                else:
+                    print(f"TABLE_LIST.yaml not found at {TABLE_LIST_YAML}. Proceeding without it.")
 
                 subprocess.run(cmd, check=True)
                 print(f"Entity creation completed for pipeline {pipeline_id}, source schema {source_schema}, target schema {target_schema or source_schema}, target type {target_type}")

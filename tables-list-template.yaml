@@ -1,0 +1,11 @@
+schemas:
+  dbo:
+    target: public
+    tables:
+      whitelist:
+      blacklist:
+        - TABLE_TO_BE_SKIPPED
+      custom:
+        name: CUSTOMERS_NO_PKEY
+        keys: 
+          - ID
