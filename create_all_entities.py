@@ -238,6 +238,13 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         "alias": key_column["name"],
                         "type": key_column["type"]
                     })
+                else:
+                    print(f"Warning: Key {key_name} not found in columns for table {table_name}. Adding with unknown type.")
+                    keys.append({
+                        "name": key_name,
+                        "alias": key_name,
+                        "type": "unknown"
+                    })
         else:
             # Fallback to default behavior if no custom configuration
             keys = [
@@ -247,6 +254,12 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     "type": col["type"]
                 } for col in columns["columns"] if col.get("isPrimaryKey")
             ]
+
+        # For CUSTOMERS_NO_PKEY, ensure we're using the custom keys if specified
+        if table_name == "CUSTOMERS_NO_PKEY" and custom_config:
+            print(f"Applying custom configuration for CUSTOMERS_NO_PKEY: {custom_config}")
+            if 'keys' in custom_config:
+                keys = [{"name": key, "alias": key, "type": "unknown"} for key in custom_config['keys']]
 
         entity = {
             "entityName": f"{source_schema}.{table_name}",
