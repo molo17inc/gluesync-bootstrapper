@@ -204,8 +204,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
     
     schema_config = yaml_config.get('schemas', {}).get(source_schema, {})
     yaml_target_schema = schema_config.get('target', target_schema)
-    blacklist = schema_config.get('tables', {}).get('blacklist', [])
-    custom_tables = schema_config.get('tables', {}).get('custom', [])
+    blacklist = schema_config.get('tables', {}).get('blacklist', []) or []  # Use an empty list if blacklist is None
+    custom_tables = schema_config.get('tables', {}).get('custom', []) or []  # Use an empty list if custom is None
     
     for table in tables:
         table_name = table["name"]
