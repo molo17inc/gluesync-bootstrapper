@@ -28,6 +28,9 @@ ENV TABLE_LIST_YAML=${TABLE_LIST_YAML}
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Install PyYAML
+RUN pip install PyYAML
+
 # Copy the application code
 COPY . .
 
