@@ -31,8 +31,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the application code
 COPY . .
 
-# Copy the TABLE_LIST.yaml file into the container
-COPY TABLE_LIST.yaml ${TABLE_LIST_YAML}
-
 # Command to run the application
 CMD ["python", "main.py"]
