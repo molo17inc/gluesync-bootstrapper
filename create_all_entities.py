@@ -218,7 +218,10 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             print(f"Warning: Table without name encountered. Skipping.")
             continue
 
-        if table_name.startswith("sys") or table_name in blacklist or (whitelist and table_name not in whitelist):
+        # Check if table should be skipped
+        if (table_name.startswith("sys") or 
+            (blacklist and table_name in blacklist) or 
+            (whitelist and table_name not in whitelist)):
             print(f"Skipping table: {table_name}")
             continue
 
