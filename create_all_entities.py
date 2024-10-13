@@ -218,16 +218,15 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             print(f"Warning: Table without name encountered. Skipping.")
             continue
 
-        # Skip tables that start with "sys", are in the blacklist, or not in the whitelist (if whitelist is specified)
         if table_name.startswith("sys") or table_name in blacklist or (whitelist and table_name not in whitelist):
             print(f"Skipping table: {table_name}")
             continue
 
         columns = get_table_columns(token, pipeline_id, source_agent_id, source_schema, table_name)
 
-        # Check if this table has custom key configuration
         custom_config = custom_tables.get(table_name, {})
-        
+        print(f"Custom config for {table_name}: {custom_config}")
+
         if custom_config and 'keys' in custom_config:
             keys = []
             for key_name in custom_config['keys']:
@@ -246,7 +245,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         "type": "unknown"
                     })
         else:
-            # Fallback to default behavior if no custom configuration
             keys = [
                 {
                     "name": col["name"],
@@ -256,10 +254,20 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             ]
 
         # For CUSTOMERS_NO_PKEY, ensure we're using the custom keys if specified
-        if table_name == "CUSTOMERS_NO_PKEY" and custom_config:
-            print(f"Applying custom configuration for CUSTOMERS_NO_PKEY: {custom_config}")
-            if 'keys' in custom_config:
-                keys = [{"name": key, "alias": key, "type": "unknown"} for key in custom_config['keys']]
+        if table_name == "CUSTOMERS_NO_PKEY":
+            if custom_config and 'keys' in custom_config:
+                print(f"Applying custom keys for CUSTOMERS_NO_PKEY: {custom_config['keys']}")
+                keys = [
+                    {
+                        "name": key,
+                        "alias": key,
+                        "type": next((col["type"] for col in columns["columns"] if col["name"] == key), "unknown")
+                    } for key in custom_config['keys']
+                ]
+            else:
+                print("Warning: No custom keys specified for CUSTOMERS_NO_PKEY. Table will have no keys.")
+
+        print(f"Final keys for {table_name}: {keys}")
 
         entity = {
             "entityName": f"{source_schema}.{table_name}",
