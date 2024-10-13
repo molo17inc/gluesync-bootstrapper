@@ -30,6 +30,7 @@ import urllib3
 import ssl
 from requests.adapters import HTTPAdapter
 from urllib3.util.ssl_ import create_urllib3_context
+import yaml
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -180,8 +181,15 @@ def map_data_type(source_type, source_node_info, target_node_info):
     return source_type  # If no mapping found, return the original type
 
 def load_yaml_config(file_path):
-    with open(file_path, 'r') as file:
-        return yaml.safe_load(file)
+    try:
+        with open(file_path, 'r') as file:
+            return yaml.safe_load(file)
+    except FileNotFoundError:
+        print(f"YAML file not found at {file_path}. Proceeding without it.")
+        return {}
+    except yaml.YAMLError as e:
+        print(f"Error parsing YAML file: {e}. Proceeding without it.")
+        return {}
 
 def create_entities(token, pipeline_id, source_schema, target_schema, tables, source_agent_id, target_agent_id, target_type, yaml_config):
     entities = []
@@ -327,9 +335,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="GlueSync Entity Creation Script")
     parser.add_argument('--pipeline', required=True, help="Pipeline ID")
     parser.add_argument('--source-schema', required=True, help="Source schema name")
-    parser.add_argument('--target-schema', required=True, help="Target schema name")
-    parser.add_argument('--target-type', required=True, choices=['SQL', 'NoSQL'], help="Target type (SQL or NoSQL)")
-    parser.add_argument('--yaml-file', help="Path to the YAML configuration file")
-    args = parser.parse_args()
-
+    parser.add_argument('--target-schema', required=True, help="Target schema name")    
+    parser.add_argument('--target-type', required=True, choices=['SQL', 'NoSQL'], help="Target type (SQL or NoSQL)")    
+    parser.add_argument('--yaml-file', help="Path to the YAML configuration file")    
+    args = parser.parse_args()    
     main(args.pipeline, args.source_schema, args.target_schema, args.target_type, args.yaml_file)
