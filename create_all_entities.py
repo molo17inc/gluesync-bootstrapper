@@ -204,21 +204,29 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
     
     schema_config = yaml_config.get('schemas', {}).get(source_schema, {})
     yaml_target_schema = schema_config.get('target', target_schema)
-    blacklist = schema_config.get('tables', {}).get('blacklist', []) or []  # Use an empty list if blacklist is None
-    custom_tables = schema_config.get('tables', {}).get('custom', []) or []  # Use an empty list if custom is None
+    whitelist = schema_config.get('tables', {}).get('whitelist', [])
+    blacklist = schema_config.get('tables', {}).get('blacklist', [])
+    custom_tables = schema_config.get('tables', {}).get('custom', {})
+
+    print(f"Whitelist: {whitelist}")
+    print(f"Blacklist: {blacklist}")
+    print(f"Custom tables: {custom_tables}")
     
     for table in tables:
-        table_name = table["name"]
+        table_name = table.get("name")
+        if not table_name:
+            print(f"Warning: Table without name encountered. Skipping.")
+            continue
 
-        # Skip tables that start with "sys" or are in the blacklist
-        if table_name.startswith("sys") or table_name in blacklist:
+        # Skip tables that start with "sys", are in the blacklist, or not in the whitelist (if whitelist is specified)
+        if table_name.startswith("sys") or table_name in blacklist or (whitelist and table_name not in whitelist):
             print(f"Skipping table: {table_name}")
             continue
 
         columns = get_table_columns(token, pipeline_id, source_agent_id, source_schema, table_name)
 
         # Check if this table has custom key configuration
-        custom_config = next((t for t in custom_tables if t['name'] == table_name), None)
+        custom_config = custom_tables.get(table_name, {})
         
         if custom_config and 'keys' in custom_config:
             keys = []
@@ -237,7 +245,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     "name": col["name"],
                     "alias": col["name"],
                     "type": col["type"]
-                } for col in columns["columns"] if col["isPrimaryKey"]
+                } for col in columns["columns"] if col.get("isPrimaryKey")
             ]
 
         entity = {

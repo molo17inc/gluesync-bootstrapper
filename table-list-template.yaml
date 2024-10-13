@@ -6,6 +6,7 @@ schemas:
       blacklist:
         - TABLE_TO_BE_SKIPPED
       custom:
-        name: CUSTOMERS_NO_PKEY
-        keys: 
-          - ID
+        name: 
+          CUSTOMERS_NO_PKEY:
+            keys: 
+              - ID
