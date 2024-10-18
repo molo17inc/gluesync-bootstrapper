@@ -44,6 +44,7 @@ default_password = 'admin'
 user_defined_password = os.getenv('DEFAULT_PASSWORD', default_password)
 create_entities_from_schema = os.getenv('CREATE_ENTITIES_FROM_SCHEMA')
 target_schema = os.getenv('TARGET_SCHEMA')  # Environment variable for target schema
+source_type = os.getenv('SOURCE_TYPE', 'SQL')  # New environment variable for source type
 target_type = os.getenv('TARGET_TYPE', 'NoSQL')
 TABLE_LIST_YAML = os.getenv('TABLE_LIST_YAML', 'TABLE_LIST.yaml')
 
@@ -264,6 +265,7 @@ def main():
                     entity_creation_script,
                     '--pipeline', pipeline_id,
                     '--source-schema', source_schema,
+                    '--source-type', source_type,
                     '--target-type', target_type
                 ]
                 
@@ -282,7 +284,7 @@ def main():
                     print(f"TABLE_LIST.yaml not found at {TABLE_LIST_YAML}. Proceeding without it.")
 
                 subprocess.run(cmd, check=True)
-                print(f"Entity creation completed for pipeline {pipeline_id}, source schema {source_schema}, target schema {target_schema or source_schema}, target type {target_type}")
+                print(f"Entity creation completed for pipeline {pipeline_id}, source schema {source_schema}, target schema {target_schema or source_schema}, source type {source_type}, target type {target_type}")
             except subprocess.CalledProcessError as e:
                 print(f"Error running entity creation script: {e}")
 

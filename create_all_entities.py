@@ -191,7 +191,7 @@ def load_yaml_config(file_path):
         print(f"Error parsing YAML file: {e}. Proceeding without it.")
         return {}
 
-def create_entities(token, pipeline_id, source_schema, target_schema, tables, source_agent_id, target_agent_id, target_type, yaml_config):
+def create_entities(token, pipeline_id, source_schema, target_schema, tables, source_agent_id, target_agent_id, source_type, target_type, yaml_config):
     entities = []
     
     source_node_info = get_node_info(token, pipeline_id, source_agent_id)
@@ -276,7 +276,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             "entityName": f"{source_schema}.{table_name}",
             "agentEntities": [
                 {
-                    "type": "SingleTable",
+                    "type": "NoSqlEntity" if source_type.lower() == "nosql" else "SingleTable",
                     "entityType": {
                         "type": "Source",
                         "maxItemsCountPerIteration": 1000,
@@ -336,7 +336,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
     entity_data = {"entities": entities}
     return fetch_core_hub(f"/pipelines/{pipeline_id}/config/entities", method="PUT", token=token, body=entity_data)
 
-def main(pipeline_id, source_schema, target_schema, target_type, yaml_file):
+def main(pipeline_id, source_schema, target_schema, source_type, target_type, yaml_file):
     token = authenticate()
     
     # Load YAML configuration
@@ -356,7 +356,7 @@ def main(pipeline_id, source_schema, target_schema, target_type, yaml_file):
     tables = get_agent_tables(token, pipeline_id, source_agent['id'], source_schema)
     
     # Create all entities in a single call
-    response = create_entities(token, pipeline_id, source_schema, target_schema, tables["tables"], source_agent['id'], target_agent['id'], target_type, yaml_config)
+    response = create_entities(token, pipeline_id, source_schema, target_schema, tables["tables"], source_agent['id'], target_agent['id'], source_type, target_type, yaml_config)
     
     if response:
         print(f"Entities created successfully for source schema: {source_schema} and target schema: {target_schema}")
@@ -368,7 +368,8 @@ if __name__ == "__main__":
     parser.add_argument('--pipeline', required=True, help="Pipeline ID")
     parser.add_argument('--source-schema', required=True, help="Source schema name")
     parser.add_argument('--target-schema', required=True, help="Target schema name")    
+    parser.add_argument('--source-type', required=True, choices=['SQL', 'NoSQL'], help="Source type (SQL or NoSQL)")
     parser.add_argument('--target-type', required=True, choices=['SQL', 'NoSQL'], help="Target type (SQL or NoSQL)")    
     parser.add_argument('--yaml-file', help="Path to the YAML configuration file")    
     args = parser.parse_args()    
-    main(args.pipeline, args.source_schema, args.target_schema, args.target_type, args.yaml_file)
+    main(args.pipeline, args.source_schema, args.target_schema, args.source_type, args.target_type, args.yaml_file)
