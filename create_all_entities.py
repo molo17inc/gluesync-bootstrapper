@@ -284,6 +284,10 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         "pollingIntervalMilliseconds": 100
                     },
                     "agentId": source_agent_id,
+                    "entityObject": {
+                        "scope": source_schema,
+                        "collection": table_name
+                    },
                     "table": {
                         "name": table_name,
                         "schema": source_schema
