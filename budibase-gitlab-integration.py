@@ -50,7 +50,7 @@ def main(version):
                 'GSSOURCEVERSION': row.get('gluesyncSourceVersion', ''),
                 'GSTARGETVERSION': row.get('gluesyncTargetVersion', ''),
                 'GSCOREVERSION': row.get('gluesyncCoreHubVersion', ''),
-                'GSBOOTSTRAPPERVERSION': row.get('gluesyncBoostrapperVersion', ''),
+                'GSBOOTSTRAPPERVERSION': row.get('gluesyncBootstrapperVersion', ''),
                 'CI_PIPELINE_DESCRIPTION': row.get('nickname', ''),
                 'INTEGRATION_TEST_ID': row.get('_id', '')
             }
