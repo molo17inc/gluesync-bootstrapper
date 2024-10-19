@@ -50,8 +50,15 @@ def safe_encode(s):
 def generate_short_guid():
     return str(uuid.uuid4()).split('-')[0]
 
+def ensure_http_url(url):
+    if url.startswith('https://'):
+        return 'http://' + url[8:]
+    elif not url.startswith('http://'):
+        return 'http://' + url
+    return url
+
 def fetch_core_hub(path, method='GET', token=None, body=None):
-    url = f"{core_hub_url}{path}"
+    url = ensure_http_url(f"{core_hub_url}{path}")
     headers = {
         'Authorization': f'Bearer {token}' if token else None,
         'Content-Type': 'application/json'
