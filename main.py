@@ -76,69 +76,32 @@ def generate_short_guid():
     return str(uuid.uuid4()).split('-')[0]
 
 def fetch_core_hub(path, method='GET', token=None, body=None):
-    global core_hub_url  # Allow modification of the global variable
+    url = f"{core_hub_url}{path}"
+    headers = {
+        'Authorization': f'Bearer {token}' if token else None,
+        'Content-Type': 'application/json'
+    }
 
-    original_url = core_hub_url
-    urls_to_try = [original_url]
+    print(f"Loading: {url} with: {body}")
+    
+    session = requests.Session()
+    adapter = CustomHttpAdapter()
+    session.mount('https://', adapter)
+    
+    response = session.request(method, url, headers=headers, json=body, verify=False)
+    
+    if response.status_code < 200 or response.status_code >= 300:
+        print(f"Request to {url} failed with status code {response.status_code}: {response.text}")
+        raise Exception(f"Request to {url} failed with status code {response.status_code}: {response.text}")
+    
+    if response.status_code == 202 and not response.content:
+        return {}
 
-    if original_url.startswith('https://'):
-        http_url = original_url.replace('https://', 'http://', 1)
-        urls_to_try.append(http_url)
-
-    for url in urls_to_try:
-        full_url = f"{url}{path}"
-        headers = {
-            'Authorization': f'Bearer {token}' if token else None,
-            'Content-Type': 'application/json'
-        }
-
-        print(f"Attempting request to: {full_url} with: {body}")
-
-        session = requests.Session()
-        adapter = CustomHttpAdapter()
-        session.mount('https://', adapter)
-
-        try:
-            response = session.request(method, full_url, headers=headers, json=body, verify=False, timeout=10)
-
-            if response.status_code < 200 or response.status_code >= 300:
-                print(f"Request to {full_url} failed with status code {response.status_code}: {response.text}")
-                if url == original_url:
-                    continue  # Try the next URL if available
-                else:
-                    raise Exception(f"Request to {full_url} failed with status code {response.status_code}: {response.text}")
-
-            if url != original_url:
-                print(f"Successfully connected using {url}. Updating core_hub_url.")
-                core_hub_url = url  # Update the global variable for future requests
-
-            if response.status_code == 202 and not response.content:
-                return {}
-
-            try:
-                return response.json()
-            except json.JSONDecodeError:
-                print(f"Non-JSON response from {full_url}: {response.text}")
-                return response.text
-
-        except requests.exceptions.SSLError as ssl_err:
-            print(f"SSL error occurred with {full_url}: {str(ssl_err)}")
-            if url == original_url:
-                print("Falling back to HTTP...")
-                continue  # Try the HTTP URL
-            else:
-                print("SSL error occurred with fallback HTTP URL. Unable to proceed.")
-                raise Exception(f"SSL error: {str(ssl_err)}")
-
-        except requests.exceptions.RequestException as e:
-            print(f"Request to {full_url} failed: {str(e)}")
-            if url == original_url:
-                continue  # Try the next URL if available
-            else:
-                raise Exception(f"Request failed: {str(e)}")
-
-    print("All connection attempts failed.")
-    raise Exception("Failed to connect to Core Hub")
+    try:
+        return response.json()
+    except json.JSONDecodeError:
+        print(f"Non-JSON response from {url}: {response.text}")
+        return response.text
 
 def get_entities(token, pipeline_id):
     response = fetch_core_hub(f"/pipelines/{pipeline_id}/entities", token=token)

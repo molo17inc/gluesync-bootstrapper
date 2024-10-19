@@ -60,69 +60,35 @@ def generate_short_guid():
     return str(uuid.uuid4()).split('-')[0]
 
 def fetch_core_hub(path, method='GET', token=None, body=None, params=None):
-    global CORE_HUB_URL  # Allow modification of the global variable
+    url = f"{CORE_HUB_URL}{path}"
+    headers = {
+        'Authorization': f'Bearer {token}' if token else None,
+        'Content-Type': 'application/json'
+    }
 
-    original_url = CORE_HUB_URL
-    urls_to_try = [original_url]
+    print(f"Sending request to: {url}")
+    print(f"Method: {method}")
+    print(f"Headers: {headers}")
+    print(f"Body: {body}")
+    print(f"Params: {params}")
 
-    if original_url.startswith('https://'):
-        http_url = original_url.replace('https://', 'http://', 1)
-        urls_to_try.append(http_url)
+    session = requests.Session()
+    adapter = CustomHttpAdapter()
+    session.mount('https://', adapter)
 
-    for url in urls_to_try:
-        full_url = f"{url}{path}"
-        headers = {
-            'Authorization': f'Bearer {token}' if token else None,
-            'Content-Type': 'application/json'
-        }
+    response = session.request(method, url, headers=headers, json=body, params=params, verify=False)
 
-        print(f"Attempting request to: {full_url}")
-        print(f"Method: {method}")
-        print(f"Headers: {headers}")
-        print(f"Body: {body}")
-        print(f"Params: {params}")
+    print(f"Response status code: {response.status_code}")
+    print(f"Response content: {response.text}")
 
-        session = requests.Session()
-        adapter = CustomHttpAdapter()
-        session.mount('https://', adapter)
+    if response.status_code < 200 or response.status_code >= 300:
+        print(f"Request to {url} failed with status code {response.status_code}: {response.text}")
+        return None
 
-        try:
-            response = session.request(method, full_url, headers=headers, json=body, params=params, verify=False, timeout=10)
-            
-            print(f"Response status code: {response.status_code}")
-            print(f"Response content: {response.text}")
-
-            if response.status_code < 200 or response.status_code >= 300:
-                print(f"Request to {full_url} failed with status code {response.status_code}: {response.text}")
-                continue  # Try the next URL if available
-
-            if url != original_url:
-                print(f"Successfully connected using {url}. Updating CORE_HUB_URL.")
-                CORE_HUB_URL = url  # Update the global variable for future requests
-
-            try:
-                return response.json()
-            except json.JSONDecodeError:
-                return response.text
-
-        except requests.exceptions.SSLError as ssl_err:
-            print(f"SSL error occurred with {full_url}: {str(ssl_err)}")
-            if url == original_url:
-                print("Falling back to HTTP...")
-                continue  # Try the HTTP URL
-            else:
-                print("SSL error occurred with fallback HTTP URL. Unable to proceed.")
-                return None
-
-        except requests.exceptions.RequestException as e:
-            print(f"Request to {full_url} failed: {str(e)}")
-            if url == original_url:
-                continue  # Try the next URL if available
-            else:
-                return None
-
-    print("All connection attempts failed.")
-    return None
+    try:
+        return response.json()
+    except json.JSONDecodeError:
+        return response.text
 
 def authenticate():
     auth_response = fetch_core_hub(
