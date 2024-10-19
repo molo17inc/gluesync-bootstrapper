@@ -206,7 +206,7 @@ def main():
             {
                 **agent,
                 'hostCredentials': conf_agent['hostCredentials'],
-                'customHostCredentials': agent['hostCredentialsCustomProperties'],
+                'customHostCredentials': agent['customHostCredentials'],
                 'specificConfiguration': conf_agent['specificConfiguration'],
                 'entities': conf_agent['entities']
             }
