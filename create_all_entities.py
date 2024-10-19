@@ -339,17 +339,18 @@ def main(pipeline_id, source_schema, target_schema, source_type, target_type, ya
     agents = get_pipeline_agents(token, pipeline_id)
     
     # Find source and target agents
-    source_agent = next(({"id": agent_id, **agent_info} for agent_id, agent_info in agents.items() if agent_info['agentType'] == 'SOURCE'), None)
-    target_agent = next(({"id": agent_id, **agent_info} for agent_id, agent_info in agents.items() if agent_info['agentType'] == 'TARGET'), None)
+    source_agent = next((agent for agent in agents if agent['agentType'] == 'SOURCE'), None)
+    target_agent = next((agent for agent in agents if agent['agentType'] == 'TARGET'), None)
     
     if not source_agent or not target_agent:
         raise Exception("Could not find both source and target agents in the pipeline configuration")
     
     # Get tables for the given source schema
-    tables = get_agent_tables(token, pipeline_id, source_agent['id'], source_schema)
+    tables = get_agent_tables(token, pipeline_id, source_agent['agentId'], source_schema)
     
     # Create all entities in a single call
-    response = create_entities(token, pipeline_id, source_schema, target_schema, tables["tables"], source_agent['id'], target_agent['id'], source_type, target_type, yaml_config)
+    response = create_entities(token, pipeline_id, source_schema, target_schema, tables["tables"], 
+                               source_agent['agentId'], target_agent['agentId'], source_type, target_type, yaml_config)
     
     if response:
         print(f"Entities created successfully for source schema: {source_schema} and target schema: {target_schema}")
