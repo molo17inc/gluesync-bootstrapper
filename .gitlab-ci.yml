@@ -1,11 +1,13 @@
 stages:
   - deploy
 
+default:
+  tags:
+    - gs-docker-performance-test
+
 deploy:
   stage: deploy
   image: docker:latest
-  # rules:
-  #   - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_TAG != /^tag-/'
   services:
     - name: docker:dind
       variables:
@@ -15,7 +17,19 @@ deploy:
 
     - apk add --no-cache bash
 
-    - docker build -t ${DOCKER_REGISTRY}/${APP_NAME}:latest .
+    - 
+      | 
+      MODULE_NAME=${CI_COMMIT_TAG#tag-}  # Removes everything before "tag-"
+      MODULE_NAME=${MODULE_NAME%-v*}  # Removes everything after the last "-"
+
+      TAGPART=`echo $CI_COMMIT_TAG | grep -oE '[0-9]+\.[0-9]+\.[0-9](.*)'`
+
+      DEFAULT_NAME=${DOCKER_REGISTRY}/${APP_NAME}
+      ADDITIONAL_TAG="${DEFAULT_NAME}:${TAGPART}"
 
     - docker login -u danieleangeli -p "$CI_REGISTRY_PASSWORD"
-    - docker push "${DOCKER_REGISTRY}/${APP_NAME}:latest"
+    - docker build -t $DEFAULT_NAME:latest .
+    - docker tag $DEFAULT_NAME:latest "$ADDITIONAL_TAG"
+    - docker push "$ADDITIONAL_TAG"
+  rules:
+    - if: $CI_COMMIT_TAG
