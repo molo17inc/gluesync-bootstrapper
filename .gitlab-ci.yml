@@ -26,8 +26,10 @@ deploy:
 
       ADDITIONAL_TAG="$IMAGE_NAME:$TAGPART"
 
-    - docker build -t ${DOCKER_REGISTRY}/${APP_NAME}:latest .
-    - docker tag ${DOCKER_REGISTRY}/${APP_NAME}:latest "$ADDITIONAL_TAG"
+      DEFAULT_NAME=${DOCKER_REGISTRY}/${APP_NAME}
+
+    - docker build -t $DEFAULT_NAME:latest .
+    - docker tag $DEFAULT_NAME:latest "$ADDITIONAL_TAG"
 
     - docker login -u danieleangeli -p "$CI_REGISTRY_PASSWORD"
     - docker push "$ADDITIONAL_TAG"
