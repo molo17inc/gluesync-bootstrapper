@@ -247,6 +247,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         "alias": key_name,
                         "type": "unknown"
                     })
+            print(f"Using custom keys for {table_name}: {keys}")
         else:
             keys = [
                 {
@@ -255,22 +256,10 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     "type": col["type"]
                 } for col in columns["columns"] if col.get("isPrimaryKey")
             ]
+            print(f"Using primary keys for {table_name}: {keys}")
 
-        # For CUSTOMERS_NO_PKEY, ensure we're using the custom keys if specified
-        if table_name == "CUSTOMERS_NO_PKEY":
-            if custom_config and 'keys' in custom_config:
-                print(f"Applying custom keys for CUSTOMERS_NO_PKEY: {custom_config['keys']}")
-                keys = [
-                    {
-                        "name": key,
-                        "alias": key,
-                        "type": next((col["type"] for col in columns["columns"] if col["name"] == key), "unknown")
-                    } for key in custom_config['keys']
-                ]
-            else:
-                print("Warning: No custom keys specified for CUSTOMERS_NO_PKEY. Table will have no keys.")
-
-        print(f"Final keys for {table_name}: {keys}")
+        if not keys:
+            print(f"Warning: No keys specified for {table_name}. Table will have no keys.")
 
         entity = {
             "entityName": f"{source_schema}.{table_name}",
