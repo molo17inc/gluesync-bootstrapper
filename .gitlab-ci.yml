@@ -8,8 +8,6 @@ default:
 deploy:
   stage: deploy
   image: docker:latest
-  # rules:
-  #   - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_TAG != /^tag-/'
   services:
     - name: docker:dind
       variables:
@@ -19,7 +17,19 @@ deploy:
 
     - apk add --no-cache bash
 
+    - 
+      | 
+      MODULE_NAME=${CI_COMMIT_TAG#tag-}  # Removes everything before "tag-"
+      MODULE_NAME=${MODULE_NAME%-v*}  # Removes everything after the last "-"
+
+      TAGPART=`echo $CI_COMMIT_TAG | grep -oE '[0-9]+\.[0-9]+\.[0-9](.*)'`
+
+      ADDITIONAL_TAG="$IMAGE_NAME:$TAGPART"
+
     - docker build -t ${DOCKER_REGISTRY}/${APP_NAME}:latest .
+    - docker tag ${DOCKER_REGISTRY}/${APP_NAME}:latest "$ADDITIONAL_TAG"
 
     - docker login -u danieleangeli -p "$CI_REGISTRY_PASSWORD"
-    - docker push "${DOCKER_REGISTRY}/${APP_NAME}:latest"
+    - docker push "$ADDITIONAL_TAG"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_TAG != /^tag-/
