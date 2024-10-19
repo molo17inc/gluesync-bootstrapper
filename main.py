@@ -128,18 +128,26 @@ def configure_entities(agents_to_conf, pipeline_id, token):
 
     for agent in agents_to_conf:
         for entity in agent['entities']:
-            entities_payload["entities"].append({
-                "entityName": entity["entityName"],
-                "agentEntities": [{
-                    "type": entity["type"],
-                    "entityType": entity["entityType"],
-                    "agentId": agent['id'],
-                    "customProperties": entity.get("customProperties", {}),
-                    "tablesProperties": entity.get("tablesProperties", {}),
-                    "table": entity.get("table", {}),
-                    "columns": entity.get("columns", []),
-                    "keys": entity.get("keys", [])
-                }]
+            # Find existing entity or create a new one
+            existing_entity = next((e for e in entities_payload["entities"] if e["entityName"] == entity["entityName"]), None)
+            if existing_entity is None:
+                existing_entity = {
+                    "entityId": str(uuid.uuid4()),  # Generate a new ID for the entity
+                    "entityName": entity["entityName"],
+                    "agentEntities": []
+                }
+                entities_payload["entities"].append(existing_entity)
+
+            # Add the agentEntity to the entity
+            existing_entity["agentEntities"].append({
+                "type": entity["type"],
+                "entityType": entity["entityType"],
+                "agentId": agent['agentId'],
+                "customProperties": entity.get("customProperties", {}),
+                "tablesProperties": entity.get("tablesProperties", {}),
+                "table": entity.get("table", {}),
+                "columns": entity.get("columns", []),
+                "keys": entity.get("keys", [])
             })
 
     fetch_core_hub(
@@ -193,7 +201,6 @@ def main():
         if not isinstance(unassigned_agents, list):
             raise Exception('Failed to retrieve unassigned agents')
 
-        # Debug: Print unassigned agents
         print("Unassigned agents:", json.dumps(unassigned_agents, indent=2))
         print("Config agents:", json.dumps(conf_test['agents'], indent=2))
 
@@ -213,7 +220,9 @@ def main():
         # Filter agents to configure
         agents_to_conf = [
             {
-                **agent,
+                'agentId': agent['agentId'],
+                'agentType': agent['agentType'],
+                'agentTag': agent['agentTag'],
                 'hostCredentials': conf_agent['hostCredentials'],
                 'customHostCredentials': conf_agent['customHostCredentials'],
                 'specificConfiguration': conf_agent['specificConfiguration'],
@@ -224,29 +233,28 @@ def main():
             if agent['agentTag'] == conf_agent['agentTag'] and agent['agentType'] == conf_agent['agentType']
         ]
 
-        # Debug: Print filtered agents
         print("Filtered agents:", json.dumps(agents_to_conf, indent=2))
 
         # Assign agents to pipeline
         for agent in agents_to_conf:
-            if 'id' not in agent:
-                print(f"Warning: Agent missing 'id' field: {agent}")
+            if 'agentId' not in agent:
+                print(f"Warning: Agent missing 'agentId' field: {agent}")
                 continue
             
             fetch_core_hub(
-                f"/pipelines/{pipeline_id}/agents/{agent['id']}",
+                f"/pipelines/{pipeline_id}/agents/{agent['agentId']}",
                 method='PUT',
                 token=token
             )
 
         # Apply agent host credentials
         for agent in agents_to_conf:
-            if 'id' not in agent:
-                print(f"Warning: Agent missing 'id' field: {agent}")
+            if 'agentId' not in agent:
+                print(f"Warning: Agent missing 'agentId' field: {agent}")
                 continue
             
             fetch_core_hub(
-                f"/pipelines/{pipeline_id}/agents/{agent['id']}/config/credentials",
+                f"/pipelines/{pipeline_id}/agents/{agent['agentId']}/config/credentials",
                 method='PUT',
                 token=token,
                 body={
@@ -257,13 +265,13 @@ def main():
         
         # Apply agent specific configuration
         for agent in agents_to_conf:
-            if 'id' not in agent:
-                print(f"Warning: Agent missing 'id' field: {agent}")
+            if 'agentId' not in agent:
+                print(f"Warning: Agent missing 'agentId' field: {agent}")
                 continue
             
             if agent['specificConfiguration']:
                 fetch_core_hub(
-                    f"/pipelines/{pipeline_id}/agents/{agent['id']}/config/specific",
+                    f"/pipelines/{pipeline_id}/agents/{agent['agentId']}/config/specific",
                     method='PUT',
                     token=token,
                     body={"configuration": agent['specificConfiguration']}
