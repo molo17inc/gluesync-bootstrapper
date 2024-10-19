@@ -24,10 +24,9 @@ deploy:
 
       TAGPART=`echo $CI_COMMIT_TAG | grep -oE '[0-9]+\.[0-9]+\.[0-9](.*)'`
 
-      ADDITIONAL_TAG="$IMAGE_NAME:$TAGPART"
-
       DEFAULT_NAME=${DOCKER_REGISTRY}/${APP_NAME}
-      
+      ADDITIONAL_TAG="${DEFAULT_NAME}:${TAGPART}"
+
     - docker login -u danieleangeli -p "$CI_REGISTRY_PASSWORD"
     - docker build -t $DEFAULT_NAME:latest .
     - docker tag $DEFAULT_NAME:latest "$ADDITIONAL_TAG"
