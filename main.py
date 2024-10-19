@@ -43,12 +43,12 @@ default_user = 'admin'
 default_password = 'admin'
 user_defined_password = os.getenv('DEFAULT_PASSWORD', default_password)
 create_entities_from_schema = os.getenv('CREATE_ENTITIES_FROM_SCHEMA')
-target_schema = os.getenv('TARGET_SCHEMA')  # Environment variable for target schema
-source_type = os.getenv('SOURCE_TYPE', 'SQL')  # New environment variable for source type
+target_schema = os.getenv('TARGET_SCHEMA')
+source_type = os.getenv('SOURCE_TYPE', 'SQL')
 target_type = os.getenv('TARGET_TYPE', 'NoSQL')
 TABLE_LIST_YAML = os.getenv('TABLE_LIST_YAML', 'TABLE_LIST.yaml')
 
-ENTITY_START_TIMEOUT = 1  # Timeout in seconds between entity start calls
+ENTITY_START_TIMEOUT = 1
 
 class CustomHttpAdapter(HTTPAdapter):
     def __init__(self, *args, **kwargs):
@@ -142,7 +142,6 @@ def configure_entities(agents_to_conf, pipeline_id, token):
                 }]
             })
 
-    # Send the consolidated payload to configure all entities at once
     fetch_core_hub(
         f"/pipelines/{pipeline_id}/config/entities",
         method='PUT',
@@ -194,6 +193,10 @@ def main():
         if not isinstance(unassigned_agents, list):
             raise Exception('Failed to retrieve unassigned agents')
 
+        # Debug: Print unassigned agents
+        print("Unassigned agents:", json.dumps(unassigned_agents, indent=2))
+        print("Config agents:", json.dumps(conf_test['agents'], indent=2))
+
         fancy_names = generate_fancy_names(2)
 
         # Create pipeline
@@ -221,8 +224,15 @@ def main():
             if agent['agentTag'] == conf_agent['agentTag'] and agent['agentType'] == conf_agent['agentType']
         ]
 
+        # Debug: Print filtered agents
+        print("Filtered agents:", json.dumps(agents_to_conf, indent=2))
+
         # Assign agents to pipeline
         for agent in agents_to_conf:
+            if 'id' not in agent:
+                print(f"Warning: Agent missing 'id' field: {agent}")
+                continue
+            
             fetch_core_hub(
                 f"/pipelines/{pipeline_id}/agents/{agent['id']}",
                 method='PUT',
@@ -231,6 +241,10 @@ def main():
 
         # Apply agent host credentials
         for agent in agents_to_conf:
+            if 'id' not in agent:
+                print(f"Warning: Agent missing 'id' field: {agent}")
+                continue
+            
             fetch_core_hub(
                 f"/pipelines/{pipeline_id}/agents/{agent['id']}/config/credentials",
                 method='PUT',
@@ -243,6 +257,10 @@ def main():
         
         # Apply agent specific configuration
         for agent in agents_to_conf:
+            if 'id' not in agent:
+                print(f"Warning: Agent missing 'id' field: {agent}")
+                continue
+            
             if agent['specificConfiguration']:
                 fetch_core_hub(
                     f"/pipelines/{pipeline_id}/agents/{agent['id']}/config/specific",
@@ -254,7 +272,6 @@ def main():
         configure_entities(agents_to_conf, pipeline_id, token)
 
         if create_entities_from_schema:
-            # Use create_entities_from_schema as the source schema name
             source_schema = create_entities_from_schema
 
             # Invoke the entity creation script
@@ -269,14 +286,11 @@ def main():
                     '--target-type', target_type
                 ]
                 
-                # Add target schema if provided
                 if target_schema:
                     cmd.extend(['--target-schema', target_schema])
                 else:
-                    # If target_schema is not provided, use source_schema as target_schema
                     cmd.extend(['--target-schema', source_schema])
 
-                # Add TABLE_LIST.yaml file parameter if the file exists
                 if os.path.exists(TABLE_LIST_YAML):
                     cmd.extend(['--yaml-file', TABLE_LIST_YAML])
                     print(f"Using TABLE_LIST.yaml: {TABLE_LIST_YAML}")
