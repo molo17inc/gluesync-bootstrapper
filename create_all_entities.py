@@ -123,18 +123,15 @@ def map_data_type(source_type, source_node_info, target_node_info):
     source_matrix = source_node_info['dataTypesMatrix']
     target_matrix = target_node_info['dataTypesMatrix']
     
-    # Normalize the source type (remove any size specifiers, e.g., varchar(255) -> varchar)
     normalized_source_type = source_type.split('(')[0].lower()
 
     print(f"Mapping source type: {source_type} (normalized: {normalized_source_type})")
 
-    # Special handling for some types
     if normalized_source_type == 'mediumblob':
         normalized_source_type = 'blob'
     elif normalized_source_type == 'year':
-        normalized_source_type = 'int'  # Usually 'year' is stored as an integer
+        normalized_source_type = 'int'
 
-    # Find the matching GlueSync data type for the source type
     source_item = next((item for item in source_matrix if normalized_source_type in [t.lower() for t in item['supportedTypes']]), None)
     
     if not source_item:
@@ -144,17 +141,14 @@ def map_data_type(source_type, source_node_info, target_node_info):
     source_gluesync_type = source_item['gluesyncDataType']
     print(f"Matched GlueSync data type: {source_gluesync_type}")
 
-    # Find the corresponding target type
     target_item = next((item for item in target_matrix if item['gluesyncDataType'] == source_gluesync_type), None)
     
     if target_item:
-        # Check if there's a direct match in supported types
         normalized_target_types = [t.lower() for t in target_item['supportedTypes']]
         if normalized_source_type in normalized_target_types:
             print(f"Direct match found: {source_type}")
-            return source_type  # Use the original source type if it's supported in the target
+            return source_type
         
-        # Special handling for specific types
         if normalized_source_type == 'geometry':
             print(f"Mapping geometry type: {source_type} -> geometry")
             return 'geometry'
@@ -173,17 +167,18 @@ def map_data_type(source_type, source_node_info, target_node_info):
             print(f"Mapping {normalized_source_type} to int")
             return 'int'
         
-        # If no direct match, use the default type for this GlueSync data type in the target
         print(f"Mapping {source_type} to {target_item['defaultType']} (no direct match in target)")
         return target_item['defaultType']
     
     print(f"Warning: No target mapping found for GlueSync type {source_gluesync_type}. Using source type {source_type} as is.")
-    return source_type  # If no mapping found, return the original type
+    return source_type
 
 def load_yaml_config(file_path):
     try:
         with open(file_path, 'r') as file:
-            return yaml.safe_load(file)
+            config = yaml.safe_load(file)
+            print(f"Loaded YAML config: {json.dumps(config, indent=2)}")
+            return config
     except FileNotFoundError:
         print(f"YAML file not found at {file_path}. Proceeding without it.")
         return {}
@@ -202,12 +197,17 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
     print("Target Node Info:")
     print(json.dumps(target_node_info, indent=2))
     
-    schema_config = yaml_config.get('schemas', {}).get(source_schema, {})
+    print(f"Full YAML config: {json.dumps(yaml_config, indent=2)}")
+    
+    schema_config = yaml_config.get(source_schema, {})
+    print(f"Schema config for {source_schema}: {json.dumps(schema_config, indent=2)}")
+    
     yaml_target_schema = schema_config.get('target', target_schema)
     whitelist = schema_config.get('tables', {}).get('whitelist', [])
     blacklist = schema_config.get('tables', {}).get('blacklist', [])
     custom_tables = schema_config.get('tables', {}).get('custom', {})
 
+    print(f"Target schema: {yaml_target_schema}")
     print(f"Whitelist: {whitelist}")
     print(f"Blacklist: {blacklist}")
     print(f"Custom tables: {custom_tables}")
@@ -218,7 +218,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             print(f"Warning: Table without name encountered. Skipping.")
             continue
 
-        # Check if table should be skipped
         if (table_name.startswith("sys") or 
             (blacklist and table_name in blacklist) or 
             (whitelist and table_name not in whitelist)):
@@ -332,23 +331,19 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 def main(pipeline_id, source_schema, target_schema, source_type, target_type, yaml_file):
     token = authenticate()
     
-    # Load YAML configuration
     yaml_config = load_yaml_config(yaml_file) if yaml_file else {}
+    print(f"Loaded YAML config in main: {json.dumps(yaml_config, indent=2)}")
     
-    # Get pipeline agents
     agents = get_pipeline_agents(token, pipeline_id)
     
-    # Find source and target agents
     source_agent = next((agent for agent in agents if agent['agentType'] == 'SOURCE'), None)
     target_agent = next((agent for agent in agents if agent['agentType'] == 'TARGET'), None)
     
     if not source_agent or not target_agent:
         raise Exception("Could not find both source and target agents in the pipeline configuration")
     
-    # Get tables for the given source schema
     tables = get_agent_tables(token, pipeline_id, source_agent['agentId'], source_schema)
     
-    # Create all entities in a single call
     response = create_entities(token, pipeline_id, source_schema, target_schema, tables["tables"], 
                                source_agent['agentId'], target_agent['agentId'], source_type, target_type, yaml_config)
     
@@ -363,7 +358,7 @@ if __name__ == "__main__":
     parser.add_argument('--source-schema', required=True, help="Source schema name")
     parser.add_argument('--target-schema', required=True, help="Target schema name")    
     parser.add_argument('--source-type', required=True, choices=['SQL', 'NoSQL'], help="Source type (SQL or NoSQL)")
-    parser.add_argument('--target-type', required=True, choices=['SQL', 'NoSQL'], help="Target type (SQL or NoSQL)")    
-    parser.add_argument('--yaml-file', help="Path to the YAML configuration file")    
-    args = parser.parse_args()    
+    parser.add_argument('--target-type', required=True, choices=['SQL', 'NoSQL'], help="Target type (SQL or NoSQL)")        
+    parser.add_argument('--yaml-file', help="Path to the YAML configuration file")
+    args = parser.parse_args()
     main(args.pipeline, args.source_schema, args.target_schema, args.source_type, args.target_type, args.yaml_file)
