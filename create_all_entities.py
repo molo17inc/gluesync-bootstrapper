@@ -202,12 +202,17 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
     print("Target Node Info:")
     print(json.dumps(target_node_info, indent=2))
     
-    schema_config = yaml_config.get('schemas', {}).get(source_schema, {})
+    print(f"Full YAML config: {json.dumps(yaml_config, indent=2)}")
+    
+    schema_config = yaml_config.get(source_schema, {})
+    print(f"Schema config for {source_schema}: {json.dumps(schema_config, indent=2)}")
+    
     yaml_target_schema = schema_config.get('target', target_schema)
     whitelist = schema_config.get('tables', {}).get('whitelist', [])
     blacklist = schema_config.get('tables', {}).get('blacklist', [])
     custom_tables = schema_config.get('tables', {}).get('custom', {})
 
+    print(f"Target schema: {yaml_target_schema}")
     print(f"Whitelist: {whitelist}")
     print(f"Blacklist: {blacklist}")
     print(f"Custom tables: {custom_tables}")
