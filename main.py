@@ -22,6 +22,7 @@
 import os
 import json
 import requests
+import sys
 from faker import Faker
 import urllib.parse
 import time
@@ -49,6 +50,10 @@ target_type = os.getenv('TARGET_TYPE', 'NoSQL')
 TABLE_LIST_YAML = os.getenv('TABLE_LIST_YAML', 'TABLE_LIST.yaml')
 
 ENTITY_START_TIMEOUT = 1
+
+class GlueSyncError(Exception):
+    """Custom exception for GlueSync-related errors"""
+    pass
 
 class CustomHttpAdapter(HTTPAdapter):
     def __init__(self, *args, **kwargs):
@@ -88,104 +93,122 @@ def fetch_core_hub(path, method='GET', token=None, body=None):
     adapter = CustomHttpAdapter()
     session.mount('https://', adapter)
     
-    response = session.request(method, url, headers=headers, json=body, verify=False)
-    
-    if response.status_code < 200 or response.status_code >= 300:
-        print(f"Request to {url} failed with status code {response.status_code}: {response.text}")
-        raise Exception(f"Request to {url} failed with status code {response.status_code}: {response.text}")
+    try:
+        response = session.request(method, url, headers=headers, json=body, verify=False)
+        response.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        print(f"API request failed: {str(e)}")
+        if hasattr(e.response, 'text'):
+            print(f"Response content: {e.response.text}")
+        raise GlueSyncError(f"API request to {url} failed: {str(e)}")
     
     if response.status_code == 202 and not response.content:
         return {}
 
     try:
         return response.json()
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as e:
         print(f"Non-JSON response from {url}: {response.text}")
-        return response.text
+        raise GlueSyncError(f"Invalid JSON response from {url}: {str(e)}")
 
 def get_entities(token, pipeline_id):
-    response = fetch_core_hub(f"/pipelines/{pipeline_id}/entities", token=token)
-    print(f"Retrieved the following entities: {response}")
-    
-    if not isinstance(response, list) or not response:
-        print(f"Unexpected response when fetching entities: {response}")
-        return []
-    
-    entities = []
-    for item in response:
-        if 'entity' in item and isinstance(item['entity'], dict):
-            entity = item['entity']
-            if 'entityId' in entity and 'entityName' in entity:
-                entities.append({
-                    'entityId': entity['entityId'],
-                    'entityName': entity['entityName']
-                })
-    
-    return entities
+    try:
+        response = fetch_core_hub(f"/pipelines/{pipeline_id}/entities", token=token)
+        print(f"Retrieved the following entities: {response}")
+        
+        if not isinstance(response, list):
+            raise GlueSyncError(f"Unexpected response format when fetching entities: {response}")
+        
+        entities = []
+        for item in response:
+            if 'entity' in item and isinstance(item['entity'], dict):
+                entity = item['entity']
+                if 'entityId' in entity and 'entityName' in entity:
+                    entities.append({
+                        'entityId': entity['entityId'],
+                        'entityName': entity['entityName']
+                    })
+        
+        return entities
+    except Exception as e:
+        print(f"Error getting entities: {str(e)}")
+        raise
 
 def configure_entities(agents_to_conf, pipeline_id, token):
-    entities_payload = {"entities": []}
+    try:
+        entities_payload = {"entities": []}
 
-    for agent in agents_to_conf:
-        for entity in agent['entities']:
-            # Find existing entity or create a new one
-            existing_entity = next((e for e in entities_payload["entities"] if e["entityName"] == entity["entityName"]), None)
-            if existing_entity is None:
-                existing_entity = {
-                    "entityId": str(uuid.uuid4()),  # Generate a new ID for the entity
-                    "entityName": entity["entityName"],
-                    "agentEntities": []
-                }
-                entities_payload["entities"].append(existing_entity)
+        for agent in agents_to_conf:
+            for entity in agent['entities']:
+                existing_entity = next((e for e in entities_payload["entities"] if e["entityName"] == entity["entityName"]), None)
+                if existing_entity is None:
+                    existing_entity = {
+                        "entityId": str(uuid.uuid4()),
+                        "entityName": entity["entityName"],
+                        "agentEntities": []
+                    }
+                    entities_payload["entities"].append(existing_entity)
 
-            # Add the agentEntity to the entity
-            existing_entity["agentEntities"].append({
-                "type": entity["type"],
-                "entityType": entity["entityType"],
-                "agentId": agent['agentId'],
-                "customProperties": entity.get("customProperties", {}),
-                "tablesProperties": entity.get("tablesProperties", {}),
-                "table": entity.get("table", {}),
-                "columns": entity.get("columns", []),
-                "keys": entity.get("keys", [])
-            })
+                existing_entity["agentEntities"].append({
+                    "type": entity["type"],
+                    "entityType": entity["entityType"],
+                    "agentId": agent['agentId'],
+                    "customProperties": entity.get("customProperties", {}),
+                    "tablesProperties": entity.get("tablesProperties", {}),
+                    "table": entity.get("table", {}),
+                    "columns": entity.get("columns", []),
+                    "keys": entity.get("keys", [])
+                })
 
-    fetch_core_hub(
-        f"/pipelines/{pipeline_id}/config/entities",
-        method='PUT',
-        token=token,
-        body=entities_payload
-    )
+        fetch_core_hub(
+            f"/pipelines/{pipeline_id}/config/entities",
+            method='PUT',
+            token=token,
+            body=entities_payload
+        )
+    except Exception as e:
+        print(f"Error configuring entities: {str(e)}")
+        raise
 
 def start_entity_syncs(token, pipeline_id):
-    entities = get_entities(token, pipeline_id)
-    print(f"Retrieved the following entities: {entities}")
-    
-    for entity in entities:
-        entityId = entity['entityId']
-        entityName = entity['entityName']
+    try:
+        entities = get_entities(token, pipeline_id)
+        print(f"Retrieved the following entities: {entities}")
         
-        try:
-            encoded_entity_id = safe_encode(entityId)
-            query_params = f"entity={encoded_entity_id}"
+        for entity in entities:
+            entityId = entity['entityId']
+            entityName = entity['entityName']
             
-            response = fetch_core_hub(
-                f"/pipelines/{pipeline_id}/commands/sync/start?withSnapshot=true&{query_params}",
-                method='POST',
-                token=token
-            )
-            print(f"Started sync for entity: {entityName} (ID: {entityId})")
-            print(f"Response: {response}")
-            
-            time.sleep(ENTITY_START_TIMEOUT)
-        except Exception as e:
-            print(f"Error starting sync for entity {entityName} (ID: {entityId}): {str(e)}")
+            try:
+                encoded_entity_id = safe_encode(entityId)
+                query_params = f"entity={encoded_entity_id}"
+                
+                response = fetch_core_hub(
+                    f"/pipelines/{pipeline_id}/commands/sync/start?withSnapshot=true&{query_params}",
+                    method='POST',
+                    token=token
+                )
+                print(f"Started sync for entity: {entityName} (ID: {entityId})")
+                print(f"Response: {response}")
+                
+                time.sleep(ENTITY_START_TIMEOUT)
+            except Exception as e:
+                print(f"Error starting sync for entity {entityName} (ID: {entityId}): {str(e)}")
+                raise
+    except Exception as e:
+        print(f"Error in start_entity_syncs: {str(e)}")
+        raise
 
 def main():
-    with open(file_conf_path, 'r') as file:
-        conf_test = json.load(file)
-
     try:
+        # Load configuration
+        try:
+            with open(file_conf_path, 'r') as file:
+                conf_test = json.load(file)
+        except (IOError, json.JSONDecodeError) as e:
+            print(f"Error loading configuration file: {str(e)}")
+            sys.exit(1)
+
         # Authenticate
         auth_response = fetch_core_hub(
             '/authentication/login',
@@ -194,12 +217,12 @@ def main():
         )
         token = auth_response.get('apiToken')
         if not token:
-            raise Exception('Failed to authenticate')
+            raise GlueSyncError('Failed to authenticate: No API token received')
 
         # List unassigned agents
         unassigned_agents = fetch_core_hub('/unassigned-agents', token=token)
         if not isinstance(unassigned_agents, list):
-            raise Exception('Failed to retrieve unassigned agents')
+            raise GlueSyncError('Failed to retrieve unassigned agents: Invalid response format')
 
         print("Unassigned agents:", json.dumps(unassigned_agents, indent=2))
         print("Config agents:", json.dumps(conf_test['agents'], indent=2))
@@ -215,16 +238,16 @@ def main():
         )
         pipeline_id = pipeline_response.get('pipelineId')
         if not pipeline_id:
-            raise Exception('Failed to create pipeline')
+            raise GlueSyncError('Failed to create pipeline: No pipeline ID received')
 
-        # Filter agents to configure
+        # Filter and configure agents
         agents_to_conf = [
             {
                 'agentId': agent['agentId'],
                 'agentType': agent['agentType'],
                 'agentTag': agent['agentTag'],
                 'hostCredentials': conf_agent['hostCredentials'],
-                'customHostCredentials': conf_agent['customHostCredentials'],
+                'customHostCredentials': conf_agent.get('hostCredentialsCustomProperties', {}),
                 'specificConfiguration': conf_agent['specificConfiguration'],
                 'entities': conf_agent['entities']
             }
@@ -233,26 +256,24 @@ def main():
             if agent['agentTag'] == conf_agent['agentTag'] and agent['agentType'] == conf_agent['agentType']
         ]
 
+        if not agents_to_conf:
+            raise GlueSyncError("No matching agents found to configure")
+
         print("Filtered agents:", json.dumps(agents_to_conf, indent=2))
 
-        # Assign agents to pipeline
+        # Configure each agent
         for agent in agents_to_conf:
             if 'agentId' not in agent:
-                print(f"Warning: Agent missing 'agentId' field: {agent}")
-                continue
+                raise GlueSyncError(f"Invalid agent configuration: Missing agentId field")
             
+            # Assign agent to pipeline
             fetch_core_hub(
                 f"/pipelines/{pipeline_id}/agents/{agent['agentId']}",
                 method='PUT',
                 token=token
             )
 
-        # Apply agent host credentials
-        for agent in agents_to_conf:
-            if 'agentId' not in agent:
-                print(f"Warning: Agent missing 'agentId' field: {agent}")
-                continue
-            
+            # Configure host credentials
             fetch_core_hub(
                 f"/pipelines/{pipeline_id}/agents/{agent['agentId']}/config/credentials",
                 method='PUT',
@@ -262,13 +283,8 @@ def main():
                     'customHostCredentials': agent['customHostCredentials']
                 }
             )
-        
-        # Apply agent specific configuration
-        for agent in agents_to_conf:
-            if 'agentId' not in agent:
-                print(f"Warning: Agent missing 'agentId' field: {agent}")
-                continue
             
+            # Configure specific settings
             if agent['specificConfiguration']:
                 fetch_core_hub(
                     f"/pipelines/{pipeline_id}/agents/{agent['agentId']}/config/specific",
@@ -281,49 +297,48 @@ def main():
 
         if create_entities_from_schema:
             source_schema = create_entities_from_schema
+            cmd = [
+                'python',
+                'create_all_entities.py',
+                '--pipeline', pipeline_id,
+                '--source-schema', source_schema,
+                '--source-type', source_type,
+                '--target-type', target_type
+            ]
+            
+            if target_schema:
+                cmd.extend(['--target-schema', target_schema])
+            else:
+                cmd.extend(['--target-schema', source_schema])
 
-            # Invoke the entity creation script
-            entity_creation_script = 'create_all_entities.py' 
+            if os.path.exists(TABLE_LIST_YAML):
+                cmd.extend(['--yaml-file', TABLE_LIST_YAML])
+                print(f"Using TABLE_LIST.yaml: {TABLE_LIST_YAML}")
+            
             try:
-                cmd = [
-                    'python',
-                    entity_creation_script,
-                    '--pipeline', pipeline_id,
-                    '--source-schema', source_schema,
-                    '--source-type', source_type,
-                    '--target-type', target_type
-                ]
-                
-                if target_schema:
-                    cmd.extend(['--target-schema', target_schema])
-                else:
-                    cmd.extend(['--target-schema', source_schema])
-
-                if os.path.exists(TABLE_LIST_YAML):
-                    cmd.extend(['--yaml-file', TABLE_LIST_YAML])
-                    print(f"Using TABLE_LIST.yaml: {TABLE_LIST_YAML}")
-                else:
-                    print(f"TABLE_LIST.yaml not found at {TABLE_LIST_YAML}. Proceeding without it.")
-
                 subprocess.run(cmd, check=True)
-                print(f"Entity creation completed for pipeline {pipeline_id}, source schema {source_schema}, target schema {target_schema or source_schema}, source type {source_type}, target type {target_type}")
+                print(f"Entity creation completed for pipeline {pipeline_id}")
             except subprocess.CalledProcessError as e:
-                print(f"Error running entity creation script: {e}")
+                raise GlueSyncError(f"Entity creation script failed: {str(e)}")
 
-        # Set pipeline as ready (exiting from Draft status)
+        # Set pipeline as ready
         fetch_core_hub(
-                f"/pipelines/{pipeline_id}",
-                method='PUT',
-                token=token,
-                body={'configurationCompleted': True, 'name': fancy_names[0]}
+            f"/pipelines/{pipeline_id}",
+            method='PUT',
+            token=token,
+            body={'configurationCompleted': True, 'name': fancy_names[0]}
         )
 
         time.sleep(ENTITY_START_TIMEOUT)
-                
+        
         start_entity_syncs(token, pipeline_id)
 
+    except GlueSyncError as error:
+        print(f"GlueSync Error: {str(error)}")
+        sys.exit(1)
     except Exception as error:
-        print(f"Error: {error}")
+        print(f"Unexpected error: {str(error)}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
