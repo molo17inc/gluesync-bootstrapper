@@ -228,6 +228,10 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
         custom_config = custom_tables.get(table_name, {})
         print(f"Custom config for {table_name}: {custom_config}")
+        
+        # Get custom target table name if specified
+        target_table_name = custom_config.get('name', table_name)
+        print(f"Using target table name: {target_table_name} for source table: {table_name}")
 
         if custom_config and 'keys' in custom_config:
             keys = []
@@ -297,11 +301,11 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     "agentId": target_agent_id,
                     "entityObject": {
                         "scope": yaml_target_schema,
-                        "collection": table_name
+                        "collection": target_table_name
                     },
                     "table": {
                         "schema": yaml_target_schema,
-                        "name": table_name
+                        "name": target_table_name
                     },
                     "columns": [
                         {
