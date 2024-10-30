@@ -233,6 +233,13 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         target_table_name = custom_config.get('name', table_name)
         print(f"Using target table name: {target_table_name} for source table: {table_name}")
 
+        # Log column mappings if any exist
+        if 'columns' in custom_config:
+            print(f"Column mappings for {table_name}:")
+            for column_map in custom_config['columns']:
+                for source_name, target_name in column_map.items():
+                    print(f"  {source_name} -> {target_name}")
+
         if custom_config and 'keys' in custom_config:
             keys = []
             for key_name in custom_config['keys']:
@@ -309,7 +316,14 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     },
                     "columns": [
                         {
-                            "name": col["name"],
+                            "name": next(
+                                (target_name 
+                                for column_map in custom_config.get('columns', [])
+                                for source_name, target_name in column_map.items()
+                                if source_name == col["name"]
+                                ),
+                                col["name"]  # Default to original name if no mapping found
+                            ),
                             "type": map_data_type(col["type"], source_node_info, target_node_info)
                         } for col in columns["columns"]
                     ],
