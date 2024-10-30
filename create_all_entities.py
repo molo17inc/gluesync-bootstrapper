@@ -294,7 +294,14 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     "columns": [
                         {
                             "name": col["name"],
-                            "alias": col["name"],
+                            "alias": next(
+                                (target_name 
+                                for column_map in custom_config.get('columns', [])
+                                for source_name, target_name in column_map.items()
+                                if source_name == col["name"]
+                                ),
+                                col["name"]  # Default to original name if no mapping found
+                            ),
                             "type": col["type"]
                         } for col in columns["columns"]
                     ],
@@ -316,7 +323,14 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     },
                     "columns": [
                         {
-                            "name": col["name"],
+                            "name": next(
+                                (target_name 
+                                for column_map in custom_config.get('columns', [])
+                                for source_name, target_name in column_map.items()
+                                if source_name == col["name"]
+                                ),
+                                col["name"]  # Default to original name if no mapping found
+                            ),
                             "alias": next(
                                 (target_name 
                                 for column_map in custom_config.get('columns', [])
