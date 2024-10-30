@@ -316,7 +316,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     },
                     "columns": [
                         {
-                            "name": next(
+                            "name": col["name"],
+                            "alias": next(
                                 (target_name 
                                 for column_map in custom_config.get('columns', [])
                                 for source_name, target_name in column_map.items()
