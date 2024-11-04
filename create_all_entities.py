@@ -22,15 +22,16 @@
 import os
 import json
 import requests
-import argparse
 import time
 import uuid
+import urllib.parse
 from urllib.parse import urlencode, quote
 import urllib3
 import ssl
 from requests.adapters import HTTPAdapter
 from urllib3.util.ssl_ import create_urllib3_context
 import yaml
+import argparse
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -74,7 +75,7 @@ class CoreHubClient:
         self.adapter = ProtocolAwareAdapter()
         
         # Parse URL to determine protocol
-        parsed_url = urlparse(base_url)
+        parsed_url = urllib.parse.urlparse(base_url)
         is_secure = parsed_url.scheme == 'https'
         
         # Configure adapter based on protocol
@@ -92,11 +93,7 @@ class CoreHubClient:
         }
         headers = {k: v for k, v in headers.items() if v is not None}
 
-        print(f"Sending request to: {url}")
-        print(f"Method: {method}")
-        print(f"Headers: {headers}")
-        print(f"Body: {body}")
-        print(f"Params: {params}")
+        print(f"Loading: {url} with: {body}")
         
         response = self.session.request(
             method, 
@@ -106,17 +103,18 @@ class CoreHubClient:
             params=params,
             verify=False if self.adapter.is_secure_protocol else None
         )
-
-        print(f"Response status code: {response.status_code}")
-        print(f"Response content: {response.text}")
-
+        
         if response.status_code < 200 or response.status_code >= 300:
             print(f"Request to {url} failed with status code {response.status_code}: {response.text}")
-            return None
+            raise Exception(f"Request to {url} failed with status code {response.status_code}: {response.text}")
+        
+        if response.status_code == 202 and not response.content:
+            return {}
 
         try:
             return response.json()
         except json.JSONDecodeError:
+            print(f"Non-JSON response from {url}: {response.text}")
             return response.text
 
 def generate_short_guid():
@@ -127,18 +125,6 @@ core_hub_client = CoreHubClient(CORE_HUB_URL)
 
 def fetch_core_hub(path, method='GET', token=None, body=None, params=None):
     return core_hub_client.request(path, method, token, body, params)
-
-# [Rest of the functions remain the same, just use fetch_core_hub as before]
-def authenticate():
-    auth_response = fetch_core_hub(
-        '/authentication/login',
-        method='POST',
-        body={'username': DEFAULT_USER, 'password': DEFAULT_PASSWORD}
-    )
-    token = auth_response.get('apiToken')
-    if not token:
-        raise Exception('Failed to authenticate')
-    return token
 
 def authenticate():
     auth_response = fetch_core_hub(
