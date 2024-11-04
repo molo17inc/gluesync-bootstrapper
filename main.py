@@ -31,6 +31,7 @@ import urllib3
 import ssl
 from requests.adapters import HTTPAdapter
 from urllib3.util.ssl_ import create_urllib3_context
+from urllib.parse import urlparse
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -50,7 +51,8 @@ TABLE_LIST_YAML = os.getenv('TABLE_LIST_YAML', 'TABLE_LIST.yaml')
 
 ENTITY_START_TIMEOUT = 1
 
-class CustomHttpAdapter(HTTPAdapter):
+class ProtocolAwareAdapter(HTTPAdapter):
+    """HTTP adapter that handles both HTTP and HTTPS protocols."""
     def __init__(self, *args, **kwargs):
         self.ssl_context = create_urllib3_context(
             cert_reqs=ssl.CERT_NONE,
@@ -59,12 +61,70 @@ class CustomHttpAdapter(HTTPAdapter):
         super().__init__(*args, **kwargs)
 
     def init_poolmanager(self, *args, **kwargs):
-        kwargs['ssl_context'] = self.ssl_context
+        if self.is_secure_protocol:
+            kwargs['ssl_context'] = self.ssl_context
         return super().init_poolmanager(*args, **kwargs)
 
     def proxy_manager_for(self, *args, **kwargs):
-        kwargs['ssl_context'] = self.ssl_context
+        if self.is_secure_protocol:
+            kwargs['ssl_context'] = self.ssl_context
         return super().proxy_manager_for(*args, **kwargs)
+
+    @property
+    def is_secure_protocol(self):
+        return hasattr(self, '_is_secure') and self._is_secure
+
+    def set_protocol(self, is_secure):
+        self._is_secure = is_secure
+
+class CoreHubClient:
+    """Client for handling CoreHub API requests with protocol awareness."""
+    def __init__(self, base_url):
+        self.base_url = base_url
+        self.session = requests.Session()
+        self.adapter = ProtocolAwareAdapter()
+        
+        # Parse URL to determine protocol
+        parsed_url = urlparse(base_url)
+        is_secure = parsed_url.scheme == 'https'
+        
+        # Configure adapter based on protocol
+        self.adapter.set_protocol(is_secure)
+        
+        # Mount adapter for both HTTP and HTTPS
+        self.session.mount('http://', self.adapter)
+        self.session.mount('https://', self.adapter)
+
+    def request(self, path, method='GET', token=None, body=None):
+        url = f"{self.base_url}{path}"
+        headers = {
+            'Authorization': f'Bearer {token}' if token else None,
+            'Content-Type': 'application/json'
+        }
+        headers = {k: v for k, v in headers.items() if v is not None}
+
+        print(f"Loading: {url} with: {body}")
+        
+        response = self.session.request(
+            method, 
+            url, 
+            headers=headers, 
+            json=body, 
+            verify=False if self.adapter.is_secure_protocol else None
+        )
+        
+        if response.status_code < 200 or response.status_code >= 300:
+            print(f"Request to {url} failed with status code {response.status_code}: {response.text}")
+            raise Exception(f"Request to {url} failed with status code {response.status_code}: {response.text}")
+        
+        if response.status_code == 202 and not response.content:
+            return {}
+
+        try:
+            return response.json()
+        except json.JSONDecodeError:
+            print(f"Non-JSON response from {url}: {response.text}")
+            return response.text
 
 def generate_fancy_names(length):
     return [fake.catch_phrase() for _ in range(length)]
@@ -75,33 +135,11 @@ def safe_encode(s):
 def generate_short_guid():
     return str(uuid.uuid4()).split('-')[0]
 
+# Initialize the CoreHub client
+core_hub_client = CoreHubClient(core_hub_url)
+
 def fetch_core_hub(path, method='GET', token=None, body=None):
-    url = f"{core_hub_url}{path}"
-    headers = {
-        'Authorization': f'Bearer {token}' if token else None,
-        'Content-Type': 'application/json'
-    }
-
-    print(f"Loading: {url} with: {body}")
-    
-    session = requests.Session()
-    adapter = CustomHttpAdapter()
-    session.mount('https://', adapter)
-    
-    response = session.request(method, url, headers=headers, json=body, verify=False)
-    
-    if response.status_code < 200 or response.status_code >= 300:
-        print(f"Request to {url} failed with status code {response.status_code}: {response.text}")
-        raise Exception(f"Request to {url} failed with status code {response.status_code}: {response.text}")
-    
-    if response.status_code == 202 and not response.content:
-        return {}
-
-    try:
-        return response.json()
-    except json.JSONDecodeError:
-        print(f"Non-JSON response from {url}: {response.text}")
-        return response.text
+    return core_hub_client.request(path, method, token, body)
 
 def get_entities(token, pipeline_id):
     response = fetch_core_hub(f"/pipelines/{pipeline_id}/entities", token=token)
