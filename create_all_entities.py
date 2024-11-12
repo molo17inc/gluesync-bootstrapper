@@ -160,7 +160,6 @@ def map_data_type(source_type, source_node_info, target_node_info):
     target_matrix = target_node_info['dataTypesMatrix']
     
     normalized_source_type = source_type.split('(')[0].lower()
-
     print(f"Mapping source type: {source_type} (normalized: {normalized_source_type})")
 
     if normalized_source_type == 'mediumblob':
@@ -168,7 +167,12 @@ def map_data_type(source_type, source_node_info, target_node_info):
     elif normalized_source_type == 'year':
         normalized_source_type = 'int'
 
-    source_item = next((item for item in source_matrix if normalized_source_type in [t.lower() for t in item['supportedTypes']]), None)
+    # Find matching source type in matrix (case-insensitive)
+    source_item = next(
+        (item for item in source_matrix 
+         if any(t.lower() == normalized_source_type for t in item['supportedTypes'])),
+        None
+    )
     
     if not source_item:
         print(f"Warning: No mapping found for source type {source_type}. Using as is.")
@@ -177,33 +181,62 @@ def map_data_type(source_type, source_node_info, target_node_info):
     source_gluesync_type = source_item['gluesyncDataType']
     print(f"Matched GlueSync data type: {source_gluesync_type}")
 
-    target_item = next((item for item in target_matrix if item['gluesyncDataType'] == source_gluesync_type), None)
+    # Find matching target type
+    target_item = next(
+        (item for item in target_matrix 
+         if item['gluesyncDataType'] == source_gluesync_type),
+        None
+    )
     
     if target_item:
-        normalized_target_types = [t.lower() for t in target_item['supportedTypes']]
-        if normalized_source_type in normalized_target_types:
-            print(f"Direct match found: {source_type}")
-            return source_type
+        # Case-insensitive search but return server's exact value if found
+        supported_types_map = {t.lower(): t for t in target_item['supportedTypes']}
         
+        if normalized_source_type in supported_types_map:
+            server_type = supported_types_map[normalized_source_type]
+            print(f"Direct match found: {server_type}")
+            return server_type
+        
+        # Special case mappings using server's exact values
         if normalized_source_type == 'geometry':
-            print(f"Mapping geometry type: {source_type} -> geometry")
-            return 'geometry'
+            for t in target_item['supportedTypes']:
+                if t.lower() == 'geometry':
+                    print(f"Mapping geometry type: {source_type} -> {t}")
+                    return t
         elif normalized_source_type in ['enum', 'set']:
-            print(f"Mapping {normalized_source_type} to varchar")
-            return 'varchar'
+            # Find first STRING type in target's supported types
+            for t in target_item['supportedTypes']:
+                if 'string' in t.lower():
+                    print(f"Mapping {normalized_source_type} to {t}")
+                    return t
         elif normalized_source_type == 'json':
-            mapped_type = 'json' if 'json' in normalized_target_types else 'varchar'
-            print(f"Mapping json to {mapped_type}")
-            return mapped_type
+            # Try to find JSON type first, fall back to STRING
+            for t in target_item['supportedTypes']:
+                if 'json' in t.lower():
+                    print(f"Mapping json to {t}")
+                    return t
+            for t in target_item['supportedTypes']:
+                if 'string' in t.lower():
+                    print(f"Mapping json to {t} (fallback)")
+                    return t
         elif normalized_source_type == 'bit':
-            mapped_type = 'boolean' if 'boolean' in normalized_target_types else 'smallint'
-            print(f"Mapping bit to {mapped_type}")
-            return mapped_type
+            # Try to find BOOLEAN type first, fall back to INT
+            for t in target_item['supportedTypes']:
+                if 'boolean' in t.lower():
+                    print(f"Mapping bit to {t}")
+                    return t
+            for t in target_item['supportedTypes']:
+                if 'int' in t.lower():
+                    print(f"Mapping bit to {t} (fallback)")
+                    return t
         elif normalized_source_type in ['tinyint', 'smallint', 'mediumint']:
-            print(f"Mapping {normalized_source_type} to int")
-            return 'int'
+            # Find appropriate INT type
+            for t in target_item['supportedTypes']:
+                if 'int' in t.lower():
+                    print(f"Mapping {normalized_source_type} to {t}")
+                    return t
         
-        print(f"Mapping {source_type} to {target_item['defaultType']} (no direct match in target)")
+        print(f"Mapping {source_type} to {target_item['defaultType']} (using target's default type)")
         return target_item['defaultType']
     
     print(f"Warning: No target mapping found for GlueSync type {source_gluesync_type}. Using source type {source_type} as is.")
