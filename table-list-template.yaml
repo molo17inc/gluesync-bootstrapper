@@ -15,6 +15,13 @@ schemas:
         DRIVERS:
           keys: 
             - ID
+          documentKey:
+            prefix: "TESTPREFIX"
+            suffix: "TESTSUFFIX"
+            separator: "-"
+            keys: 
+              - ID
+              - LAST_NAME
           name: drivers
           columns:
             - FIRST_NAME: firstName

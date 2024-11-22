@@ -305,6 +305,56 @@ def process_filter_clauses(filter_config, columns_info):
         return {"clauses": processed_clauses}
     return None
 
+def process_filter_clauses(filter_config, columns_info):
+    """
+    Process filter clauses from YAML configuration into the required format
+    """
+    if not filter_config or 'clauses' not in filter_config:
+        return None
+
+    processed_clauses = []
+    for clause in filter_config['clauses']:
+        # Skip invalid clauses
+        if 'column' not in clause or 'operation' not in clause:
+            print(f"Warning: Skipping invalid filter clause: {clause}")
+            continue
+
+        column_name = clause['column']
+        operation_type = clause['operation']
+
+        # Create the basic filter clause
+        filter_clause = {
+            "column": {
+                "name": column_name,
+                "type": clause.get('type', 'string')
+            },
+            "operation": {
+                "type": operation_type
+            }
+        }
+
+        # Handle value based on operation type
+        if operation_type not in ['IsNull', 'IsNotNull']:
+            if 'value' not in clause:
+                print(f"Warning: Missing value for operation {operation_type} on column {column_name}")
+                continue
+                
+            if operation_type == 'Regex':
+                filter_clause["operation"]["filterValue"] = clause['value']
+            elif clause['type'] == 'int':
+                filter_clause["operation"]["filterValue"] = int(clause['value'])
+            elif clause['type'] == 'float':
+                filter_clause["operation"]["filterValue"] = float(clause['value'])
+            else:
+                filter_clause["operation"]["filterValue"] = str(clause['value'])
+
+        print(f"Generated filter clause: {json.dumps(filter_clause, indent=2)}")
+        processed_clauses.append(filter_clause)
+
+    if processed_clauses:
+        return {"clauses": processed_clauses}
+    return None
+
 def create_entities(token, pipeline_id, source_schema, target_schema, tables, source_agent_id, target_agent_id, source_type, target_type, yaml_config):
     entities = []
     
@@ -372,6 +422,18 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         processed_filters = process_filter_clauses(filter_config, columns) if filter_config else None
         print(f"Processed filters for {table_name}: {processed_filters}")
 
+        # Get document key configuration if it exists
+        document_key = None
+        if custom_config and 'documentKey' in custom_config:
+            doc_key_config = custom_config['documentKey']
+            document_key = {
+                "prefix": doc_key_config.get('prefix', ''),
+                "suffix": doc_key_config.get('suffix', ''),
+                "separator": doc_key_config.get('separator', '-'),
+                "keys": doc_key_config.get('keys', [])
+            }
+            print(f"Document key configuration for {table_name}: {document_key}")
+
         # Process keys and other configurations as before...
         if custom_config and 'keys' in custom_config:
             keys = []
@@ -408,95 +470,100 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         source_table_key = f"{source_schema}.{table_name}"
         target_table_key = f"{yaml_target_schema}.{target_table_name}"
 
+        source_entity = {
+            "type": "NoSqlEntity" if source_type.lower() == "nosql" else "SingleTable",
+            "entityType": {
+                "type": "Source",
+                "maxItemsCountPerIteration": 1000,
+                "maxMigrationItemsCountPerIteration": 1000,
+                "pollingIntervalMilliseconds": 100
+            },
+            "agentId": source_agent_id,
+            "entityObject": {
+                "scope": source_schema,
+                "collection": table_name
+            },
+            "table": {
+                "name": table_name,
+                "schema": source_schema
+            },
+            "columns": [
+                {
+                    "name": col["name"],
+                    "alias": next(
+                        (target_name 
+                        for column_map in custom_config.get('columns', [])
+                        for source_name, target_name in column_map.items()
+                        if source_name == col["name"]
+                        ),
+                        col["name"]
+                    ),
+                    "type": col["type"]
+                } for col in columns["columns"]
+            ],
+            "keys": keys,
+            "customProperties": source_custom_properties,
+            "tablesProperties": {source_table_key: {}}
+        }
+
+        target_entity = {
+            "type": "NoSqlEntity" if target_type.lower() == "nosql" else "SingleTable",
+            "entityType": {
+                "type": "Target",
+                **({"filter": processed_filters} if processed_filters else {})
+            },
+            "agentId": target_agent_id,
+            "entityObject": {
+                "scope": yaml_target_schema,
+                "collection": target_table_name
+            },
+            "table": {
+                "schema": yaml_target_schema,
+                "name": target_table_name
+            },
+            "columns": [
+                {
+                    "name": next(
+                        (target_name 
+                        for column_map in custom_config.get('columns', [])
+                        for source_name, target_name in column_map.items()
+                        if source_name == col["name"]
+                        ),
+                        col["name"]
+                    ),
+                    "alias": next(
+                        (target_name 
+                        for column_map in custom_config.get('columns', [])
+                        for source_name, target_name in column_map.items()
+                        if source_name == col["name"]
+                        ),
+                        col["name"]
+                    ),
+                    "type": map_data_type(col["type"], source_node_info, target_node_info)
+                } for col in columns["columns"]
+            ],
+            "keys": [
+                {
+                    "name": key["name"],
+                    "type": map_data_type(key["type"], source_node_info, target_node_info)
+                } for key in keys
+            ],
+            "customProperties": target_custom_properties,
+            "tablesProperties": {target_table_key: {}},
+            "sourceAgent": source_agent_id,
+            "sourceTable": {
+                "schema": source_schema,
+                "name": table_name
+            }
+        }
+
+        # Add document key mapping if configured
+        if document_key:
+            target_entity["keyMapping"] = document_key
+
         entity = {
             "entityName": f"{source_schema}.{table_name}",
-            "agentEntities": [
-                {
-                    "type": "NoSqlEntity" if source_type.lower() == "nosql" else "SingleTable",
-                    "entityType": {
-                        "type": "Source",
-                        "maxItemsCountPerIteration": 1000,
-                        "maxMigrationItemsCountPerIteration": 1000,
-                        "pollingIntervalMilliseconds": 100
-                    },
-                    "agentId": source_agent_id,
-                    "entityObject": {
-                        "scope": source_schema,
-                        "collection": table_name
-                    },
-                    "table": {
-                        "name": table_name,
-                        "schema": source_schema
-                    },
-                    "columns": [
-                        {
-                            "name": col["name"],
-                            "alias": next(
-                                (target_name 
-                                for column_map in custom_config.get('columns', [])
-                                for source_name, target_name in column_map.items()
-                                if source_name == col["name"]
-                                ),
-                                col["name"]
-                            ),
-                            "type": col["type"]
-                        } for col in columns["columns"]
-                    ],
-                    "keys": keys,
-                    "customProperties": source_custom_properties,
-                    "tablesProperties": {source_table_key: {}}
-                },
-                {
-                    "type": "NoSqlEntity" if target_type.lower() == "nosql" else "SingleTable",
-                    "entityType": {
-                        "type": "Target",
-                        **({"filter": processed_filters} if processed_filters else {})
-                    },
-                    "agentId": target_agent_id,
-                    "entityObject": {
-                        "scope": yaml_target_schema,
-                        "collection": target_table_name
-                    },
-                    "table": {
-                        "schema": yaml_target_schema,
-                        "name": target_table_name
-                    },
-                    "columns": [
-                        {
-                            "name": next(
-                                (target_name 
-                                for column_map in custom_config.get('columns', [])
-                                for source_name, target_name in column_map.items()
-                                if source_name == col["name"]
-                                ),
-                                col["name"]
-                            ),
-                            "alias": next(
-                                (target_name 
-                                for column_map in custom_config.get('columns', [])
-                                for source_name, target_name in column_map.items()
-                                if source_name == col["name"]
-                                ),
-                                col["name"]
-                            ),
-                            "type": map_data_type(col["type"], source_node_info, target_node_info)
-                        } for col in columns["columns"]
-                    ],
-                    "keys": [
-                        {
-                            "name": key["name"],
-                            "type": map_data_type(key["type"], source_node_info, target_node_info)
-                        } for key in keys
-                    ],
-                    "customProperties": target_custom_properties,
-                    "tablesProperties": {target_table_key: {}},
-                    "sourceAgent": source_agent_id,
-                    "sourceTable": {
-                        "schema": source_schema,
-                        "name": table_name
-                    }
-                }
-            ]
+            "agentEntities": [source_entity, target_entity]
         }
         entities.append(entity)
     
