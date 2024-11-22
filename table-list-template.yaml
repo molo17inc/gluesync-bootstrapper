@@ -1,49 +1,57 @@
 schemas:
   dbo:
     target: public
-    # Global custom properties for all tables in this schema
     customProperties:
       source: 
         maxItemsCountPerIteration: 1000
-        maxMigrationItemsCountPerIteration: 1000
         pollingIntervalMilliseconds: 100
       target:
-        ttlValue: 10000000  # Default TTL for all target entities
+        ttlValue: 10000000
     tables:
       whitelist:
         - DRIVERS
         - VEHICLES
-      blacklist:
-        - TABLE_TO_BE_SKIPPED
       custom:
         DRIVERS:
           keys: 
             - ID
-          # Optional: rename target table
           name: drivers
-          # Column mappings with aliases
           columns:
             - FIRST_NAME: firstName
             - LAST_NAME: lastName
-            - EMAIL: email
-            - DRIVING_LICENSE_ID: drivingLicenseId
-          # Override custom properties for this specific table
+          # New filter configuration
+          filter:
+            clauses:
+              - column: GENDER
+                type: string  # Specify the column type for proper mapping
+                operation: Equal
+                value: "Female"
+              - column: AGE
+                type: int
+                operation: GreaterEqual
+                value: 21
+              - column: DRIVING_LICENSE_EXPIRE_DATE
+                type: string
+                operation: IsNotNull
+              - column: EMAIL
+                type: string
+                operation: Regex
+                value: ".*@company\\.com"
           customProperties:
-            source:
-              maxItemsCountPerIteration: 500  # Override global value
-              maxMigrationItemsCountPerIteration: 500
             target:
-              ttlValue: 20000000  # Override global TTL
-              customField: customValue
+              ttlValue: 20000000
         
         VEHICLES:
           keys:
             - VEHICLE_ID
-          name: vehicles  # Target table name
-          columns:
-            - VEHICLE_MODEL: model
-            - VEHICLE_BRAND: brand
-            - REGISTRATION_DATE: registrationDate
-          customProperties:
-            target:
-              ttlValue: 15000000  # Different TTL for vehicles
+          name: vehicles
+          filter:
+            clauses:
+              - column: REGISTRATION_DATE
+                type: string
+                operation: Greater
+                value: "2020-01-01"
+              - column: STATUS
+                type: string
+                operation: In
+                value: ["ACTIVE", "MAINTENANCE"]
