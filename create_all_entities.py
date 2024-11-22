@@ -255,6 +255,49 @@ def load_yaml_config(file_path):
         print(f"Error parsing YAML file: {e}. Proceeding without it.")
         return {}
 
+def process_filter_clauses(filter_config, columns_info):
+    """
+    Process filter clauses from YAML configuration into the required format
+    """
+    if not filter_config or 'clauses' not in filter_config:
+        return None
+
+    processed_clauses = []
+    for clause in filter_config['clauses']:
+        # Skip invalid clauses
+        if 'column' not in clause or 'operation' not in clause:
+            print(f"Warning: Skipping invalid filter clause: {clause}")
+            continue
+
+        column_name = clause['column']
+        operation_type = clause['operation']
+        filter_value = clause.get('value')  # Optional for some operations
+
+        # Create the filter clause
+        filter_clause = {
+            "column": {
+                "name": column_name,
+                "type": clause.get('type', 'string')  # Default to string if not specified
+            },
+            "operation": {
+                "type": operation_type
+            }
+        }
+
+        # Add filterValue only for operations that require it
+        if operation_type not in ['IsNull', 'IsNotNull']:
+            if filter_value is not None:
+                filter_clause["operation"]["filterValue"] = filter_value
+            else:
+                print(f"Warning: Missing filter value for operation {operation_type} on column {column_name}")
+                continue
+
+        processed_clauses.append(filter_clause)
+
+    if processed_clauses:
+        return {"clauses": processed_clauses}
+    return None
+
 def create_entities(token, pipeline_id, source_schema, target_schema, tables, source_agent_id, target_agent_id, source_type, target_type, yaml_config):
     entities = []
     
@@ -316,6 +359,11 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         # Get custom target table name if specified
         target_table_name = custom_config.get('name', table_name)
         print(f"Using target table name: {target_table_name} for source table: {table_name}")
+
+        # Get and process filter configuration
+        filter_config = custom_config.get('filter')
+        processed_filters = process_filter_clauses(filter_config, columns) if filter_config else None
+        print(f"Processed filters for {table_name}: {processed_filters}")
 
         # Process keys and other configurations as before...
         if custom_config and 'keys' in custom_config:
@@ -394,7 +442,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 {
                     "type": "NoSqlEntity" if target_type.lower() == "nosql" else "SingleTable",
                     "entityType": {
-                        "type": "Target"
+                        "type": "Target",
+                        **({"filter": processed_filters} if processed_filters else {})
                     },
                     "agentId": target_agent_id,
                     "entityObject": {
@@ -413,7 +462,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                 for source_name, target_name in column_map.items()
                                 if source_name == col["name"]
                                 ),
-                                col["name"]  # Default to original name if no mapping found
+                                col["name"]
                             ),
                             "alias": next(
                                 (target_name 
@@ -421,7 +470,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                 for source_name, target_name in column_map.items()
                                 if source_name == col["name"]
                                 ),
-                                col["name"]  # Default to original name if no mapping found
+                                col["name"]
                             ),
                             "type": map_data_type(col["type"], source_node_info, target_node_info)
                         } for col in columns["columns"]
