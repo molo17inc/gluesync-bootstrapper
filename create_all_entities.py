@@ -276,10 +276,17 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
     blacklist = schema_config.get('tables', {}).get('blacklist', [])
     custom_tables = schema_config.get('tables', {}).get('custom', {})
 
+    # Get schema-level custom properties
+    schema_custom_properties = schema_config.get('customProperties', {})
+    global_source_custom_properties = schema_custom_properties.get('source', {})
+    global_target_custom_properties = schema_custom_properties.get('target', {})
+
     print(f"Target schema: {yaml_target_schema}")
     print(f"Whitelist: {whitelist}")
     print(f"Blacklist: {blacklist}")
     print(f"Custom tables: {custom_tables}")
+    print(f"Global source custom properties: {global_source_custom_properties}")
+    print(f"Global target custom properties: {global_target_custom_properties}")
     
     for table in tables:
         table_name = table.get("name")
@@ -298,17 +305,19 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         custom_config = custom_tables.get(table_name, {})
         print(f"Custom config for {table_name}: {custom_config}")
         
+        # Get table-specific custom properties and merge with global properties
+        table_custom_properties = custom_config.get('customProperties', {})
+        source_custom_properties = {**global_source_custom_properties, **table_custom_properties.get('source', {})}
+        target_custom_properties = {**global_target_custom_properties, **table_custom_properties.get('target', {})}
+        
+        print(f"Source custom properties for {table_name}: {source_custom_properties}")
+        print(f"Target custom properties for {table_name}: {target_custom_properties}")
+        
         # Get custom target table name if specified
         target_table_name = custom_config.get('name', table_name)
         print(f"Using target table name: {target_table_name} for source table: {table_name}")
 
-        # Log column mappings if any exist
-        if 'columns' in custom_config:
-            print(f"Column mappings for {table_name}:")
-            for column_map in custom_config['columns']:
-                for source_name, target_name in column_map.items():
-                    print(f"  {source_name} -> {target_name}")
-
+        # Process keys and other configurations as before...
         if custom_config and 'keys' in custom_config:
             keys = []
             for key_name in custom_config['keys']:
@@ -340,6 +349,10 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         if not keys:
             print(f"Warning: No keys specified for {table_name}. Table will have no keys.")
 
+        # Create source and target table property keys
+        source_table_key = f"{source_schema}.{table_name}"
+        target_table_key = f"{yaml_target_schema}.{target_table_name}"
+
         entity = {
             "entityName": f"{source_schema}.{table_name}",
             "agentEntities": [
@@ -369,12 +382,14 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                 for source_name, target_name in column_map.items()
                                 if source_name == col["name"]
                                 ),
-                                col["name"]  # Default to original name if no mapping found
+                                col["name"]
                             ),
                             "type": col["type"]
                         } for col in columns["columns"]
                     ],
-                    "keys": keys
+                    "keys": keys,
+                    "customProperties": source_custom_properties,
+                    "tablesProperties": {source_table_key: {}}
                 },
                 {
                     "type": "NoSqlEntity" if target_type.lower() == "nosql" else "SingleTable",
@@ -417,6 +432,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             "type": map_data_type(key["type"], source_node_info, target_node_info)
                         } for key in keys
                     ],
+                    "customProperties": target_custom_properties,
+                    "tablesProperties": {target_table_key: {}},
                     "sourceAgent": source_agent_id,
                     "sourceTable": {
                         "schema": source_schema,
