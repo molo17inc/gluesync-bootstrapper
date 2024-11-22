@@ -271,27 +271,34 @@ def process_filter_clauses(filter_config, columns_info):
 
         column_name = clause['column']
         operation_type = clause['operation']
-        filter_value = clause.get('value')  # Optional for some operations
 
-        # Create the filter clause
+        # Create the basic filter clause
         filter_clause = {
             "column": {
                 "name": column_name,
-                "type": clause.get('type', 'string')  # Default to string if not specified
+                "type": clause.get('type', 'string')
             },
             "operation": {
                 "type": operation_type
             }
         }
 
-        # Add filterValue only for operations that require it
+        # Handle value based on operation type
         if operation_type not in ['IsNull', 'IsNotNull']:
-            if filter_value is not None:
-                filter_clause["operation"]["filterValue"] = filter_value
-            else:
-                print(f"Warning: Missing filter value for operation {operation_type} on column {column_name}")
+            if 'value' not in clause:
+                print(f"Warning: Missing value for operation {operation_type} on column {column_name}")
                 continue
+                
+            if operation_type == 'Regex':
+                filter_clause["operation"]["filterValue"] = clause['value']
+            elif clause['type'] == 'int':
+                filter_clause["operation"]["filterValue"] = int(clause['value'])
+            elif clause['type'] == 'float':
+                filter_clause["operation"]["filterValue"] = float(clause['value'])
+            else:
+                filter_clause["operation"]["filterValue"] = str(clause['value'])
 
+        print(f"Generated filter clause: {json.dumps(filter_clause, indent=2)}")
         processed_clauses.append(filter_clause)
 
     if processed_clauses:
