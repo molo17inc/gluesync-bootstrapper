@@ -308,6 +308,7 @@ def process_filter_clauses(filter_config, columns_info):
 def process_filter_clauses(filter_config, columns_info):
     """
     Process filter clauses from YAML configuration into the required format
+    All filter values are converted to strings as required by the backend
     """
     if not filter_config or 'clauses' not in filter_config:
         return None
@@ -339,13 +340,12 @@ def process_filter_clauses(filter_config, columns_info):
                 print(f"Warning: Missing value for operation {operation_type} on column {column_name}")
                 continue
                 
-            if operation_type == 'Regex':
-                filter_clause["operation"]["filterValue"] = clause['value']
-            elif clause['type'] == 'int':
-                filter_clause["operation"]["filterValue"] = int(clause['value'])
-            elif clause['type'] == 'float':
-                filter_clause["operation"]["filterValue"] = float(clause['value'])
+            # Convert all values to strings
+            if isinstance(clause['value'], (list, tuple)):
+                # Handle arrays (for IN operations)
+                filter_clause["operation"]["filterValue"] = [str(v) for v in clause['value']]
             else:
+                # Handle single values
                 filter_clause["operation"]["filterValue"] = str(clause['value'])
 
         print(f"Generated filter clause: {json.dumps(filter_clause, indent=2)}")
