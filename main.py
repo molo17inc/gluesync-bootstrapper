@@ -219,12 +219,32 @@ def start_entity_syncs(token, pipeline_id):
         except Exception as e:
             print(f"Error starting sync for entity {entityName} (ID: {entityId}): {str(e)}")
 
+def change_password(token, old_password, new_password):
+    """Change the user password and return the new token."""
+    response = fetch_core_hub(
+        '/users/password',
+        method='PUT',
+        token=token,
+        body={
+            'oldPassword': old_password,
+            'newPassword': new_password
+        }
+    )
+    
+    # Re-authenticate with the new password
+    auth_response = fetch_core_hub(
+        '/authentication/login',
+        method='POST',
+        body={'username': default_user, 'password': new_password}
+    )
+    return auth_response.get('apiToken')
+
 def main():
     with open(file_conf_path, 'r') as file:
         conf_test = json.load(file)
 
     try:
-        # Authenticate
+        # Initial authentication
         auth_response = fetch_core_hub(
             '/authentication/login',
             method='POST',
@@ -233,6 +253,14 @@ def main():
         token = auth_response.get('apiToken')
         if not token:
             raise Exception('Failed to authenticate')
+
+        # Generate a new random password and change it
+        new_password = f"{fake.word()}_{generate_short_guid()}_!{fake.random_number(digits=3)}"
+        try:
+            token = change_password(token, default_password, new_password)
+            print(f"Successfully changed password to: {new_password}")
+        except Exception as e:
+            print(f"Password change failed, continuing with existing token: {str(e)}")
 
         # List unassigned agents
         unassigned_agents = fetch_core_hub('/unassigned-agents', token=token)
@@ -323,6 +351,10 @@ def main():
             # Invoke the entity creation script
             entity_creation_script = 'create_all_entities.py' 
             try:
+                # Create a new environment with the updated password
+                script_env = os.environ.copy()
+                script_env['DEFAULT_PASSWORD'] = new_password
+
                 cmd = [
                     'python',
                     entity_creation_script,
@@ -343,7 +375,7 @@ def main():
                 else:
                     print(f"TABLE_LIST.yaml not found at {TABLE_LIST_YAML}. Proceeding without it.")
 
-                subprocess.run(cmd, check=True)
+                subprocess.run(cmd, check=True, env=script_env)
                 print(f"Entity creation completed for pipeline {pipeline_id}, source schema {source_schema}, target schema {target_schema or source_schema}, source type {source_type}, target type {target_type}")
             except subprocess.CalledProcessError as e:
                 print(f"Error running entity creation script: {e}")
