@@ -264,10 +264,15 @@ def main():
             token = change_password(token, default_password, new_password)
             print(f"Successfully changed password to: {new_password}")
             
-            # Verify the new token works
-            test_response = fetch_core_hub('/unassigned-agents', token=token)
-            if not isinstance(test_response, list):
-                raise Exception('Failed to verify new token')
+            # Initial authentication
+            auth_response = fetch_core_hub(
+                '/authentication/login',
+                method='POST',
+                body={'username': default_user, 'password': new_password}
+            )
+            token = auth_response.get('apiToken')
+            if not token:
+                raise Exception('Failed to authenticate')
                 
         except Exception as e:
             print(f"Password change failed, attempting to continue with default password: {str(e)}")
