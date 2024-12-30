@@ -231,13 +231,16 @@ def change_password(token, old_password, new_password):
         }
     )
     
-    # Re-authenticate with the new password
+    # Re-authenticate immediately with the new password to get a fresh token
     auth_response = fetch_core_hub(
         '/authentication/login',
         method='POST',
         body={'username': default_user, 'password': new_password}
     )
-    return auth_response.get('apiToken')
+    new_token = auth_response.get('apiToken')
+    if not new_token:
+        raise Exception('Failed to re-authenticate after password change')
+    return new_token
 
 def main():
     with open(file_conf_path, 'r') as file:
@@ -257,10 +260,27 @@ def main():
         # Generate a new random password and change it
         new_password = f"{fake.word().upper()}_{generate_short_guid()}_!{fake.random_number(digits=3)}"
         try:
+            # Change password and get new token
             token = change_password(token, default_password, new_password)
             print(f"Successfully changed password to: {new_password}")
+            
+            # Verify the new token works
+            test_response = fetch_core_hub('/unassigned-agents', token=token)
+            if not isinstance(test_response, list):
+                raise Exception('Failed to verify new token')
+                
         except Exception as e:
-            print(f"Password change failed, continuing with existing token: {str(e)}")
+            print(f"Password change failed, attempting to continue with default password: {str(e)}")
+            # Try to get a fresh token with the default password
+            auth_response = fetch_core_hub(
+                '/authentication/login',
+                method='POST',
+                body={'username': default_user, 'password': default_password}
+            )
+            token = auth_response.get('apiToken')
+            if not token:
+                raise Exception('Failed to re-authenticate with default password')
+            new_password = default_password
 
         # List unassigned agents
         unassigned_agents = fetch_core_hub('/unassigned-agents', token=token)
