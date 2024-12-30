@@ -222,7 +222,7 @@ def start_entity_syncs(token, pipeline_id):
 def change_password(token, old_password, new_password):
     """Change the user password and return the new token."""
     response = fetch_core_hub(
-        '/users/password',
+        '/authentication/reset-password',
         method='PUT',
         token=token,
         body={
