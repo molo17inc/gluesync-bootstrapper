@@ -255,7 +255,7 @@ def main():
             raise Exception('Failed to authenticate')
 
         # Generate a new random password and change it
-        new_password = f"{fake.word()}_{generate_short_guid()}_!{fake.random_number(digits=3)}"
+        new_password = f"{fake.word().upper()}_{generate_short_guid()}_!{fake.random_number(digits=3)}"
         try:
             token = change_password(token, default_password, new_password)
             print(f"Successfully changed password to: {new_password}")
