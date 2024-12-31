@@ -574,8 +574,8 @@ def main(pipeline_id, source_schema, target_schema, source_type, target_type, ya
             raise Exception(f"Expected 2 agents, found {len(agents) if agents else 0}")
         
         # Identify source and target agents based on type
-        source_agent = next((agent for agent in agents if agent['agentType'] == source_type), None)
-        target_agent = next((agent for agent in agents if agent['agentType'] == target_type), None)
+        source_agent = next((agent for agent in agents if agent['agentType'] == 'SOURCE'), None)
+        target_agent = next((agent for agent in agents if agent['agentType'] == 'TARGET'), None)
         
         if not source_agent or not target_agent:
             raise Exception(f"Could not find required agents. Source ({source_type}): {source_agent}, Target ({target_type}): {target_agent}")
