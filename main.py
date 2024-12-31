@@ -219,14 +219,23 @@ def start_entity_syncs(token, pipeline_id):
         except Exception as e:
             print(f"Error starting sync for entity {entityName} (ID: {entityId}): {str(e)}")
 
-def change_password(token, new_password):
+def save_token(token):
+    """Save the authentication token to a file."""
+    try:
+        with open('auth_token.txt', 'w') as f:
+            f.write(token)
+        print("Authentication token saved successfully")
+    except Exception as e:
+        print(f"Warning: Failed to save authentication token: {e}")
+
+def change_password(token, old_password, new_password):
     """Change the user password and return the new token."""
     response = fetch_core_hub(
         '/authentication/reset-password',
         method='POST',
         token=token,
         body={
-            'oldPassword': default_password,
+            'oldPassword': old_password,
             'newPassword': new_password
         }
     )
@@ -249,6 +258,9 @@ def change_password(token, new_password):
     change_required = auth_response.get('changeRequired', False)
     if change_required:
         raise Exception('Password change still required after reset')
+    
+    # Save the new token
+    save_token(new_token)
         
     return new_token
 
@@ -257,7 +269,7 @@ def main():
         conf_test = json.load(file)
 
     try:
-        # Initial authentication with default credentials
+        # Initial authentication
         auth_response = fetch_core_hub(
             '/authentication/login',
             method='POST',
@@ -274,7 +286,7 @@ def main():
             new_password = f"{fake.word().upper()}_{generate_short_guid()}_!{fake.random_number(digits=3)}"
             try:
                 # Change password and get new token
-                token = change_password(token, new_password)
+                token = change_password(token, default_password, new_password)
                 print(f"Successfully changed password to: {new_password}")
                 
             except Exception as e:
@@ -291,6 +303,8 @@ def main():
                 new_password = default_password
         else:
             new_password = default_password
+            # Save the initial token if no password change was required
+            save_token(token)
 
         # List unassigned agents
         unassigned_agents = fetch_core_hub('/unassigned-agents', token=token)
