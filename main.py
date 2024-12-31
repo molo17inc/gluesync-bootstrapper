@@ -48,6 +48,7 @@ target_schema = os.getenv('TARGET_SCHEMA')
 source_type = os.getenv('SOURCE_TYPE', 'SQL')
 target_type = os.getenv('TARGET_TYPE', 'NoSQL')
 TABLE_LIST_YAML = os.getenv('TABLE_LIST_YAML', 'TABLE_LIST.yaml')
+AUTH_TOKEN_PATH = os.path.join('/opt/config', 'auth_token.txt')
 
 ENTITY_START_TIMEOUT = 1
 
@@ -220,11 +221,14 @@ def start_entity_syncs(token, pipeline_id):
             print(f"Error starting sync for entity {entityName} (ID: {entityId}): {str(e)}")
 
 def save_token(token):
-    """Save the authentication token to a file."""
+    """Save the authentication token to a file in the config directory."""
     try:
-        with open('auth_token.txt', 'w') as f:
+        # Create config directory if it doesn't exist
+        os.makedirs(os.path.dirname(AUTH_TOKEN_PATH), exist_ok=True)
+        
+        with open(AUTH_TOKEN_PATH, 'w') as f:
             f.write(token)
-        print("Authentication token saved successfully")
+        print(f"Authentication token saved successfully to {AUTH_TOKEN_PATH}")
     except Exception as e:
         print(f"Warning: Failed to save authentication token: {e}")
 
