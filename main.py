@@ -219,19 +219,19 @@ def start_entity_syncs(token, pipeline_id):
         except Exception as e:
             print(f"Error starting sync for entity {entityName} (ID: {entityId}): {str(e)}")
 
-def change_password(token, old_password, new_password):
+def change_password(token, new_password):
     """Change the user password and return the new token."""
     response = fetch_core_hub(
         '/authentication/reset-password',
-        method='PUT',
+        method='POST',
         token=token,
         body={
-            'oldPassword': old_password,
+            'oldPassword': '',
             'newPassword': new_password
         }
     )
     
-    # Re-authenticate immediately with the new password to get a fresh token
+    # Re-authenticate with the new password to get a fresh token
     auth_response = fetch_core_hub(
         '/authentication/login',
         method='POST',
@@ -247,7 +247,7 @@ def main():
         conf_test = json.load(file)
 
     try:
-        # Initial authentication
+        # Initial authentication with default credentials
         auth_response = fetch_core_hub(
             '/authentication/login',
             method='POST',
@@ -256,35 +256,29 @@ def main():
         token = auth_response.get('apiToken')
         if not token:
             raise Exception('Failed to authenticate')
-
-        # Generate a new random password and change it
-        new_password = f"{fake.word().upper()}_{generate_short_guid()}_!{fake.random_number(digits=3)}"
-        try:
-            # Change password and get new token
-            token = change_password(token, default_password, new_password)
-            print(f"Successfully changed password to: {new_password}")
             
-            # Initial authentication
-            auth_response = fetch_core_hub(
-                '/authentication/login',
-                method='POST',
-                body={'username': default_user, 'password': new_password}
-            )
-            token = auth_response.get('apiToken')
-            if not token:
-                raise Exception('Failed to authenticate')
+        change_required = auth_response.get('changeRequired', False)
+        if change_required:
+            # Generate a new random password and change it
+            new_password = f"{fake.word().upper()}_{generate_short_guid()}_!{fake.random_number(digits=3)}"
+            try:
+                # Change password and get new token
+                token = change_password(token, new_password)
+                print(f"Successfully changed password to: {new_password}")
                 
-        except Exception as e:
-            print(f"Password change failed, attempting to continue with default password: {str(e)}")
-            # Try to get a fresh token with the default password
-            auth_response = fetch_core_hub(
-                '/authentication/login',
-                method='POST',
-                body={'username': default_user, 'password': default_password}
-            )
-            token = auth_response.get('apiToken')
-            if not token:
-                raise Exception('Failed to re-authenticate with default password')
+            except Exception as e:
+                print(f"Password change failed, attempting to continue with default password: {str(e)}")
+                # Try to get a fresh token with the default password
+                auth_response = fetch_core_hub(
+                    '/authentication/login',
+                    method='POST',
+                    body={'username': default_user, 'password': default_password}
+                )
+                token = auth_response.get('apiToken')
+                if not token:
+                    raise Exception('Failed to re-authenticate with default password')
+                new_password = default_password
+        else:
             new_password = default_password
 
         # List unassigned agents
