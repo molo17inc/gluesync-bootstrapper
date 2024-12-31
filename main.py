@@ -231,6 +231,11 @@ def change_password(token, new_password):
         }
     )
     
+    if response != "Password changed":
+        raise Exception(f"Unexpected response from password reset: {response}")
+    
+    print("Password reset successful")
+    
     # Re-authenticate with the new password to get a fresh token
     auth_response = fetch_core_hub(
         '/authentication/login',
@@ -240,6 +245,11 @@ def change_password(token, new_password):
     new_token = auth_response.get('apiToken')
     if not new_token:
         raise Exception('Failed to re-authenticate after password change')
+        
+    change_required = auth_response.get('changeRequired', False)
+    if change_required:
+        raise Exception('Password change still required after reset')
+        
     return new_token
 
 def main():
@@ -259,6 +269,7 @@ def main():
             
         change_required = auth_response.get('changeRequired', False)
         if change_required:
+            print(f"Password change required")
             # Generate a new random password and change it
             new_password = f"{fake.word().upper()}_{generate_short_guid()}_!{fake.random_number(digits=3)}"
             try:
