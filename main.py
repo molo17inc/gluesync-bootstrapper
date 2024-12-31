@@ -226,7 +226,7 @@ def change_password(token, new_password):
         method='POST',
         token=token,
         body={
-            'oldPassword': '',
+            'oldPassword': default_password,
             'newPassword': new_password
         }
     )
@@ -381,17 +381,14 @@ def main():
             # Invoke the entity creation script
             entity_creation_script = 'create_all_entities.py' 
             try:
-                # Create a new environment with the updated password
-                script_env = os.environ.copy()
-                script_env['DEFAULT_PASSWORD'] = new_password
-
                 cmd = [
                     'python',
                     entity_creation_script,
                     '--pipeline', pipeline_id,
                     '--source-schema', source_schema,
                     '--source-type', source_type,
-                    '--target-type', target_type
+                    '--target-type', target_type,
+                    '--token', token
                 ]
                 
                 if target_schema:
@@ -405,7 +402,7 @@ def main():
                 else:
                     print(f"TABLE_LIST.yaml not found at {TABLE_LIST_YAML}. Proceeding without it.")
 
-                subprocess.run(cmd, check=True, env=script_env)
+                subprocess.run(cmd, check=True)
                 print(f"Entity creation completed for pipeline {pipeline_id}, source schema {source_schema}, target schema {target_schema or source_schema}, source type {source_type}, target type {target_type}")
             except subprocess.CalledProcessError as e:
                 print(f"Error running entity creation script: {e}")

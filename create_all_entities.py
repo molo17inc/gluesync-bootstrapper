@@ -37,8 +37,6 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Environment variables with default values
 CORE_HUB_URL = os.getenv('CORE_HUB_URL', 'https://localhost:1717')
-DEFAULT_USER = os.getenv('DEFAULT_USER', 'admin')
-DEFAULT_PASSWORD = os.getenv('DEFAULT_PASSWORD', 'admin')
 ENTITY_START_TIMEOUT = int(os.getenv('ENTITY_START_TIMEOUT', '1'))
 
 class ProtocolAwareAdapter(HTTPAdapter):
@@ -125,17 +123,6 @@ core_hub_client = CoreHubClient(CORE_HUB_URL)
 
 def fetch_core_hub(path, method='GET', token=None, body=None, params=None):
     return core_hub_client.request(path, method, token, body, params)
-
-def authenticate():
-    auth_response = fetch_core_hub(
-        '/authentication/login',
-        method='POST',
-        body={'username': DEFAULT_USER, 'password': DEFAULT_PASSWORD}
-    )
-    token = auth_response.get('apiToken')
-    if not token:
-        raise Exception('Failed to authenticate')
-    return token
 
 def get_pipeline_config(token, pipeline_id):
     return fetch_core_hub(f"/pipelines/{pipeline_id}/config", token=token)
@@ -570,37 +557,64 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
     entity_data = {"entities": entities}
     return fetch_core_hub(f"/pipelines/{pipeline_id}/config/entities", method="PUT", token=token, body=entity_data)
 
-def main(pipeline_id, source_schema, target_schema, source_type, target_type, yaml_file):
-    token = authenticate()
-    
-    yaml_config = load_yaml_config(yaml_file) if yaml_file else {}
-    print(f"Loaded YAML config in main: {json.dumps(yaml_config, indent=2)}")
-    
-    agents = get_pipeline_agents(token, pipeline_id)
-    
-    source_agent = next((agent for agent in agents if agent['agentType'] == 'SOURCE'), None)
-    target_agent = next((agent for agent in agents if agent['agentType'] == 'TARGET'), None)
-    
-    if not source_agent or not target_agent:
-        raise Exception("Could not find both source and target agents in the pipeline configuration")
-    
-    tables = get_agent_tables(token, pipeline_id, source_agent['agentId'], source_schema)
-    
-    response = create_entities(token, pipeline_id, source_schema, target_schema, tables["tables"], 
-                             source_agent['agentId'], target_agent['agentId'], source_type, target_type, yaml_config)
-    
-    if response:
-        print(f"Entities created successfully for source schema: {source_schema} and target schema: {target_schema}")
-    else:
-        print(f"Failed to create entities for source schema: {source_schema} and target schema: {target_schema}")
+def main(pipeline_id, source_schema, target_schema, source_type, target_type, yaml_file, token):
+    """
+    Main function to create entities for a pipeline
+    """
+    try:
+        yaml_config = load_yaml_config(yaml_file) if yaml_file else None
+        
+        # Get pipeline configuration
+        pipeline_config = get_pipeline_config(token, pipeline_id)
+        
+        # Get agents information
+        agents = get_pipeline_agents(token, pipeline_id)
+        
+        if not agents or len(agents) != 2:
+            raise Exception(f"Expected 2 agents, found {len(agents) if agents else 0}")
+        
+        # Identify source and target agents based on type
+        source_agent = next((agent for agent in agents if agent['agentType'] == source_type), None)
+        target_agent = next((agent for agent in agents if agent['agentType'] == target_type), None)
+        
+        if not source_agent or not target_agent:
+            raise Exception(f"Could not find required agents. Source ({source_type}): {source_agent}, Target ({target_type}): {target_agent}")
+        
+        # Get tables from source agent
+        tables = get_agent_tables(token, pipeline_id, source_agent['agentId'], source_schema)
+        
+        if not tables:
+            raise Exception(f"No tables found in schema {source_schema}")
+            
+        # Create entities
+        create_entities(
+            token, pipeline_id, source_schema, target_schema,
+            tables, source_agent['agentId'], target_agent['agentId'],
+            source_type, target_type, yaml_config
+        )
+        
+    except Exception as e:
+        print(f"Error: {str(e)}")
+        raise
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="GlueSync Entity Creation Script")
     parser.add_argument('--pipeline', required=True, help="Pipeline ID")
     parser.add_argument('--source-schema', required=True, help="Source schema name")
-    parser.add_argument('--target-schema', required=True, help="Target schema name")    
-    parser.add_argument('--source-type', required=True, choices=['SQL', 'NoSQL'], help="Source type (SQL or NoSQL)")
-    parser.add_argument('--target-type', required=True, choices=['SQL', 'NoSQL'], help="Target type (SQL or NoSQL)")        
-    parser.add_argument('--yaml-file', help="Path to the YAML configuration file")
+    parser.add_argument('--target-schema', required=True, help="Target schema name")
+    parser.add_argument('--source-type', required=True, help="Source agent type")
+    parser.add_argument('--target-type', required=True, help="Target agent type")
+    parser.add_argument('--yaml-file', help="YAML configuration file path")
+    parser.add_argument('--token', required=True, help="Authentication token")
+    
     args = parser.parse_args()
-    main(args.pipeline, args.source_schema, args.target_schema, args.source_type, args.target_type, args.yaml_file)
+    
+    main(
+        args.pipeline,
+        args.source_schema,
+        args.target_schema,
+        args.source_type,
+        args.target_type,
+        args.yaml_file,
+        args.token
+    )
