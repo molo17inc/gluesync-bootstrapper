@@ -48,7 +48,7 @@ target_schema = os.getenv('TARGET_SCHEMA')
 source_type = os.getenv('SOURCE_TYPE', 'SQL')
 target_type = os.getenv('TARGET_TYPE', 'NoSQL')
 TABLE_LIST_YAML = os.getenv('TABLE_LIST_YAML', 'TABLE_LIST.yaml')
-AUTH_TOKEN_PATH = os.path.join('/opt/config', 'auth_token.txt')
+AUTH_TOKEN_PATH = os.path.join('/opt/config', 'auth_token.json')
 
 ENTITY_START_TIMEOUT = 1
 
