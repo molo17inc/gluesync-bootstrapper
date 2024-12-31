@@ -132,8 +132,21 @@ def get_pipeline_agents(token, pipeline_id):
     return config.get('agents', {})
 
 def get_agent_tables(token, pipeline_id, agent_id, schema_name):
+    """Get list of tables from an agent for a specific schema."""
     params = {'schema': schema_name}
-    return fetch_core_hub(f"/pipelines/{pipeline_id}/agents/{agent_id}/discovery/tables", token=token, params=params)
+    response = fetch_core_hub(
+        f"/pipelines/{pipeline_id}/agents/{agent_id}/discovery/tables",
+        token=token,
+        params=params
+    )
+    
+    if isinstance(response, dict) and 'tables' in response:
+        return response['tables']
+    elif isinstance(response, list):
+        return response
+    else:
+        print(f"Unexpected response format from get_agent_tables: {response}")
+        return []
 
 def get_table_columns(token, pipeline_id, agent_id, schema_name, table_name):
     params = {'tableschema': schema_name, 'tablename': table_name}
@@ -343,8 +356,13 @@ def process_filter_clauses(filter_config, columns_info):
     return None
 
 def create_entities(token, pipeline_id, source_schema, target_schema, tables, source_agent_id, target_agent_id, source_type, target_type, yaml_config):
+    """Create entities for the pipeline."""
+    if not yaml_config:
+        yaml_config = {}
+    
     entities = []
     
+    # Get node info for data type mapping
     source_node_info = get_node_info(token, pipeline_id, source_agent_id)
     target_node_info = get_node_info(token, pipeline_id, target_agent_id)
     
@@ -376,7 +394,11 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
     print(f"Global target custom properties: {global_target_custom_properties}")
     
     for table in tables:
-        table_name = table.get("name")
+        if isinstance(table, str):
+            table_name = table
+        else:
+            table_name = table.get("name")
+            
         if not table_name:
             print(f"Warning: Table without name encountered. Skipping.")
             continue
