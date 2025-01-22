@@ -290,11 +290,8 @@ def main():
                         method='GET',
                         token=token
                     )
-                    if check_token.status_code == 200:
+                    if isinstance(check_token, list):
                         print("Successfully authenticated with saved token")
-                        new_password = default_password
-                        token = check_token.get('apiToken')
-                        save_token(token)  # Update the token with the new one
                     else:
                         print("Saved token is invalid, attempting to authenticate with default credentials")
                         token = None
