@@ -284,11 +284,17 @@ def main():
                 token_data = json.load(f)
                 token = token_data.get('token')
                 if token:
-                    # Verify login with the saved token
-                    auth_response = fetch_core_hub('/authentication/verify', token=token)
-                    if auth_response.get('success'):
+                    # Verify login by attempting to authenticate
+                    auth_response = fetch_core_hub(
+                        '/authentication/login',
+                        method='POST',
+                        body={'username': default_user, 'password': default_password}
+                    )
+                    if auth_response.get('apiToken'):
                         print("Successfully authenticated with saved token")
                         new_password = default_password
+                        token = auth_response.get('apiToken')
+                        save_token(token)  # Update the token with the new one
                     else:
                         print("Saved token is invalid, attempting to authenticate with default credentials")
                         token = None
