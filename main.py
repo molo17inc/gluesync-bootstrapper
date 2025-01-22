@@ -285,16 +285,20 @@ def main():
                 token = token_data.get('token')
                 if token:
                     # Verify login by attempting to authenticate
-                    check_token = fetch_core_hub(
-                        '/pipelines',
-                        method='GET',
-                        token=token
-                    )
-                    if isinstance(check_token, list):
-                        print("Successfully authenticated with saved token")
-                    else:
-                        print("Saved token is invalid, attempting to authenticate with default credentials")
-                        token = None
+                    try:
+                        check_token = fetch_core_hub(
+                            '/pipelines',
+                            method='GET',
+                            token=token
+                        )
+                        if isinstance(check_token, list):
+                            print("Successfully authenticated with saved token")
+                    except Exception as e:
+                        if "401" in str(e):
+                            print("Saved token is invalid, attempting to authenticate with default credentials")
+                            token = None
+                        else:
+                            raise e
         except FileNotFoundError:
             print("No saved token found, attempting to authenticate with default credentials")
             token = None
