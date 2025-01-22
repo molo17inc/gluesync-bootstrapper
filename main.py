@@ -285,15 +285,15 @@ def main():
                 token = token_data.get('token')
                 if token:
                     # Verify login by attempting to authenticate
-                    auth_response = fetch_core_hub(
-                        '/authentication/login',
-                        method='POST',
-                        body={'username': default_user, 'password': default_password}
+                    check_token = fetch_core_hub(
+                        '/pipelines',
+                        method='GET',
+                        token=token
                     )
-                    if auth_response.get('apiToken'):
+                    if check_token.status_code == 200:
                         print("Successfully authenticated with saved token")
                         new_password = default_password
-                        token = auth_response.get('apiToken')
+                        token = check_token.get('apiToken')
                         save_token(token)  # Update the token with the new one
                     else:
                         print("Saved token is invalid, attempting to authenticate with default credentials")
