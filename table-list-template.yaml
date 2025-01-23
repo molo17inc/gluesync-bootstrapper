@@ -24,8 +24,21 @@ schemas:
               - LAST_NAME
           name: drivers
           columns:
-            - FIRST_NAME: firstName
-            - LAST_NAME: lastName
+            - FIRST_NAME:
+                name: firstName
+                type: varchar(50)
+            - LAST_NAME:
+                name: lastName
+                type: varchar(100)
+            - AGE:
+                name: age
+                type: int
+            - DRIVING_LICENSE_EXPIRE_DATE:
+                name: licenseExpiry
+                type: datetime
+            - EMAIL:
+                name: email
+                type: varchar(255)
           # New filter configuration
           filter:
             clauses:
@@ -52,6 +65,19 @@ schemas:
           keys:
             - VEHICLE_ID
           name: vehicles
+          columns:
+            - VEHICLE_ID:
+                name: id
+                type: varchar(36)
+            - MODEL:
+                name: model
+                type: varchar(100)
+            - YEAR:
+                name: year
+                type: int
+            - REGISTRATION_DATE:
+                name: registrationDate
+                type: datetime
           filter:
             clauses:
               - column: REGISTRATION_DATE
