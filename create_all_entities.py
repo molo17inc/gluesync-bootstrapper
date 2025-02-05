@@ -355,7 +355,7 @@ def process_filter_clauses(filter_config, columns_info):
         return {"clauses": processed_clauses}
     return None
 
-def create_entities(token, pipeline_id, source_schema, target_schema, tables, source_agent_id, target_agent_id, source_type, target_type, yaml_config):
+def create_entities(token, pipeline_id, source_schema, target_schema, tables, source_agent_id, target_agent_id, source_type, target_type, yaml_config, skip_errors=False, chunk_size=50):
     """Create entities for the pipeline."""
     if not yaml_config:
         yaml_config = {}
@@ -576,10 +576,46 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         }
         entities.append(entity)
     
-    entity_data = {"entities": entities}
-    return fetch_core_hub(f"/pipelines/{pipeline_id}/config/entities", method="PUT", token=token, body=entity_data)
+    # Process entities in chunks
+    total_entities = len(entities)
+    successful_entities = 0
+    failed_entities = 0
+    
+    print(f"Processing {total_entities} entities in chunks of {chunk_size}...")
+    
+    for i in range(0, total_entities, chunk_size):
+        chunk = entities[i:i + chunk_size]
+        chunk_data = {"entities": chunk}
+        chunk_start = i + 1
+        chunk_end = min(i + chunk_size, total_entities)
+        
+        print(f"\nProcessing chunk {chunk_start}-{chunk_end} of {total_entities} entities...")
+        
+        try:
+            response = fetch_core_hub(
+                f"/pipelines/{pipeline_id}/config/entities", 
+                method="PUT", 
+                token=token, 
+                body=chunk_data
+            )
+            print(f"Successfully created entities {chunk_start}-{chunk_end}")
+            successful_entities += len(chunk)
+        except Exception as e:
+            error_msg = str(e)
+            print(f"Error creating entities {chunk_start}-{chunk_end}: {error_msg}")
+            failed_entities += len(chunk)
+            if not skip_errors:
+                raise
+            print("Skipping chunk due to skip_errors=True")
+    
+    print(f"\nProcessing complete:")
+    print(f"- Total entities: {total_entities}")
+    print(f"- Successfully created: {successful_entities}")
+    print(f"- Failed: {failed_entities}")
+    
+    return {"successful": successful_entities, "failed": failed_entities, "total": total_entities}
 
-def main(pipeline_id, source_schema, target_schema, source_type, target_type, yaml_file, token):
+def main(pipeline_id, source_schema, target_schema, source_type, target_type, yaml_file, token, skip_errors=False, chunk_size=50):
     """
     Main function to create entities for a pipeline
     """
@@ -612,17 +648,21 @@ def main(pipeline_id, source_schema, target_schema, source_type, target_type, ya
         create_entities(
             token, pipeline_id, source_schema, target_schema,
             tables, source_agent['agentId'], target_agent['agentId'],
-            source_type, target_type, yaml_config
+            source_type, target_type, yaml_config, skip_errors, chunk_size
         )
         
     except Exception as e:
         print(f"Error: {str(e)}")
-        raise
+        if not skip_errors:
+            raise
+        print("Skipping error due to skip_errors=True")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="GlueSync Entity Creation Script")
+    parser = argparse.ArgumentParser(description="Gluesync Entity Creation Script")
     parser.add_argument('--pipeline', required=True, help="Pipeline ID")
     parser.add_argument('--source-schema', required=True, help="Source schema name")
+    parser.add_argument('--chunk-size', type=int, default=50, help="Number of entities to process in each chunk (default: 50)")
+    parser.add_argument('--skip-errors', action='store_true', help="Continue execution even if errors occur")
     parser.add_argument('--target-schema', required=True, help="Target schema name")
     parser.add_argument('--source-type', required=True, help="Source agent type")
     parser.add_argument('--target-type', required=True, help="Target agent type")
@@ -638,5 +678,7 @@ if __name__ == "__main__":
         args.source_type,
         args.target_type,
         args.yaml_file,
-        args.token
+        args.token,
+        args.skip_errors,
+        args.chunk_size
     )
