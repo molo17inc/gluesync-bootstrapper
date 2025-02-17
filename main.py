@@ -29,6 +29,8 @@ import subprocess
 import uuid
 import urllib3
 import ssl
+import secrets
+import string
 from requests.adapters import HTTPAdapter
 from urllib3.util.ssl_ import create_urllib3_context
 from urllib.parse import urlparse
@@ -84,14 +86,14 @@ class CoreHubClient:
         self.base_url = base_url
         self.session = requests.Session()
         self.adapter = ProtocolAwareAdapter()
-        
+
         # Parse URL to determine protocol
         parsed_url = urlparse(base_url)
         is_secure = parsed_url.scheme == 'https'
-        
+
         # Configure adapter based on protocol
         self.adapter.set_protocol(is_secure)
-        
+
         # Mount adapter for both HTTP and HTTPS
         self.session.mount('http://', self.adapter)
         self.session.mount('https://', self.adapter)
@@ -105,19 +107,19 @@ class CoreHubClient:
         headers = {k: v for k, v in headers.items() if v is not None}
 
         print(f"Loading: {url} with: {body}")
-        
+
         response = self.session.request(
-            method, 
-            url, 
-            headers=headers, 
-            json=body, 
+            method,
+            url,
+            headers=headers,
+            json=body,
             verify=False if self.adapter.is_secure_protocol else None
         )
-        
+
         if response.status_code < 200 or response.status_code >= 300:
             print(f"Request to {url} failed with status code {response.status_code}: {response.text}")
             raise Exception(f"Request to {url} failed with status code {response.status_code}: {response.text}")
-        
+
         if response.status_code == 202 and not response.content:
             return {}
 
@@ -136,6 +138,16 @@ def safe_encode(s):
 def generate_short_guid():
     return str(uuid.uuid4()).split('-')[0]
 
+def generate_random_password() -> str:
+    symbols = [chr(i) for i in range(33, 47)]
+    password = ""
+    for _ in range(9):
+        password += secrets.choice(string.ascii_lowercase)
+    password += secrets.choice(string.ascii_uppercase)
+    password += secrets.choice(string.digits)
+    password += secrets.choice(symbols)
+    return password
+
 # Initialize the CoreHub client
 core_hub_client = CoreHubClient(core_hub_url)
 
@@ -145,11 +157,11 @@ def fetch_core_hub(path, method='GET', token=None, body=None):
 def get_entities(token, pipeline_id):
     response = fetch_core_hub(f"/pipelines/{pipeline_id}/entities", token=token)
     print(f"Retrieved the following entities: {response}")
-    
+
     if not isinstance(response, list) or not response:
         print(f"Unexpected response when fetching entities: {response}")
         return []
-    
+
     entities = []
     for item in response:
         if 'entity' in item and isinstance(item['entity'], dict):
@@ -159,7 +171,7 @@ def get_entities(token, pipeline_id):
                     'entityId': entity['entityId'],
                     'entityName': entity['entityName']
                 })
-    
+
     return entities
 
 def configure_entities(agents_to_conf, pipeline_id, token):
@@ -199,15 +211,15 @@ def configure_entities(agents_to_conf, pipeline_id, token):
 def start_entity_syncs(token, pipeline_id):
     entities = get_entities(token, pipeline_id)
     print(f"Retrieved the following entities: {entities}")
-    
+
     for entity in entities:
         entityId = entity['entityId']
         entityName = entity['entityName']
-        
+
         try:
             encoded_entity_id = safe_encode(entityId)
             query_params = f"entity={encoded_entity_id}"
-            
+
             response = fetch_core_hub(
                 f"/pipelines/{pipeline_id}/commands/sync/start?withSnapshot=true&{query_params}",
                 method='POST',
@@ -215,7 +227,7 @@ def start_entity_syncs(token, pipeline_id):
             )
             print(f"Started sync for entity: {entityName} (ID: {entityId})")
             print(f"Response: {response}")
-            
+
             time.sleep(ENTITY_START_TIMEOUT)
         except Exception as e:
             print(f"Error starting sync for entity {entityName} (ID: {entityId}): {str(e)}")
@@ -225,12 +237,12 @@ def save_token(token):
     try:
         # Create config directory if it doesn't exist
         os.makedirs(os.path.dirname(AUTH_TOKEN_PATH), exist_ok=True)
-        
+
         # Create token JSON structure
         token_data = {
             "token": token
         }
-        
+
         with open(AUTH_TOKEN_PATH, 'w') as f:
             json.dump(token_data, f, indent=2)
         print(f"Authentication token saved successfully to {AUTH_TOKEN_PATH}")
@@ -248,12 +260,12 @@ def change_password(token, old_password, new_password):
             'newPassword': new_password
         }
     )
-    
+
     if response != "Password changed":
         raise Exception(f"Unexpected response from password reset: {response}")
-    
+
     print("Password reset successful")
-    
+
     # Re-authenticate with the new password to get a fresh token
     auth_response = fetch_core_hub(
         '/authentication/login',
@@ -263,14 +275,14 @@ def change_password(token, old_password, new_password):
     new_token = auth_response.get('apiToken')
     if not new_token:
         raise Exception('Failed to re-authenticate after password change')
-        
+
     change_required = auth_response.get('changeRequired', False)
     if change_required:
         raise Exception('Password change still required after reset')
-    
+
     # Save the new token
     save_token(new_token)
-        
+
     return new_token
 
 def main():
@@ -302,7 +314,7 @@ def main():
         except FileNotFoundError:
             print("No saved token found, attempting to authenticate with default credentials")
             token = None
-        
+
         if not token:
             # Initial authentication
             auth_response = fetch_core_hub(
@@ -313,12 +325,12 @@ def main():
             token = auth_response.get('apiToken')
             if not token:
                 raise Exception('Failed to authenticate')
-                
+
             change_required = auth_response.get('changeRequired', False)
             if change_required:
                 print(f"Password change required")
                 # Generate a new random password and change it
-                new_password = f"{fake.word().upper()}_{generate_short_guid()}_!{fake.random_number(digits=3)}"
+                new_password = generate_random_password()
                 try:
                     # Change password and get new token
                     token = change_password(token, default_password, new_password)
@@ -384,7 +396,7 @@ def main():
             if 'agentId' not in agent:
                 print(f"Warning: Agent missing 'agentId' field: {agent}")
                 continue
-            
+
             fetch_core_hub(
                 f"/pipelines/{pipeline_id}/agents/{agent['agentId']}",
                 method='PUT',
@@ -396,7 +408,7 @@ def main():
             if 'agentId' not in agent:
                 print(f"Warning: Agent missing 'agentId' field: {agent}")
                 continue
-            
+
             fetch_core_hub(
                 f"/pipelines/{pipeline_id}/agents/{agent['agentId']}/config/credentials",
                 method='PUT',
@@ -406,13 +418,13 @@ def main():
                     'customHostCredentials': agent['customHostCredentials']
                 }
             )
-        
+
         # Apply agent specific configuration
         for agent in agents_to_conf:
             if 'agentId' not in agent:
                 print(f"Warning: Agent missing 'agentId' field: {agent}")
                 continue
-            
+
             if agent['specificConfiguration']:
                 fetch_core_hub(
                     f"/pipelines/{pipeline_id}/agents/{agent['agentId']}/config/specific",
@@ -427,7 +439,7 @@ def main():
             source_schema = create_entities_from_schema
 
             # Invoke the entity creation script
-            entity_creation_script = 'create_all_entities.py' 
+            entity_creation_script = 'create_all_entities.py'
             try:
                 cmd = [
                     'python',
@@ -438,7 +450,7 @@ def main():
                     '--target-type', target_type,
                     '--token', token
                 ]
-                
+
                 if target_schema:
                     cmd.extend(['--target-schema', target_schema])
                 else:
@@ -464,7 +476,7 @@ def main():
         )
 
         time.sleep(ENTITY_START_TIMEOUT)
-                
+
         start_entity_syncs(token, pipeline_id)
 
     except Exception as error:
