@@ -64,18 +64,10 @@ DRIVERS:
       - LAST_NAME
   name: drivers
   columns:
-    - FIRST_NAME:
-        name: firstName
-        type: varchar(50)
-    - LAST_NAME:
-        name: lastName
-        type: varchar(100)
-    - AGE:
-        name: age
-        type: int
-    - EMAIL:
-        name: email
-        type: varchar(255)
+    - FIRST_NAME: "FIRST_NAME"
+    - LAST_NAME: "LAST_NAME"
+    - AGE: "AGE"
+    - EMAIL: "EMAIL"
 ```
 
 The column configuration supports:

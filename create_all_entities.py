@@ -499,14 +499,17 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             "columns": [
                 {
                     "name": col["name"],
-                    "alias": next(
-                        (target_name 
-                        for column_map in custom_config.get('columns', [])
-                        for source_name, target_name in column_map.items()
-                        if source_name == col["name"]
-                        ),
-                        col["name"]
-                    ),
+                    "alias": target_name,
+                    "type": col["type"]
+                } 
+                for col in columns["columns"]
+                for column_map in custom_config.get('columns', [])
+                for source_name, target_name in column_map.items()
+                if source_name == col["name"]
+            ] if custom_config.get('columns') else [
+                {
+                    "name": col["name"],
+                    "alias": col["name"],
                     "type": col["type"]
                 } for col in columns["columns"]
             ],
@@ -532,22 +535,18 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             },
             "columns": [
                 {
-                    "name": next(
-                        (target_name 
-                        for column_map in custom_config.get('columns', [])
-                        for source_name, target_name in column_map.items()
-                        if source_name == col["name"]
-                        ),
-                        col["name"]
-                    ),
-                    "alias": next(
-                        (target_name 
-                        for column_map in custom_config.get('columns', [])
-                        for source_name, target_name in column_map.items()
-                        if source_name == col["name"]
-                        ),
-                        col["name"]
-                    ),
+                    "name": target_name,
+                    "alias": target_name,
+                    "type": map_data_type(col["type"], source_node_info, target_node_info)
+                }
+                for col in columns["columns"]
+                for column_map in custom_config.get('columns', [])
+                for source_name, target_name in column_map.items()
+                if source_name == col["name"]
+            ] if custom_config.get('columns') else [
+                {
+                    "name": col["name"],
+                    "alias": col["name"],
                     "type": map_data_type(col["type"], source_node_info, target_node_info)
                 } for col in columns["columns"]
             ],
