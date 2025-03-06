@@ -5,6 +5,9 @@ default:
   tags:
     - gs-docker-performance-test
 
+variables:
+  DOCKER_TLS_CERTDIR: ""
+
 deploy:
   stage: deploy
   image: docker:latest
