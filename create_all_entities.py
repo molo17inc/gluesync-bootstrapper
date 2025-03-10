@@ -481,12 +481,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
         source_entity = {
             "type": "NoSqlEntity" if source_type.lower() == "nosql" else "SingleTable",
-            "entityType": {
-                "type": "Source",
-                "maxItemsCountPerIteration": 1000,
-                "maxMigrationItemsCountPerIteration": 1000,
-                "pollingIntervalMilliseconds": 100
-            },
+            "entityType": {**source_custom_properties, "type": "Source"},
             "agentId": source_agent_id,
             "entityObject": {
                 "scope": source_schema,
@@ -518,12 +513,13 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             "tablesProperties": {source_table_key: {}}
         }
 
+        target_entity_type = {**target_custom_properties, "type": "Target"}
+        if processed_filters:
+            target_entity_type["filter"] = processed_filters
+
         target_entity = {
             "type": "NoSqlEntity" if target_type.lower() == "nosql" else "SingleTable",
-            "entityType": {
-                "type": "Target",
-                **({"filter": processed_filters} if processed_filters else {})
-            },
+            "entityType": target_entity_type,
             "agentId": target_agent_id,
             "entityObject": {
                 "scope": yaml_target_schema,
