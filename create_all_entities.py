@@ -379,7 +379,12 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
     yaml_target_schema = schema_config.get('target', target_schema)
     whitelist = schema_config.get('tables', {}).get('whitelist', [])
     blacklist = schema_config.get('tables', {}).get('blacklist', [])
-    custom_tables = schema_config.get('tables', {}).get('custom', {})
+    # Handle empty custom tables attribute - convert None to empty dict
+    tables_config = schema_config.get('tables', {})
+    custom_tables = tables_config.get('custom', {})
+    if custom_tables is None:
+        custom_tables = {}
+        print("Warning: 'custom' attribute is present but empty in YAML. Converting to empty dict.")
 
     # Get schema-level custom properties
     schema_custom_properties = schema_config.get('customProperties', {})
@@ -412,6 +417,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         columns = get_table_columns(token, pipeline_id, source_agent_id, source_schema, table_name)
 
         custom_config = custom_tables.get(table_name, {})
+        if custom_config is None:
+            custom_config = {}
+            print(f"Warning: Custom config for table {table_name} is present but empty in YAML. Converting to empty dict.")
         print(f"Custom config for {table_name}: {custom_config}")
         
         # Get table-specific custom properties and merge with global properties
