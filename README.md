@@ -149,10 +149,6 @@ For support and bug reports, please create an issue in the GitLab repository.
 4. Push to the branch
 5. Create a new Merge Request
 
-## License
-
-[License information to be added]
-
 ## Project Status
 
 Active development
