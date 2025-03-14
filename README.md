@@ -124,12 +124,54 @@ The agent configuration defines the connection details for source and target dat
 
 1. Clone the repository:
 ```bash
-git clone https://gitlab.com/molo17srl/products/gluesync/gluesync-bootstrapper.git
+git clone https://gitlab.com/molo17-public/gluesync/gluesync-bootstrapper.git
 ```
 
 2. Configure your schema in `table-list-template.yaml`
-3. Set up your agent configuration in `config.json`
+3. Set up your agent configuration in `config.json` (if you want bootstrapper to configure also agents' connection properties)
 4. Start the synchronization process
+
+### Usage of main.py
+The `main.py` script is the main entry point for the Gluesync Bootstrapper. It is used to start the synchronization process, creating a new pipeline and starting the agents based on the given config.json file. That config file should contain the connection properties for the source and target databases.
+
+To run the script, use the following command:
+```bash
+python main.py --config <path_to_config> --token <auth_token> [--skip-errors] [--chunk-size <number>]
+```
+
+Parameters:
+
+- `--config`: Required. Path to the agent configuration file
+- `--token`: Required. Authentication token for API access
+- `--skip-errors`: Optional. Continue execution even if errors occur
+- `--chunk-size`: Optional. Number of entities to process in each chunk (default: 50)
+
+Note: The script will create a new pipeline and start the agents based on the given config.json file. It will also perform a chained call to `create_all_entities.py` to create all the entities in the CoreHub if a `table-list-template.yaml` is provided.
+
+### Usage of create_all_entities.py
+
+The `create_all_entities.py` script is used to create all the entities in the CoreHub. It will create the entities based on the given settings from the `table-list-template.yaml`, such as:
+- Schemas
+- Tables
+- Columns definition 
+- Custom properties
+
+To run the script, use the following command:
+```bash
+python create_all_entities.py --pipeline <pipeline_id> --source-schema <source_schema> --target-schema <target_schema> --source-type <source_agent_type> --target-type <target_agent_type> --yaml-file <path_to_yaml_config> --token <auth_token> [--skip-errors] [--chunk-size <number>]
+```
+
+Parameters:
+
+- `--pipeline`: Required. The ID of the pipeline to create entities for
+- `--source-schema`: Required. Source schema name
+- `--target-schema`: Required. Target schema name
+- `--source-type`: Required. Source agent type (e.g., mssql, postgres)
+- `--target-type`: Required. Target agent type (e.g., couchbase, aerospike)
+- `--yaml-file`: Required. Path to the YAML configuration file
+- `--token`: Required. Authentication token for API access
+- `--skip-errors`: Optional. Continue execution even if errors occur
+- `--chunk-size`: Optional. Number of entities to process in each chunk (default: 50)
 
 ## Requirements
 
