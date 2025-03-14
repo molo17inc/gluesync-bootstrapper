@@ -23,7 +23,7 @@ SOFTWARE.
 
 # Gluesync Bootstrapper
 
-Gluesync Bootstrapper is a powerful data synchronization tool that enables seamless data replication between different database systems. It supports real-time change tracking and customizable data transformation rules.
+Gluesync Bootstrapper is a configuration tool for setting up database schema mappings between source and target systems. It allows you to define table structures, column mappings, and connection properties using YAML configuration files, enabling precise control over how data is transferred and transformed across different database systems.
 
 ## Features
 
