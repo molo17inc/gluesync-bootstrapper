@@ -135,6 +135,22 @@ git clone https://gitlab.com/molo17-public/gluesync/gluesync-bootstrapper.git
 
 The tool is interactive, that means that it requires you to have a Gluesync deployed and running since it directly talks to the CoreHub API to retrieve all the needed informations from source and target databases involved in the pipeline setup you're configuring.
 
+### Getting a valid authentication token
+
+In order to use the tool you need to get a valid authentication token from the CoreHub API. You can get a valid token in at least 3 ways:
+
+1. By logging in to the CoreHub Web UI and copying the token from the browser's cookies;
+2. By looking for the token within the main.py script execution logs if you're automating the process end-to-end;
+3. By using an http client like Postman or curl to call the CoreHub API and get a valid token.
+
+In the following example we will show you how to get a valid token using curl:
+
+```bash
+curl -X POST https://<corehub-url>/authentication/login -H "Content-Type: application/json" -d '{"username":"<username>","password":"<password>"}'
+```
+
+Default username and password are `admin` and `admin`. Keep in mind that at the first login you will be prompted to set a new password, you will need to use that new password to get a valid token.
+
 ### Usage of main.py
 The `main.py` script is the main entry point for the Gluesync Bootstrapper. It is used to start the synchronization process, creating a new pipeline and starting the agents based on the given config.json file. That config file should contain the connection properties for the source and target databases.
 
