@@ -23,7 +23,7 @@ SOFTWARE.
 
 # Gluesync Bootstrapper
 
-Gluesync Bootstrapper is a configuration tool for setting up database schema mappings between source and target systems. It allows you to define table structures, column mappings, and connection properties using YAML configuration files, enabling precise control over how data is transferred and transformed across different database systems.
+Gluesync Bootstrapper is a configuration tool for setting up database schema mappings between source and target systems in an automated way, bypassing the need to manually configure entities in the Gluesync CoreHub Web UI. It allows you to define table structures, column mappings, and connection properties using YAML configuration files, enabling precise control over how data is transferred and transformed across different database systems.
 
 ## Features
 
@@ -133,7 +133,7 @@ git clone https://gitlab.com/molo17-public/gluesync/gluesync-bootstrapper.git
 
 ### Before you start
 
-The tool is interactive, that means that it requires you to have a Gluesync deployed and running.
+The tool is interactive, that means that it requires you to have a Gluesync deployed and running since it directly talks to the CoreHub API to retrieve all the needed informations from source and target databases involved in the pipeline setup you're configuring.
 
 ### Usage of main.py
 The `main.py` script is the main entry point for the Gluesync Bootstrapper. It is used to start the synchronization process, creating a new pipeline and starting the agents based on the given config.json file. That config file should contain the connection properties for the source and target databases.
