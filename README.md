@@ -48,19 +48,20 @@ The configuration consists of two main parts:
 The schema configuration defines how tables should be synchronized and transformed. Example:
 
 ```yaml
-schemas:
-  dbo:
-    target: public
-    customProperties:
-      source:
-        maxItemsCountPerIteration: 1000
-        pollingIntervalMilliseconds: 100
-      target:
-        ttlValue: 10000000
-    tables:
-      whitelist:
-        - DRIVERS
-        - VEHICLES
+dbo: # Source schema
+  target: public # Target schema
+  customProperties: # Custom properties for both source and target
+    source: # Source custom properties
+      maxItemsCountPerIteration: 1000
+      pollingIntervalMilliseconds: 100
+    target: # Target custom properties
+      ttlValue: 10000000
+  tables: # Tables to be synchronized
+    whitelist: # Allowed tables to be synchronized, empty list means all tables
+      - DRIVERS
+      - VEHICLES
+    blacklist: # Forbidden tables to be synchronized, empty list means no restrictions
+      - TEST
 ```
 
 #### Table Configuration
