@@ -131,13 +131,44 @@ git clone https://gitlab.com/molo17-public/gluesync/gluesync-bootstrapper.git
 3. Set up your agent configuration in `config.json` (if you want bootstrapper to configure also agents' connection properties)
 4. Start the synchronization process
 
+### Before you start
+
+The tool is interactive, that means that it requires you to have a Gluesync deployed and running.
+
 ### Usage of main.py
 The `main.py` script is the main entry point for the Gluesync Bootstrapper. It is used to start the synchronization process, creating a new pipeline and starting the agents based on the given config.json file. That config file should contain the connection properties for the source and target databases.
 
 To run the script, use the following command:
+
 ```bash
 python main.py --config <path_to_config> --token <auth_token> [--skip-errors] [--chunk-size <number>]
 ```
+
+Alternatively, you can configure the script using environment variables:
+
+```bash
+# Set environment variables
+export FILE_CONF_PATH="./my-config.json"
+export CORE_HUB_URL="https://my-corehub:1717"
+export DEFAULT_PASSWORD="my-secure-password"
+export CREATE_ENTITIES_FROM_SCHEMA="true"
+export TARGET_SCHEMA="public"
+export SOURCE_TYPE="mssql"
+export TARGET_TYPE="couchbase"
+
+# Run the script
+python main.py
+```
+
+Available environment variables:
+
+- `FILE_CONF_PATH`: Path to the configuration file (default: `./config.json`)
+- `CORE_HUB_URL`: URL of the CoreHub service (default: `https://localhost:1717`)
+- `DEFAULT_PASSWORD`: Password for authentication (default: `admin`)
+- `CREATE_ENTITIES_FROM_SCHEMA`: Whether to create entities from schema (if set to any value)
+- `TARGET_SCHEMA`: Target schema name for entity creation
+- `SOURCE_TYPE`: Source agent type (default: `SQL`)
+- `TARGET_TYPE`: Target agent type (default: `NoSQL`)
 
 Parameters:
 
@@ -153,7 +184,7 @@ Note: The script will create a new pipeline and start the agents based on the gi
 The `create_all_entities.py` script is used to create all the entities in the CoreHub. It will create the entities based on the given settings from the `table-list-template.yaml`, such as:
 - Schemas
 - Tables
-- Columns definition 
+- Columns definition
 - Custom properties
 
 To run the script, use the following command:
