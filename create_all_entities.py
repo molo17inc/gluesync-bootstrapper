@@ -32,8 +32,13 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.ssl_ import create_urllib3_context
 import yaml
 import argparse
+from utils.log import get_logger, create_log_file, log_success, log_failure, lockfile_failure, exit_on_fail
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# Initialize logger
+log_file = create_log_file()
+logger = get_logger(log_file)
 
 # Environment variables with default values
 CORE_HUB_URL = os.getenv('CORE_HUB_URL', 'https://localhost:1717')
@@ -91,7 +96,7 @@ class CoreHubClient:
         }
         headers = {k: v for k, v in headers.items() if v is not None}
 
-        print(f"Loading: {url} with: {body}")
+        logger.debug(f"Loading: {url} with: {body}")
         
         response = self.session.request(
             method, 
@@ -103,8 +108,10 @@ class CoreHubClient:
         )
         
         if response.status_code < 200 or response.status_code >= 300:
-            print(f"Request to {url} failed with status code {response.status_code}: {response.text}")
-            raise Exception(f"Request to {url} failed with status code {response.status_code}: {response.text}")
+            error_msg = f"Request to {url} failed with status code {response.status_code}: {response.text}"
+            log_failure(logger, error_msg)
+            lockfile_failure()
+            raise Exception(error_msg)
         
         if response.status_code == 202 and not response.content:
             return {}
@@ -112,7 +119,7 @@ class CoreHubClient:
         try:
             return response.json()
         except json.JSONDecodeError:
-            print(f"Non-JSON response from {url}: {response.text}")
+            logger.warning(f"Non-JSON response from {url}: {response.text}")
             return response.text
 
 def generate_short_guid():
@@ -622,6 +629,7 @@ def main(pipeline_id, source_schema, target_schema, source_type, target_type, ya
     """
     Main function to create entities for a pipeline
     """
+    logger.info(f"Starting entity creation for pipeline {pipeline_id}")
     try:
         yaml_config = load_yaml_config(yaml_file) if yaml_file else None
         
@@ -632,20 +640,29 @@ def main(pipeline_id, source_schema, target_schema, source_type, target_type, ya
         agents = get_pipeline_agents(token, pipeline_id)
         
         if not agents or len(agents) != 2:
-            raise Exception(f"Expected 2 agents, found {len(agents) if agents else 0}")
+            error_msg = f"Expected 2 agents, found {len(agents) if agents else 0}"
+            log_failure(logger, error_msg)
+            lockfile_failure()
+            raise Exception(error_msg)
         
         # Identify source and target agents based on type
         source_agent = next((agent for agent in agents if agent['agentType'] == 'SOURCE'), None)
         target_agent = next((agent for agent in agents if agent['agentType'] == 'TARGET'), None)
         
         if not source_agent or not target_agent:
-            raise Exception(f"Could not find required agents. Source ({source_type}): {source_agent}, Target ({target_type}): {target_agent}")
+            error_msg = f"Could not find required agents. Source ({source_type}): {source_agent}, Target ({target_type}): {target_agent}"
+            log_failure(logger, error_msg)
+            lockfile_failure()
+            raise Exception(error_msg)
         
         # Get tables from source agent
         tables = get_agent_tables(token, pipeline_id, source_agent['agentId'], source_schema)
         
         if not tables:
-            raise Exception(f"No tables found in schema {source_schema}")
+            error_msg = f"No tables found in schema {source_schema}"
+            log_failure(logger, error_msg)
+            lockfile_failure()
+            raise Exception(error_msg)
             
         # Create entities
         create_entities(
@@ -655,10 +672,16 @@ def main(pipeline_id, source_schema, target_schema, source_type, target_type, ya
         )
         
     except Exception as e:
-        print(f"Error: {str(e)}")
+        log_failure(logger, f"Error: {str(e)}")
+        lockfile_failure()
         if not skip_errors:
             raise
-        print("Skipping error due to skip_errors=True")
+        logger.warning("Skipping error due to skip_errors=True")
+        return
+        
+    # Log successful completion
+    log_success(logger, f"Entity creation completed successfully for pipeline {pipeline_id}")
+    lockfile_complete()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Gluesync Entity Creation Script")

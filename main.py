@@ -34,10 +34,15 @@ import string
 from requests.adapters import HTTPAdapter
 from urllib3.util.ssl_ import create_urllib3_context
 from urllib.parse import urlparse
+from utils.log import get_logger, create_log_file, log_success, log_failure, lockfile_failure, exit_on_fail
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 fake = Faker()
+
+# Initialize logger
+log_file = create_log_file()
+logger = get_logger(log_file)
 
 # Environment variables and constants
 file_conf_path = os.getenv('FILE_CONF_PATH', './config.json')
@@ -106,7 +111,7 @@ class CoreHubClient:
         }
         headers = {k: v for k, v in headers.items() if v is not None}
 
-        print(f"Loading: {url} with: {body}")
+        logger.debug(f"Loading: {url} with: {body}")
 
         response = self.session.request(
             method,
@@ -117,8 +122,9 @@ class CoreHubClient:
         )
 
         if response.status_code < 200 or response.status_code >= 300:
-            print(f"Request to {url} failed with status code {response.status_code}: {response.text}")
-            raise Exception(f"Request to {url} failed with status code {response.status_code}: {response.text}")
+            error_msg = f"Request to {url} failed with status code {response.status_code}: {response.text}"
+            log_failure(logger, error_msg)
+            raise Exception(error_msg)
 
         if response.status_code == 202 and not response.content:
             return {}
@@ -126,7 +132,7 @@ class CoreHubClient:
         try:
             return response.json()
         except json.JSONDecodeError:
-            print(f"Non-JSON response from {url}: {response.text}")
+            logger.warning(f"Non-JSON response from {url}: {response.text}")
             return response.text
 
 def generate_fancy_names(length):
@@ -156,10 +162,10 @@ def fetch_core_hub(path, method='GET', token=None, body=None):
 
 def get_entities(token, pipeline_id):
     response = fetch_core_hub(f"/pipelines/{pipeline_id}/entities", token=token)
-    print(f"Retrieved the following entities: {response}")
+    logger.debug(f"Retrieved the following entities: {response}")
 
     if not isinstance(response, list) or not response:
-        print(f"Unexpected response when fetching entities: {response}")
+        logger.warning(f"Unexpected response when fetching entities: {response}")
         return []
 
     entities = []
@@ -286,11 +292,18 @@ def change_password(token, old_password, new_password):
     return new_token
 
 def main():
-    with open(file_conf_path, 'r') as file:
-        conf_test = json.load(file)
-
+    logger.info("Starting GlueSync bootstrapper")
+    
     try:
-        # Check if a valid token is present
+        with open(file_conf_path, 'r') as file:
+            conf_test = json.load(file)
+        logger.info(f"Loaded configuration from {file_conf_path}")
+    except Exception as e:
+        log_failure(logger, f"Failed to load configuration: {str(e)}")
+        lockfile_failure()
+        return
+
+    # Check if a valid token is present
         try:
             with open(AUTH_TOKEN_PATH, 'r') as f:
                 token_data = json.load(f)
@@ -304,15 +317,15 @@ def main():
                             token=token
                         )
                         if isinstance(check_token, list):
-                            print("Successfully authenticated with saved token")
+                            log_success(logger, "Successfully authenticated with saved token")
                     except Exception as e:
                         if "401" in str(e):
-                            print("Saved token is invalid, attempting to authenticate with default credentials")
+                            logger.warning("Saved token is invalid, attempting to authenticate with default credentials")
                             token = None
                         else:
                             raise e
         except FileNotFoundError:
-            print("No saved token found, attempting to authenticate with default credentials")
+            logger.info("No saved token found, attempting to authenticate with default credentials")
             token = None
 
         if not token:
@@ -324,19 +337,21 @@ def main():
             )
             token = auth_response.get('apiToken')
             if not token:
+                log_failure(logger, "Failed to authenticate")
+                lockfile_failure()
                 raise Exception('Failed to authenticate')
 
             change_required = auth_response.get('changeRequired', False)
             if change_required:
-                print(f"Password change required")
+                logger.info("Password change required")
                 # Generate a new random password and change it
                 new_password = generate_random_password()
                 try:
                     # Change password and get new token
                     token = change_password(token, default_password, new_password)
-                    print(f"Successfully changed password to: {new_password}")
+                    log_success(logger, f"Successfully changed password to: {new_password}")
                 except Exception as e:
-                    print(f"Password change failed, attempting to continue with default password: {str(e)}")
+                    log_failure(logger, f"Password change failed, attempting to continue with default password: {str(e)}")
                     # Try to get a fresh token with the default password
                     auth_response = fetch_core_hub(
                         '/authentication/login',
@@ -345,6 +360,8 @@ def main():
                     )
                     token = auth_response.get('apiToken')
                     if not token:
+                        log_failure(logger, "Failed to re-authenticate with default password")
+                        lockfile_failure()
                         raise Exception('Failed to re-authenticate with default password')
                     new_password = default_password
             else:
@@ -355,10 +372,13 @@ def main():
         # List unassigned agents
         unassigned_agents = fetch_core_hub('/unassigned-agents', token=token)
         if not isinstance(unassigned_agents, list):
+            log_failure(logger, "Failed to retrieve unassigned agents")
+            lockfile_failure()
             raise Exception('Failed to retrieve unassigned agents')
 
-        print("Unassigned agents:", json.dumps(unassigned_agents, indent=2))
-        print("Config agents:", json.dumps(conf_test['agents'], indent=2))
+        logger.info(f"Found {len(unassigned_agents)} unassigned agents")
+        logger.debug(f"Unassigned agents: {json.dumps(unassigned_agents, indent=2)}")
+        logger.debug(f"Config agents: {json.dumps(conf_test['agents'], indent=2)}")
 
         fancy_names = generate_fancy_names(2)
 
@@ -371,6 +391,8 @@ def main():
         )
         pipeline_id = pipeline_response.get('pipelineId')
         if not pipeline_id:
+            log_failure(logger, "Failed to create pipeline")
+            lockfile_failure()
             raise Exception('Failed to create pipeline')
 
         # Filter agents to configure
@@ -389,12 +411,13 @@ def main():
             if agent['agentTag'] == conf_agent['agentTag'] and agent['agentType'] == conf_agent['agentType']
         ]
 
-        print("Filtered agents:", json.dumps(agents_to_conf, indent=2))
+        logger.info(f"Filtered {len(agents_to_conf)} agents for configuration")
+        logger.debug(f"Filtered agents: {json.dumps(agents_to_conf, indent=2)}")
 
         # Assign agents to pipeline
         for agent in agents_to_conf:
             if 'agentId' not in agent:
-                print(f"Warning: Agent missing 'agentId' field: {agent}")
+                logger.warning(f"Agent missing 'agentId' field: {agent}")
                 continue
 
             fetch_core_hub(
@@ -406,7 +429,7 @@ def main():
         # Apply agent host credentials
         for agent in agents_to_conf:
             if 'agentId' not in agent:
-                print(f"Warning: Agent missing 'agentId' field: {agent}")
+                logger.warning(f"Agent missing 'agentId' field: {agent}")
                 continue
 
             fetch_core_hub(
@@ -422,7 +445,7 @@ def main():
         # Apply agent specific configuration
         for agent in agents_to_conf:
             if 'agentId' not in agent:
-                print(f"Warning: Agent missing 'agentId' field: {agent}")
+                logger.warning(f"Agent missing 'agentId' field: {agent}")
                 continue
 
             if agent['specificConfiguration']:
@@ -458,14 +481,15 @@ def main():
 
                 if os.path.exists(TABLE_LIST_YAML):
                     cmd.extend(['--yaml-file', TABLE_LIST_YAML])
-                    print(f"Using TABLE_LIST.yaml: {TABLE_LIST_YAML}")
+                    logger.info(f"Using TABLE_LIST.yaml: {TABLE_LIST_YAML}")
                 else:
-                    print(f"TABLE_LIST.yaml not found at {TABLE_LIST_YAML}. Proceeding without it.")
+                    logger.warning(f"TABLE_LIST.yaml not found at {TABLE_LIST_YAML}. Proceeding without it.")
 
                 subprocess.run(cmd, check=True)
-                print(f"Entity creation completed for pipeline {pipeline_id}, source schema {source_schema}, target schema {target_schema or source_schema}, source type {source_type}, target type {target_type}")
+                log_success(logger, f"Entity creation completed for pipeline {pipeline_id}, source schema {source_schema}, target schema {target_schema or source_schema}, source type {source_type}, target type {target_type}")
             except subprocess.CalledProcessError as e:
-                print(f"Error running entity creation script: {e}")
+                log_failure(logger, f"Error running entity creation script: {e}")
+                lockfile_failure()
 
         # Set pipeline as ready (exiting from Draft status)
         fetch_core_hub(
@@ -479,8 +503,13 @@ def main():
 
         start_entity_syncs(token, pipeline_id)
 
+        # Log successful completion
+        log_success(logger, f"Pipeline {pipeline_id} successfully configured and started")
+        lockfile_complete()
+        
     except Exception as error:
-        print(f"Error: {error}")
+        log_failure(logger, f"Error: {error}")
+        lockfile_failure()
 
 if __name__ == "__main__":
     main()
