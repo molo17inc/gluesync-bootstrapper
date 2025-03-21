@@ -35,6 +35,7 @@ ARG TARGET_TYPE
 ARG TARGET_SCHEMA
 ARG ENTITY_START_TIMEOUT=1
 ARG TABLE_LIST_YAML=/opt/config/TABLE_LIST.yaml
+ARG LOG_DIR=/logs
 
 # Set environment variables
 ENV FILE_CONF_PATH=${FILE_CONF_PATH}
@@ -46,6 +47,7 @@ ENV TARGET_TYPE=${TARGET_TYPE}
 ENV TARGET_SCHEMA=${TARGET_SCHEMA}
 ENV ENTITY_START_TIMEOUT=${ENTITY_START_TIMEOUT}
 ENV TABLE_LIST_YAML=${TABLE_LIST_YAML}
+ENV LOG_DIR=${LOG_DIR}
 
 # Copy requirements.txt and install dependencies
 COPY requirements.txt .
@@ -53,6 +55,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the application code
 COPY . .
+
+# Create logs directory
+RUN mkdir -p ${LOG_DIR} && chmod 777 ${LOG_DIR}
 
 # Command to run the application
 CMD ["python", "main.py"]

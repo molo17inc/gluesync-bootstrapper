@@ -80,14 +80,16 @@ def create_log_file(log_dir=None):
     Create a log file with a timestamp in the specified directory.
     
     Args:
-        log_dir (str, optional): Directory to create the log file in. 
-                                If None, 'logs' directory in the current directory is used.
+        log_dir (str, optional): Directory to create the log file in.
+                                If None, checks for LOG_DIR environment variable.
+                                If LOG_DIR is not set, uses 'logs' directory in the current directory.
                                 
     Returns:
         str: Path to the created log file
     """
     if not log_dir:
-        log_dir = os.path.join(os.getcwd(), 'logs')
+        # Check for LOG_DIR environment variable first
+        log_dir = os.environ.get('LOG_DIR', os.path.join(os.getcwd(), 'logs'))
         
     # Ensure log directory exists
     if not os.path.exists(log_dir):
