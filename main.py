@@ -182,6 +182,13 @@ if not os.path.exists(license_file_path):
     logger.error(f"License file not found at {license_file_path}. Cannot proceed with SDK initialization.")
     exit(1)
 
+try:
+    from gluesync_sdk import GluesyncSDK
+except ModuleNotFoundError:
+    logger.error("gluesync_sdk module not found. Make sure it's installed as a submodule.")
+    # Handle the absence of the SDK appropriately, e.g., set a flag or use a mock
+    GluesyncSDK = None
+
 # Initialize the Gluesync SDK client
 initialize_gluesync_sdk()
 

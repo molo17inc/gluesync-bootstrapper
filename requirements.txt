@@ -2,4 +2,5 @@ requests
 faker
 PyYAML
 colorama
-gluesync_sdk
+
+# The gluesync_sdk dependency is installed directly in the Dockerfile
