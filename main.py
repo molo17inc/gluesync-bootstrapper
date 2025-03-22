@@ -542,22 +542,22 @@ def main():
             log_failure(logger, f"Error running entity creation script: {e}")
             lockfile_failure()
 
-    # Set pipeline as ready (exiting from Draft status)
-    fetch_core_hub(
-            f"/pipelines/{pipeline_id}",
-            method='PUT',
-            token=token,
-            body={'configurationCompleted': True, 'name': fancy_names[0]}
-    )
+    try:
+        # Set pipeline as ready (exiting from Draft status)
+        fetch_core_hub(
+                f"/pipelines/{pipeline_id}",
+                method='PUT',
+                token=token,
+                body={'configurationCompleted': True, 'name': fancy_names[0]}
+        )
 
-    time.sleep(ENTITY_START_TIMEOUT)
+        time.sleep(ENTITY_START_TIMEOUT)
 
-    start_entity_syncs(token, pipeline_id)
+        start_entity_syncs(token, pipeline_id)
 
-    # Log successful completion
-    log_success(logger, f"Pipeline {pipeline_id} successfully configured and started")
-    lockfile_complete()
-        
+        # Log successful completion
+        log_success(logger, f"Pipeline {pipeline_id} successfully configured and started")
+        lockfile_complete()
     except Exception as error:
         log_failure(logger, f"Error: {error}")
         lockfile_failure()
