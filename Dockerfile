@@ -68,6 +68,8 @@ COPY . .
 RUN if [ -d "./gluesync-client-sdk" ] && [ -f "./gluesync-client-sdk/setup.py" ]; then \
     pip install -e ./gluesync-client-sdk; \
     echo "SDK installed successfully"; \
+    # Verify the installation
+    python -c "import gluesync_sdk; print('SDK import successful')" || exit 1; \
 else \
     echo "ERROR: SDK submodule not found or setup.py missing"; \
     ls -la; \
