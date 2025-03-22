@@ -61,14 +61,14 @@ ENV GLUESYNC_SECURITY_CONFIG=${GLUESYNC_SECURITY_CONFIG}
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the application code
+# Copy the application code and the gluesync-client-sdk
 COPY . .
 
-# Copy the gluesync_sdk module directly to the Python path
-COPY gluesync-client-sdk/gluesync_sdk /usr/local/lib/python3.10/site-packages/gluesync_sdk
+# Create the Python site-packages directory
+RUN mkdir -p /usr/local/lib/python3.10/site-packages/
 
-# Copy the client-sdk for reference
-COPY gluesync-client-sdk /opt/gluesync-client-sdk
+# Copy the SDK module to the Python path
+RUN cp -r /opt/python/gluesync-client-sdk/gluesync_sdk /usr/local/lib/python3.10/site-packages/
 
 # Stay in the python directory
 WORKDIR /opt/python
