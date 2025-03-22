@@ -1,0 +1,3 @@
+[submodule "gluesync-client-sdk"]
+	path = gluesync-client-sdk
+	url = https://gitlab.com/molo17-public/gluesync/gluesync-python-corehub-handshake-sdk.git
