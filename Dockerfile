@@ -64,8 +64,14 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the application code including the submodule
 COPY . .
 
-# Install the SDK from the submodule
-RUN pip install -e ./gluesync-client-sdk
+# Create the Python site-packages directory
+RUN mkdir -p /usr/local/lib/python3.10/site-packages/
+
+# Copy the SDK module directly to the Python path
+RUN cp -r /opt/python/gluesync-client-sdk/gluesync_sdk /usr/local/lib/python3.10/site-packages/
+
+# Create an empty __init__.py file if it doesn't exist
+RUN touch /usr/local/lib/python3.10/site-packages/gluesync_sdk/__init__.py
 
 # Stay in the python directory
 WORKDIR /opt/python
