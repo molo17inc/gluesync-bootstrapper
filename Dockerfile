@@ -64,8 +64,20 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the application code including the submodule
 COPY . .
 
-# Install all dependencies required by the SDK
-RUN pip install websockets==11.0.3 pyjks cryptography pycryptodome
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    python3-dev \
+    libssl-dev \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Install SDK dependencies one by one
+RUN pip install websockets==11.0.3 && \
+    pip install cryptography && \
+    pip install pycryptodome && \
+    pip install pyasn1 && \
+    pip install pyasn1_modules && \
+    pip install javaobj-py3
 
 # Install the SDK by directly copying it to the Python path
 RUN if [ -d "./gluesync-client-sdk/gluesync_sdk" ]; then \
