@@ -24,7 +24,7 @@ stages:
 
 default:
   tags:
-    - gs-docker-performance-test
+    - gs-runners-hq
 
 variables:
   DOCKER_TLS_CERTDIR: ""
