@@ -28,7 +28,6 @@ WORKDIR /opt/python
 # Set build arguments
 ARG FILE_CONF_PATH=/opt/config/config.json
 ARG CORE_HUB_URL=http://localhost:1717
-ARG DEFAULT_PASSWORD=admin
 ARG CREATE_ENTITIES_FROM_SCHEMA
 ARG SOURCE_TYPE=SQL
 ARG TARGET_TYPE
@@ -36,11 +35,12 @@ ARG TARGET_SCHEMA
 ARG ENTITY_START_TIMEOUT=1
 ARG TABLE_LIST_YAML=/opt/config/TABLE_LIST.yaml
 ARG LOG_DIR=/logs
+ARG DEFAULT_PASSWORD
+ARG GLUESYNC_LICENSE_FILE
 
 # Set environment variables
 ENV FILE_CONF_PATH=${FILE_CONF_PATH}
 ENV CORE_HUB_URL=${CORE_HUB_URL}
-ENV DEFAULT_PASSWORD=${DEFAULT_PASSWORD}
 ENV CREATE_ENTITIES_FROM_SCHEMA=${CREATE_ENTITIES_FROM_SCHEMA}
 ENV SOURCE_TYPE=${SOURCE_TYPE}
 ENV TARGET_TYPE=${TARGET_TYPE}
@@ -48,6 +48,8 @@ ENV TARGET_SCHEMA=${TARGET_SCHEMA}
 ENV ENTITY_START_TIMEOUT=${ENTITY_START_TIMEOUT}
 ENV TABLE_LIST_YAML=${TABLE_LIST_YAML}
 ENV LOG_DIR=${LOG_DIR}
+ENV DEFAULT_PASSWORD=""
+ENV GLUESYNC_LICENSE_FILE=${GLUESYNC_LICENSE_FILE}
 
 # Copy requirements.txt and install dependencies
 COPY requirements.txt .
@@ -55,6 +57,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the application code
 COPY . .
+
+# Copy the gluesync-client-sdk as a submodule
+COPY gluesync-client-sdk /opt/gluesync-client-sdk
+
+# Copy the license file
+COPY ${GLUESYNC_LICENSE_FILE} /opt/gluesync/data/gs-license.dat
 
 # Create logs directory
 RUN mkdir -p ${LOG_DIR} && chmod 777 ${LOG_DIR}
