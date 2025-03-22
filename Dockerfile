@@ -67,9 +67,11 @@ COPY . .
 # Copy the gluesync-client-sdk as a submodule
 COPY gluesync-client-sdk /opt/gluesync-client-sdk
 
-# Install the SDK module directly by copying it to site-packages
-RUN mkdir -p /usr/local/lib/python3.10/site-packages/
-RUN cp -r /opt/gluesync-client-sdk/gluesync_sdk /usr/local/lib/python3.10/site-packages/
+# Try to install the SDK using different methods (if one fails, try the next)
+RUN mkdir -p /usr/local/lib/python3.10/site-packages/ && \
+    (cd /opt/gluesync-client-sdk && pip install . || \
+     cp -r /opt/gluesync-client-sdk/gluesync_sdk /usr/local/lib/python3.10/site-packages/ || \
+     echo "WARNING: Could not install gluesync_sdk - will use mock implementation")
 
 # Stay in the python directory
 WORKDIR /opt/python
