@@ -67,9 +67,11 @@ COPY . .
 # Copy the gluesync-client-sdk as a submodule
 COPY gluesync-client-sdk /opt/gluesync-client-sdk
 
-# Install the SDK from the submodule first
-WORKDIR /opt/gluesync-client-sdk
-RUN pip install .
+# Install the SDK module directly by copying it to site-packages
+RUN mkdir -p /usr/local/lib/python3.10/site-packages/
+RUN cp -r /opt/gluesync-client-sdk/gluesync_sdk /usr/local/lib/python3.10/site-packages/
+
+# Stay in the python directory
 WORKDIR /opt/python
 
 # Copy the license file
