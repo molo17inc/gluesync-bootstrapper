@@ -2,3 +2,4 @@ requests
 faker
 PyYAML
 colorama
+gluesync_sdk
