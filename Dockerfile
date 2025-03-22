@@ -68,7 +68,7 @@ COPY . .
 COPY gluesync-client-sdk /opt/gluesync-client-sdk
 
 # Install the SDK from the submodule first
-RUN pip install -e ./gluesync-sdk
+RUN pip install -e /opt/gluesync-client-sdk
 
 # Copy the license file
 COPY ${GLUESYNC_LICENSE_FILE} /opt/gluesync/data/gs-license.dat
