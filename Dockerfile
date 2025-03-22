@@ -64,6 +64,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the application code including the submodule
 COPY . .
 
+# Install websockets dependency required by the SDK
+RUN pip install websockets==11.0.3
+
 # Install the SDK by directly copying it to the Python path
 RUN if [ -d "./gluesync-client-sdk/gluesync_sdk" ]; then \
     # Get the Python site-packages directory
