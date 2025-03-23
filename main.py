@@ -31,6 +31,7 @@ import urllib3
 import ssl
 import secrets
 import string
+import traceback
 from requests.adapters import HTTPAdapter
 from urllib3.util.ssl_ import create_urllib3_context
 from urllib.parse import urlparse
@@ -274,9 +275,37 @@ if user_defined_password or os.path.exists(AUTH_TOKEN_PATH):
     core_hub_client = CoreHubClient(core_hub_url)
 else:
     logger.info("Using Gluesync SDK for authentication.")
-    token = get_token()
-    if not token:
-        logger.error("Failed to obtain token from Gluesync SDK.")
+    try:
+        # Get the SDK client for inspection
+        sdk_client = get_gluesync_client()
+        if sdk_client:
+            logger.debug(f"SDK client type: {type(sdk_client).__name__}")
+            # Check if client has token-related attributes
+            token_attrs = [attr for attr in dir(sdk_client) if 'token' in attr.lower()]
+            if token_attrs:
+                logger.debug(f"Token-related attributes in SDK client: {token_attrs}")
+        
+        # Try to get the token
+        token = get_token()
+        logger.debug(f"Token retrieved: {token is not None}")
+        
+        if not token:
+            logger.error("Failed to obtain token from Gluesync SDK - token is None.")
+            # Check for any alternative token access methods
+            if sdk_client and hasattr(sdk_client, 'token'):
+                logger.debug("Trying to access token via property...")
+                token = sdk_client.token
+                logger.debug(f"Token via property: {token is not None}")
+            
+            if not token:
+                logger.error("All token retrieval methods failed.")
+                exit(1)
+        else:
+            logger.info("Successfully obtained token from Gluesync SDK.")
+    except Exception as e:
+        logger.error(f"Exception during token retrieval: {str(e)}")
+        logger.error(f"Exception type: {type(e).__name__}")
+        logger.error(f"Stack trace: {traceback.format_exc()}")
         exit(1)
 
     # Use the token for CoreHubClient
