@@ -100,6 +100,18 @@ def initialize_gluesync_sdk():
                     security_config=security_config
                 )
                 logger.debug("SDK client instance created successfully")
+                
+                # Check if the client needs to be connected
+                if hasattr(_gluesync_client, 'connect') and hasattr(_gluesync_client, 'is_connected'):
+                    if not _gluesync_client.is_connected():
+                        logger.debug("Client is not connected. Attempting to connect...")
+                        try:
+                            _gluesync_client.connect()
+                            logger.debug("Client connection successful")
+                        except Exception as e:
+                            logger.error(f"Failed to connect client: {str(e)}")
+                    else:
+                        logger.debug("Client is already connected")
             except Exception as e:
                 logger.error(f"Exception during SDK client creation: {str(e)}")
                 logger.error(f"Exception type: {type(e).__name__}")
@@ -142,6 +154,16 @@ def get_token():
         raise RuntimeError("Gluesync SDK is not initialized")
     
     logger.debug(f"Client type: {type(_gluesync_client).__name__}")
+    
+    # Ensure client is connected if it has connection methods
+    if hasattr(_gluesync_client, 'connect') and hasattr(_gluesync_client, 'is_connected'):
+        if not _gluesync_client.is_connected():
+            logger.debug("Client is not connected when trying to get token. Attempting to connect...")
+            try:
+                _gluesync_client.connect()
+                logger.debug("Client connection successful during token retrieval")
+            except Exception as e:
+                logger.error(f"Failed to connect client during token retrieval: {str(e)}")
     
     # Try multiple ways to get the token
     token = None
