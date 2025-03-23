@@ -34,7 +34,7 @@ import string
 from requests.adapters import HTTPAdapter
 from urllib3.util.ssl_ import create_urllib3_context
 from urllib.parse import urlparse
-from utils.log import get_logger, create_log_file, log_success, log_failure, lockfile_failure, lockfile_complete, exit_on_fail
+from utils.log import get_logger, create_log_file, log_success, log_failure, lockfile_failure, lockfile_complete, exit_on_fail, log_warning
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -336,12 +336,14 @@ def main():
             body={'username': default_user, 'password': default_password}
         )
         token = auth_response.get('apiToken')
-        if not token:
+
+        change_required = auth_response.get('changeRequired', False)
+
+        if not change_required == False and not token:
             log_failure(logger, "Failed to authenticate")
             lockfile_failure()
             raise Exception('Failed to authenticate')
 
-        change_required = auth_response.get('changeRequired', False)
         if change_required:
             logger.info("Password change required")
             # Generate a new random password and change it
