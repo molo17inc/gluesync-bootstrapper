@@ -96,10 +96,9 @@ RUN if [ -d "./gluesync-client-sdk/gluesync_sdk" ]; then \
     echo "class MockGluesyncSDK:" >> $SITE_PACKAGES/gluesync_sdk/__init__.py; \
     echo "    def __init__(self, **kwargs):" >> $SITE_PACKAGES/gluesync_sdk/__init__.py; \
     echo "        self.module_tag = kwargs.get('module_tag', 'unknown')" >> $SITE_PACKAGES/gluesync_sdk/__init__.py; \
+    echo "        self._token = 'mock-token'" >> $SITE_PACKAGES/gluesync_sdk/__init__.py; \
     echo "        import logging" >> $SITE_PACKAGES/gluesync_sdk/__init__.py; \
     echo "        logging.warning(f'Initialized mock SDK with module_tag={self.module_tag}')" >> $SITE_PACKAGES/gluesync_sdk/__init__.py; \
-    echo "    def get_token(self):" >> $SITE_PACKAGES/gluesync_sdk/__init__.py; \
-    echo "        return 'mock-token'" >> $SITE_PACKAGES/gluesync_sdk/__init__.py; \
     echo "    def get_core_hub_url(self):" >> $SITE_PACKAGES/gluesync_sdk/__init__.py; \
     echo "        import os" >> $SITE_PACKAGES/gluesync_sdk/__init__.py; \
     echo "        return os.getenv('CORE_HUB_URL', 'http://gluesync-core-hub:1717')" >> $SITE_PACKAGES/gluesync_sdk/__init__.py; \

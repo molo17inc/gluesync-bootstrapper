@@ -89,7 +89,8 @@ def initialize_gluesync_sdk():
 def get_token():
     if _gluesync_client is None:
         raise RuntimeError("Gluesync SDK is not initialized")
-    return _gluesync_client.get_token()
+    # Access the _token attribute instead of calling get_token()
+    return _gluesync_client._token
 
 
 def get_gluesync_client():
