@@ -77,7 +77,8 @@ RUN pip install websockets==11.0.3 && \
     pip install pycryptodome && \
     pip install pyasn1 && \
     pip install pyasn1_modules && \
-    pip install javaobj-py3
+    pip install javaobj-py3 && \
+    pip install pyjks
 
 # Install the SDK by directly copying it to the Python path
 RUN if [ -d "./gluesync-client-sdk/gluesync_sdk" ]; then \
