@@ -61,12 +61,20 @@ def initialize_gluesync_sdk():
             
             logger.info(f"Initializing Gluesync SDK with module_tag={module_tag}, use_ssl={use_ssl}")
             
+            # Determine host from CORE_HUB_URL if available
+            core_hub_url = os.getenv('CORE_HUB_URL', 'http://gluesync-core-hub:1717')
+            from urllib.parse import urlparse
+            parsed_url = urlparse(core_hub_url)
+            host = parsed_url.hostname
+            port = parsed_url.port or 1717
+            
             _gluesync_client = GluesyncSDK(
-                license_file=license_file,
+                host=host,
+                port=port,
+                license_file_path=license_file,
                 module_tag=module_tag,
-                use_ssl=use_ssl,
-                keystore_path=keystore_path,
-                keystore_password=keystore_password
+                ssl=use_ssl,
+                security_config=security_config
             )
             
             logger.info("Gluesync SDK initialized successfully")
