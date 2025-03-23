@@ -89,7 +89,21 @@ def initialize_gluesync_sdk():
                         if not _gluesync_client.is_connected():
                             logger.debug("Client is not connected. Attempting to connect...")
                             try:
-                                _gluesync_client.connect()
+                                # Check if connect is a coroutine function
+                                import inspect
+                                if inspect.iscoroutinefunction(_gluesync_client.connect):
+                                    logger.debug("Connect is a coroutine, using asyncio to connect")
+                                    import asyncio
+                                    # Create an event loop if one doesn't exist
+                                    try:
+                                        loop = asyncio.get_event_loop()
+                                    except RuntimeError:
+                                        loop = asyncio.new_event_loop()
+                                        asyncio.set_event_loop(loop)
+                                    # Run the connect coroutine
+                                    loop.run_until_complete(_gluesync_client.connect())
+                                else:
+                                    _gluesync_client.connect()
                                 logger.debug("Client connection successful")
                             except Exception as e:
                                 logger.error(f"Failed to connect client: {str(e)}")
@@ -100,7 +114,21 @@ def initialize_gluesync_sdk():
                         if not _gluesync_client.is_connected:
                             logger.debug("Client is not connected (property). Attempting to connect...")
                             try:
-                                _gluesync_client.connect()
+                                # Check if connect is a coroutine function
+                                import inspect
+                                if inspect.iscoroutinefunction(_gluesync_client.connect):
+                                    logger.debug("Connect is a coroutine, using asyncio to connect")
+                                    import asyncio
+                                    # Create an event loop if one doesn't exist
+                                    try:
+                                        loop = asyncio.get_event_loop()
+                                    except RuntimeError:
+                                        loop = asyncio.new_event_loop()
+                                        asyncio.set_event_loop(loop)
+                                    # Run the connect coroutine
+                                    loop.run_until_complete(_gluesync_client.connect())
+                                else:
+                                    _gluesync_client.connect()
                                 logger.debug("Client connection successful")
                             except Exception as e:
                                 logger.error(f"Failed to connect client: {str(e)}")
@@ -158,7 +186,21 @@ def get_token():
             if not _gluesync_client.is_connected():
                 logger.debug("Client is not connected when trying to get token. Attempting to connect...")
                 try:
-                    _gluesync_client.connect()
+                    # Check if connect is a coroutine function
+                    import inspect
+                    if inspect.iscoroutinefunction(_gluesync_client.connect):
+                        logger.debug("Connect is a coroutine, using asyncio to connect during token retrieval")
+                        import asyncio
+                        # Create an event loop if one doesn't exist
+                        try:
+                            loop = asyncio.get_event_loop()
+                        except RuntimeError:
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                        # Run the connect coroutine
+                        loop.run_until_complete(_gluesync_client.connect())
+                    else:
+                        _gluesync_client.connect()
                     logger.debug("Client connection successful during token retrieval")
                 except Exception as e:
                     logger.error(f"Failed to connect client during token retrieval: {str(e)}")
@@ -167,7 +209,21 @@ def get_token():
             if not _gluesync_client.is_connected:
                 logger.debug("Client is not connected (property) when trying to get token. Attempting to connect...")
                 try:
-                    _gluesync_client.connect()
+                    # Check if connect is a coroutine function
+                    import inspect
+                    if inspect.iscoroutinefunction(_gluesync_client.connect):
+                        logger.debug("Connect is a coroutine, using asyncio to connect during token retrieval")
+                        import asyncio
+                        # Create an event loop if one doesn't exist
+                        try:
+                            loop = asyncio.get_event_loop()
+                        except RuntimeError:
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                        # Run the connect coroutine
+                        loop.run_until_complete(_gluesync_client.connect())
+                    else:
+                        _gluesync_client.connect()
                     logger.debug("Client connection successful during token retrieval")
                 except Exception as e:
                     logger.error(f"Failed to connect client during token retrieval: {str(e)}")
@@ -185,7 +241,22 @@ def get_token():
     # Method 2: Try token property if it exists
     if token is None and hasattr(_gluesync_client, 'token'):
         try:
-            token = _gluesync_client.token
+            # Check if token is a property with a getter that might be async
+            import inspect
+            token_property = getattr(type(_gluesync_client), 'token', None)
+            if token_property and isinstance(token_property, property) and inspect.iscoroutinefunction(token_property.fget):
+                logger.debug("token property getter is a coroutine, using asyncio to get token")
+                import asyncio
+                # Create an event loop if one doesn't exist
+                try:
+                    loop = asyncio.get_event_loop()
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                # Run the token property getter coroutine
+                token = loop.run_until_complete(token_property.fget(_gluesync_client))
+            else:
+                token = _gluesync_client.token
             logger.debug(f"Method 2 (token property): {token is not None}")
         except Exception as e:
             logger.error(f"Error accessing token property: {str(e)}")
@@ -193,7 +264,21 @@ def get_token():
     # Method 3: Try get_token method if it exists
     if token is None and hasattr(_gluesync_client, 'get_token'):
         try:
-            token = _gluesync_client.get_token()
+            # Check if get_token is a coroutine function
+            import inspect
+            if inspect.iscoroutinefunction(_gluesync_client.get_token):
+                logger.debug("get_token is a coroutine, using asyncio to get token")
+                import asyncio
+                # Create an event loop if one doesn't exist
+                try:
+                    loop = asyncio.get_event_loop()
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                # Run the get_token coroutine
+                token = loop.run_until_complete(_gluesync_client.get_token())
+            else:
+                token = _gluesync_client.get_token()
             logger.debug(f"Method 3 (get_token method): {token is not None}")
         except Exception as e:
             logger.error(f"Error calling get_token method: {str(e)}")
