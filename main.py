@@ -455,6 +455,75 @@ def main():
     except Exception as e:
         log_failure(logger, f"Failed to load configuration: {str(e)}")
         lockfile_failure()
+        return
+
+    # Check if a valid token is present
+    try:
+        with open(AUTH_TOKEN_PATH, 'r') as f:
+            token_data = json.load(f)
+            token = token_data.get('token')
+            if token:
+                # Verify login by attempting to authenticate
+                try:
+                    check_token = fetch_core_hub(
+                        '/pipelines',
+                        method='GET',
+                        token=token
+                    )
+                    if isinstance(check_token, list):
+                        log_success(logger, "Successfully authenticated with saved token")
+                except Exception as e:
+                    if "401" in str(e):
+                        logger.warning("Saved token is invalid, attempting to authenticate with default credentials")
+                        token = None
+                    else:
+                        raise e
+    except FileNotFoundError:
+        logger.info("No saved token found, attempting to authenticate with default credentials")
+        token = None
+
+    if not token:
+        # Initial authentication
+        auth_response = fetch_core_hub(
+            '/authentication/login',
+            method='POST',
+            body={'username': default_user, 'password': default_password}
+        )
+        token = auth_response.get('apiToken')
+
+        change_required = auth_response.get('changeRequired', False)
+
+        if not change_required == False and not token:
+            log_failure(logger, "Failed to authenticate")
+            lockfile_failure()
+            raise Exception('Failed to authenticate')
+
+        if change_required:
+            logger.info("Password change required")
+            # Generate a new random password and change it
+            new_password = generate_random_password()
+            try:
+                # Change password and get new token
+                token = change_password(token, default_password, new_password)
+                log_success(logger, f"Successfully changed password to: {new_password}")
+            except Exception as e:
+                log_failure(logger, f"Password change failed, attempting to continue with default password: {str(e)}")
+                # Try to get a fresh token with the default password
+                auth_response = fetch_core_hub(
+                    '/authentication/login',
+                    method='POST',
+                    body={'username': default_user, 'password': default_password}
+                )
+                token = auth_response.get('apiToken')
+                if not token:
+                    log_failure(logger, "Failed to re-authenticate with default password")
+                    lockfile_failure()
+                    raise Exception('Failed to re-authenticate with default password')
+                new_password = default_password
+        else:
+            new_password = default_password
+            # Save the initial token if no password change was required
+            save_token(token)
 
     # List unassigned agents
     unassigned_agents = fetch_core_hub('/unassigned-agents', token=token)
