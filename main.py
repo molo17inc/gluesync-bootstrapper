@@ -34,7 +34,7 @@ import string
 from requests.adapters import HTTPAdapter
 from urllib3.util.ssl_ import create_urllib3_context
 from urllib.parse import urlparse
-from utils.log import get_logger, create_log_file, log_success, log_failure, lockfile_failure, exit_on_fail
+from utils.log import get_logger, create_log_file, log_success, log_failure, lockfile_failure, lockfile_complete, exit_on_fail
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
