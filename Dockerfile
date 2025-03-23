@@ -90,9 +90,19 @@ RUN if [ -d "./gluesync-client-sdk/gluesync_sdk" ]; then \
     cp -r ./gluesync-client-sdk/gluesync_sdk/* $SITE_PACKAGES/gluesync_sdk/; \
     # Make sure __init__.py exists
     touch $SITE_PACKAGES/gluesync_sdk/__init__.py; \
-    # Add GluesyncSDK alias to the __init__.py file
-    echo "# Add GluesyncSDK alias for backward compatibility" >> $SITE_PACKAGES/gluesync_sdk/__init__.py; \
+    # Add aliases to the __init__.py file for backward compatibility
+    echo "# Add aliases for backward compatibility" >> $SITE_PACKAGES/gluesync_sdk/__init__.py; \
     echo "GluesyncSDK = GluesyncClient" >> $SITE_PACKAGES/gluesync_sdk/__init__.py; \
+    echo "class MockGluesyncSDK:" >> $SITE_PACKAGES/gluesync_sdk/__init__.py; \
+    echo "    def __init__(self, **kwargs):" >> $SITE_PACKAGES/gluesync_sdk/__init__.py; \
+    echo "        self.module_tag = kwargs.get('module_tag', 'unknown')" >> $SITE_PACKAGES/gluesync_sdk/__init__.py; \
+    echo "        import logging" >> $SITE_PACKAGES/gluesync_sdk/__init__.py; \
+    echo "        logging.warning(f'Initialized mock SDK with module_tag={self.module_tag}')" >> $SITE_PACKAGES/gluesync_sdk/__init__.py; \
+    echo "    def get_token(self):" >> $SITE_PACKAGES/gluesync_sdk/__init__.py; \
+    echo "        return 'mock-token'" >> $SITE_PACKAGES/gluesync_sdk/__init__.py; \
+    echo "    def get_core_hub_url(self):" >> $SITE_PACKAGES/gluesync_sdk/__init__.py; \
+    echo "        import os" >> $SITE_PACKAGES/gluesync_sdk/__init__.py; \
+    echo "        return os.getenv('CORE_HUB_URL', 'http://gluesync-core-hub:1717')" >> $SITE_PACKAGES/gluesync_sdk/__init__.py; \
     echo "SDK copied to $SITE_PACKAGES/gluesync_sdk/"; \
     # Verify the installation
     python -c "import gluesync_sdk; print('SDK import successful')" || exit 1; \
