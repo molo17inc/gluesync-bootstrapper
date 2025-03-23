@@ -5,28 +5,8 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Try to import the SDK, but provide a mock implementation if it's not available
-try:
-    from gluesync_sdk import GluesyncSDK
-    SDK_AVAILABLE = True
-except ImportError:
-    logger.warning("gluesync_sdk module not found. Using mock implementation.")
-    SDK_AVAILABLE = False
-    
-    # Mock implementation of GluesyncSDK
-    class MockGluesyncSDK:
-        def __init__(self, **kwargs):
-            self.license_file = kwargs.get('license_file')
-            self.module_tag = kwargs.get('module_tag')
-            logger.warning(f"Initialized mock SDK with module_tag={self.module_tag}")
-            
-        def get_token(self):
-            return "mock-token"
-            
-        def get_core_hub_url(self):
-            return os.getenv('CORE_HUB_URL', 'http://gluesync-core-hub:1717')
-    
-    GluesyncSDK = MockGluesyncSDK
+# Import the SDK - no mock implementation
+from gluesync_sdk import GluesyncSDK
 
 # Try to load security configuration if needed
 security_config = {}
@@ -103,15 +83,29 @@ def initialize_gluesync_sdk():
                 
                 # Check if the client needs to be connected
                 if hasattr(_gluesync_client, 'connect') and hasattr(_gluesync_client, 'is_connected'):
-                    if not _gluesync_client.is_connected():
-                        logger.debug("Client is not connected. Attempting to connect...")
-                        try:
-                            _gluesync_client.connect()
-                            logger.debug("Client connection successful")
-                        except Exception as e:
-                            logger.error(f"Failed to connect client: {str(e)}")
+                    # Check if is_connected is a method or a property
+                    if callable(getattr(_gluesync_client, 'is_connected')):
+                        # It's a method
+                        if not _gluesync_client.is_connected():
+                            logger.debug("Client is not connected. Attempting to connect...")
+                            try:
+                                _gluesync_client.connect()
+                                logger.debug("Client connection successful")
+                            except Exception as e:
+                                logger.error(f"Failed to connect client: {str(e)}")
+                        else:
+                            logger.debug("Client is already connected")
                     else:
-                        logger.debug("Client is already connected")
+                        # It's a property
+                        if not _gluesync_client.is_connected:
+                            logger.debug("Client is not connected (property). Attempting to connect...")
+                            try:
+                                _gluesync_client.connect()
+                                logger.debug("Client connection successful")
+                            except Exception as e:
+                                logger.error(f"Failed to connect client: {str(e)}")
+                        else:
+                            logger.debug("Client is already connected (property)")
             except Exception as e:
                 logger.error(f"Exception during SDK client creation: {str(e)}")
                 logger.error(f"Exception type: {type(e).__name__}")
@@ -142,10 +136,11 @@ def initialize_gluesync_sdk():
             logger.info("Gluesync SDK initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize Gluesync SDK: {str(e)}")
-            # If SDK is available but initialization failed, create a mock client
-            if SDK_AVAILABLE:
-                _gluesync_client = MockGluesyncSDK(module_tag=os.getenv('GLUESYNC_MODULE_TAG', 'gluesync-bootstrapper'))
-                logger.warning("Using mock SDK client due to initialization failure")
+            logger.error(f"Exception type: {type(e).__name__}")
+            import traceback
+            logger.error(f"Stack trace: {traceback.format_exc()}")
+            # No mock fallback - just raise the exception
+            raise RuntimeError(f"Failed to initialize Gluesync SDK: {str(e)}")
 
 
 def get_token():
@@ -157,13 +152,25 @@ def get_token():
     
     # Ensure client is connected if it has connection methods
     if hasattr(_gluesync_client, 'connect') and hasattr(_gluesync_client, 'is_connected'):
-        if not _gluesync_client.is_connected():
-            logger.debug("Client is not connected when trying to get token. Attempting to connect...")
-            try:
-                _gluesync_client.connect()
-                logger.debug("Client connection successful during token retrieval")
-            except Exception as e:
-                logger.error(f"Failed to connect client during token retrieval: {str(e)}")
+        # Check if is_connected is a method or a property
+        if callable(getattr(_gluesync_client, 'is_connected')):
+            # It's a method
+            if not _gluesync_client.is_connected():
+                logger.debug("Client is not connected when trying to get token. Attempting to connect...")
+                try:
+                    _gluesync_client.connect()
+                    logger.debug("Client connection successful during token retrieval")
+                except Exception as e:
+                    logger.error(f"Failed to connect client during token retrieval: {str(e)}")
+        else:
+            # It's a property
+            if not _gluesync_client.is_connected:
+                logger.debug("Client is not connected (property) when trying to get token. Attempting to connect...")
+                try:
+                    _gluesync_client.connect()
+                    logger.debug("Client connection successful during token retrieval")
+                except Exception as e:
+                    logger.error(f"Failed to connect client during token retrieval: {str(e)}")
     
     # Try multiple ways to get the token
     token = None
