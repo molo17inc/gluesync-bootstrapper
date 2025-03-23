@@ -90,6 +90,9 @@ RUN if [ -d "./gluesync-client-sdk/gluesync_sdk" ]; then \
     cp -r ./gluesync-client-sdk/gluesync_sdk/* $SITE_PACKAGES/gluesync_sdk/; \
     # Make sure __init__.py exists
     touch $SITE_PACKAGES/gluesync_sdk/__init__.py; \
+    # Add GluesyncSDK alias to the __init__.py file
+    echo "# Add GluesyncSDK alias for backward compatibility" >> $SITE_PACKAGES/gluesync_sdk/__init__.py; \
+    echo "GluesyncSDK = GluesyncClient" >> $SITE_PACKAGES/gluesync_sdk/__init__.py; \
     echo "SDK copied to $SITE_PACKAGES/gluesync_sdk/"; \
     # Verify the installation
     python -c "import gluesync_sdk; print('SDK import successful')" || exit 1; \
