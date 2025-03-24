@@ -283,8 +283,8 @@ else:
         exit(1)
 
     # Use the token for CoreHubClient
-    global core_hub_client
-    core_hub_client = init_core_hub_client(core_hub_url)
+    # Set the global core_hub_client using the existing get_core_hub_client function
+    core_hub_client = get_core_hub_client()
 
 def get_entities(token, pipeline_id):
     response = fetch_core_hub(f"/pipelines/{pipeline_id}/entities", token=token)
