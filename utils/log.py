@@ -109,8 +109,8 @@ def log_success(logger, message):
 
 
 def log_failure(logger, message):
-    """Log a failure message with red background for the 'ERROR' part"""
-    logger.error(Back.ORANGE + "ERROR" + Back.RESET + " - " + message)
+    """Log a failure message with yellow background for the 'ERROR' part"""
+    logger.error(Back.YELLOW + "ERROR" + Back.RESET + " - " + message)
 
 
 def log_fatal(logger, message):
