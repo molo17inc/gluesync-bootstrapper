@@ -711,19 +711,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 token=token, 
                 body=chunk_data
             )
-            
-            # Store the entity IDs from the response if available
-            if isinstance(response, list):
-                for entity_data in response:
-                    entity_name = entity_data.get('name')
-                    entity_id = entity_data.get('id')
-                    if entity_name and entity_id:
-                        # Associate entity ID with its name for later use in scheduling
-                        for ent in chunk:
-                            if ent.get('entityName') == entity_name:
-                                ent['id'] = entity_id
-                                break
-                
             print(f"Successfully created entities {chunk_start}-{chunk_end}")
             successful_entities += len(chunk)
         except Exception as e:
@@ -743,21 +730,40 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
     if successful_entities > 0 and ENABLE_SCHEDULING:
         logger.info("Creating schedules for entities...")
         
+        # Get updated entity IDs from the pipeline config
         try:
-            # First, attempt to get entity IDs from the entities we just created
-            for entity in entities:
-                entity_name = entity.get('entityName')
-                entity_id = entity.get('id')
-                table_name = entity_name.split('.')[-1] if entity_name and '.' in entity_name else None
-                
-                if entity_id and table_name:
-                    logger.info(f"Using entity ID {entity_id} for {entity_name}")
-                    
-                    # Find corresponding table in tables list to get schedules
-                    for table in tables:
-                        if table.get('name') == table_name and table.get('custom', {}).get('schedules'):
-                            create_entity_schedules(token, pipeline_id, entity_id, table_name, table['custom']['schedules'])
-                            break
+            response = fetch_core_hub(f"/pipelines/{pipeline_id}/entities", token=token)
+            logger.info(f"Retrieved the following entities: {response}")
+            
+            if not isinstance(response, list) or not response:
+                logger.warning(f"Unexpected response when fetching entities: {response}")
+                return {"successful": successful_entities, "failed": failed_entities, "total": total_entities}
+            
+            # Process entities in the format used in main.py
+            entities_map = {}
+            for item in response:
+                if 'entity' in item and isinstance(item['entity'], dict):
+                    entity = item['entity']
+                    if 'entityId' in entity and 'entityName' in entity:
+                        entity_id = entity['entityId']
+                        entity_name = entity['entityName']
+                        # Extract table name from entity name (typically schema.table)
+                        parts = entity_name.split('.')
+                        table_name = parts[-1] if len(parts) > 1 else entity_name
+                        entities_map[table_name] = entity_id
+                        logger.info(f"Found entity: {entity_name} (ID: {entity_id})")
+            
+            # Create schedules for each entity found in the YAML config
+            if yaml_config and 'schemas' in yaml_config:
+                for schema_name, schema_config in yaml_config['schemas'].items():
+                    if 'tables' in schema_config and 'custom' in schema_config['tables']:
+                        custom_tables = schema_config['tables']['custom']
+                        for table_key, table_data in custom_tables.items():
+                            table_name = table_data.get('name')
+                            if table_name in entities_map and 'schedules' in table_data:
+                                entity_id = entities_map[table_name]
+                                logger.info(f"Creating schedules for table {table_name} (Entity ID: {entity_id})")
+                                create_entity_schedules(token, pipeline_id, entity_id, table_name, table_data['schedules'])
             
             # Create pipeline-level schedules if defined
             if yaml_config and 'schemas' in yaml_config:
