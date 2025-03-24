@@ -13,8 +13,10 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 class ProtocolAwareAdapter(HTTPAdapter):
     """HTTP adapter that's aware of secure vs insecure connections."""
     def __init__(self, *args, **kwargs):
+        # Initialize _is_secure before calling super().__init__
+        # to ensure it exists before init_poolmanager is called
+        self._is_secure = kwargs.pop('is_secure', False)
         super().__init__(*args, **kwargs)
-        self._is_secure = False
 
     def init_poolmanager(self, *args, **kwargs):
         if self._is_secure:
@@ -25,23 +27,19 @@ class ProtocolAwareAdapter(HTTPAdapter):
             kwargs['cert_reqs'] = 'CERT_NONE'
         
         return super().init_poolmanager(*args, **kwargs)
-    
-    def set_protocol(self, is_secure):
-        self._is_secure = is_secure
 
 class CoreHubClient:
     """Client for handling CoreHub API requests with protocol awareness."""
     def __init__(self, base_url):
         self.base_url = base_url
         self.session = requests.Session()
-        self.adapter = ProtocolAwareAdapter()
-
+        
         # Parse URL to determine protocol
         parsed_url = urlparse(base_url)
         is_secure = parsed_url.scheme == 'https'
-
-        # Configure adapter based on protocol
-        self.adapter.set_protocol(is_secure)
+        
+        # Create adapter with is_secure parameter
+        self.adapter = ProtocolAwareAdapter(is_secure=is_secure)
 
         # Mount adapter for both HTTP and HTTPS
         self.session.mount('http://', self.adapter)
