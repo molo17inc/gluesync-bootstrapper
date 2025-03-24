@@ -363,7 +363,8 @@ def start_entity_syncs(token, pipeline_id):
             time.sleep(ENTITY_START_TIMEOUT)
         except Exception as e:
             print(f"Error starting sync for entity {entityName} (ID: {entityId}): {str(e)}")
-        print(f"Warning: Failed to save authentication token: {e}")
+            # Log the error using the enhanced logging framework
+            log_failure(logger, f"Failed to start sync for entity {entityName}")
 
 def change_password(token, old_password, new_password):
     """Change the user password and return the new token."""
