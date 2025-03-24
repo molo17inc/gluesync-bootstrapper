@@ -28,6 +28,20 @@ schemas:
         pollingIntervalMilliseconds: 100
       target:
         ttlValue: 10000000
+    # Optional pipeline-level schedule configurations
+    schedules:
+      # Pipeline start schedule (runs on weekdays at 7:00 AM)
+      - name: "Daily pipeline startup"
+        description: "Start the entire pipeline every weekday morning"
+        task_type: "pipeline_start"  # pipeline_start, pipeline_stop, pipeline_snapshot
+        schedule:
+          days_of_week: ["monday", "tuesday", "wednesday", "thursday", "friday"]
+          hour: 7
+          minute: 0
+        # Alternatively, you can use cron expression:
+        # cron_expression: "0 7 * * 1-5"
+        with_snapshot: false
+        enabled: true
     tables:
       whitelist:
         - DRIVERS
@@ -60,6 +74,24 @@ schemas:
             - EMAIL:
                 name: email
                 type: varchar(255)
+          # Entity-level schedule configurations
+          schedules:
+            # First schedule for entity (runs every day at midnight)
+            - name: "Daily driver data snapshot"
+              description: "Create snapshot of driver data daily at midnight"
+              task_type: "entity_snapshot"  # entity_start, entity_stop, entity_snapshot
+              cron_expression: "0 0 * * *"  # Every day at midnight
+              enabled: true
+            # Second schedule for entity (runs on weekends at 2:00 AM)
+            - name: "Weekend driver data refresh"
+              description: "Restart driver entity every weekend for data refresh"
+              task_type: "entity_start"  # entity_start, entity_stop, entity_snapshot
+              schedule:
+                days_of_week: ["saturday", "sunday"]
+                hour: 2
+                minute: 0
+              with_snapshot: true
+              enabled: true
           # New filter configuration
           filter:
             clauses:
@@ -99,6 +131,16 @@ schemas:
             - REGISTRATION_DATE:
                 name: registrationDate
                 type: datetime
+          # Entity-level schedule configurations
+          schedules:
+            - name: "Weekly vehicles snapshot"
+              description: "Create a snapshot of vehicle data every Sunday at 1:00 AM"
+              task_type: "entity_snapshot"
+              schedule:
+                days_of_week: ["sunday"]
+                hour: 1
+                minute: 0
+              enabled: true
           filter:
             clauses:
               - column: REGISTRATION_DATE

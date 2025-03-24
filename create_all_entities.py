@@ -28,11 +28,13 @@ import urllib.parse
 from urllib.parse import urlencode, quote
 import urllib3
 import ssl
+import traceback
 from requests.adapters import HTTPAdapter
 from urllib3.util.ssl_ import create_urllib3_context
 import yaml
 import argparse
 from utils.log import get_logger, create_log_file, log_success, log_failure, lockfile_failure, lockfile_complete, exit_on_fail
+from utils.chronos_client import ChronosClient
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -42,7 +44,9 @@ logger = get_logger(log_file)
 
 # Environment variables with default values
 CORE_HUB_URL = os.getenv('CORE_HUB_URL', 'https://localhost:1717')
+CHRONOS_URL = os.getenv('CHRONOS_URL', 'http://gluesync-chronos:8000')
 ENTITY_START_TIMEOUT = int(os.getenv('ENTITY_START_TIMEOUT', '1'))
+ENABLE_SCHEDULING = os.getenv('ENABLE_SCHEDULING', 'true').lower() == 'true'
 
 class ProtocolAwareAdapter(HTTPAdapter):
     """HTTP adapter that handles both HTTP and HTTPS protocols."""
@@ -161,6 +165,105 @@ def get_table_columns(token, pipeline_id, agent_id, schema_name, table_name):
 
 def get_node_info(token, pipeline_id, agent_id):
     return fetch_core_hub(f"/pipelines/{pipeline_id}/agents/{agent_id}/discovery/node-info", token=token)
+
+
+def create_entity_schedules(token, pipeline_id, entity_id, entity_name, schedules_config):
+    """Create schedules for an entity based on the YAML configuration."""
+    if not schedules_config or not ENABLE_SCHEDULING:
+        return
+        
+    logger.info(f"Creating schedules for entity {entity_name} (ID: {entity_id})")
+    
+    chronos_client = ChronosClient(CHRONOS_URL)
+    
+    for schedule_config in schedules_config:
+        try:
+            # Extract schedule parameters
+            task_type = schedule_config.get('task_type')
+            name = schedule_config.get('name')
+            description = schedule_config.get('description')
+            with_snapshot = schedule_config.get('with_snapshot', False)
+            enabled = schedule_config.get('enabled', True)
+            
+            # Create a configuration dict for the chronos client
+            schedule_data = {}
+            if 'cron_expression' in schedule_config:
+                schedule_data['cron_expression'] = schedule_config['cron_expression']
+            elif 'schedule' in schedule_config:
+                schedule_data['schedule'] = schedule_config['schedule']
+            else:
+                logger.warning(f"Schedule for entity {entity_name} is missing both 'cron_expression' and 'schedule'. Skipping.")
+                continue
+                
+            # Create the schedule
+            result = chronos_client.create_entity_schedule(
+                pipeline_id=pipeline_id,
+                entity_id=entity_id,
+                task_type=task_type,
+                schedule_config=schedule_data,
+                name=name,
+                description=description,
+                with_snapshot=with_snapshot,
+                enabled=enabled
+            )
+            
+            log_success(logger, f"Created {task_type} schedule for entity {entity_name}: {name}")
+            logger.debug(f"Schedule details: {json.dumps(result)}")
+            
+        except Exception as e:
+            error_msg = f"Failed to create schedule for entity {entity_name}: {str(e)}"
+            log_failure(logger, error_msg)
+            logger.error(traceback.format_exc())
+            # Continue creating other schedules even if one fails
+
+
+def create_pipeline_schedules(token, pipeline_id, pipeline_schedules):
+    """Create schedules for the entire pipeline based on the YAML configuration."""
+    if not pipeline_schedules or not ENABLE_SCHEDULING:
+        return
+        
+    logger.info(f"Creating pipeline-level schedules for pipeline {pipeline_id}")
+    
+    chronos_client = ChronosClient(CHRONOS_URL)
+    
+    for schedule_config in pipeline_schedules:
+        try:
+            # Extract schedule parameters
+            task_type = schedule_config.get('task_type')
+            name = schedule_config.get('name')
+            description = schedule_config.get('description')
+            with_snapshot = schedule_config.get('with_snapshot', False)
+            enabled = schedule_config.get('enabled', True)
+            
+            # Create a configuration dict for the chronos client
+            schedule_data = {}
+            if 'cron_expression' in schedule_config:
+                schedule_data['cron_expression'] = schedule_config['cron_expression']
+            elif 'schedule' in schedule_config:
+                schedule_data['schedule'] = schedule_config['schedule']
+            else:
+                logger.warning(f"Pipeline schedule is missing both 'cron_expression' and 'schedule'. Skipping.")
+                continue
+                
+            # Create the schedule
+            result = chronos_client.create_pipeline_schedule(
+                pipeline_id=pipeline_id,
+                task_type=task_type,
+                schedule_config=schedule_data,
+                name=name,
+                description=description,
+                with_snapshot=with_snapshot,
+                enabled=enabled
+            )
+            
+            log_success(logger, f"Created {task_type} schedule for pipeline {pipeline_id}: {name}")
+            logger.debug(f"Schedule details: {json.dumps(result)}")
+            
+        except Exception as e:
+            error_msg = f"Failed to create pipeline schedule: {str(e)}"
+            log_failure(logger, error_msg)
+            logger.error(traceback.format_exc())
+            # Continue creating other schedules even if one fails
 
 def map_data_type(source_type, source_node_info, target_node_info):
     source_matrix = source_node_info['dataTypesMatrix']
@@ -623,6 +726,38 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
     print(f"- Successfully created: {successful_entities}")
     print(f"- Failed: {failed_entities}")
     
+    # Create entity schedules if successful
+    if successful_entities > 0 and ENABLE_SCHEDULING:
+        logger.info("Creating schedules for entities...")
+        
+        # Get updated entity IDs from the pipeline config
+        try:
+            pipeline_entities = fetch_core_hub(f"/pipelines/{pipeline_id}/config/entities", token=token)
+            
+            # Create schedules for each entity in the YAML config
+            for entity_config in pipeline_entities:
+                table_name = entity_config.get('name')
+                entity_id = entity_config.get('id')
+                
+                # Find corresponding table in YAML config
+                if yaml_config and 'schemas' in yaml_config:
+                    for schema_name, schema_config in yaml_config['schemas'].items():
+                        if 'tables' in schema_config and 'custom' in schema_config['tables']:
+                            custom_tables = schema_config['tables']['custom']
+                            for table_key, table_data in custom_tables.items():
+                                if table_data.get('name') == table_name and 'schedules' in table_data:
+                                    create_entity_schedules(token, pipeline_id, entity_id, table_name, table_data['schedules'])
+            
+            # Create pipeline-level schedules if defined
+            if yaml_config and 'schemas' in yaml_config:
+                for schema_name, schema_config in yaml_config['schemas'].items():
+                    if 'schedules' in schema_config:
+                        create_pipeline_schedules(token, pipeline_id, schema_config['schedules'])
+                        
+        except Exception as e:
+            logger.error(f"Error creating schedules: {str(e)}")
+            # Don't fail the whole process just because scheduling failed
+    
     return {"successful": successful_entities, "failed": failed_entities, "total": total_entities}
 
 def main(pipeline_id, source_schema, target_schema, source_type, target_type, yaml_file, token, skip_errors=False, chunk_size=50):
@@ -694,8 +829,14 @@ if __name__ == "__main__":
     parser.add_argument('--target-type', required=True, help="Target agent type")
     parser.add_argument('--yaml-file', help="YAML configuration file path")
     parser.add_argument('--token', required=True, help="Authentication token")
+    parser.add_argument('--enable-scheduling', action='store_true', help="Enable creation of schedules from YAML config")
     
     args = parser.parse_args()
+    
+    # Get command line arguments for scheduling
+    if args.enable_scheduling:
+        # Override the environment variable setting
+        ENABLE_SCHEDULING = True
     
     main(
         args.pipeline,

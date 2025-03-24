@@ -34,6 +34,7 @@ Gluesync Bootstrapper is a configuration tool for setting up database schema map
 - Flexible polling intervals and batch processing
 - TTL (Time To Live) management for target documents
 - Type-safe column mapping and transformation
+- Automated scheduling for entities and pipelines via Chronos integration
 
 ## Configuration
 
@@ -42,6 +43,7 @@ Gluesync Bootstrapper is a configuration tool for setting up database schema map
 The configuration consists of two main parts:
 1. Schema configuration (`table-list-template.yaml`)
 2. Agent configuration (`config.json`)
+3. Schedule configuration (integrated within the `table-list-template.yaml`)
 
 ### Schema Configuration
 
@@ -56,6 +58,16 @@ dbo: # Source schema
       pollingIntervalMilliseconds: 100
     target: # Target custom properties
       ttlValue: 10000000
+  # Pipeline-level schedules (optional)
+  schedules:
+    - name: "Daily pipeline startup"
+      description: "Start the entire pipeline every weekday morning"
+      task_type: "pipeline_start"  # pipeline_start, pipeline_stop, pipeline_snapshot
+      schedule:
+        days_of_week: ["monday", "tuesday", "wednesday", "thursday", "friday"]
+        hour: 7
+        minute: 0
+      enabled: true
   tables: # Tables to be synchronized
     whitelist: # Allowed tables to be synchronized, empty list means all tables
       - DRIVERS
@@ -92,6 +104,13 @@ DRIVERS:
     - LAST_NAME: "LAST_NAME"
     - AGE: "AGE"
     - EMAIL: "EMAIL"
+  # Entity-level schedules (optional)
+  schedules:
+    - name: "Daily data snapshot"
+      description: "Create snapshot of data daily at midnight"
+      task_type: "entity_snapshot"  # entity_start, entity_stop, entity_snapshot
+      cron_expression: "0 0 * * *"  # Every day at midnight
+      enabled: true
 ```
 
 The column configuration supports:
@@ -193,8 +212,68 @@ Parameters:
 - `--token`: Required. Authentication token for API access
 - `--skip-errors`: Optional. Continue execution even if errors occur
 - `--chunk-size`: Optional. Number of entities to process in each chunk (default: 50)
+- `--enable-scheduling`: Optional. Enable creation of schedules from YAML config
 
 Note: The script will create a new pipeline and start the agents based on the given config.json file. It will also perform a chained call to `create_all_entities.py` to create all the entities in the CoreHub if a `table-list-template.yaml` is provided.
+
+### Scheduling with Chronos
+
+The Gluesync Bootstrapper now integrates with Chronos for automated scheduling of pipeline and entity operations. You can define schedules in the `table-list-template.yaml` file at two levels:
+
+1. **Pipeline-level schedules**: Applied to the entire pipeline
+2. **Entity-level schedules**: Applied to specific entities
+
+#### Configuring Schedules
+
+Schedules can be configured using either a cron expression or a user-friendly schedule definition:
+
+```yaml
+# Using cron expression
+schedules:
+  - name: "Daily snapshot"
+    description: "Create snapshot daily at midnight"
+    task_type: "entity_snapshot"  # entity_start, entity_stop, entity_snapshot
+    cron_expression: "0 0 * * *"  # Every day at midnight
+    enabled: true
+    with_snapshot: false  # Optional, default is false
+
+# Using user-friendly schedule
+schedules:
+  - name: "Weekend refresh"
+    description: "Refresh data on weekends"
+    task_type: "entity_start"  # entity_start, entity_stop, entity_snapshot
+    schedule:
+      days_of_week: ["saturday", "sunday"]
+      hour: 2
+      minute: 0
+    with_snapshot: true  # Take snapshot before starting the entity
+    enabled: true
+```
+
+#### Task Types
+
+Supported task types for pipeline-level schedules:
+- `pipeline_start`: Start the entire pipeline
+- `pipeline_stop`: Stop the entire pipeline
+- `pipeline_snapshot`: Create a snapshot of the entire pipeline
+
+Supported task types for entity-level schedules:
+- `entity_start`: Start a specific entity
+- `entity_stop`: Stop a specific entity
+- `entity_snapshot`: Create a snapshot of a specific entity
+
+#### Enabling Scheduling
+
+Scheduling can be enabled in two ways:
+
+1. **Environment Variable**: Set `ENABLE_SCHEDULING=true` (enabled by default)
+2. **Command Line Flag**: Use the `--enable-scheduling` flag when running the script
+
+```bash
+python create_all_entities.py --pipeline <pipeline_id> --enable-scheduling [...other args]
+```
+
+Note: The Chronos service must be running and accessible at the URL specified by the `CHRONOS_URL` environment variable (default: `http://gluesync-chronos:8000`).
 
 ### Usage of create_all_entities.py
 

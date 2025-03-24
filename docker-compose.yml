@@ -9,12 +9,15 @@ services:
     environment:
       - FILE_CONF_PATH=/opt/custom-folder/config.json
       - CORE_HUB_URL=http://host.docker.internal:1717
+      - CHRONOS_URL=http://gluesync-chronos:8000
       - DEFAULT_PASSWORD=admin
       - CREATE_ENTITIES_FROM_SCHEMA=dbo
       - TARGET_TYPE=NoSQL
       - TARGET_SCHEMA=dbo
       - ENTITY_START_TIMEOUT=4
+      - ENABLE_SCHEDULING=true
     volumes:
       - ./example-config.json:/opt/custom-folder/config.json
+      - ./table-list-template.yaml:/opt/config/TABLE_LIST.yaml
     extra_hosts:
       - "host.docker.internal:host-gateway"
