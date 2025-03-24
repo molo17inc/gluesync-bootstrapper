@@ -711,6 +711,19 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 token=token, 
                 body=chunk_data
             )
+            
+            # Store the entity IDs from the response if available
+            if isinstance(response, list):
+                for entity_data in response:
+                    entity_name = entity_data.get('name')
+                    entity_id = entity_data.get('id')
+                    if entity_name and entity_id:
+                        # Associate entity ID with its name for later use in scheduling
+                        for ent in chunk:
+                            if ent.get('entityName') == entity_name:
+                                ent['id'] = entity_id
+                                break
+                
             print(f"Successfully created entities {chunk_start}-{chunk_end}")
             successful_entities += len(chunk)
         except Exception as e:
@@ -730,23 +743,21 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
     if successful_entities > 0 and ENABLE_SCHEDULING:
         logger.info("Creating schedules for entities...")
         
-        # Get updated entity IDs from the pipeline config
         try:
-            pipeline_entities = fetch_core_hub(f"/pipelines/{pipeline_id}/config/entities", token=token)
-            
-            # Create schedules for each entity in the YAML config
-            for entity_config in pipeline_entities:
-                table_name = entity_config.get('name')
-                entity_id = entity_config.get('id')
+            # First, attempt to get entity IDs from the entities we just created
+            for entity in entities:
+                entity_name = entity.get('entityName')
+                entity_id = entity.get('id')
+                table_name = entity_name.split('.')[-1] if entity_name and '.' in entity_name else None
                 
-                # Find corresponding table in YAML config
-                if yaml_config and 'schemas' in yaml_config:
-                    for schema_name, schema_config in yaml_config['schemas'].items():
-                        if 'tables' in schema_config and 'custom' in schema_config['tables']:
-                            custom_tables = schema_config['tables']['custom']
-                            for table_key, table_data in custom_tables.items():
-                                if table_data.get('name') == table_name and 'schedules' in table_data:
-                                    create_entity_schedules(token, pipeline_id, entity_id, table_name, table_data['schedules'])
+                if entity_id and table_name:
+                    logger.info(f"Using entity ID {entity_id} for {entity_name}")
+                    
+                    # Find corresponding table in tables list to get schedules
+                    for table in tables:
+                        if table.get('name') == table_name and table.get('custom', {}).get('schedules'):
+                            create_entity_schedules(token, pipeline_id, entity_id, table_name, table['custom']['schedules'])
+                            break
             
             # Create pipeline-level schedules if defined
             if yaml_config and 'schemas' in yaml_config:
