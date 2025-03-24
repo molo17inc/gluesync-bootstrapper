@@ -16,6 +16,7 @@ services:
       - TARGET_SCHEMA=dbo
       - ENTITY_START_TIMEOUT=4
       - ENABLE_SCHEDULING=true
+      - USE_SDK=true
     volumes:
       - ./example-config.json:/opt/custom-folder/config.json
       - ./table-list-template.yaml:/opt/config/TABLE_LIST.yaml

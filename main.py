@@ -36,9 +36,29 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.ssl_ import create_urllib3_context
 from urllib.parse import urlparse
 from utils.log import get_logger, create_log_file, log_success, log_failure, lockfile_failure, exit_on_fail, lockfile_complete
-from utils.gluesync_sdk_client import initialize_gluesync_sdk, get_token, get_gluesync_client
+from utils.gluesync_sdk_client import initialize_gluesync_sdk, get_token, get_gluesync_client, CoreHubClient
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# Core hub client accessor
+def get_core_hub_client():
+    global _core_hub_client
+    if _core_hub_client is None:
+        core_hub_url = os.getenv('CORE_HUB_URL', 'http://localhost:1717')
+        _core_hub_client = CoreHubClient(core_hub_url)
+    return _core_hub_client
+
+def set_core_hub_client(client):
+    global _core_hub_client
+    _core_hub_client = client
+
+# Private module variable
+_core_hub_client = None
+
+# Define this function early since it's used throughout the code
+def fetch_core_hub(path, method='GET', token=None, body=None, params=None):
+    client = get_core_hub_client()
+    return client.request(path, method, token, body, params)
 
 fake = Faker()
 
@@ -51,6 +71,9 @@ file_conf_path = os.getenv('FILE_CONF_PATH', './config.json')
 
 # Retrieve CoreHub URL from SDK if not specified
 core_hub_url = os.getenv('CORE_HUB_URL')
+
+# Retrieve use_sdk from environment
+use_sdk = os.getenv('USE_SDK', 'False').lower() in ['true', '1', 't', 'y', 'yes']
 
 if not core_hub_url:
     logger.info("No CoreHub URL specified, attempting to discover via SDK.")
@@ -194,7 +217,7 @@ except ModuleNotFoundError:
 initialize_gluesync_sdk()
 
 # Determine authentication method
-if user_defined_password or os.path.exists(AUTH_TOKEN_PATH):
+if not use_sdk:
     logger.info("Using manual authentication with provided password or token.")
     # Existing authentication logic
     try:
@@ -272,9 +295,13 @@ if user_defined_password or os.path.exists(AUTH_TOKEN_PATH):
             save_token(token)
 
     # Use the token for CoreHubClient
-    core_hub_client = CoreHubClient(core_hub_url)
+    set_core_hub_client(CoreHubClient(core_hub_url))
 else:
+    # If we're using SDK, still need to set the core_hub_client for API calls
     logger.info("Using Gluesync SDK for authentication.")
+    # Make sure we have a client
+    if get_core_hub_client() is None:
+        set_core_hub_client(CoreHubClient(core_hub_url))
     try:
         # Get the SDK client for inspection
         sdk_client = get_gluesync_client()
@@ -302,6 +329,8 @@ else:
                 exit(1)
         else:
             logger.info("Successfully obtained token from Gluesync SDK.")
+            # Save the token
+            save_token(token)
     except Exception as e:
         logger.error(f"Exception during token retrieval: {str(e)}")
         logger.error(f"Exception type: {type(e).__name__}")
@@ -309,10 +338,8 @@ else:
         exit(1)
 
     # Use the token for CoreHubClient
-    core_hub_client = CoreHubClient(core_hub_url)
-
-def fetch_core_hub(path, method='GET', token=None, body=None):
-    return core_hub_client.request(path, method, token, body)
+    global core_hub_client
+    core_hub_client = init_core_hub_client(core_hub_url)
 
 def get_entities(token, pipeline_id):
     response = fetch_core_hub(f"/pipelines/{pipeline_id}/entities", token=token)
