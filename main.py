@@ -126,6 +126,24 @@ def generate_random_password() -> str:
     password += secrets.choice(symbols)
     return password
 
+
+def save_token(token):
+    """Save the authentication token to a JSON file in the config directory."""
+    try:
+        # Create config directory if it doesn't exist
+        os.makedirs(os.path.dirname(AUTH_TOKEN_PATH), exist_ok=True)
+
+        # Create token JSON structure
+        token_data = {
+            "token": token
+        }
+
+        with open(AUTH_TOKEN_PATH, 'w') as f:
+            json.dump(token_data, f, indent=2)
+        print(f"Authentication token saved successfully to {AUTH_TOKEN_PATH}")
+    except Exception as e:
+        print(f"Warning: Failed to save authentication token: {e}")
+
 # Check if the license file exists before initializing the SDK
 license_file_path = os.getenv('GLUESYNC_LICENSE_FILE', '/opt/gluesync/data/gs-license.dat')
 
@@ -345,22 +363,6 @@ def start_entity_syncs(token, pipeline_id):
             time.sleep(ENTITY_START_TIMEOUT)
         except Exception as e:
             print(f"Error starting sync for entity {entityName} (ID: {entityId}): {str(e)}")
-
-def save_token(token):
-    """Save the authentication token to a JSON file in the config directory."""
-    try:
-        # Create config directory if it doesn't exist
-        os.makedirs(os.path.dirname(AUTH_TOKEN_PATH), exist_ok=True)
-
-        # Create token JSON structure
-        token_data = {
-            "token": token
-        }
-
-        with open(AUTH_TOKEN_PATH, 'w') as f:
-            json.dump(token_data, f, indent=2)
-        print(f"Authentication token saved successfully to {AUTH_TOKEN_PATH}")
-    except Exception as e:
         print(f"Warning: Failed to save authentication token: {e}")
 
 def change_password(token, old_password, new_password):
