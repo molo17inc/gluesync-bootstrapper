@@ -35,6 +35,7 @@ import yaml
 import argparse
 from utils.log import get_logger, create_log_file, log_success, log_failure, lockfile_failure, lockfile_complete, exit_on_fail
 from utils.chronos_client import ChronosClient
+from utils.core_hub_client import CoreHubClient
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -48,92 +49,16 @@ CHRONOS_URL = os.getenv('CHRONOS_URL', 'http://gluesync-chronos:8000')
 ENTITY_START_TIMEOUT = int(os.getenv('ENTITY_START_TIMEOUT', '1'))
 ENABLE_SCHEDULING = os.getenv('ENABLE_SCHEDULING', 'true').lower() == 'true'
 
-class ProtocolAwareAdapter(HTTPAdapter):
-    """HTTP adapter that handles both HTTP and HTTPS protocols."""
-    def __init__(self, *args, **kwargs):
-        self.ssl_context = create_urllib3_context(
-            cert_reqs=ssl.CERT_NONE,
-            ssl_version=ssl.PROTOCOL_TLS
-        )
-        super().__init__(*args, **kwargs)
-
-    def init_poolmanager(self, *args, **kwargs):
-        if self.is_secure_protocol:
-            kwargs['ssl_context'] = self.ssl_context
-        return super().init_poolmanager(*args, **kwargs)
-
-    def proxy_manager_for(self, *args, **kwargs):
-        if self.is_secure_protocol:
-            kwargs['ssl_context'] = self.ssl_context
-        return super().proxy_manager_for(*args, **kwargs)
-
-    @property
-    def is_secure_protocol(self):
-        return hasattr(self, '_is_secure') and self._is_secure
-
-    def set_protocol(self, is_secure):
-        self._is_secure = is_secure
-
-class CoreHubClient:
-    """Client for handling CoreHub API requests with protocol awareness."""
-    def __init__(self, base_url):
-        self.base_url = base_url
-        self.session = requests.Session()
-        self.adapter = ProtocolAwareAdapter()
-        
-        # Parse URL to determine protocol
-        parsed_url = urllib.parse.urlparse(base_url)
-        is_secure = parsed_url.scheme == 'https'
-        
-        # Configure adapter based on protocol
-        self.adapter.set_protocol(is_secure)
-        
-        # Mount adapter for both HTTP and HTTPS
-        self.session.mount('http://', self.adapter)
-        self.session.mount('https://', self.adapter)
-
-    def request(self, path, method='GET', token=None, body=None, params=None):
-        url = f"{self.base_url}{path}"
-        headers = {
-            'Authorization': f'Bearer {token}' if token else None,
-            'Content-Type': 'application/json'
-        }
-        headers = {k: v for k, v in headers.items() if v is not None}
-
-        logger.debug(f"Loading: {url} with: {body}")
-        
-        response = self.session.request(
-            method, 
-            url, 
-            headers=headers, 
-            json=body, 
-            params=params,
-            verify=False if self.adapter.is_secure_protocol else None
-        )
-        
-        if response.status_code < 200 or response.status_code >= 300:
-            error_msg = f"Request to {url} failed with status code {response.status_code}: {response.text}"
-            log_failure(logger, error_msg)
-            lockfile_failure()
-            raise Exception(error_msg)
-        
-        if response.status_code == 202 and not response.content:
-            return {}
-
-        try:
-            return response.json()
-        except json.JSONDecodeError:
-            logger.warning(f"Non-JSON response from {url}: {response.text}")
-            return response.text
-
-def generate_short_guid():
-    return str(uuid.uuid4()).split('-')[0]
+# ProtocolAwareAdapter and CoreHubClient have been moved to utils/core_hub_client.py
 
 # Initialize the CoreHub client
 core_hub_client = CoreHubClient(CORE_HUB_URL)
 
 def fetch_core_hub(path, method='GET', token=None, body=None, params=None):
     return core_hub_client.request(path, method, token, body, params)
+
+def generate_short_guid():
+    return str(uuid.uuid4()).split('-')[0]
 
 def get_pipeline_config(token, pipeline_id):
     return fetch_core_hub(f"/pipelines/{pipeline_id}/config", token=token)

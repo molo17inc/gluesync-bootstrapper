@@ -36,7 +36,8 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.ssl_ import create_urllib3_context
 from urllib.parse import urlparse
 from utils.log import get_logger, create_log_file, log_success, log_failure, lockfile_failure, exit_on_fail, lockfile_complete
-from utils.gluesync_sdk_client import initialize_gluesync_sdk, get_token, get_gluesync_client, CoreHubClient
+from utils.gluesync_sdk_client import initialize_gluesync_sdk, get_token, get_gluesync_client
+from utils.core_hub_client import CoreHubClient
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -104,81 +105,7 @@ AUTH_TOKEN_PATH = os.path.join('/opt/config', 'auth_token.json')
 
 ENTITY_START_TIMEOUT = 1
 
-class ProtocolAwareAdapter(HTTPAdapter):
-    """HTTP adapter that handles both HTTP and HTTPS protocols."""
-    def __init__(self, *args, **kwargs):
-        self.ssl_context = create_urllib3_context(
-            cert_reqs=ssl.CERT_NONE,
-            ssl_version=ssl.PROTOCOL_TLS
-        )
-        super().__init__(*args, **kwargs)
-
-    def init_poolmanager(self, *args, **kwargs):
-        if self.is_secure_protocol:
-            kwargs['ssl_context'] = self.ssl_context
-        return super().init_poolmanager(*args, **kwargs)
-
-    def proxy_manager_for(self, *args, **kwargs):
-        if self.is_secure_protocol:
-            kwargs['ssl_context'] = self.ssl_context
-        return super().proxy_manager_for(*args, **kwargs)
-
-    @property
-    def is_secure_protocol(self):
-        return hasattr(self, '_is_secure') and self._is_secure
-
-    def set_protocol(self, is_secure):
-        self._is_secure = is_secure
-
-class CoreHubClient:
-    """Client for handling CoreHub API requests with protocol awareness."""
-    def __init__(self, base_url):
-        self.base_url = base_url
-        self.session = requests.Session()
-        self.adapter = ProtocolAwareAdapter()
-
-        # Parse URL to determine protocol
-        parsed_url = urlparse(base_url)
-        is_secure = parsed_url.scheme == 'https'
-
-        # Configure adapter based on protocol
-        self.adapter.set_protocol(is_secure)
-
-        # Mount adapter for both HTTP and HTTPS
-        self.session.mount('http://', self.adapter)
-        self.session.mount('https://', self.adapter)
-
-    def request(self, path, method='GET', token=None, body=None):
-        url = f"{self.base_url}{path}"
-        headers = {
-            'Authorization': f'Bearer {token}' if token else None,
-            'Content-Type': 'application/json'
-        }
-        headers = {k: v for k, v in headers.items() if v is not None}
-
-        logger.debug(f"Loading: {url} with: {body}")
-
-        response = self.session.request(
-            method,
-            url,
-            headers=headers,
-            json=body,
-            verify=False if self.adapter.is_secure_protocol else None
-        )
-
-        if response.status_code < 200 or response.status_code >= 300:
-            error_msg = f"Request to {url} failed with status code {response.status_code}: {response.text}"
-            log_failure(logger, error_msg)
-            raise Exception(error_msg)
-
-        if response.status_code == 202 and not response.content:
-            return {}
-
-        try:
-            return response.json()
-        except json.JSONDecodeError:
-            logger.warning(f"Non-JSON response from {url}: {response.text}")
-            return response.text
+# CoreHubClient and ProtocolAwareAdapter have been moved to utils/core_hub_client.py
 
 def generate_fancy_names(length):
     return [fake.catch_phrase() for _ in range(length)]
