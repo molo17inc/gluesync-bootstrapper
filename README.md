@@ -262,6 +262,49 @@ Supported task types for entity-level schedules:
 - `entity_stop`: Stop a specific entity
 - `entity_snapshot`: Create a snapshot of a specific entity
 
+## Advanced Features
+
+### CoreHub Autodiscovery
+
+The bootstrapper includes a CoreHub autodiscovery feature that automatically detects and connects to the CoreHub service without requiring manual configuration of the CoreHub URL. This feature:
+
+- Simplifies deployment by reducing configuration needs
+- Makes the system more resilient to network changes
+- Falls back to the `CORE_HUB_URL` environment variable if autodiscovery fails
+- Provides detailed logging about the discovery process
+
+To override autodiscovery and use a specific CoreHub URL:
+
+```bash
+export CORE_HUB_URL="https://your-corehub-instance:1717"
+```
+
+### SSL/TLS Support
+
+The bootstrapper supports secure communication via SSL/TLS across all components:
+
+- GluesyncSDK client for WebSocket connections
+- CoreHub client for API requests
+- Chronos client for scheduling service
+
+SSL features include:
+
+- Automatic URL scheme conversion (HTTP → HTTPS when SSL is enabled)
+- Consistent certificate verification settings across all HTTP methods
+- Configurable certificate verification (can be disabled in development environments)
+
+Configure SSL using the following environment variables:
+
+```bash
+# Enable SSL for all communications
+export SSL_ENABLED="true"
+
+# Skip certificate verification (useful in development environments)
+export SSL_SKIP_VERIFY="false"
+```
+
+When SSL is enabled, all HTTP URLs will be automatically converted to HTTPS.
+
 #### Enabling Scheduling
 
 Scheduling can be enabled in two ways:
