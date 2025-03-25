@@ -403,7 +403,7 @@ def change_password(token, old_password, new_password):
     return new_token
 
 def main():
-    logger.info("Starting GlueSync bootstrapper")
+    logger.info("Starting Gluesync bootstrapper")
     
     try:
         with open(file_conf_path, 'r') as file:

@@ -214,7 +214,7 @@ def map_data_type(source_type, source_node_info, target_node_info):
         return source_type
 
     source_gluesync_type = source_item['gluesyncDataType']
-    print(f"Matched GlueSync data type: {source_gluesync_type}")
+    print(f"Matched Gluesync data type: {source_gluesync_type}")
 
     # Find matching target type
     target_item = next(
@@ -274,7 +274,7 @@ def map_data_type(source_type, source_node_info, target_node_info):
         print(f"Mapping {source_type} to {target_item['defaultType']} (using target's default type)")
         return target_item['defaultType']
     
-    print(f"Warning: No target mapping found for GlueSync type {source_gluesync_type}. Using source type {source_type} as is.")
+    print(f"Warning: No target mapping found for Gluesync type {source_gluesync_type}. Using source type {source_type} as is.")
     return source_type
 
 def load_yaml_config(file_path):
