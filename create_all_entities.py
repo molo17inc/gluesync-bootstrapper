@@ -680,16 +680,28 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             
             # Create schedules for each entity found in the YAML config
             if yaml_config and 'schemas' in yaml_config:
+                # Track which tables we've already processed to avoid duplicates
+                processed_tables = set()
+                
                 for schema_name, schema_config in yaml_config['schemas'].items():
                     if 'tables' in schema_config and 'custom' in schema_config['tables']:
                         custom_tables = schema_config['tables']['custom']
                         for table_key, table_data in custom_tables.items():
+                            # Skip if we've already processed this table
+                            if table_key in processed_tables:
+                                continue
+                                
+                            processed_tables.add(table_key)
+                            
                             # Use the table_key directly instead of looking for 'name' field
                             table_name = table_key
+                            
                             if table_name in entities_map and 'schedules' in table_data:
                                 entity_id = entities_map[table_name]
                                 logger.info(f"Creating schedules for table {table_name} (Entity ID: {entity_id})")
                                 create_entity_schedules(token, pipeline_id, entity_id, table_name, table_data['schedules'])
+                            else:
+                                logger.warning(f"Unable to create schedules for {table_name}. Entity not found or no schedules defined.")
             
             # Create pipeline-level schedules if defined
             if yaml_config and 'schemas' in yaml_config:
