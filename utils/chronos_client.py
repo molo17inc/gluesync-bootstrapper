@@ -22,7 +22,7 @@
 import os
 import requests
 import json
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse, urlunparse
 from utils.log import get_logger, log_success, log_failure
 
 # Initialize logger
@@ -35,7 +35,21 @@ class ChronosClient:
         self.base_url = base_url or os.getenv('CHRONOS_URL', 'http://gluesync-chronos:8000')
         if not self.base_url.endswith('/'):
             self.base_url += '/'
-        logger.info(f"Initializing Chronos client with base URL: {self.base_url}")
+            
+        # Check SSL configuration
+        self.use_ssl = os.getenv('SSL_ENABLED', 'False').lower() == 'true'
+        self.verify_ssl = not (os.getenv('SSL_SKIP_VERIFY', 'False').lower() == 'true')
+        
+        # Update URL scheme if SSL is enabled
+        if self.use_ssl:
+            parsed_url = urlparse(self.base_url)
+            # If the URL is using http, update it to https
+            if parsed_url.scheme == 'http':
+                updated_url = urlunparse(('https',) + parsed_url[1:])
+                logger.info(f"SSL enabled: Changed Chronos URL from {self.base_url} to {updated_url}")
+                self.base_url = updated_url
+        
+        logger.info(f"Initializing Chronos client with base URL: {self.base_url}, SSL={self.use_ssl}, verify={self.verify_ssl}")
         
     def _request(self, endpoint, method='GET', data=None, params=None):
         """Make a request to the Chronos API."""
@@ -47,12 +61,16 @@ class ChronosClient:
             if data:
                 logger.debug(f"Request data: {json.dumps(data)}")
                 
+            # Use SSL verification based on configuration
+            verify = self.verify_ssl if self.use_ssl else False
+            
             response = requests.request(
                 method, 
                 url, 
                 json=data, 
                 params=params,
-                headers=headers
+                headers=headers,
+                verify=verify
             )
             
             response.raise_for_status()
