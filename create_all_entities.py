@@ -684,7 +684,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     if 'tables' in schema_config and 'custom' in schema_config['tables']:
                         custom_tables = schema_config['tables']['custom']
                         for table_key, table_data in custom_tables.items():
-                            table_name = table_data.get('name')
+                            # Use the table_key directly instead of looking for 'name' field
+                            table_name = table_key
                             if table_name in entities_map and 'schedules' in table_data:
                                 entity_id = entities_map[table_name]
                                 logger.info(f"Creating schedules for table {table_name} (Entity ID: {entity_id})")
