@@ -83,9 +83,9 @@ def initialize_gluesync_sdk():
                     port=port,
                     license_file_path=license_file,
                     module_tag=module_tag,
-                    ssl=use_ssl,
+                    use_ssl=use_ssl,
                     security_config=security_config_path,
-                    ssl_verify=not ssl_skip_verify  # If skip_verify is True, we set ssl_verify to False
+                    verify_ssl=not ssl_skip_verify
                 )
                 logger.debug("SDK client instance created successfully")
                 
