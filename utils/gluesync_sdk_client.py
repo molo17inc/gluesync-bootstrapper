@@ -31,6 +31,7 @@ def initialize_gluesync_sdk():
             license_file = os.getenv('GLUESYNC_LICENSE_FILE', '/opt/gluesync/data/gs-license.dat')
             module_tag = os.getenv('GLUESYNC_MODULE_TAG', 'gluesync-bootstrapper')
             use_ssl = os.getenv('SSL_ENABLED', 'False').lower() == 'true'
+            ssl_skip_verify = os.getenv('SSL_SKIP_VERIFY', 'False').lower() == 'true'
             
             # Get keystore info from security config if available
             keystore_path = None
@@ -73,13 +74,18 @@ def initialize_gluesync_sdk():
             try:
                 # Pass the path to the security config file, not the dictionary
                 security_config_path = os.getenv('GLUESYNC_SECURITY_CONFIG', '/opt/gluesync/data/security-config.json')
+                
+                # Log SSL configuration
+                logger.info(f"SSL Configuration: enabled={use_ssl}, skip_verify={ssl_skip_verify}")
+                
                 _gluesync_client = GluesyncSDK(
                     host=host,
                     port=port,
                     license_file_path=license_file,
                     module_tag=module_tag,
                     ssl=use_ssl,
-                    security_config=security_config_path
+                    security_config=security_config_path,
+                    ssl_verify=not ssl_skip_verify  # If skip_verify is True, we set ssl_verify to False
                 )
                 logger.debug("SDK client instance created successfully")
                 
