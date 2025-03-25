@@ -71,13 +71,15 @@ def initialize_gluesync_sdk():
             logger.debug(f"  - security_config: {json.dumps(security_config) if security_config else None}")
             
             try:
+                # Pass the path to the security config file, not the dictionary
+                security_config_path = os.getenv('GLUESYNC_SECURITY_CONFIG', '/opt/gluesync/data/security-config.json')
                 _gluesync_client = GluesyncSDK(
                     host=host,
                     port=port,
                     license_file_path=license_file,
                     module_tag=module_tag,
                     ssl=use_ssl,
-                    security_config=security_config
+                    security_config=security_config_path
                 )
                 logger.debug("SDK client instance created successfully")
                 
