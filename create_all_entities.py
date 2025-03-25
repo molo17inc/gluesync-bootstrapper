@@ -679,11 +679,21 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         logger.info(f"Found entity: {entity_name} (ID: {entity_id})")
             
             # Create schedules for each entity found in the YAML config
-            if yaml_config and 'schemas' in yaml_config:
+            if yaml_config:
                 # Track which tables we've already processed to avoid duplicates
                 processed_tables = set()
                 
-                for schema_name, schema_config in yaml_config['schemas'].items():
+                # Determine if schemas are at root level or under 'schemas' key
+                schemas_dict = yaml_config.get('schemas', {})
+                
+                # If 'schemas' key doesn't exist or is empty, assume schemas are at root level
+                if not schemas_dict:
+                    # Treat each top-level key as a schema name
+                    # Filter out keys that are not dictionaries (they wouldn't be schema configs)
+                    schemas_dict = {k: v for k, v in yaml_config.items() if isinstance(v, dict)}
+                    logger.info(f"Using root-level schema definitions: {list(schemas_dict.keys())}")
+                
+                for schema_name, schema_config in schemas_dict.items():
                     if 'tables' in schema_config and 'custom' in schema_config['tables']:
                         custom_tables = schema_config['tables']['custom']
                         for table_key, table_data in custom_tables.items():
@@ -704,9 +714,21 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                 logger.warning(f"Unable to create schedules for {table_name}. Entity not found or no schedules defined.")
             
             # Create pipeline-level schedules if defined
-            if yaml_config and 'schemas' in yaml_config:
-                for schema_name, schema_config in yaml_config['schemas'].items():
+            if yaml_config:
+                # Reuse the same schemas_dict from entity schedules
+                if not 'schemas_dict' in locals():
+                    # Determine if schemas are at root level or under 'schemas' key
+                    schemas_dict = yaml_config.get('schemas', {})
+                    
+                    # If 'schemas' key doesn't exist or is empty, assume schemas are at root level
+                    if not schemas_dict:
+                        # Treat each top-level key as a schema name
+                        schemas_dict = {k: v for k, v in yaml_config.items() if isinstance(v, dict)}
+                        logger.info(f"Using root-level schema definitions for pipeline schedules: {list(schemas_dict.keys())}")
+                
+                for schema_name, schema_config in schemas_dict.items():
                     if 'schedules' in schema_config:
+                        logger.info(f"Creating pipeline-level schedules for schema {schema_name}")
                         create_pipeline_schedules(token, pipeline_id, schema_config['schedules'])
                         
         except Exception as e:
