@@ -30,7 +30,7 @@ def initialize_gluesync_sdk():
         try:
             license_file = os.getenv('GLUESYNC_LICENSE_FILE', '/opt/gluesync/data/gs-license.dat')
             module_tag = os.getenv('GLUESYNC_MODULE_TAG', 'gluesync-bootstrapper')
-            use_ssl = os.getenv('GLUESYNC_USE_SSL', 'False').lower() == 'true'
+            use_ssl = os.getenv('SSL_ENABLED', 'False').lower() == 'true'
             
             # Get keystore info from security config if available
             keystore_path = None
