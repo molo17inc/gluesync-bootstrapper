@@ -73,20 +73,22 @@ file_conf_path = os.getenv('FILE_CONF_PATH', './config.json')
 # Retrieve CoreHub URL from SDK if not specified
 core_hub_url = os.getenv('CORE_HUB_URL')
 
-# Retrieve use_sdk from environment
-use_sdk = os.getenv('USE_SDK', 'False').lower() in ['true', '1', 't', 'y', 'yes']
+# use_sdk variable is now defined earlier in the code
 
 if not core_hub_url:
-    logger.info("No CoreHub URL specified, attempting to discover via SDK.")
-    sdk_client = get_gluesync_client()
-    if sdk_client:
-        core_hub_url = sdk_client.get_core_hub_url()
-        if core_hub_url:
-            logger.info(f"Discovered CoreHub URL via SDK: {core_hub_url}")
+    if use_sdk:
+        logger.info("No CoreHub URL specified, attempting to discover via SDK.")
+        sdk_client = get_gluesync_client()
+        if sdk_client:
+            core_hub_url = sdk_client.get_core_hub_url()
+            if core_hub_url:
+                logger.info(f"Discovered CoreHub URL via SDK: {core_hub_url}")
+            else:
+                logger.warning("Failed to discover CoreHub URL via SDK, using default.")
         else:
-            logger.warning("Failed to discover CoreHub URL via SDK, using default.")
+            logger.error("SDK client not initialized, cannot discover CoreHub URL.")
     else:
-        logger.error("SDK client not initialized, cannot discover CoreHub URL.")
+        logger.info("USE_SDK is false, skipping SDK CoreHub URL discovery.")
 
 # Fallback to default CoreHub URL
 if not core_hub_url:
@@ -144,22 +146,29 @@ def save_token(token):
     except Exception as e:
         print(f"Warning: Failed to save authentication token: {e}")
 
-# Check if the license file exists before initializing the SDK
-license_file_path = os.getenv('GLUESYNC_LICENSE_FILE', '/opt/gluesync/data/gs-license.dat')
+# Retrieve use_sdk from environment early to avoid unnecessary imports/checks
+use_sdk = os.getenv('USE_SDK', 'False').lower() in ['true', '1', 't', 'y', 'yes']
 
-if not os.path.exists(license_file_path):
-    logger.error(f"License file not found at {license_file_path}. Cannot proceed with SDK initialization.")
-    exit(1)
+# Only check license file and initialize SDK if USE_SDK is true
+if use_sdk:
+    # Check if the license file exists before initializing the SDK
+    license_file_path = os.getenv('GLUESYNC_LICENSE_FILE', '/opt/gluesync/data/gs-license.dat')
 
-try:
-    from gluesync_sdk import GluesyncSDK
-except ModuleNotFoundError:
-    logger.error("gluesync_sdk module not found. Make sure it's installed as a submodule.")
-    # Handle the absence of the SDK appropriately, e.g., set a flag or use a mock
-    GluesyncSDK = None
+    if not os.path.exists(license_file_path):
+        logger.error(f"License file not found at {license_file_path}. Cannot proceed with SDK initialization.")
+        exit(1)
 
-# Initialize the Gluesync SDK client
-initialize_gluesync_sdk()
+    try:
+        from gluesync_sdk import GluesyncSDK
+    except ModuleNotFoundError:
+        logger.error("gluesync_sdk module not found. Make sure it's installed as a submodule.")
+        # Handle the absence of the SDK appropriately, e.g., set a flag or use a mock
+        GluesyncSDK = None
+
+    # Initialize the Gluesync SDK client
+    initialize_gluesync_sdk()
+else:
+    logger.info("Skipping SDK initialization as USE_SDK is set to false")
 
 # Determine authentication method
 if not use_sdk:
