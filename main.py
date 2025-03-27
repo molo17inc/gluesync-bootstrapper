@@ -491,7 +491,7 @@ def main():
                 auth_response = fetch_core_hub(
                     '/authentication/login',
                     method='POST',
-                    body={'username': default_user, 'password': default_password}
+                    body={'username': default_user, 'password': user_defined_password}
                 )
                 token = auth_response.get('apiToken')
 
