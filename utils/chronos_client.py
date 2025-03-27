@@ -127,7 +127,7 @@ class ChronosClient:
         
         Args:
             pipeline_id (str): ID of the pipeline
-            entity_id (str): ID of the entity
+            entity_id (str): ID of the entity (will be added to entity_ids array)
             task_type (str): Type of task to schedule (entity_start, entity_stop, entity_snapshot)
             schedule_config (dict): Schedule configuration dict with either 'cron_expression' or 'schedule' 
             name (str, optional): Name for the job
@@ -158,7 +158,7 @@ class ChronosClient:
             'description': description,
             'task_type': task_type,
             'pipeline_id': pipeline_id,
-            'entity_id': entity_id,
+            'entity_ids': [entity_id],  # Use entity_ids array instead of entity_id
             'with_snapshot': with_snapshot,
             'enabled': enabled
         }
