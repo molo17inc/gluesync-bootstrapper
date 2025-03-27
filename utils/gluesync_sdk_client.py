@@ -5,27 +5,41 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Import the SDK - no mock implementation
-from gluesync_sdk import GluesyncSDK
-
-# Try to load security configuration if needed
-security_config = {}
-try:
-    security_config_path = os.getenv('GLUESYNC_SECURITY_CONFIG', '/opt/gluesync/data/security-config.json')
-    if os.path.exists(security_config_path):
-        with open(security_config_path) as f:
-            security_config = json.load(f)
-            logger.info(f"Loaded security config from {security_config_path}")
-    else:
-        logger.warning(f"Security config not found at {security_config_path}")
-except Exception as e:
-    logger.error(f"Error loading security config: {str(e)}")
-
 # Singleton client instance
 _gluesync_client = None
 
+# Check if SDK should be used
+use_sdk = os.getenv('USE_SDK', 'False').lower() in ['true', '1', 't', 'y', 'yes']
+
+# Only attempt to load security config if SDK is enabled
+security_config = {}
+if use_sdk:
+    try:
+        security_config_path = os.getenv('GLUESYNC_SECURITY_CONFIG', '/opt/gluesync/data/security-config.json')
+        if os.path.exists(security_config_path):
+            with open(security_config_path) as f:
+                security_config = json.load(f)
+                logger.info(f"Loaded security config from {security_config_path}")
+        else:
+            logger.warning(f"Security config not found at {security_config_path}")
+    except Exception as e:
+        logger.error(f"Error loading security config: {str(e)}")
+
 def initialize_gluesync_sdk():
     global _gluesync_client
+    
+    # Check if SDK is enabled
+    if not use_sdk:
+        logger.info("SDK initialization skipped as USE_SDK is set to false")
+        return
+        
+    # Only import SDK when needed
+    try:
+        from gluesync_sdk import GluesyncSDK
+    except ModuleNotFoundError as e:
+        logger.error(f"Failed to import GluesyncSDK module: {str(e)}")
+        return
+    
     if _gluesync_client is None:
         try:
             license_file = os.getenv('GLUESYNC_LICENSE_FILE', '/opt/gluesync/data/gs-license.dat')
@@ -180,6 +194,11 @@ def initialize_gluesync_sdk():
 
 
 def get_token():
+    # If SDK is disabled, don't attempt to get a token
+    if not use_sdk:
+        logger.info("Token retrieval skipped as USE_SDK is set to false")
+        return None
+        
     if _gluesync_client is None:
         logger.error("Gluesync SDK is not initialized when trying to get token")
         raise RuntimeError("Gluesync SDK is not initialized")
@@ -313,6 +332,11 @@ def get_token():
 
 
 def get_gluesync_client():
+    # If SDK is disabled, return None without raising an exception
+    if not use_sdk:
+        logger.debug("Returning None for gluesync_client as USE_SDK is set to false")
+        return None
+        
     if _gluesync_client is None:
         raise RuntimeError("Gluesync SDK is not initialized")
     return _gluesync_client
