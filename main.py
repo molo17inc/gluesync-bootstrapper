@@ -212,7 +212,7 @@ if not use_sdk:
         auth_response = fetch_core_hub(
             '/authentication/login',
             method='POST',
-            body={'username': default_user, 'password': default_password}
+            body={'username': default_user, 'password': user_defined_password}
         )
         token = auth_response.get('apiToken')
         if not token:
@@ -227,24 +227,24 @@ if not use_sdk:
             new_password = generate_random_password()
             try:
                 # Change password and get new token
-                token = change_password(token, default_password, new_password)
+                token = change_password(token, user_defined_password, new_password)
                 log_success(logger, f"Successfully changed password to: {new_password}")
             except Exception as e:
                 log_failure(logger, f"Password change failed, attempting to continue with default password: {str(e)}")
-                # Try to get a fresh token with the default password
+                # Try to get a fresh token with the user-defined password
                 auth_response = fetch_core_hub(
                     '/authentication/login',
                     method='POST',
-                    body={'username': default_user, 'password': default_password}
+                    body={'username': default_user, 'password': user_defined_password}
                 )
                 token = auth_response.get('apiToken')
                 if not token:
-                    log_failure(logger, "Failed to re-authenticate with default password")
+                    log_failure(logger, "Failed to re-authenticate with user-defined password")
                     lockfile_failure()
-                    raise Exception('Failed to re-authenticate with default password')
-                new_password = default_password
+                    raise Exception('Failed to re-authenticate with user-defined password')
+                new_password = user_defined_password
         else:
-            new_password = default_password
+            new_password = user_defined_password
             # Save the initial token if no password change was required
             save_token(token)
 
@@ -425,34 +425,35 @@ def main():
     
     # First check if we have a valid SDK token
     sdk_token = None
-    try:
-        # Try to get token from SDK first if available
-        if 'GluesyncSDK' in globals():
-            logger.info("Attempting to get token from Gluesync SDK")
-            sdk_client = get_gluesync_client()
-            if sdk_client:
-                sdk_token = get_token()
-                if sdk_token:
-                    logger.info("Successfully retrieved token from Gluesync SDK")
-                    # Verify the SDK token works
-                    try:
-                        check_token = fetch_core_hub(
-                            '/pipelines',
-                            method='GET',
-                            token=sdk_token
-                        )
-                        if isinstance(check_token, list):
-                            log_success(logger, "Successfully authenticated with SDK token")
-                            token = sdk_token  # Use the SDK token for all subsequent requests
-                        else:
-                            logger.warning("SDK token verification returned unexpected response")
+    if not use_sdk:
+        try:
+            # Try to get token from SDK first if available
+            if 'GluesyncSDK' in globals():
+                logger.info("Attempting to get token from Gluesync SDK")
+                sdk_client = get_gluesync_client()
+                if sdk_client:
+                    sdk_token = get_token()
+                    if sdk_token:
+                        logger.info("Successfully retrieved token from Gluesync SDK")
+                        # Verify the SDK token works
+                        try:
+                            check_token = fetch_core_hub(
+                                '/pipelines',
+                                method='GET',
+                                token=sdk_token
+                            )
+                            if isinstance(check_token, list):
+                                log_success(logger, "Successfully authenticated with SDK token")
+                                token = sdk_token  # Use the SDK token for all subsequent requests
+                            else:
+                                logger.warning("SDK token verification returned unexpected response")
                             sdk_token = None
-                    except Exception as e:
-                        logger.warning(f"SDK token verification failed: {str(e)}")
-                        sdk_token = None
-    except Exception as e:
-        logger.warning(f"Error retrieving SDK token: {str(e)}")
-        sdk_token = None
+                        except Exception as e:
+                            logger.warning(f"SDK token verification failed: {str(e)}")
+                            sdk_token = None
+        except Exception as e:
+            logger.warning(f"Error retrieving SDK token: {str(e)}")
+            sdk_token = None
     
     # If SDK token is valid, use it
     if sdk_token:
@@ -515,24 +516,24 @@ def main():
             new_password = generate_random_password()
             try:
                 # Change password and get new token
-                token = change_password(token, default_password, new_password)
+                token = change_password(token, user_defined_password, new_password)
                 log_success(logger, f"Successfully changed password to: {new_password}")
             except Exception as e:
                 log_failure(logger, f"Password change failed, attempting to continue with default password: {str(e)}")
-                # Try to get a fresh token with the default password
+                # Try to get a fresh token with the user-defined password
                 auth_response = fetch_core_hub(
                     '/authentication/login',
                     method='POST',
-                    body={'username': default_user, 'password': default_password}
+                    body={'username': default_user, 'password': user_defined_password}
                 )
                 token = auth_response.get('apiToken')
                 if not token:
-                    log_failure(logger, "Failed to re-authenticate with default password")
+                    log_failure(logger, "Failed to re-authenticate with user-defined password")
                     lockfile_failure()
-                    raise Exception('Failed to re-authenticate with default password')
-                new_password = default_password
+                    raise Exception('Failed to re-authenticate with user-defined password')
+                new_password = user_defined_password
         else:
-            new_password = default_password
+            new_password = user_defined_password
             # Save the initial token if no password change was required
             save_token(token)
 
