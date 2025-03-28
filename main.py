@@ -170,6 +170,10 @@ if use_sdk:
 else:
     logger.info("Skipping SDK initialization as USE_SDK is set to false")
 
+# Initialize variables that might be used in different code paths
+change_required = False
+new_password = user_defined_password
+
 # Determine authentication method
 if not use_sdk:
     logger.info("Using manual authentication with provided password or token.")
