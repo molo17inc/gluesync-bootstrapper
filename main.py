@@ -413,9 +413,21 @@ def change_password(token, old_password, new_password):
 
     return new_token
 
-def main():
-    logger.info("Starting Gluesync bootstrapper")
-    
+def main():    
+     # Display ASCII art at startup
+    ascii_art = """
+                                                                                                        
+██████   ██████   ██████  ████████ ███████ ████████ ██████   █████  ██████  ██████  ███████ ██████  
+██   ██ ██    ██ ██    ██    ██    ██         ██    ██   ██ ██   ██ ██   ██ ██   ██ ██      ██   ██ 
+██████  ██    ██ ██    ██    ██    ███████    ██    ██████  ███████ ██████  ██████  █████   ██████  
+██   ██ ██    ██ ██    ██    ██         ██    ██    ██   ██ ██   ██ ██      ██      ██      ██   ██ 
+██████   ██████   ██████     ██    ███████    ██    ██   ██ ██   ██ ██      ██      ███████ ██   ██ 
+                                                                                                    
+                                               
+"""
+    logger.info("\n" + ascii_art)
+    logger.info("Starting Gluesync Bootstrapper module...")
+
     # Initialize variables that might be used in different code paths
     change_required = False
     new_password = user_defined_password
