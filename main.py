@@ -573,7 +573,7 @@ def main():
         '/pipelines',
         method='POST',
         token=token,
-        body={'name': fancy_names[0], 'description': fancy_names[1], 'configurationCompleted': False}
+        body={'name': fancy_names[0], 'description': fancy_names[1]}
     )
     pipeline_id = pipeline_response.get('pipelineId')
     if not pipeline_id:
@@ -683,7 +683,7 @@ def main():
                 f"/pipelines/{pipeline_id}",
                 method='PUT',
                 token=token,
-                body={'configurationCompleted': True, 'name': fancy_names[0]}
+                body={'name': fancy_names[0]}
         )
 
         time.sleep(ENTITY_START_TIMEOUT)
