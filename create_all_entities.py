@@ -55,7 +55,48 @@ ENABLE_SCHEDULING = os.getenv('ENABLE_SCHEDULING', 'true').lower() == 'true'
 core_hub_client = CoreHubClient(CORE_HUB_URL)
 
 def fetch_core_hub(path, method='GET', token=None, body=None, params=None):
-    return core_hub_client.request(path, method, token, body, params)
+    # Log request details
+    logger.debug(f"\n{'='*80}")
+    logger.debug(f"[API REQUEST] {method.upper()} {path}")
+    
+    if params:
+        logger.debug("\nQuery Parameters:")
+        for k, v in (params.items() if params else {}):
+            logger.debug(f"  {k}: {v}")
+    
+    if body is not None:
+        logger.debug("\nRequest Body:")
+        try:
+            logger.debug(json.dumps(body, indent=2) if isinstance(body, (dict, list)) else str(body))
+        except Exception as e:
+            logger.debug(f"<Unable to serialize request body: {e}>")
+    
+    logger.debug("-" * 40)
+    
+    try:
+        # Make the request
+        start_time = time.time()
+        response = core_hub_client.request(path, method, token, body, params)
+        duration = time.time() - start_time
+        
+        # Log response
+        logger.debug(f"Request completed in {duration:.3f}s")
+        logger.debug(f"[RESPONSE] {method.upper()} {path}")
+        logger.debug(f"Response (first 1000 chars): {str(response)[:1000]}")
+        logger.debug("="*80 + "\n")
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"API request failed: {str(e)}")
+        if hasattr(e, 'response') and e.response is not None:
+            try:
+                error_body = e.response.json()
+                logger.error(f"Error response: {json.dumps(error_body, indent=2)}")
+            except:
+                logger.error(f"Error response: {e.response.text}")
+        logger.debug("="*80 + "\n")
+        raise
 
 def generate_short_guid():
     return str(uuid.uuid4()).split('-')[0]
