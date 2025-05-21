@@ -248,8 +248,8 @@ def export_as_yaml(connections, output_dir=None, template_file=None):
                 # Find matching template for this schema
                 template_schema = find_matching_template_schema(schema_name)
                 
-                # Use template values if found, otherwise use defaults
-                target_schema = template_schema.get('target', 'public') if template_schema else 'public'
+                # Use template values if found, otherwise use source schema name as target
+                target_schema = template_schema.get('target', schema_name) if template_schema else schema_name
                 custom_props = template_schema.get('customProperties', {}) if template_schema else {}
                 schedules = template_schema.get('schedules', []) if template_schema else []
                 
