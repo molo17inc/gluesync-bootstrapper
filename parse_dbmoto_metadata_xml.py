@@ -1,9 +1,21 @@
 import xml.etree.ElementTree as ET
 import os
 import yaml
+import argparse
 
-# Path to your XML metadata file
-XML_PATH = os.path.expanduser("~/Downloads/metadata.xml")
+def parse_arguments():
+    parser = argparse.ArgumentParser(description='Parse DbMoto metadata XML and generate YAML configurations.')
+    parser.add_argument('xml_path', type=str, help='Path to the DbMoto metadata XML file')
+    parser.add_argument('--output-dir', type=str, default='schemas_yaml',
+                      help='Directory to save generated YAML files (default: schemas_yaml)')
+    parser.add_argument('--template', type=str, 
+                      default=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'table-list-template-basic.yaml'),
+                      help='Path to template YAML file (default: table-list-template-basic.yaml in script directory)')
+    return parser.parse_args()
+
+# Parse command line arguments
+args = parse_arguments()
+XML_PATH = os.path.expanduser(args.xml_path)
 
 def parse_xml():
     print(f"Parsing XML: {XML_PATH}")
@@ -155,7 +167,13 @@ def parse_xml():
     
     return connections
 
-def export_as_yaml(connections, output_dir="schemas_yaml", template_file="/Users/danieleangeli/Documents/Repositories/gluesync-bootstrapper/table-list-template-basic.yaml"):
+def export_as_yaml(connections, output_dir=None, template_file=None):
+    # Use command line arguments if parameters are not provided
+    if output_dir is None:
+        output_dir = args.output_dir
+    if template_file is None:
+        template_file = args.template
+        
     """Generate YAML files for each schema with its tables and fields, matching table-list-template.yaml structure"""
     os.makedirs(output_dir, exist_ok=True)
     exported_count = 0
@@ -249,29 +267,33 @@ def export_as_yaml(connections, output_dir="schemas_yaml", template_file="/Users
     
     return exported_count
 
-def view_table_list_template(template_path="/Users/danieleangeli/Documents/Repositories/gluesync-bootstrapper/table-list-template.yaml"):
+def view_table_list_template(template_path=None):
     """View the structure of the target table-list-template.yaml to ensure compatibility"""
+    if template_path is None:
+        template_path = args.template
+    print(f"Viewing template: {template_path}")
     if os.path.exists(template_path):
-        print(f"\nReference structure from {os.path.basename(template_path)}:")
         with open(template_path, 'r') as f:
             template_content = f.read()
+            print("\nTemplate content (first 300 chars):")
             print("\n" + template_content[:300] + "...\n")  # Show first 300 chars
 
 if __name__ == "__main__":
+    # Ensure output directory exists
+    os.makedirs(args.output_dir, exist_ok=True)
+    
     connections = parse_xml()
     
     # Print hierarchy summary
-    print("\nConnection & Schema Hierarchy:")
-    for conn in connections.values():
-        print(f"- Database: {conn['name']} (ID: {conn['id']})")
-        for schema in conn["schemas"].values():
-            tables_count = len(schema["tables"])
-            tables_with_fields = sum(1 for t in schema["tables"].values() if t["fields"])
-            fields_count = sum(len(t["fields"]) for t in schema["tables"].values())
-            
-            print(f"  - Schema: {schema['name']} (ID: {schema['id']})")
-            print(f"    Tables: {tables_count} total, {tables_with_fields} with fields")
-            print(f"    Fields: {fields_count} total")
+    print("\n=== Database Structure ===")
+    for conn_id, conn in connections.items():
+        print(f"\nConnection: {conn['name']} (ID: {conn_id})")
+        for schema_id, schema in conn['schemas'].items():
+            print(f"  Schema: {schema['name']} (ID: {schema_id})")
+            print(f"    Tables: {len(schema.get('tables', {}))} tables")
+    
+    # Export as YAML files using command line arguments
+    export_as_yaml(connections)
     
     # View reference template structure
     view_table_list_template()

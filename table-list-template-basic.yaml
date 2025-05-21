@@ -1,0 +1,136 @@
+# Copyright (c) 2024 MOLO17
+# Author: Daniele Angeli
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
+schemas:
+  dbo:
+    target: public
+    customProperties:
+      source: 
+        maxItemsCountPerIteration: 1000
+    tables:
+      whitelist:
+        - DRIVERS
+        - VEHICLES
+      custom:
+        DRIVERS:
+          keys: 
+            - ID
+          documentKey:
+            prefix: "TESTPREFIX"
+            suffix: "TESTSUFFIX"
+            separator: "-"
+            keys: 
+              - ID
+              - LAST_NAME
+          name: drivers
+          columns:
+            - FIRST_NAME:
+                name: firstName
+                type: varchar(50)
+            - LAST_NAME:
+                name: lastName
+                type: varchar(100)
+            - AGE:
+                name: age
+                type: int
+            - DRIVING_LICENSE_EXPIRE_DATE:
+                name: licenseExpiry
+                type: datetime
+            - EMAIL:
+                name: email
+                type: varchar(255)
+          # Entity-level schedule configurations
+          schedules:
+            # First schedule for entity (runs every day at midnight)
+            - name: "Daily driver data snapshot"
+              description: "Create snapshot of driver data daily at midnight"
+              task_type: "entity_snapshot"  # entity_start, entity_stop, entity_snapshot
+              cron_expression: "0 0 * * *"  # Every day at midnight
+              enabled: true
+            # Second schedule for entity (runs on weekends at 2:00 AM)
+            - name: "Weekend driver data refresh"
+              description: "Restart driver entity every weekend for data refresh"
+              task_type: "entity_start"  # entity_start, entity_stop, entity_snapshot
+              schedule:
+                days_of_week: ["saturday", "sunday"]
+                hour: 2
+                minute: 0
+              with_snapshot: true
+              enabled: true
+          # New filter configuration
+          filter:
+            clauses:
+              - column: GENDER
+                type: string  # Specify the column type for proper mapping
+                operation: Equal
+                value: "Female"
+              - column: AGE
+                type: int
+                operation: GreaterEqual
+                value: 21
+              - column: DRIVING_LICENSE_EXPIRE_DATE
+                type: string
+                operation: IsNotNull
+              - column: EMAIL
+                type: string
+                operation: Regex
+                value: ".*@company\\.com"
+          customProperties:
+            target:
+              ttlValue: 20000000
+        
+        VEHICLES:
+          keys:
+            - VEHICLE_ID
+          name: vehicles
+          columns:
+            - VEHICLE_ID:
+                name: id
+                type: varchar(36)
+            - MODEL:
+                name: model
+                type: varchar(100)
+            - YEAR:
+                name: year
+                type: int
+            - REGISTRATION_DATE:
+                name: registrationDate
+                type: datetime
+          # Entity-level schedule configurations
+          schedules:
+            - name: "Weekly vehicles snapshot"
+              description: "Create a snapshot of vehicle data every Sunday at 1:00 AM"
+              task_type: "entity_snapshot"
+              schedule:
+                days_of_week: ["sunday"]
+                hour: 1
+                minute: 0
+              enabled: true
+          filter:
+            clauses:
+              - column: REGISTRATION_DATE
+                type: string
+                operation: Greater
+                value: "2020-01-01"
+              - column: STATUS
+                type: string
+                operation: In
+                value: ["ACTIVE", "MAINTENANCE"]
