@@ -188,16 +188,24 @@ def export_as_yaml(connections, output_dir=None, template_file=None):
             except Exception as e:
                 print(f"Warning: Could not parse template file: {e}")
     
-    # Extract default custom properties and schedules from template if available
-    default_custom_props = {}
-    default_schedules = []
-    if template_structure and 'schemas' in template_structure and template_structure['schemas']:
-        # Get first schema as example
-        example_schema = list(template_structure['schemas'].values())[0]
-        if 'customProperties' in example_schema:
-            default_custom_props = example_schema['customProperties']
-        if 'schedules' in example_schema:
-            default_schedules = example_schema['schedules']
+    # Extract schemas from template if available
+    template_schemas = {}
+    if template_structure and 'schemas' in template_structure:
+        template_schemas = {name.lower(): schema for name, schema in template_structure['schemas'].items()}
+    
+    # Function to find best matching template schema
+    def find_matching_template_schema(schema_name):
+        # First try exact match
+        if schema_name.lower() in template_schemas:
+            return template_schemas[schema_name.lower()]
+        
+        # Try partial match (case insensitive)
+        for template_name, schema in template_schemas.items():
+            if schema_name.lower() in template_name.lower() or template_name.lower() in schema_name.lower():
+                return schema
+        
+        # No match found, return None
+        return None
     
     # Process each connection and schema
     for conn in connections.values():
@@ -237,13 +245,21 @@ def export_as_yaml(connections, output_dir=None, template_file=None):
                         "columns": columns
                     }
                 
+                # Find matching template for this schema
+                template_schema = find_matching_template_schema(schema_name)
+                
+                # Use template values if found, otherwise use defaults
+                target_schema = template_schema.get('target', 'public') if template_schema else 'public'
+                custom_props = template_schema.get('customProperties', {}) if template_schema else {}
+                schedules = template_schema.get('schedules', []) if template_schema else []
+                
                 # Create the schema structure that matches table-list-template.yaml
                 yaml_data = {
                     "schemas": {
                         schema_name: {
-                            "target": "public",  # Default target schema
-                            "customProperties": default_custom_props,
-                            "schedules": default_schedules,
+                            "target": target_schema,
+                            "customProperties": custom_props,
+                            "schedules": schedules,
                             "tables": {
                                 "whitelist": whitelist,
                                 "custom": custom_tables
