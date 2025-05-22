@@ -59,6 +59,7 @@ schemas:
               - ID
               - LAST_NAME
           name: drivers
+          groupId: "_default"
           columns:
             - FIRST_NAME:
                 name: firstName
@@ -116,6 +117,7 @@ schemas:
               ttlValue: 20000000
         
         VEHICLES:
+          groupId: "finance"
           keys:
             - VEHICLE_ID
           name: vehicles
