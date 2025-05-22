@@ -616,7 +616,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             "keys": keys,
             "customProperties": source_custom_properties,
             "tablesProperties": {source_table_key: {}},
-            "group_id": "_default" # unless a group is specified within the table-list-template.yaml file a default group is declared
+            "groupId": group_id_map.get(custom_config.get('group_id', '_default'), custom_config.get('group_id', '_default'))  # Use mapped group_id or fallback to YAML/default
         }
 
         target_entity_type = {**target_custom_properties, "type": "Target"}
@@ -666,7 +666,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 "schema": source_schema,
                 "name": table_name
             },
-            "group_id": "_default" # unless a group is specified within the table-list-template.yaml file a default group is declared
+            "groupId": group_id_map.get(custom_config.get('group_id', '_default'), custom_config.get('group_id', '_default'))  # Use mapped group_id or fallback to YAML/default
         }
 
         # Add document key mapping if configured
