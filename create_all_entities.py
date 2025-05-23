@@ -690,8 +690,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             ],
             "keys": keys,
             "customProperties": source_custom_properties,
-            "tablesProperties": {source_table_key: {}},
-            "groupId": groupId_map.get(custom_config.get('groupId', '_default'), custom_config.get('groupId', '_default'))  # Use mapped groupId or fallback to YAML/default
+            "tablesProperties": {source_table_key: {}}
         }
 
         target_entity_type = {**target_custom_properties, "type": "Target"}
@@ -740,8 +739,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             "sourceTable": {
                 "schema": source_schema,
                 "name": table_name
-            },
-            "groupId": groupId_map.get(custom_config.get('groupId', '_default'), custom_config.get('groupId', '_default'))  # Use mapped groupId or fallback to YAML/default
+            }
         }
 
         # Add document key mapping if configured
@@ -750,7 +748,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
         entity = {
             "entityName": f"{source_schema}.{table_name}",
-            "agentEntities": [source_entity, target_entity]
+            "agentEntities": [source_entity, target_entity],
+            "groupId": groupId_map.get(custom_config.get('groupId', '_default'), custom_config.get('groupId', '_default'))  # Use mapped groupId or fallback to YAML/default
         }
         entities.append(entity)
     
