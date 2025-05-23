@@ -530,20 +530,41 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         # Process keys and other configurations as before...
         if custom_config and 'keys' in custom_config:
             keys = []
-            for key_name in custom_config['keys']:
+            for key_def in custom_config['keys']:
+                # Handle both string (key name) and dict (key with name/alias) formats
+                if isinstance(key_def, dict):
+                    # Handle the case where the key is specified as a dict with 'name' and optional 'alias'
+                    key_name = next(iter(key_def)) if not key_def.get('name') else key_def['name']
+                    key_config = key_def.get(key_name, {}) if isinstance(key_def.get(key_name), dict) else {}
+                    
+                    # Get the key name (either from the dict key or from the 'name' field)
+                    key_name = key_name or key_config.get('name')
+                    # Get the alias (defaults to the key name if not specified)
+                    key_alias = key_config.get('name', key_name)
+                    
+                    # Get the key type from the config or find it in the columns
+                    key_type = key_config.get('type')
+                else:
+                    # Simple string format - use the string as both name and alias
+                    key_name = key_def
+                    key_alias = key_def
+                    key_type = None
+                
+                # Try to find the key in the columns to get its type if not specified
                 key_column = next((col for col in columns["columns"] if col["name"] == key_name), None)
+                
                 if key_column:
                     keys.append({
-                        "name": key_column["name"],
-                        "alias": key_column["name"],
-                        "type": key_column["type"]
+                        "name": key_name,
+                        "alias": key_alias,
+                        "type": key_type or key_column["type"]
                     })
                 else:
                     print(f"Warning: Key {key_name} not found in columns for table {table_name}. Adding with unknown type.")
                     keys.append({
                         "name": key_name,
-                        "alias": key_name,
-                        "type": "unknown"
+                        "alias": key_alias,
+                        "type": key_type or "unknown"
                     })
             print(f"Using custom keys for {table_name}: {keys}")
         else:
@@ -633,7 +654,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             "keys": [
                 {
                     "name": key["name"],
-                    "type": map_data_type(key["type"], source_node_info, target_node_info)
+                    "alias": key.get("alias", key["name"]),
+                    "type": map_data_type(key["type"], source_node_info, target_node_info) if key.get("type") and key["type"] != "unknown" else key["type"]
                 } for key in keys
             ],
             "customProperties": target_custom_properties,

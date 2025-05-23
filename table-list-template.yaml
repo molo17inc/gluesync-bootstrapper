@@ -48,8 +48,9 @@ schemas:
         - VEHICLES
       custom:
         DRIVERS:
-          keys: 
-            - ID
+          keys:
+            - ID:
+                name: id
           documentKey:
             prefix: "TESTPREFIX"
             suffix: "TESTSUFFIX"
