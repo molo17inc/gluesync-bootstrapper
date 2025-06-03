@@ -159,6 +159,7 @@ schemas:
         # The following tables will be combined into a single MultiTable entity
         ORDERS_HEADERS:
           chainId: "orders_chain"  # Tables with the same chainId will be combined into a MultiTable entity
+          orderIndex: 0  # Order index for this entity in the chain (default: 0 if not specified)
           groupId: "sales"
           keys:
             - ID
@@ -197,6 +198,7 @@ schemas:
               
         ORDERS_ROWS:
           chainId: "orders_chain"  # Same chainId as ORDERS_HEADERS to be included in the same MultiTable
+          orderIndex: 1  # Order index for this entity in the chain (default: 0 if not specified)
           groupId: "sales"
           keys:
             - ID

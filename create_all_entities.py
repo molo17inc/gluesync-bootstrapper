@@ -506,9 +506,13 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     if 'chainId' in table_data:
                         chain_id = table_data['chainId']
                         chain_ids.add(chain_id)
+                        
+                        # Get orderIndex, default to 0 if not specified
+                        order_index = table_data.get('orderIndex', 0)
+                        
                         if chain_id not in chained_tables:
                             chained_tables[chain_id] = []
-                        chained_tables[chain_id].append((table_key, table_data))
+                        chained_tables[chain_id].append((table_key, table_data, order_index))
     
     # Create groups before creating entities
     groupId_map = {}
@@ -772,10 +776,13 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         if not tables_list:
             continue
             
-        logger.info(f"Creating MultiTable entity for chainId: {chain_id} with {len(tables_list)} tables")
+        # Sort tables by orderIndex
+        sorted_tables = sorted(tables_list, key=lambda x: x[2])
+        
+        logger.info(f"Creating MultiTable entity for chainId: {chain_id} with {len(sorted_tables)} tables")
         
         # We'll use the first table's name as the entity name prefix
-        first_table_key, first_table_data = tables_list[0]
+        first_table_key, first_table_data, _ = sorted_tables[0]
         entity_name = f"{source_schema}.{first_table_key}"
         
         # Initialize tables, columns, and keys for the MultiTable entity
@@ -785,7 +792,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         tables_properties = {}
         
         # Process each table in the chain
-        for table_key, table_data in tables_list:
+        for table_key, table_data, order_index in sorted_tables:
             # Get columns for this table
             columns = get_table_columns(token, pipeline_id, source_agent_id, source_schema, table_key)
             
@@ -875,7 +882,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 "unchangedDataFilterType": "ENTIRE_ROW"
             },
             "agentId": source_agent_id,
-            "orderIndex": 0,
+            "orderIndex": order_index,
             "customProperties": {},
             "tablesProperties": tables_properties,
             "tables": multi_tables,
@@ -891,7 +898,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         target_tables_properties = {}
         
         # Process each table for the target
-        for table_key, table_data in tables_list:
+        for table_key, table_data, order_index in sorted_tables:
             # Add table to the list
             target_table_obj = {"name": table_key, "schema": target_schema}
             target_tables.append(target_table_obj)
@@ -960,7 +967,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 "snapshotWritingConcurrency": target_custom_properties.get('snapshotWritingConcurrency', 1)
             },
             "agentId": target_agent_id,
-            "orderIndex": 0,
+            "orderIndex": order_index,
             "customProperties": {"ttlValue": target_custom_properties.get('ttlValue', 0)},
             "tablesProperties": target_tables_properties,
             "tables": target_tables,
@@ -975,7 +982,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 "entityName": entity_name,
                 "agentEntities": [source_entity, target_entity],
                 "groupId": groupId_map.get(table_data.get('groupId', '_default'), table_data.get('groupId', '_default')),
-                "orderIndex": 0
+                "orderIndex": 0  # This is the entity's orderIndex in the pipeline, not within the chain
             }]
         }
         
@@ -993,7 +1000,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             
             # Check if this table is in any chain
             for tables_list in chained_tables.values():
-                for table_key, _ in tables_list:
+                for table_key, _, _ in tables_list:
                     if table_key == table_name:
                         is_chained = True
                         break
