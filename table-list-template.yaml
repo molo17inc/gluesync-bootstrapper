@@ -154,3 +154,72 @@ schemas:
                 type: string
                 operation: In
                 value: ["ACTIVE", "MAINTENANCE"]
+                
+        # MultiTable entity example with chainId
+        # The following tables will be combined into a single MultiTable entity
+        ORDERS_HEADERS:
+          chainId: "orders_chain"  # Tables with the same chainId will be combined into a MultiTable entity
+          groupId: "sales"
+          keys:
+            - ID
+          name: orders_headers
+          columns:
+            - ID:
+                name: id
+                type: int
+            - ORDER_NUMBER:
+                name: orderNumber
+                type: varchar(50)
+            - ORDER_DATE:
+                name: orderDate
+                type: varchar(50)
+            - STATUS:
+                name: status
+                type: int
+            - CUSTOMER_ID:
+                name: customerId
+                type: int
+            - ADDRESS_ID:
+                name: addressId
+                type: int
+            - NOTES:
+                name: notes
+                type: varchar(255)
+            - DRIVER_ID:
+                name: driverId
+                type: int
+          customProperties:
+            source:
+              maxItemsCountPerIteration: 1000
+              pollingIntervalMilliseconds: 100
+            target:
+              ttlValue: 0
+              
+        ORDERS_ROWS:
+          chainId: "orders_chain"  # Same chainId as ORDERS_HEADERS to be included in the same MultiTable
+          groupId: "sales"
+          keys:
+            - ID
+          name: orders_rows
+          columns:
+            - ID:
+                name: id
+                type: int
+            - ARTICLE_ID:
+                name: articleId
+                type: int
+            - QUANTITY:
+                name: quantity
+                type: int
+            - ORDER_ID:
+                name: orderId
+                type: int
+            - NOTES:
+                name: notes
+                type: varchar(255)
+          customProperties:
+            source:
+              maxItemsCountPerIteration: 1000
+              pollingIntervalMilliseconds: 100
+            target:
+              ttlValue: 0
