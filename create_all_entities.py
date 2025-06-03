@@ -782,7 +782,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         logger.info(f"Creating MultiTable entity for chainId: {chain_id} with {len(sorted_tables)} tables")
         
         # We'll use the first table's name as the entity name prefix
-        first_table_key, first_table_data, _ = sorted_tables[0]
+        first_table_key, first_table_data, first_table_order_index = sorted_tables[0]
         entity_name = f"{source_schema}.{first_table_key}"
         
         # Initialize tables, columns, and keys for the MultiTable entity
@@ -796,8 +796,12 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             # Get columns for this table
             columns = get_table_columns(token, pipeline_id, source_agent_id, source_schema, table_key)
             
-            # Add table to the list
-            table_obj = {"name": table_key, "schema": source_schema}
+            # Add table to the list with its orderIndex
+            table_obj = {
+                "name": table_key, 
+                "schema": source_schema,
+                "orderIndex": order_index  # Include orderIndex for each table
+            }
             multi_tables.append(table_obj)
             
             # Add table to tables_properties
@@ -882,7 +886,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 "unchangedDataFilterType": "ENTIRE_ROW"
             },
             "agentId": source_agent_id,
-            "orderIndex": order_index,
+            "orderIndex": first_table_order_index,  # Use the first table's orderIndex for the source entity
             "customProperties": {},
             "tablesProperties": tables_properties,
             "tables": multi_tables,
@@ -899,8 +903,12 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         
         # Process each table for the target
         for table_key, table_data, order_index in sorted_tables:
-            # Add table to the list
-            target_table_obj = {"name": table_key, "schema": target_schema}
+            # Add table to the list with its orderIndex
+            target_table_obj = {
+                "name": table_key, 
+                "schema": target_schema,
+                "orderIndex": order_index  # Include orderIndex for each table
+            }
             target_tables.append(target_table_obj)
             
             # Add table to tables_properties
@@ -967,7 +975,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 "snapshotWritingConcurrency": target_custom_properties.get('snapshotWritingConcurrency', 1)
             },
             "agentId": target_agent_id,
-            "orderIndex": order_index,
+            "orderIndex": first_table_order_index,  # Use the first table's orderIndex for the target entity
             "customProperties": {"ttlValue": target_custom_properties.get('ttlValue', 0)},
             "tablesProperties": target_tables_properties,
             "tables": target_tables,
@@ -982,7 +990,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 "entityName": entity_name,
                 "agentEntities": [source_entity, target_entity],
                 "groupId": groupId_map.get(table_data.get('groupId', '_default'), table_data.get('groupId', '_default')),
-                "orderIndex": 0  # This is the entity's orderIndex in the pipeline, not within the chain
+                "orderIndex": first_table_order_index  # Use the first table's orderIndex for the entire entity
             }]
         }
         
