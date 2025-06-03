@@ -770,7 +770,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
     
     # Process MultiTable entities first
     multi_table_entities = []
-    
     # For each chainId, create a MultiTable entity
     for chain_id, tables_list in chained_tables.items():
         if not tables_list:
@@ -779,7 +778,11 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         # Sort tables by orderIndex
         sorted_tables = sorted(tables_list, key=lambda x: x[2])
         
-        logger.info(f"Creating MultiTable entity for chainId: {chain_id} with {len(sorted_tables)} tables")
+        # Log table ordering for debugging
+        logger.info(f"Creating MultiTable entity for chainId: {chain_id} with {len(sorted_tables)} tables in order:")
+        for idx, (table_key, _, order_index) in enumerate(sorted_tables):
+            logger.info(f"  {idx+1}. Table {table_key} with orderIndex: {order_index}")
+
         
         # We'll use the first table's name as the entity name prefix
         first_table_key, first_table_data, first_table_order_index = sorted_tables[0]
@@ -796,11 +799,10 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             # Get columns for this table
             columns = get_table_columns(token, pipeline_id, source_agent_id, source_schema, table_key)
             
-            # Add table to the list with its orderIndex
+            # Add table to the list
             table_obj = {
                 "name": table_key, 
-                "schema": source_schema,
-                "orderIndex": order_index  # Include orderIndex for each table
+                "schema": source_schema
             }
             multi_tables.append(table_obj)
             
@@ -903,11 +905,10 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         
         # Process each table for the target
         for table_key, table_data, order_index in sorted_tables:
-            # Add table to the list with its orderIndex
+            # Add table to the list
             target_table_obj = {
                 "name": table_key, 
-                "schema": target_schema,
-                "orderIndex": order_index  # Include orderIndex for each table
+                "schema": target_schema
             }
             target_tables.append(target_table_obj)
             
@@ -1034,6 +1035,14 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         for i, multi_entity in enumerate(multi_table_entities):
             try:
                 logger.info(f"Creating MultiTable entity {i+1}/{total_multi_tables}: {multi_entity['entities'][0]['entityName']}")
+                
+                # Log the final tables ordering in payload before sending
+                for agent_entity in multi_entity['entities'][0].get('agentEntities', []):
+                    if 'tables' in agent_entity:
+                        logger.info(f"Final tables order in payload for {agent_entity.get('entityName')}:")
+                        for idx, table in enumerate(agent_entity.get('tables', [])):
+                            logger.info(f"  {idx+1}. {table.get('schema')}.{table.get('name')}")
+                            
                 response = fetch_core_hub(
                     f"/pipelines/{pipeline_id}/config/entities", 
                     method="PUT", 
@@ -1065,6 +1074,14 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             chunk_end = min(i + chunk_size, total_entities)
             
             logger.info(f"\nProcessing chunk {chunk_start}-{chunk_end} of {total_entities} entities...")
+            
+            # Log the final tables ordering in payload before sending
+            for entity_payload in chunk_data.get('entities', []):
+                for agent_entity in entity_payload.get('agentEntities', []):
+                    if 'tables' in agent_entity:
+                        logger.info(f"Final tables order in payload for {agent_entity.get('entityName')}:")
+                        for idx, table in enumerate(agent_entity.get('tables', [])):
+                            logger.info(f"  {idx+1}. {table.get('schema')}.{table.get('name')}")
             
             try:
                 response = fetch_core_hub(
