@@ -486,8 +486,11 @@ def process_filter_clauses(filter_config, columns_info):
     return None
 
 def create_entities(token, pipeline_id, source_schema, target_schema, tables, source_agent_id, target_agent_id, source_type, target_type, yaml_config, skip_errors=False, chunk_size=50):
-    # First, collect all unique group names from the YAML configuration
+    # First, collect all unique group names and chain IDs from the YAML configuration
     group_names = set()
+    chain_ids = set()
+    chained_tables = {}  # Dictionary to store tables by chainId
+    
     if yaml_config:
         schemas_dict = yaml_config.get('schemas', {})
         if not schemas_dict:
@@ -498,6 +501,14 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 for table_key, table_data in schema_config['tables']['custom'].items():
                     if 'groupId' in table_data and table_data['groupId'] != '_default':
                         group_names.add(table_data['groupId'])
+                    
+                    # Collect chainId information
+                    if 'chainId' in table_data:
+                        chain_id = table_data['chainId']
+                        chain_ids.add(chain_id)
+                        if chain_id not in chained_tables:
+                            chained_tables[chain_id] = []
+                        chained_tables[chain_id].append((table_key, table_data))
     
     # Create groups before creating entities
     groupId_map = {}
@@ -753,42 +764,317 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         }
         entities.append(entity)
     
-    # Process entities in chunks
+    # Process MultiTable entities first
+    multi_table_entities = []
+    
+    # For each chainId, create a MultiTable entity
+    for chain_id, tables_list in chained_tables.items():
+        if not tables_list:
+            continue
+            
+        logger.info(f"Creating MultiTable entity for chainId: {chain_id} with {len(tables_list)} tables")
+        
+        # We'll use the first table's name as the entity name prefix
+        first_table_key, first_table_data = tables_list[0]
+        entity_name = f"{source_schema}.{first_table_key}"
+        
+        # Initialize tables, columns, and keys for the MultiTable entity
+        multi_tables = []
+        multi_columns = []
+        multi_keys = []
+        tables_properties = {}
+        
+        # Process each table in the chain
+        for table_key, table_data in tables_list:
+            # Get columns for this table
+            columns = get_table_columns(token, pipeline_id, source_agent_id, source_schema, table_key)
+            
+            # Add table to the list
+            table_obj = {"name": table_key, "schema": source_schema}
+            multi_tables.append(table_obj)
+            
+            # Add table to tables_properties
+            tables_properties[f"{source_schema}.{table_key}"] = {}
+            
+            # Process columns
+            table_columns = []
+            for col in columns["columns"]:
+                table_columns.append({
+                    "name": col["name"],
+                    "alias": col["name"],
+                    "table": {"name": table_key, "schema": source_schema},
+                    "type": col["type"]
+                })
+            
+            # Add columns for this table
+            multi_columns.append({"name": table_key, "schema": source_schema})
+            multi_columns.append(table_columns)
+            
+            # Process keys
+            custom_config = table_data
+            if custom_config and 'keys' in custom_config:
+                keys = []
+                for key_def in custom_config['keys']:
+                    # Handle both string (key name) and dict (key with name/alias) formats
+                    if isinstance(key_def, dict):
+                        key_name = next(iter(key_def)) if not key_def.get('name') else key_def['name']
+                        key_config = key_def.get(key_name, {}) if isinstance(key_def.get(key_name), dict) else {}
+                        
+                        key_name = key_name or key_config.get('name')
+                        key_alias = key_config.get('name', key_name)
+                        key_type = key_config.get('type')
+                    else:
+                        key_name = key_def
+                        key_alias = key_def
+                        key_type = None
+                    
+                    # Try to find the key in the columns to get its type if not specified
+                    key_column = next((col for col in columns["columns"] if col["name"] == key_name), None)
+                    
+                    if key_column:
+                        keys.append({
+                            "name": key_name,
+                            "alias": key_alias,
+                            "table": {"name": table_key, "schema": source_schema},
+                            "type": key_type or key_column["type"]
+                        })
+                    else:
+                        print(f"Warning: Key {key_name} not found in columns for table {table_key}. Adding with unknown type.")
+                        keys.append({
+                            "name": key_name,
+                            "alias": key_alias,
+                            "table": {"name": table_key, "schema": source_schema},
+                            "type": key_type or "unknown"
+                        })
+            else:
+                keys = [
+                    {
+                        "name": col["name"],
+                        "alias": col["name"],
+                        "table": {"name": table_key, "schema": source_schema},
+                        "type": col["type"]
+                    } for col in columns["columns"] if col.get("isPrimaryKey")
+                ]
+            
+            # Add keys for this table
+            multi_keys.append({"name": table_key, "schema": source_schema})
+            multi_keys.append(keys)
+        
+        # Create source entity for MultiTable
+        source_custom_properties = table_data.get('customProperties', {}).get('source', {})
+        source_entity = {
+            "type": "MultiTable",
+            "entityId": "",
+            "entityName": entity_name,
+            "agentEntityId": "",
+            "entityType": {
+                "type": "Source",
+                "maxFetchItemsCountPerIteration": source_custom_properties.get('maxItemsCountPerIteration', 1000),
+                "maxTransactionMessageKbSize": source_custom_properties.get('maxTransactionMessageKbSize', 1024),
+                "pollingIntervalMilliseconds": source_custom_properties.get('pollingIntervalMilliseconds', 100),
+                "unchangedDataFilterType": "ENTIRE_ROW"
+            },
+            "agentId": source_agent_id,
+            "orderIndex": 0,
+            "customProperties": {},
+            "tablesProperties": tables_properties,
+            "tables": multi_tables,
+            "columns": multi_columns,
+            "keys": multi_keys
+        }
+        
+        # Create target entity for MultiTable
+        target_custom_properties = table_data.get('customProperties', {}).get('target', {})
+        target_tables = []
+        target_columns = []
+        target_keys = []
+        target_tables_properties = {}
+        
+        # Process each table for the target
+        for table_key, table_data in tables_list:
+            # Add table to the list
+            target_table_obj = {"name": table_key, "schema": target_schema}
+            target_tables.append(target_table_obj)
+            
+            # Add table to tables_properties
+            target_tables_properties[f"{target_schema}.{table_key}"] = {}
+            
+            # Get columns for this table
+            columns = get_table_columns(token, pipeline_id, source_agent_id, source_schema, table_key)
+            
+            # Process columns for target
+            target_table_columns = []
+            for col in columns["columns"]:
+                target_table_columns.append({
+                    "name": col["name"],
+                    "type": map_data_type(col["type"], source_node_info, target_node_info)
+                })
+            
+            # Add columns for this table
+            target_columns.append({"name": table_key, "schema": target_schema})
+            target_columns.append(target_table_columns)
+            
+            # Process keys for target
+            custom_config = table_data
+            if custom_config and 'keys' in custom_config:
+                keys = []
+                for key_def in custom_config['keys']:
+                    if isinstance(key_def, dict):
+                        key_name = next(iter(key_def)) if not key_def.get('name') else key_def['name']
+                    else:
+                        key_name = key_def
+                    
+                    # Try to find the key in the columns to get its type
+                    key_column = next((col for col in columns["columns"] if col["name"] == key_name), None)
+                    
+                    if key_column:
+                        keys.append({
+                            "name": key_name,
+                            "type": map_data_type(key_column["type"], source_node_info, target_node_info)
+                        })
+                    else:
+                        keys.append({
+                            "name": key_name,
+                            "type": "unknown"
+                        })
+            else:
+                keys = [
+                    {
+                        "name": col["name"],
+                        "type": map_data_type(col["type"], source_node_info, target_node_info)
+                    } for col in columns["columns"] if col.get("isPrimaryKey")
+                ]
+            
+            # Add keys for this table
+            target_keys.append({"name": table_key, "schema": target_schema})
+            target_keys.append(keys)
+        
+        target_entity = {
+            "type": "MultiTable",
+            "entityId": "",
+            "entityName": entity_name,
+            "agentEntityId": "",
+            "entityType": {
+                "type": "Target",
+                "skipDeletion": target_custom_properties.get('skipDeletion', False),
+                "snapshotWritingConcurrency": target_custom_properties.get('snapshotWritingConcurrency', 1)
+            },
+            "agentId": target_agent_id,
+            "orderIndex": 0,
+            "customProperties": {"ttlValue": target_custom_properties.get('ttlValue', 0)},
+            "tablesProperties": target_tables_properties,
+            "tables": target_tables,
+            "columns": target_columns,
+            "keys": target_keys
+        }
+        
+        # Create the MultiTable entity
+        multi_table_entity = {
+            "entities": [{
+                "entityId": "",
+                "entityName": entity_name,
+                "agentEntities": [source_entity, target_entity],
+                "groupId": groupId_map.get(table_data.get('groupId', '_default'), table_data.get('groupId', '_default')),
+                "orderIndex": 0
+            }]
+        }
+        
+        # Add to multi_table_entities for separate processing
+        multi_table_entities.append(multi_table_entity)
+    
+    # Process standard entities in chunks
+    # Filter out entities that are part of a MultiTable (chainId)
+    filtered_entities = []
+    for entity in entities:
+        entity_name_parts = entity["entityName"].split('.')
+        if len(entity_name_parts) > 1:
+            table_name = entity_name_parts[-1]
+            is_chained = False
+            
+            # Check if this table is in any chain
+            for tables_list in chained_tables.values():
+                for table_key, _ in tables_list:
+                    if table_key == table_name:
+                        is_chained = True
+                        break
+                if is_chained:
+                    break
+            
+            if not is_chained:
+                filtered_entities.append(entity)
+        else:
+            filtered_entities.append(entity)
+    
+    # Reset entities to the filtered list
+    entities = filtered_entities
+    
+    # Now process MultiTable entities first
+    successful_multi_tables = 0
+    failed_multi_tables = 0
+    total_multi_tables = len(multi_table_entities)
+    
+    if total_multi_tables > 0:
+        logger.info(f"Processing {total_multi_tables} MultiTable entities...")
+        
+        for i, multi_entity in enumerate(multi_table_entities):
+            try:
+                logger.info(f"Creating MultiTable entity {i+1}/{total_multi_tables}: {multi_entity['entities'][0]['entityName']}")
+                response = fetch_core_hub(
+                    f"/pipelines/{pipeline_id}/config/entities", 
+                    method="PUT", 
+                    token=token, 
+                    body=multi_entity
+                )
+                logger.info(f"Successfully created MultiTable entity {i+1}/{total_multi_tables}")
+                successful_multi_tables += 1
+            except Exception as e:
+                error_msg = str(e)
+                logger.error(f"Error creating MultiTable entity {i+1}/{total_multi_tables}: {error_msg}")
+                failed_multi_tables += 1
+                if not skip_errors:
+                    raise
+                logger.warning("Skipping MultiTable entity due to skip_errors=True")
+    
+    # Process regular entities in chunks
     total_entities = len(entities)
     successful_entities = 0
     failed_entities = 0
     
-    print(f"Processing {total_entities} entities in chunks of {chunk_size}...")
-    
-    for i in range(0, total_entities, chunk_size):
-        chunk = entities[i:i + chunk_size]
-        chunk_data = {"entities": chunk}
-        chunk_start = i + 1
-        chunk_end = min(i + chunk_size, total_entities)
+    if total_entities > 0:
+        logger.info(f"Processing {total_entities} regular entities in chunks of {chunk_size}...")
         
-        print(f"\nProcessing chunk {chunk_start}-{chunk_end} of {total_entities} entities...")
-        
-        try:
-            response = fetch_core_hub(
-                f"/pipelines/{pipeline_id}/config/entities", 
-                method="PUT", 
-                token=token, 
-                body=chunk_data
-            )
-            print(f"Successfully created entities {chunk_start}-{chunk_end}")
-            successful_entities += len(chunk)
-        except Exception as e:
-            error_msg = str(e)
-            print(f"Error creating entities {chunk_start}-{chunk_end}: {error_msg}")
-            failed_entities += len(chunk)
-            if not skip_errors:
-                raise
-            print("Skipping chunk due to skip_errors=True")
+        for i in range(0, total_entities, chunk_size):
+            chunk = entities[i:i + chunk_size]
+            chunk_data = {"entities": chunk}
+            chunk_start = i + 1
+            chunk_end = min(i + chunk_size, total_entities)
+            
+            logger.info(f"\nProcessing chunk {chunk_start}-{chunk_end} of {total_entities} entities...")
+            
+            try:
+                response = fetch_core_hub(
+                    f"/pipelines/{pipeline_id}/config/entities", 
+                    method="PUT", 
+                    token=token, 
+                    body=chunk_data
+                )
+                logger.info(f"Successfully created entities {chunk_start}-{chunk_end}")
+                successful_entities += len(chunk)
+            except Exception as e:
+                error_msg = str(e)
+                logger.error(f"Error creating entities {chunk_start}-{chunk_end}: {error_msg}")
+                failed_entities += len(chunk)
+                if not skip_errors:
+                    raise
+                logger.warning("Skipping chunk due to skip_errors=True")
     
     print(f"\nProcessing complete:")
-    print(f"- Total entities: {total_entities}")
-    print(f"- Successfully created: {successful_entities}")
-    print(f"- Failed: {failed_entities}")
+    print(f"- Total regular entities: {total_entities}")
+    print(f"- Successfully created regular entities: {successful_entities}")
+    print(f"- Failed regular entities: {failed_entities}")
+    print(f"- Total MultiTable entities: {total_multi_tables}")
+    print(f"- Successfully created MultiTable entities: {successful_multi_tables}")
+    print(f"- Failed MultiTable entities: {failed_multi_tables}")
     
     # Create entity schedules if successful
     if successful_entities > 0 and ENABLE_SCHEDULING:
