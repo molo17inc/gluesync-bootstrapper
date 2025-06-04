@@ -367,6 +367,16 @@ def map_data_type(source_type, source_node_info, target_node_info):
                 if 'int' in t.lower():
                     print(f"Mapping {normalized_source_type} to {t}")
                     return t
+        elif normalized_source_type in ['blob', 'smallblob', 'mediumblob']:
+            for t in target_item['supportedTypes']:
+                if 'varbinary' in t.lower():
+                    print(f"Mapping {normalized_source_type} to {t}")
+                    return t
+        elif normalized_source_type in ['longtext']:
+            for t in target_item['supportedTypes']:
+                if 'varchar' in t.lower():
+                    print(f"Mapping {normalized_source_type} to {t}")
+                    return t
         
         print(f"Mapping {source_type} to {target_item['defaultType']} (using target's default type)")
         return target_item['defaultType']
