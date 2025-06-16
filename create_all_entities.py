@@ -653,7 +653,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             ],
             "keys": [
                 {
-                    "name": key["name"],
+                    "name": key.get("alias", key["name"]),
                     "alias": key.get("alias", key["name"]),
                     "type": map_data_type(key["type"], source_node_info, target_node_info) if key.get("type") and key["type"] != "unknown" else key["type"]
                 } for key in keys
