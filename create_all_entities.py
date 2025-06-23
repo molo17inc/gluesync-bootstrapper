@@ -27,6 +27,9 @@ from utils.log import get_logger, create_log_file, log_success, log_failure, loc
 from commons import get_node_info, get_table_columns, fetch_core_hub, get_pipeline_config, get_pipeline_agents, \
     get_agent_tables, create_entity_schedules, map_data_type, create_pipeline_schedules, load_yaml_config, \
     process_filter_clauses, ENABLE_SCHEDULING
+from create_all_tables import handle_table_creation
+from utils.log import get_logger, create_log_file, log_success, log_failure, lockfile_failure, lockfile_complete, exit_on_fail
+from utils.chronos_client import ChronosClient
 from utils.core_hub_client import CoreHubClient
 import random
 import colorsys
@@ -98,7 +101,6 @@ ENTITY_START_TIMEOUT = int(os.getenv('ENTITY_START_TIMEOUT', '1'))
 
 # Initialize the CoreHub client
 core_hub_client = CoreHubClient(CORE_HUB_URL)
-
 
 def create_entities(token, pipeline_id, source_schema, target_schema, tables, source_agent_id, target_agent_id, source_type, target_type, yaml_config, skip_errors=False, chunk_size=50):
     # First, collect all unique group names and chain IDs from the YAML configuration
@@ -287,6 +289,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
         if not keys:
             print(f"Warning: No keys specified for {table_name}. Table will have no keys.")
+
+        handle_table_creation(pipeline_id, target_table_name, yaml_target_schema, keys, token, columns, custom_config,
+                              source_node_info, target_node_info)
 
         # Create source and target table property keys
         source_table_key = f"{source_schema}.{table_name}"
