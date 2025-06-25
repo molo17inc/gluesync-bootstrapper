@@ -256,43 +256,61 @@ def map_data_type(source_type, source_node_info, target_node_info):
         elif normalized_source_type in ['enum', 'set']:
             # Find first STRING type in target's supported types
             for t in target_item['supportedTypes']:
-                if 'string' in t.lower():
+                if 'string' == t.lower():
                     print(f"Mapping {normalized_source_type} to {t}")
                     return t
         elif normalized_source_type == 'json':
             # Try to find JSON type first, fall back to STRING
             for t in target_item['supportedTypes']:
-                if 'json' in t.lower():
+                if 'json' == t.lower():
+                    print(f"Mapping json to {t}")
+                    return t
+                elif 'clob' == t.lower():
                     print(f"Mapping json to {t}")
                     return t
             for t in target_item['supportedTypes']:
-                if 'string' in t.lower():
+                if 'string' == t.lower():
                     print(f"Mapping json to {t} (fallback)")
                     return t
         elif normalized_source_type == 'bit':
             # Try to find BOOLEAN type first, fall back to INT
             for t in target_item['supportedTypes']:
-                if 'boolean' in t.lower():
+                if 'boolean' == t.lower():
                     print(f"Mapping bit to {t}")
                     return t
             for t in target_item['supportedTypes']:
-                if 'int' in t.lower():
+                if 'int' == t.lower():
                     print(f"Mapping bit to {t} (fallback)")
                     return t
         elif normalized_source_type in ['tinyint', 'smallint', 'mediumint']:
             # Find appropriate INT type
             for t in target_item['supportedTypes']:
-                if 'int' in t.lower():
+                if 'int' == t.lower():
                     print(f"Mapping {normalized_source_type} to {t}")
                     return t
         elif normalized_source_type in ['blob', 'smallblob', 'mediumblob']:
             for t in target_item['supportedTypes']:
-                if 'varbinary' in t.lower():
+                if 'varbinary' == t.lower():
                     print(f"Mapping {normalized_source_type} to {t}")
                     return t
         elif normalized_source_type in ['longtext']:
             for t in target_item['supportedTypes']:
-                if 'varchar' in t.lower():
+                if 'varchar' == t.lower():
+                    print(f"Mapping {normalized_source_type} to {t}")
+                    return t
+        elif normalized_source_type in ['datetime']:
+            for t in target_item['supportedTypes']:
+                if 'timestamp with time zone' == t.lower():
+                    print(f"Mapping {normalized_source_type} to {t}")
+                    return t
+        elif normalized_source_type in ['bigint']:
+            for t in target_item['supportedTypes']:
+                if 'number' == t.lower():
+                    print(f"Mapping {normalized_source_type} to {t}")
+                    return t
+        elif normalized_source_type in ['time']:
+            for t in target_item['supportedTypes']:
+                if 'timestamp with local time zone' == t.lower():
                     print(f"Mapping {normalized_source_type} to {t}")
                     return t
 
