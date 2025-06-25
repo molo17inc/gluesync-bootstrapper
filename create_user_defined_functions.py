@@ -21,7 +21,6 @@
 import base64
 import os
 import json
-import sys
 from enum import Enum
 
 import requests
@@ -31,7 +30,7 @@ import argparse
 from utils.log import get_logger, create_log_file, log_success, log_failure, lockfile_failure, lockfile_complete
 from utils.core_hub_client import CoreHubClient
 from commons import get_node_info, get_table_columns, fetch_core_hub, get_pipeline_config, get_pipeline_agents, \
-    get_agent_tables, create_entity_schedules, create_pipeline_schedules, map_data_type, load_yaml_config
+    get_agent_tables, create_entity_schedules, create_pipeline_schedules, map_data_type, load_yaml_config, process_filter_clauses
 from pathlib import Path, PosixPath
 from pydantic import BaseModel, ConfigDict
 
@@ -139,108 +138,6 @@ def handle_udf_function_definition(table_name, pipeline_id, udf, token):
     if udf_definition:
         print(f"found table with udf functions: {udf_definition}")
         check_and_compile_udf_function(table_name, udf_definition, pipeline_id, token)
-
-
-def process_filter_clauses(filter_config, columns_info):
-    """
-    Process filter clauses from YAML configuration into the required format
-    """
-    if not filter_config or 'clauses' not in filter_config:
-        return None
-
-    processed_clauses = []
-    for clause in filter_config['clauses']:
-        # Skip invalid clauses
-        if 'column' not in clause or 'operation' not in clause:
-            print(f"Warning: Skipping invalid filter clause: {clause}")
-            continue
-
-        column_name = clause['column']
-        operation_type = clause['operation']
-
-        # Create the basic filter clause
-        filter_clause = {
-            "column": {
-                "name": column_name,
-                "type": clause.get('type', 'string')
-            },
-            "operation": {
-                "type": operation_type
-            }
-        }
-
-        # Handle value based on operation type
-        if operation_type not in ['IsNull', 'IsNotNull']:
-            if 'value' not in clause:
-                print(f"Warning: Missing value for operation {operation_type} on column {column_name}")
-                continue
-
-            if operation_type == 'Regex':
-                filter_clause["operation"]["filterValue"] = clause['value']
-            elif clause['type'] == 'int':
-                filter_clause["operation"]["filterValue"] = int(clause['value'])
-            elif clause['type'] == 'float':
-                filter_clause["operation"]["filterValue"] = float(clause['value'])
-            else:
-                filter_clause["operation"]["filterValue"] = str(clause['value'])
-
-        print(f"Generated filter clause: {json.dumps(filter_clause, indent=2)}")
-        processed_clauses.append(filter_clause)
-
-    if processed_clauses:
-        return {"clauses": processed_clauses}
-    return None
-
-
-def process_filter_clauses(filter_config, columns_info):
-    """
-    Process filter clauses from YAML configuration into the required format
-    All filter values are converted to strings as required by the backend
-    """
-    if not filter_config or 'clauses' not in filter_config:
-        return None
-
-    processed_clauses = []
-    for clause in filter_config['clauses']:
-        # Skip invalid clauses
-        if 'column' not in clause or 'operation' not in clause:
-            print(f"Warning: Skipping invalid filter clause: {clause}")
-            continue
-
-        column_name = clause['column']
-        operation_type = clause['operation']
-
-        # Create the basic filter clause
-        filter_clause = {
-            "column": {
-                "name": column_name,
-                "type": clause.get('type', 'string')
-            },
-            "operation": {
-                "type": operation_type
-            }
-        }
-
-        # Handle value based on operation type
-        if operation_type not in ['IsNull', 'IsNotNull']:
-            if 'value' not in clause:
-                print(f"Warning: Missing value for operation {operation_type} on column {column_name}")
-                continue
-
-            # Convert all values to strings
-            if isinstance(clause['value'], (list, tuple)):
-                # Handle arrays (for IN operations)
-                filter_clause["operation"]["filterValue"] = [str(v) for v in clause['value']]
-            else:
-                # Handle single values
-                filter_clause["operation"]["filterValue"] = str(clause['value'])
-
-        print(f"Generated filter clause: {json.dumps(filter_clause, indent=2)}")
-        processed_clauses.append(filter_clause)
-
-    if processed_clauses:
-        return {"clauses": processed_clauses}
-    return None
 
 
 def create_user_defined_functions(token, pipeline_id, source_schema, target_schema, tables, source_agent_id,
