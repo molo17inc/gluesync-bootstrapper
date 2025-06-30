@@ -21,20 +21,13 @@
 
 import os
 import json
-import requests
-import time
-import uuid
-import urllib.parse
-from urllib.parse import urlencode, quote
 import urllib3
-import ssl
-import traceback
-from requests.adapters import HTTPAdapter
-from urllib3.util.ssl_ import create_urllib3_context
-import yaml
 import argparse
+from commons import get_node_info, get_table_columns, fetch_core_hub, get_pipeline_config, get_pipeline_agents, \
+    get_agent_tables, create_entity_schedules, map_data_type, create_pipeline_schedules, load_yaml_config, \
+    process_filter_clauses, ENABLE_SCHEDULING, create_group
+from create_all_tables import handle_table_creation
 from utils.log import get_logger, create_log_file, log_success, log_failure, lockfile_failure, lockfile_complete, exit_on_fail
-from utils.chronos_client import ChronosClient
 from utils.core_hub_client import CoreHubClient
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -45,416 +38,74 @@ logger = get_logger(log_file)
 
 # Environment variables with default values
 CORE_HUB_URL = os.getenv('CORE_HUB_URL', 'https://localhost:1717')
-CHRONOS_URL = os.getenv('CHRONOS_URL', 'http://gluesync-chronos:8000')
 ENTITY_START_TIMEOUT = int(os.getenv('ENTITY_START_TIMEOUT', '1'))
-ENABLE_SCHEDULING = os.getenv('ENABLE_SCHEDULING', 'true').lower() == 'true'
 
 # ProtocolAwareAdapter and CoreHubClient have been moved to utils/core_hub_client.py
 
 # Initialize the CoreHub client
 core_hub_client = CoreHubClient(CORE_HUB_URL)
 
-def fetch_core_hub(path, method='GET', token=None, body=None, params=None):
-    # Log request details
-    logger.debug(f"\n{'='*80}")
-    logger.debug(f"[API REQUEST] {method.upper()} {path}")
-    
-    if params:
-        logger.debug("\nQuery Parameters:")
-        for k, v in (params.items() if params else {}):
-            logger.debug(f"  {k}: {v}")
-    
-    if body is not None:
-        logger.debug("\nRequest Body:")
-        try:
-            logger.debug(json.dumps(body, indent=2) if isinstance(body, (dict, list)) else str(body))
-        except Exception as e:
-            logger.debug(f"<Unable to serialize request body: {e}>")
-    
-    logger.debug("-" * 40)
-    
-    try:
-        # Make the request
-        start_time = time.time()
-        response = core_hub_client.request(path, method, token, body, params)
-        duration = time.time() - start_time
-        
-        # Log response
-        logger.debug(f"Request completed in {duration:.3f}s")
-        logger.debug(f"[RESPONSE] {method.upper()} {path}")
-        logger.debug(f"Response (first 1000 chars): {str(response)[:1000]}")
-        logger.debug("="*80 + "\n")
-        
-        return response
-        
-    except Exception as e:
-        logger.error(f"API request failed: {str(e)}")
-        if hasattr(e, 'response') and e.response is not None:
-            try:
-                error_body = e.response.json()
-                logger.error(f"Error response: {json.dumps(error_body, indent=2)}")
-            except:
-                logger.error(f"Error response: {e.response.text}")
-        logger.debug("="*80 + "\n")
-        raise
-
-def generate_short_guid():
-    return str(uuid.uuid4()).split('-')[0]
-
-def get_pipeline_config(token, pipeline_id):
-    return fetch_core_hub(f"/pipelines/{pipeline_id}/config", token=token)
-
-def get_pipeline_agents(token, pipeline_id):
-    config = get_pipeline_config(token, pipeline_id)
-    return config.get('agents', {})
-
-def get_agent_tables(token, pipeline_id, agent_id, schema_name):
-    """Get list of tables from an agent for a specific schema."""
-    params = {'schema': schema_name}
-    response = fetch_core_hub(
-        f"/pipelines/{pipeline_id}/agents/{agent_id}/discovery/tables",
-        token=token,
-        params=params
-    )
-    
-    if isinstance(response, dict) and 'tables' in response:
-        return response['tables']
-    elif isinstance(response, list):
-        return response
-    else:
-        print(f"Unexpected response format from get_agent_tables: {response}")
-        return []
-
-def get_table_columns(token, pipeline_id, agent_id, schema_name, table_name):
-    params = {'tableschema': schema_name, 'tablename': table_name}
-    return fetch_core_hub(f"/pipelines/{pipeline_id}/agents/{agent_id}/discovery/columns", token=token, params=params)
-
-def get_node_info(token, pipeline_id, agent_id):
-    return fetch_core_hub(f"/pipelines/{pipeline_id}/agents/{agent_id}/discovery/node-info", token=token)
-
-
-def create_entity_schedules(token, pipeline_id, entity_id, entity_name, schedules_config):
-    """Create schedules for an entity based on the YAML configuration."""
-    if not schedules_config or not ENABLE_SCHEDULING:
-        return
-        
-    logger.info(f"Creating schedules for entity {entity_name} (ID: {entity_id})")
-    
-    chronos_client = ChronosClient(CHRONOS_URL)
-    
-    for schedule_config in schedules_config:
-        try:
-            # Extract schedule parameters
-            task_type = schedule_config.get('task_type')
-            name = schedule_config.get('name')
-            description = schedule_config.get('description')
-            with_snapshot = schedule_config.get('with_snapshot', False)
-            enabled = schedule_config.get('enabled', True)
-            
-            # Create a configuration dict for the chronos client
-            schedule_data = {}
-            if 'cron_expression' in schedule_config:
-                schedule_data['cron_expression'] = schedule_config['cron_expression']
-            elif 'schedule' in schedule_config:
-                schedule_data['schedule'] = schedule_config['schedule']
-            else:
-                logger.warning(f"Schedule for entity {entity_name} is missing both 'cron_expression' and 'schedule'. Skipping.")
-                continue
-                
-            # Create the schedule
-            result = chronos_client.create_entity_schedule(
-                pipeline_id=pipeline_id,
-                entity_id=entity_id,
-                task_type=task_type,
-                schedule_config=schedule_data,
-                name=name,
-                description=description,
-                with_snapshot=with_snapshot,
-                enabled=enabled
-            )
-            
-            log_success(logger, f"Created {task_type} schedule for entity {entity_name}: {name}")
-            logger.debug(f"Schedule details: {json.dumps(result)}")
-            
-        except Exception as e:
-            error_msg = f"Failed to create schedule for entity {entity_name}: {str(e)}"
-            log_failure(logger, error_msg)
-            logger.error(traceback.format_exc())
-            # Continue creating other schedules even if one fails
-
-
-def create_pipeline_schedules(token, pipeline_id, pipeline_schedules):
-    """Create schedules for the entire pipeline based on the YAML configuration."""
-    if not pipeline_schedules or not ENABLE_SCHEDULING:
-        return
-        
-    logger.info(f"Creating pipeline-level schedules for pipeline {pipeline_id}")
-    
-    chronos_client = ChronosClient(CHRONOS_URL)
-    
-    for schedule_config in pipeline_schedules:
-        try:
-            # Extract schedule parameters
-            task_type = schedule_config.get('task_type')
-            name = schedule_config.get('name')
-            description = schedule_config.get('description')
-            with_snapshot = schedule_config.get('with_snapshot', False)
-            enabled = schedule_config.get('enabled', True)
-            
-            # Create a configuration dict for the chronos client
-            schedule_data = {}
-            if 'cron_expression' in schedule_config:
-                schedule_data['cron_expression'] = schedule_config['cron_expression']
-            elif 'schedule' in schedule_config:
-                schedule_data['schedule'] = schedule_config['schedule']
-            else:
-                logger.warning(f"Pipeline schedule is missing both 'cron_expression' and 'schedule'. Skipping.")
-                continue
-                
-            # Create the schedule
-            result = chronos_client.create_pipeline_schedule(
-                pipeline_id=pipeline_id,
-                task_type=task_type,
-                schedule_config=schedule_data,
-                name=name,
-                description=description,
-                with_snapshot=with_snapshot,
-                enabled=enabled
-            )
-            
-            log_success(logger, f"Created {task_type} schedule for pipeline {pipeline_id}: {name}")
-            logger.debug(f"Schedule details: {json.dumps(result)}")
-            
-        except Exception as e:
-            error_msg = f"Failed to create pipeline schedule: {str(e)}"
-            log_failure(logger, error_msg)
-            logger.error(traceback.format_exc())
-            # Continue creating other schedules even if one fails
-
-def map_data_type(source_type, source_node_info, target_node_info):
-    source_matrix = source_node_info['dataTypesMatrix']
-    target_matrix = target_node_info['dataTypesMatrix']
-    
-    normalized_source_type = source_type.split('(')[0].lower()
-    print(f"Mapping source type: {source_type} (normalized: {normalized_source_type})")
-
-    if normalized_source_type == 'mediumblob':
-        normalized_source_type = 'blob'
-    elif normalized_source_type == 'year':
-        normalized_source_type = 'int'
-
-    # Find matching source type in matrix (case-insensitive)
-    source_item = next(
-        (item for item in source_matrix 
-         if any(t.lower() == normalized_source_type for t in item['supportedTypes'])),
-        None
-    )
-    
-    if not source_item:
-        print(f"Warning: No mapping found for source type {source_type}. Using as is.")
-        return source_type
-
-    source_gluesync_type = source_item['gluesyncDataType']
-    print(f"Matched Gluesync data type: {source_gluesync_type}")
-
-    # Find matching target type
-    target_item = next(
-        (item for item in target_matrix 
-         if item['gluesyncDataType'] == source_gluesync_type),
-        None
-    )
-    
-    if target_item:
-        # Case-insensitive search but return server's exact value if found
-        supported_types_map = {t.lower(): t for t in target_item['supportedTypes']}
-        
-        if normalized_source_type in supported_types_map:
-            server_type = supported_types_map[normalized_source_type]
-            print(f"Direct match found: {server_type}")
-            return server_type
-        
-        # Special case mappings using server's exact values
-        if normalized_source_type == 'geometry':
-            for t in target_item['supportedTypes']:
-                if t.lower() == 'geometry':
-                    print(f"Mapping geometry type: {source_type} -> {t}")
-                    return t
-        elif normalized_source_type in ['enum', 'set']:
-            # Find first STRING type in target's supported types
-            for t in target_item['supportedTypes']:
-                if 'string' in t.lower():
-                    print(f"Mapping {normalized_source_type} to {t}")
-                    return t
-        elif normalized_source_type == 'json':
-            # Try to find JSON type first, fall back to STRING
-            for t in target_item['supportedTypes']:
-                if 'json' in t.lower():
-                    print(f"Mapping json to {t}")
-                    return t
-            for t in target_item['supportedTypes']:
-                if 'string' in t.lower():
-                    print(f"Mapping json to {t} (fallback)")
-                    return t
-        elif normalized_source_type == 'bit':
-            # Try to find BOOLEAN type first, fall back to INT
-            for t in target_item['supportedTypes']:
-                if 'boolean' in t.lower():
-                    print(f"Mapping bit to {t}")
-                    return t
-            for t in target_item['supportedTypes']:
-                if 'int' in t.lower():
-                    print(f"Mapping bit to {t} (fallback)")
-                    return t
-        elif normalized_source_type in ['tinyint', 'smallint', 'mediumint']:
-            # Find appropriate INT type
-            for t in target_item['supportedTypes']:
-                if 'int' in t.lower():
-                    print(f"Mapping {normalized_source_type} to {t}")
-                    return t
-        
-        print(f"Mapping {source_type} to {target_item['defaultType']} (using target's default type)")
-        return target_item['defaultType']
-    
-    print(f"Warning: No target mapping found for Gluesync type {source_gluesync_type}. Using source type {source_type} as is.")
-    return source_type
-
-def load_yaml_config(file_path):
-    try:
-        with open(file_path, 'r') as file:
-            config = yaml.safe_load(file)
-            print(f"Loaded YAML config: {json.dumps(config, indent=2)}")
-            return config
-    except FileNotFoundError:
-        print(f"YAML file not found at {file_path}. Proceeding without it.")
-        return {}
-    except yaml.YAMLError as e:
-        print(f"Error parsing YAML file: {e}. Proceeding without it.")
-        return {}
-
-def process_filter_clauses(filter_config, columns_info):
-    """
-    Process filter clauses from YAML configuration into the required format
-    """
-    if not filter_config or 'clauses' not in filter_config:
-        return None
-
-    processed_clauses = []
-    for clause in filter_config['clauses']:
-        # Skip invalid clauses
-        if 'column' not in clause or 'operation' not in clause:
-            print(f"Warning: Skipping invalid filter clause: {clause}")
-            continue
-
-        column_name = clause['column']
-        operation_type = clause['operation']
-
-        # Create the basic filter clause
-        filter_clause = {
-            "column": {
-                "name": column_name,
-                "type": clause.get('type', 'string')
-            },
-            "operation": {
-                "type": operation_type
-            }
-        }
-
-        # Handle value based on operation type
-        if operation_type not in ['IsNull', 'IsNotNull']:
-            if 'value' not in clause:
-                print(f"Warning: Missing value for operation {operation_type} on column {column_name}")
-                continue
-                
-            if operation_type == 'Regex':
-                filter_clause["operation"]["filterValue"] = clause['value']
-            elif clause['type'] == 'int':
-                filter_clause["operation"]["filterValue"] = int(clause['value'])
-            elif clause['type'] == 'float':
-                filter_clause["operation"]["filterValue"] = float(clause['value'])
-            else:
-                filter_clause["operation"]["filterValue"] = str(clause['value'])
-
-        print(f"Generated filter clause: {json.dumps(filter_clause, indent=2)}")
-        processed_clauses.append(filter_clause)
-
-    if processed_clauses:
-        return {"clauses": processed_clauses}
-    return None
-
-def process_filter_clauses(filter_config, columns_info):
-    """
-    Process filter clauses from YAML configuration into the required format
-    All filter values are converted to strings as required by the backend
-    """
-    if not filter_config or 'clauses' not in filter_config:
-        return None
-
-    processed_clauses = []
-    for clause in filter_config['clauses']:
-        # Skip invalid clauses
-        if 'column' not in clause or 'operation' not in clause:
-            print(f"Warning: Skipping invalid filter clause: {clause}")
-            continue
-
-        column_name = clause['column']
-        operation_type = clause['operation']
-
-        # Create the basic filter clause
-        filter_clause = {
-            "column": {
-                "name": column_name,
-                "type": clause.get('type', 'string')
-            },
-            "operation": {
-                "type": operation_type
-            }
-        }
-
-        # Handle value based on operation type
-        if operation_type not in ['IsNull', 'IsNotNull']:
-            if 'value' not in clause:
-                print(f"Warning: Missing value for operation {operation_type} on column {column_name}")
-                continue
-                
-            # Convert all values to strings
-            if isinstance(clause['value'], (list, tuple)):
-                # Handle arrays (for IN operations)
-                filter_clause["operation"]["filterValue"] = [str(v) for v in clause['value']]
-            else:
-                # Handle single values
-                filter_clause["operation"]["filterValue"] = str(clause['value'])
-
-        print(f"Generated filter clause: {json.dumps(filter_clause, indent=2)}")
-        processed_clauses.append(filter_clause)
-
-    if processed_clauses:
-        return {"clauses": processed_clauses}
-    return None
-
 def create_entities(token, pipeline_id, source_schema, target_schema, tables, source_agent_id, target_agent_id, source_type, target_type, yaml_config, skip_errors=False, chunk_size=50):
+    # First, collect all unique group names and chain IDs from the YAML configuration
+    group_names = set()
+    chain_ids = set()
+    chained_tables = {}  # Dictionary to store tables by chainId
+
+    if yaml_config:
+        schemas_dict = yaml_config.get('schemas', {})
+        if not schemas_dict:
+            schemas_dict = {k: v for k, v in yaml_config.items() if isinstance(v, dict)}
+
+        for schema_name, schema_config in schemas_dict.items():
+            if 'tables' in schema_config and 'custom' in schema_config['tables']:
+                for table_key, table_data in schema_config['tables']['custom'].items():
+                    if 'groupId' in table_data and table_data['groupId'] != '_default':
+                        group_names.add(table_data['groupId'])
+
+                    # Collect chainId information
+                    if 'chainId' in table_data:
+                        chain_id = table_data['chainId']
+                        chain_ids.add(chain_id)
+
+                        # Get orderIndex, default to 0 if not specified
+                        order_index = table_data.get('orderIndex', 0)
+
+                        if chain_id not in chained_tables:
+                            chained_tables[chain_id] = []
+                        chained_tables[chain_id].append((table_key, table_data, order_index))
+
+    # Create groups before creating entities
+    groupId_map = {}
+    for group_name in group_names:
+        groupId = create_group(token, pipeline_id, group_name)
+        if groupId != '_default':
+            groupId_map[group_name] = groupId
+            logger.info(f"Created/retrieved group '{group_name}' with ID: {groupId}")
+
     """Create entities for the pipeline."""
     if not yaml_config:
         yaml_config = {}
-    
+
     entities = []
-    
+
     # Get node info for data type mapping
     source_node_info = get_node_info(token, pipeline_id, source_agent_id)
     target_node_info = get_node_info(token, pipeline_id, target_agent_id)
-    
+
     print("Source Node Info:")
     print(json.dumps(source_node_info, indent=2))
     print("Target Node Info:")
     print(json.dumps(target_node_info, indent=2))
-    
+
     print(f"Full YAML config: {json.dumps(yaml_config, indent=2)}")
-    
+
     schema_config = yaml_config.get(source_schema, {})
     print(f"Schema config for {source_schema}: {json.dumps(schema_config, indent=2)}")
-    
+
     yaml_target_schema = schema_config.get('target', target_schema)
     whitelist = schema_config.get('tables', {}).get('whitelist', [])
     blacklist = schema_config.get('tables', {}).get('blacklist', [])
+    udf = schema_config.get('tables', {}).get('udf', [])
     # Handle empty custom tables attribute - convert None to empty dict
     tables_config = schema_config.get('tables', {})
     custom_tables = tables_config.get('custom', {})
@@ -473,20 +124,20 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
     print(f"Custom tables: {custom_tables}")
     print(f"Global source custom properties: {global_source_custom_properties}")
     print(f"Global target custom properties: {global_target_custom_properties}")
-    
+
     for table in tables:
         if isinstance(table, str):
             table_name = table
         else:
             table_name = table.get("name")
-            
+
         if not table_name:
             print(f"Warning: Table without name encountered. Skipping.")
             continue
 
-        if (table_name.startswith("sys") or 
-            (blacklist and table_name in blacklist) or 
-            (whitelist and table_name not in whitelist)):
+        if (table_name.startswith("sys") or
+                (blacklist and table_name in blacklist) or
+                (whitelist and table_name not in whitelist)):
             print(f"Skipping table: {table_name}")
             continue
 
@@ -495,17 +146,18 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         custom_config = custom_tables.get(table_name, {})
         if custom_config is None:
             custom_config = {}
-            print(f"Warning: Custom config for table {table_name} is present but empty in YAML. Converting to empty dict.")
+            print(
+                f"Warning: Custom config for table {table_name} is present but empty in YAML. Converting to empty dict.")
         print(f"Custom config for {table_name}: {custom_config}")
-        
+
         # Get table-specific custom properties and merge with global properties
         table_custom_properties = custom_config.get('customProperties', {})
         source_custom_properties = {**global_source_custom_properties, **table_custom_properties.get('source', {})}
         target_custom_properties = {**global_target_custom_properties, **table_custom_properties.get('target', {})}
-        
+
         print(f"Source custom properties for {table_name}: {source_custom_properties}")
         print(f"Target custom properties for {table_name}: {target_custom_properties}")
-        
+
         # Get custom target table name if specified
         target_table_name = custom_config.get('name', table_name)
         print(f"Using target table name: {target_table_name} for source table: {table_name}")
@@ -536,12 +188,12 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     # Handle the case where the key is specified as a dict with 'name' and optional 'alias'
                     key_name = next(iter(key_def)) if not key_def.get('name') else key_def['name']
                     key_config = key_def.get(key_name, {}) if isinstance(key_def.get(key_name), dict) else {}
-                    
+
                     # Get the key name (either from the dict key or from the 'name' field)
                     key_name = key_name or key_config.get('name')
                     # Get the alias (defaults to the key name if not specified)
                     key_alias = key_config.get('name', key_name)
-                    
+
                     # Get the key type from the config or find it in the columns
                     key_type = key_config.get('type')
                 else:
@@ -549,10 +201,10 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     key_name = key_def
                     key_alias = key_def
                     key_type = None
-                
+
                 # Try to find the key in the columns to get its type if not specified
                 key_column = next((col for col in columns["columns"] if col["name"] == key_name), None)
-                
+
                 if key_column:
                     keys.append({
                         "name": key_name,
@@ -560,7 +212,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         "type": key_type or key_column["type"]
                     })
                 else:
-                    print(f"Warning: Key {key_name} not found in columns for table {table_name}. Adding with unknown type.")
+                    print(
+                        f"Warning: Key {key_name} not found in columns for table {table_name}. Adding with unknown type.")
                     keys.append({
                         "name": key_name,
                         "alias": key_alias,
@@ -579,6 +232,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
         if not keys:
             print(f"Warning: No keys specified for {table_name}. Table will have no keys.")
+
+        handle_table_creation(pipeline_id, target_table_name, yaml_target_schema, keys, token, columns, custom_config,
+                              source_node_info, target_node_info)
 
         # Create source and target table property keys
         source_table_key = f"{source_schema}.{table_name}"
@@ -601,7 +257,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     "name": col["name"],
                     "alias": target_name,
                     "type": col["type"]
-                } 
+                }
                 for col in columns["columns"]
                 for column_map in custom_config.get('columns', [])
                 for source_name, target_name in column_map.items()
@@ -655,7 +311,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 {
                     "name": key.get("alias", key["name"]),
                     "alias": key.get("alias", key["name"]),
-                    "type": map_data_type(key["type"], source_node_info, target_node_info) if key.get("type") and key["type"] != "unknown" else key["type"]
+                    "type": map_data_type(key["type"], source_node_info, target_node_info) if key.get("type") and key[
+                        "type"] != "unknown" else key["type"]
                 } for key in keys
             ],
             "customProperties": target_custom_properties,
@@ -673,60 +330,364 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
         entity = {
             "entityName": f"{source_schema}.{table_name}",
-            "agentEntities": [source_entity, target_entity]
+            "agentEntities": [source_entity, target_entity],
+            "groupId": groupId_map.get(custom_config.get('groupId', '_default'), custom_config.get('groupId', '_default'))  # Use mapped groupId or fallback to YAML/default
         }
         entities.append(entity)
-    
-    # Process entities in chunks
+
+    # Process MultiTable entities first
+    multi_table_entities = []
+    # For each chainId, create a MultiTable entity
+    for chain_id, tables_list in chained_tables.items():
+        if not tables_list:
+            continue
+
+        # Sort tables by orderIndex
+        sorted_tables = sorted(tables_list, key=lambda x: x[2])
+
+        # Log table ordering for debugging
+        logger.info(f"Creating MultiTable entity for chainId: {chain_id} with {len(sorted_tables)} tables in order:")
+        for idx, (table_key, _, order_index) in enumerate(sorted_tables):
+            logger.info(f"  {idx+1}. Table {table_key} with orderIndex: {order_index}")
+
+
+        # We'll use the first table's name as the entity name prefix
+        first_table_key, first_table_data, first_table_order_index = sorted_tables[0]
+        entity_name = f"{source_schema}.{first_table_key}"
+
+        # Initialize tables, columns, and keys for the MultiTable entity
+        multi_tables = []
+        multi_columns = []
+        multi_keys = []
+        tables_properties = {}
+
+        # Process each table in the chain
+        for table_key, table_data, order_index in sorted_tables:
+            # Get columns for this table
+            columns = get_table_columns(token, pipeline_id, source_agent_id, source_schema, table_key)
+
+            # Add table to the list
+            table_obj = {
+                "name": table_key,
+                "schema": source_schema
+            }
+            multi_tables.append(table_obj)
+
+            # Add table to tables_properties
+            tables_properties[f"{source_schema}.{table_key}"] = {}
+
+            # Process columns
+            table_columns = []
+            for col in columns["columns"]:
+                table_columns.append({
+                    "name": col["name"],
+                    "alias": col["name"],
+                    "table": {"name": table_key, "schema": source_schema},
+                    "type": col["type"]
+                })
+
+            # Add columns for this table
+            multi_columns.append({"name": table_key, "schema": source_schema})
+            multi_columns.append(table_columns)
+
+            # Process keys
+            custom_config = table_data
+            if custom_config and 'keys' in custom_config:
+                keys = []
+                for key_def in custom_config['keys']:
+                    # Handle both string (key name) and dict (key with name/alias) formats
+                    if isinstance(key_def, dict):
+                        key_name = next(iter(key_def)) if not key_def.get('name') else key_def['name']
+                        key_config = key_def.get(key_name, {}) if isinstance(key_def.get(key_name), dict) else {}
+
+                        key_name = key_name or key_config.get('name')
+                        key_alias = key_config.get('name', key_name)
+                        key_type = key_config.get('type')
+                    else:
+                        key_name = key_def
+                        key_alias = key_def
+                        key_type = None
+
+                    # Try to find the key in the columns to get its type if not specified
+                    key_column = next((col for col in columns["columns"] if col["name"] == key_name), None)
+
+                    if key_column:
+                        keys.append({
+                            "name": key_name,
+                            "alias": key_alias,
+                            "table": {"name": table_key, "schema": source_schema},
+                            "type": key_type or key_column["type"]
+                        })
+                    else:
+                        print(f"Warning: Key {key_name} not found in columns for table {table_key}. Adding with unknown type.")
+                        keys.append({
+                            "name": key_name,
+                            "alias": key_alias,
+                            "table": {"name": table_key, "schema": source_schema},
+                            "type": key_type or "unknown"
+                        })
+            else:
+                keys = [
+                    {
+                        "name": col["name"],
+                        "alias": col["name"],
+                        "table": {"name": table_key, "schema": source_schema},
+                        "type": col["type"]
+                    } for col in columns["columns"] if col.get("isPrimaryKey")
+                ]
+
+            # Add keys for this table
+            multi_keys.append({"name": table_key, "schema": source_schema})
+            multi_keys.append(keys)
+
+        # Create source entity for MultiTable
+        source_custom_properties = table_data.get('customProperties', {}).get('source', {})
+        source_entity = {
+            "type": "MultiTable",
+            "entityId": "",
+            "entityName": entity_name,
+            "agentEntityId": "",
+            "entityType": {
+                "type": "Source",
+                "maxFetchItemsCountPerIteration": source_custom_properties.get('maxItemsCountPerIteration', 1000),
+                "maxTransactionMessageKbSize": source_custom_properties.get('maxTransactionMessageKbSize', 1024),
+                "pollingIntervalMilliseconds": source_custom_properties.get('pollingIntervalMilliseconds', 100),
+                "unchangedDataFilterType": "ENTIRE_ROW"
+            },
+            "agentId": source_agent_id,
+            "orderIndex": first_table_order_index,  # Use the first table's orderIndex for the source entity
+            "customProperties": {},
+            "tablesProperties": tables_properties,
+            "tables": multi_tables,
+            "columns": multi_columns,
+            "keys": multi_keys
+        }
+
+        # Create target entity for MultiTable
+        target_custom_properties = table_data.get('customProperties', {}).get('target', {})
+        target_tables = []
+        target_columns = []
+        target_keys = []
+        target_tables_properties = {}
+
+        # Process each table for the target
+        for table_key, table_data, order_index in sorted_tables:
+            # Add table to the list
+            target_table_obj = {
+                "name": table_key,
+                "schema": target_schema
+            }
+            target_tables.append(target_table_obj)
+
+            # Add table to tables_properties
+            target_tables_properties[f"{target_schema}.{table_key}"] = {}
+
+            # Get columns for this table
+            columns = get_table_columns(token, pipeline_id, source_agent_id, source_schema, table_key)
+
+            # Process columns for target
+            target_table_columns = []
+            for col in columns["columns"]:
+                target_table_columns.append({
+                    "name": col["name"],
+                    "type": map_data_type(col["type"], source_node_info, target_node_info)
+                })
+
+            # Add columns for this table
+            target_columns.append({"name": table_key, "schema": target_schema})
+            target_columns.append(target_table_columns)
+
+            # Process keys for target
+            custom_config = table_data
+            if custom_config and 'keys' in custom_config:
+                keys = []
+                for key_def in custom_config['keys']:
+                    if isinstance(key_def, dict):
+                        key_name = next(iter(key_def)) if not key_def.get('name') else key_def['name']
+                    else:
+                        key_name = key_def
+
+                    # Try to find the key in the columns to get its type
+                    key_column = next((col for col in columns["columns"] if col["name"] == key_name), None)
+
+                    if key_column:
+                        keys.append({
+                            "name": key_name,
+                            "type": map_data_type(key_column["type"], source_node_info, target_node_info)
+                        })
+                    else:
+                        keys.append({
+                            "name": key_name,
+                            "type": "unknown"
+                        })
+            else:
+                keys = [
+                    {
+                        "name": col["name"],
+                        "type": map_data_type(col["type"], source_node_info, target_node_info)
+                    } for col in columns["columns"] if col.get("isPrimaryKey")
+                ]
+
+            # Add keys for this table
+            target_keys.append({"name": table_key, "schema": target_schema})
+            target_keys.append(keys)
+
+        target_entity = {
+            "type": "MultiTable",
+            "entityId": "",
+            "entityName": entity_name,
+            "agentEntityId": "",
+            "entityType": {
+                "type": "Target",
+                "skipDeletion": target_custom_properties.get('skipDeletion', False),
+                "snapshotWritingConcurrency": target_custom_properties.get('snapshotWritingConcurrency', 1)
+            },
+            "agentId": target_agent_id,
+            "orderIndex": first_table_order_index,  # Use the first table's orderIndex for the target entity
+            "customProperties": {"ttlValue": target_custom_properties.get('ttlValue', 0)},
+            "tablesProperties": target_tables_properties,
+            "tables": target_tables,
+            "columns": target_columns,
+            "keys": target_keys
+        }
+
+        # Create the MultiTable entity
+        multi_table_entity = {
+            "entities": [{
+                "entityId": "",
+                "entityName": entity_name,
+                "agentEntities": [source_entity, target_entity],
+                "groupId": groupId_map.get(table_data.get('groupId', '_default'), table_data.get('groupId', '_default')),
+                "orderIndex": first_table_order_index  # Use the first table's orderIndex for the entire entity
+            }]
+        }
+
+        # Add to multi_table_entities for separate processing
+        multi_table_entities.append(multi_table_entity)
+
+    # Process standard entities in chunks
+    # Filter out entities that are part of a MultiTable (chainId)
+    filtered_entities = []
+    for entity in entities:
+        entity_name_parts = entity["entityName"].split('.')
+        if len(entity_name_parts) > 1:
+            table_name = entity_name_parts[-1]
+            is_chained = False
+
+            # Check if this table is in any chain
+            for tables_list in chained_tables.values():
+                for table_key, _, _ in tables_list:
+                    if table_key == table_name:
+                        is_chained = True
+                        break
+                if is_chained:
+                    break
+
+            if not is_chained:
+                filtered_entities.append(entity)
+        else:
+            filtered_entities.append(entity)
+
+    # Reset entities to the filtered list
+    entities = filtered_entities
+
+    # Now process MultiTable entities first
+    successful_multi_tables = 0
+    failed_multi_tables = 0
+    total_multi_tables = len(multi_table_entities)
+
+    if total_multi_tables > 0:
+        logger.info(f"Processing {total_multi_tables} MultiTable entities...")
+
+        for i, multi_entity in enumerate(multi_table_entities):
+            try:
+                logger.info(f"Creating MultiTable entity {i+1}/{total_multi_tables}: {multi_entity['entities'][0]['entityName']}")
+
+                # Log the final tables ordering in payload before sending
+                for agent_entity in multi_entity['entities'][0].get('agentEntities', []):
+                    if 'tables' in agent_entity:
+                        logger.info(f"Final tables order in payload for {agent_entity.get('entityName')}:")
+                        for idx, table in enumerate(agent_entity.get('tables', [])):
+                            logger.info(f"  {idx+1}. {table.get('schema')}.{table.get('name')}")
+
+                response = fetch_core_hub(
+                    f"/pipelines/{pipeline_id}/config/entities",
+                    method="PUT",
+                    token=token,
+                    body=multi_entity
+                )
+                logger.info(f"Successfully created MultiTable entity {i+1}/{total_multi_tables}")
+                successful_multi_tables += 1
+            except Exception as e:
+                error_msg = str(e)
+                logger.error(f"Error creating MultiTable entity {i+1}/{total_multi_tables}: {error_msg}")
+                failed_multi_tables += 1
+                if not skip_errors:
+                    raise
+                logger.warning("Skipping MultiTable entity due to skip_errors=True")
+
+    # Process regular entities in chunks
     total_entities = len(entities)
     successful_entities = 0
     failed_entities = 0
-    
-    print(f"Processing {total_entities} entities in chunks of {chunk_size}...")
-    
-    for i in range(0, total_entities, chunk_size):
-        chunk = entities[i:i + chunk_size]
-        chunk_data = {"entities": chunk}
-        chunk_start = i + 1
-        chunk_end = min(i + chunk_size, total_entities)
-        
-        print(f"\nProcessing chunk {chunk_start}-{chunk_end} of {total_entities} entities...")
-        
-        try:
-            response = fetch_core_hub(
-                f"/pipelines/{pipeline_id}/config/entities", 
-                method="PUT", 
-                token=token, 
-                body=chunk_data
-            )
-            print(f"Successfully created entities {chunk_start}-{chunk_end}")
-            successful_entities += len(chunk)
-        except Exception as e:
-            error_msg = str(e)
-            print(f"Error creating entities {chunk_start}-{chunk_end}: {error_msg}")
-            failed_entities += len(chunk)
-            if not skip_errors:
-                raise
-            print("Skipping chunk due to skip_errors=True")
-    
+
+    if total_entities > 0:
+        logger.info(f"Processing {total_entities} regular entities in chunks of {chunk_size}...")
+
+        for i in range(0, total_entities, chunk_size):
+            chunk = entities[i:i + chunk_size]
+            chunk_data = {"entities": chunk}
+            chunk_start = i + 1
+            chunk_end = min(i + chunk_size, total_entities)
+
+            logger.info(f"\nProcessing chunk {chunk_start}-{chunk_end} of {total_entities} entities...")
+
+            # Log the final tables ordering in payload before sending
+            for entity_payload in chunk_data.get('entities', []):
+                for agent_entity in entity_payload.get('agentEntities', []):
+                    if 'tables' in agent_entity:
+                        logger.info(f"Final tables order in payload for {agent_entity.get('entityName')}:")
+                        for idx, table in enumerate(agent_entity.get('tables', [])):
+                            logger.info(f"  {idx+1}. {table.get('schema')}.{table.get('name')}")
+
+            try:
+                response = fetch_core_hub(
+                    f"/pipelines/{pipeline_id}/config/entities",
+                    method="PUT",
+                    token=token,
+                    body=chunk_data
+                )
+                logger.info(f"Successfully created entities {chunk_start}-{chunk_end}")
+                successful_entities += len(chunk)
+            except Exception as e:
+                error_msg = str(e)
+                logger.error(f"Error creating entities {chunk_start}-{chunk_end}: {error_msg}")
+                failed_entities += len(chunk)
+                if not skip_errors:
+                    raise
+                logger.warning("Skipping chunk due to skip_errors=True")
+
     print(f"\nProcessing complete:")
-    print(f"- Total entities: {total_entities}")
-    print(f"- Successfully created: {successful_entities}")
-    print(f"- Failed: {failed_entities}")
-    
+    print(f"- Total regular entities: {total_entities}")
+    print(f"- Successfully created regular entities: {successful_entities}")
+    print(f"- Failed regular entities: {failed_entities}")
+    print(f"- Total MultiTable entities: {total_multi_tables}")
+    print(f"- Successfully created MultiTable entities: {successful_multi_tables}")
+    print(f"- Failed MultiTable entities: {failed_multi_tables}")
+
     # Create entity schedules if successful
     if successful_entities > 0 and ENABLE_SCHEDULING:
         logger.info("Creating schedules for entities...")
-        
+
         # Get updated entity IDs from the pipeline config
         try:
             response = fetch_core_hub(f"/pipelines/{pipeline_id}/entities", token=token)
             logger.info(f"Retrieved the following entities: {response}")
-            
+
             if not isinstance(response, list) or not response:
                 logger.warning(f"Unexpected response when fetching entities: {response}")
                 return {"successful": successful_entities, "failed": failed_entities, "total": total_entities}
-            
+
             # Process entities in the format used in main.py
             entities_map = {}
             for item in response:
@@ -740,22 +701,22 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         table_name = parts[-1] if len(parts) > 1 else entity_name
                         entities_map[table_name] = entity_id
                         logger.info(f"Found entity: {entity_name} (ID: {entity_id})")
-            
+
             # Create schedules for each entity found in the YAML config
             if yaml_config:
                 # Track which tables we've already processed to avoid duplicates
                 processed_tables = set()
-                
+
                 # Determine if schemas are at root level or under 'schemas' key
                 schemas_dict = yaml_config.get('schemas', {})
-                
+
                 # If 'schemas' key doesn't exist or is empty, assume schemas are at root level
                 if not schemas_dict:
                     # Treat each top-level key as a schema name
                     # Filter out keys that are not dictionaries (they wouldn't be schema configs)
                     schemas_dict = {k: v for k, v in yaml_config.items() if isinstance(v, dict)}
                     logger.info(f"Using root-level schema definitions: {list(schemas_dict.keys())}")
-                
+
                 for schema_name, schema_config in schemas_dict.items():
                     if 'tables' in schema_config and 'custom' in schema_config['tables']:
                         custom_tables = schema_config['tables']['custom']
@@ -763,89 +724,94 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             # Skip if we've already processed this table
                             if table_key in processed_tables:
                                 continue
-                                
+
                             processed_tables.add(table_key)
-                            
+
                             # Use the table_key directly instead of looking for 'name' field
                             table_name = table_key
-                            
+
                             if table_name in entities_map and 'schedules' in table_data:
                                 entity_id = entities_map[table_name]
                                 logger.info(f"Creating schedules for table {table_name} (Entity ID: {entity_id})")
-                                create_entity_schedules(token, pipeline_id, entity_id, table_name, table_data['schedules'])
+                                create_entity_schedules(token, pipeline_id, entity_id, table_name,
+                                                        table_data['schedules'])
                             else:
-                                logger.warning(f"Unable to create schedules for {table_name}. Entity not found or no schedules defined.")
-            
+                                logger.warning(
+                                    f"Unable to create schedules for {table_name}. Entity not found or no schedules defined.")
+
             # Create pipeline-level schedules if defined
             if yaml_config:
                 # Reuse the same schemas_dict from entity schedules
                 if not 'schemas_dict' in locals():
                     # Determine if schemas are at root level or under 'schemas' key
                     schemas_dict = yaml_config.get('schemas', {})
-                    
+
                     # If 'schemas' key doesn't exist or is empty, assume schemas are at root level
                     if not schemas_dict:
                         # Treat each top-level key as a schema name
                         schemas_dict = {k: v for k, v in yaml_config.items() if isinstance(v, dict)}
-                        logger.info(f"Using root-level schema definitions for pipeline schedules: {list(schemas_dict.keys())}")
-                
+                        logger.info(
+                            f"Using root-level schema definitions for pipeline schedules: {list(schemas_dict.keys())}")
+
                 for schema_name, schema_config in schemas_dict.items():
                     if 'schedules' in schema_config:
                         logger.info(f"Creating pipeline-level schedules for schema {schema_name}")
                         create_pipeline_schedules(token, pipeline_id, schema_config['schedules'])
-                        
+
         except Exception as e:
             logger.error(f"Error creating schedules: {str(e)}")
             # Don't fail the whole process just because scheduling failed
-    
+
     return {"successful": successful_entities, "failed": failed_entities, "total": total_entities}
 
-def main(pipeline_id, source_schema, target_schema, source_type, target_type, yaml_file, token, skip_errors=False, chunk_size=50):
+
+def main(pipeline_id, source_schema, target_schema, source_type, target_type, yaml_file, token, skip_errors=False,
+         chunk_size=50):
     """
     Main function to create entities for a pipeline
     """
     logger.info(f"Starting entity creation for pipeline {pipeline_id}")
     try:
         yaml_config = load_yaml_config(yaml_file) if yaml_file else None
-        
+
         # Get pipeline configuration
         pipeline_config = get_pipeline_config(token, pipeline_id)
-        
+
         # Get agents information
         agents = get_pipeline_agents(token, pipeline_id)
-        
+
         if not agents or len(agents) != 2:
             error_msg = f"Expected 2 agents, found {len(agents) if agents else 0}"
             log_failure(logger, error_msg)
             lockfile_failure()
             raise Exception(error_msg)
-        
+
         # Identify source and target agents based on type
         source_agent = next((agent for agent in agents if agent['agentType'] == 'SOURCE'), None)
         target_agent = next((agent for agent in agents if agent['agentType'] == 'TARGET'), None)
-        
+
         if not source_agent or not target_agent:
             error_msg = f"Could not find required agents. Source ({source_type}): {source_agent}, Target ({target_type}): {target_agent}"
             log_failure(logger, error_msg)
             lockfile_failure()
             raise Exception(error_msg)
-        
+
         # Get tables from source agent
         tables = get_agent_tables(token, pipeline_id, source_agent['agentId'], source_schema)
-        
+
         if not tables:
             error_msg = f"No tables found in schema {source_schema}"
             log_failure(logger, error_msg)
             lockfile_failure()
             raise Exception(error_msg)
-            
+
         # Create entities
         create_entities(
             token, pipeline_id, source_schema, target_schema,
             tables, source_agent['agentId'], target_agent['agentId'],
             source_type, target_type, yaml_config, skip_errors, chunk_size
         )
-        
+
     except Exception as e:
         log_failure(logger, f"Error: {str(e)}")
         lockfile_failure()
@@ -853,31 +819,34 @@ def main(pipeline_id, source_schema, target_schema, source_type, target_type, ya
             raise
         logger.warning("Skipping error due to skip_errors=True")
         return
-        
+
     # Log successful completion
     log_success(logger, f"Entity creation completed successfully for pipeline {pipeline_id}")
     lockfile_complete()
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Gluesync Entity Creation Script")
     parser.add_argument('--pipeline', required=True, help="Pipeline ID")
     parser.add_argument('--source-schema', required=True, help="Source schema name")
-    parser.add_argument('--chunk-size', type=int, default=50, help="Number of entities to process in each chunk (default: 50)")
+    parser.add_argument('--chunk-size', type=int, default=50,
+                        help="Number of entities to process in each chunk (default: 50)")
     parser.add_argument('--skip-errors', action='store_true', help="Continue execution even if errors occur")
     parser.add_argument('--target-schema', required=True, help="Target schema name")
     parser.add_argument('--source-type', required=True, help="Source agent type")
     parser.add_argument('--target-type', required=True, help="Target agent type")
     parser.add_argument('--yaml-file', help="YAML configuration file path")
     parser.add_argument('--token', required=True, help="Authentication token")
-    parser.add_argument('--enable-scheduling', action='store_true', help="Enable creation of schedules from YAML config")
-    
+    parser.add_argument('--enable-scheduling', action='store_true',
+                        help="Enable creation of schedules from YAML config")
+
     args = parser.parse_args()
-    
+
     # Get command line arguments for scheduling
     if args.enable_scheduling:
         # Override the environment variable setting
         ENABLE_SCHEDULING = True
-    
+
     main(
         args.pipeline,
         args.source_schema,
