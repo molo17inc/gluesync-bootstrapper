@@ -24,6 +24,56 @@ def parse_xml():
     tree = ET.parse(XML_PATH)
     root = tree.getroot()
     
+    # First, extract groups information
+    print("Extracting groups and chains...")
+    groups = {}
+    chains = {}
+    
+    for group_elem in root.findall("./tables/DBMMGroups"):
+        group_id = group_elem.findtext("GroupID")
+        group_name = group_elem.findtext("Name")
+        group_type = group_elem.findtext("Type")
+        
+        if group_id and group_name:
+            if group_type == "0":  # Regular group
+                groups[group_id] = {
+                    "name": group_name,
+                    "type": "group",
+                    "description": group_elem.findtext("Description") or ""
+                }
+                print(f"  Found group: {group_name} (ID: {group_id})")
+            elif group_type == "1":  # Chain
+                chains[group_id] = {
+                    "name": group_name,
+                    "type": "chain",
+                    "description": group_elem.findtext("Description") or ""
+                }
+                print(f"  Found chain: {group_name} (ID: {group_id})")
+    
+    # Extract replications to track group/chain memberships
+    replications = {}
+    for repl_elem in root.findall("./tables/DBMMReplications"):
+        repl_id = repl_elem.findtext("ReplicationID")
+        group_id = repl_elem.findtext("GroupID")
+        name = repl_elem.findtext("Name")
+        properties = {}
+        
+        # Parse properties string into a dictionary
+        props_text = repl_elem.findtext("Properties", "")
+        for prop in props_text.split(';'):
+            if '=' in prop:
+                key, value = prop.split('=', 1)
+                properties[key] = value
+        
+        if repl_id and group_id and name:
+            replications[repl_id] = {
+                "name": name,
+                "group_id": group_id,
+                "src_table_id": repl_elem.findtext("SrcTableID"),
+                "trg_table_id": repl_elem.findtext("TrgTableID"),
+                "group_priority": int(properties.get('GroupPriority', '0')) if group_id in chains else 0
+            }
+    
     # Extract database connections
     print("Extracting connections...")
     connections = {}
@@ -165,9 +215,13 @@ def parse_xml():
     print(f"Tables with fields: {tables_with_fields}")
     print(f"Tables without fields: {len(tables) - tables_with_fields}")
     
-    return connections
+    # Print summary of groups and chains
+    print(f"\nFound {len(groups)} groups and {len(chains)} chains in the DBMoto configuration")
+    print(f"Found {len(replications)} replications with group/chain assignments")
+    
+    return connections, groups, chains, replications
 
-def export_as_yaml(connections, output_dir=None, template_file=None):
+def export_as_yaml(connections, groups, chains, replications, output_dir=None, template_file=None):
     # Use command line arguments if parameters are not provided
     if output_dir is None:
         output_dir = args.output_dir
@@ -187,6 +241,24 @@ def export_as_yaml(connections, output_dir=None, template_file=None):
                 template_structure = yaml.safe_load(template_content)
             except Exception as e:
                 print(f"Warning: Could not parse template file: {e}")
+    
+    # Create a mapping of table IDs to their group/chain assignments from replications
+    table_assignments = {}
+    
+    # Assign groups and chains to tables
+    for repl_id, repl in replications.items():
+        group_id = repl['group_id']
+        table_id = repl['src_table_id']  # Using source table ID for assignment
+        
+        if group_id in groups:
+            if table_id not in table_assignments:
+                table_assignments[table_id] = {}
+            table_assignments[table_id]['groupId'] = groups[group_id]['name']
+            
+        elif group_id in chains:
+            if table_id not in table_assignments:
+                table_assignments[table_id] = {}
+            table_assignments[table_id]['chainId'] = chains[group_id]['name']
     
     # Extract schemas from template if available
     template_schemas = {}
@@ -240,10 +312,17 @@ def export_as_yaml(connections, output_dir=None, template_file=None):
                         columns.append(column_entry)
                     
                     # Create the table entry with column definitions
-                    custom_tables[table_name] = {
+                    table_config = {
                         "name": table_name,  # Preserve original case
+                        "keys": [{"name": "id"}],  # Default primary key
                         "columns": columns
                     }
+                    
+                    # Add group/chain assignments if this table is in any replication
+                    if table["id"] in table_assignments:
+                        table_config.update(table_assignments[table["id"]])
+                    
+                    custom_tables[table_name] = table_config
                 
                 # Find matching template for this schema
                 template_schema = find_matching_template_schema(schema_name)
@@ -298,7 +377,8 @@ if __name__ == "__main__":
     # Ensure output directory exists
     os.makedirs(args.output_dir, exist_ok=True)
     
-    connections = parse_xml()
+    # Parse the XML and get connections, groups, chains, and replications
+    connections, groups, chains, replications = parse_xml()
     
     # Print hierarchy summary
     print("\n=== Database Structure ===")
@@ -308,15 +388,12 @@ if __name__ == "__main__":
             print(f"  Schema: {schema['name']} (ID: {schema_id})")
             print(f"    Tables: {len(schema.get('tables', {}))} tables")
     
-    # Export as YAML files using command line arguments
-    export_as_yaml(connections)
+    # Export as YAML files
+    print("\nExporting to YAML files...")
+    exported = export_as_yaml(connections, groups, chains, replications)
+    print(f"\nDone! {exported} YAML files created in {os.path.abspath(args.output_dir)}/")
+    print("These files match the structure needed for table-list-template.yaml in gluesync-bootstrapper.")
     
     # View reference template structure
     view_table_list_template()
-    
-    # Export as YAML files
-    print("\nExporting to YAML files...")
-    exported = export_as_yaml(connections)
-    print(f"\nDone! {exported} YAML files created in ./schemas_yaml/")
-    print("These files match the structure needed for table-list-template.yaml in gluesync-bootstrapper.")
 
