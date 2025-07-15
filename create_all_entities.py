@@ -39,6 +39,7 @@ logger = get_logger(log_file)
 # Environment variables with default values
 CORE_HUB_URL = os.getenv('CORE_HUB_URL', 'https://localhost:1717')
 ENTITY_START_TIMEOUT = int(os.getenv('ENTITY_START_TIMEOUT', '1'))
+CREATE_TABLE_IF_NOT_EXISTS = os.getenv('CREATE_TABLE_IF_NOT_EXISTS', 'true').lower() == 'true'
 
 # ProtocolAwareAdapter and CoreHubClient have been moved to utils/core_hub_client.py
 

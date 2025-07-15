@@ -44,6 +44,7 @@ CORE_HUB_URL = os.getenv('CORE_HUB_URL', 'https://localhost:1717')
 CHRONOS_URL = os.getenv('CHRONOS_URL', 'http://gluesync-chronos:8000')
 ENTITY_START_TIMEOUT = int(os.getenv('ENTITY_START_TIMEOUT', '1'))
 ENABLE_SCHEDULING = os.getenv('ENABLE_SCHEDULING', 'true').lower() == 'true'
+CREATE_TABLE_IF_NOT_EXISTS = os.getenv('CREATE_TABLE_IF_NOT_EXISTS', 'true').lower() == 'true'
 
 # ProtocolAwareAdapter and CoreHubClient have been moved to utils/core_hub_client.py
 
@@ -294,26 +295,29 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                           columns: list, custom_config, source_node_info, target_node_info):
     if not table_exists(pipeline_id=pipeline_id, schema_name=yaml_target_schema, table_name=target_table_name,
                         token=token):
-        print(f"table: {target_table_name} does not exists")
-        table_data = GenerateTableStatementRequest(columns=[
-            ColumnDto(name=target_name,
-                      type=map_data_type(col["type"], source_node_info, target_node_info),
-                      isPrimaryKey=target_name in keys)
-            for col in columns["columns"]
-            for column_map in custom_config.get('columns', [])
-            for source_name, target_name in column_map.items()
-            if source_name == col["name"]
-        ] if custom_config.get('columns') else [
-            ColumnDto(name=col["name"], type=map_data_type(col["type"], source_node_info, target_node_info),
-                      isPrimaryKey=col["isPrimaryKey"])
-            for col in columns["columns"]
-        ])
-        statement = generate_create_table_statement(pipeline_id=pipeline_id, schema_name=yaml_target_schema,
-                                                    table_name=target_table_name, token=token,
-                                                    table_data=table_data)
-        print(f"create table statement: {statement}")
-        create_target_table(pipeline_id=pipeline_id, create_table_request=CreateTableRequest(statement=statement),
-                            token=token)
+        if CREATE_TABLE_IF_NOT_EXISTS:
+            print(f"table: {target_table_name} does not exists, creating it")
+            table_data = GenerateTableStatementRequest(columns=[
+                ColumnDto(name=target_name,
+                          type=map_data_type(col["type"], source_node_info, target_node_info),
+                          isPrimaryKey=target_name in keys)
+                for col in columns["columns"]
+                for column_map in custom_config.get('columns', [])
+                for source_name, target_name in column_map.items()
+                if source_name == col["name"]
+            ] if custom_config.get('columns') else [
+                ColumnDto(name=col["name"], type=map_data_type(col["type"], source_node_info, target_node_info),
+                          isPrimaryKey=col["isPrimaryKey"])
+                for col in columns["columns"]
+            ])
+            statement = generate_create_table_statement(pipeline_id=pipeline_id, schema_name=yaml_target_schema,
+                                                        table_name=target_table_name, token=token,
+                                                        table_data=table_data)
+            print(f"create table statement: {statement}")
+            create_target_table(pipeline_id=pipeline_id, create_table_request=CreateTableRequest(statement=statement),
+                                token=token)
+        else:
+            print(f"table: {target_table_name} does not exists, skipping creation as CREATE_TABLE_IF_NOT_EXISTS is false")
     else:
         print(f"table: {target_table_name} already exists")
 
