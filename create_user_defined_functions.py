@@ -101,35 +101,60 @@ def read_file(filepath):
 
 def compile_udf_function(pipeline_id: str, token: str, udf_compile_request: UdfFunctionCompileRequest) -> str:
     try:
-        print(f"Compile mapping function request: {udf_compile_request.model_dump()}")
+        logger.info(f"Compiling UDF function for entity {udf_compile_request.entityName} (type: {udf_compile_request.type})")
+        logger.debug(f"Compile mapping function request: {udf_compile_request.model_dump()}")
         response = fetch_core_hub(
             f"/pipelines/{pipeline_id}/config/entities/mapping-functions/compile-mapping-function",
             method="POST",
             token=token,
             body=udf_compile_request.model_dump()
         )
+        logger.info(f"Successfully compiled UDF function for entity {udf_compile_request.entityName}")
         return response
     except requests.exceptions.RequestException as e:
         error_msg = str(e)
-        print(f"compile mapping function error: {error_msg}")
+        logger.error(f"Failed to compile UDF function for entity {udf_compile_request.entityName}: {error_msg}")
         raise
 
 def check_and_compile_udf_function(table_name: str, udf_definition: dict, pipeline_id: str, token: str):
+    udf_name = udf_definition.get("name")
     udf_type = UdfFunctionType(udf_definition.get("type"))
+    logger.info(f"Processing UDF '{udf_name}' for table {table_name} (type: {udf_type})")
+    
     file_path = find_udf_definition_in_path(table_name, udf_type)
     if file_path:
-        file_data = read_file(file_path)
-        b64_file_data = base64.b64encode(file_data.encode())
-        udf_compile_request = UdfFunctionCompileRequest(code=b64_file_data, type=udf_type, entityName=table_name)
-        compile_udf_function(pipeline_id=pipeline_id, token=token, udf_compile_request=udf_compile_request)
+        logger.info(f"Found UDF file at: {file_path}")
+        try:
+            file_data = read_file(file_path)
+            logger.debug(f"Read {len(file_data)} characters from UDF file")
+            b64_file_data = base64.b64encode(file_data.encode())
+            udf_compile_request = UdfFunctionCompileRequest(code=b64_file_data, type=udf_type, entityName=table_name)
+            compile_udf_function(pipeline_id=pipeline_id, token=token, udf_compile_request=udf_compile_request)
+            logger.info(f"Successfully processed UDF '{udf_name}' for table {table_name}")
+        except Exception as e:
+            logger.error(f"Failed to process UDF '{udf_name}' for table {table_name}: {str(e)}")
+            raise
     else:
-        logger.warning(f"missing function file for: {udf_definition}, file_path: {file_path}")
+        logger.warning(f"Missing UDF file for '{udf_name}' (table: {table_name}, type: {udf_type}). Expected file path: {file_path}")
 
 def handle_udf_function_definition(table_name, pipeline_id, udf, token):
-    udf_definition = get_udf_function_for_table(table_name, udf)
-    if udf_definition:
-        print(f"found table with udf functions: {udf_definition}")
-        check_and_compile_udf_function(table_name, udf_definition, pipeline_id, token)
+    logger.info(f"Checking UDF definitions for table {table_name}")
+    logger.debug(f"Available UDF list: {udf}")
+    
+    # Process each UDF definition in the list
+    for udf_definition in udf:
+        if udf_definition:
+            logger.info(f"Processing UDF definition: {udf_definition}")
+            try:
+                check_and_compile_udf_function(table_name, udf_definition, pipeline_id, token)
+            except Exception as e:
+                logger.error(f"Failed to process UDF definition {udf_definition} for table {table_name}: {str(e)}")
+                raise
+        else:
+            logger.warning(f"Empty UDF definition found for table {table_name}")
+    
+    if not udf:
+        logger.debug(f"No UDF definitions found for table {table_name}")
 
 def create_user_defined_functions(token, pipeline_id, source_schema, target_schema, tables, source_agent_id,
                                   target_agent_id,
