@@ -115,7 +115,10 @@ schemas:
           customProperties:
             target:
               ttlValue: 20000000
-        
+              udf: # User defined functions
+                - name: UPPERCASE_DRIVERS
+                  type: java
+          
         VEHICLES:
           groupId: "finance"
           keys:
