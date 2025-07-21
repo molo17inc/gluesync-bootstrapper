@@ -157,7 +157,6 @@ def create_user_defined_functions(token, pipeline_id, source_schema, target_sche
     yaml_target_schema = schema_config.get('target', target_schema)
     whitelist = schema_config.get('tables', {}).get('whitelist', [])
     blacklist = schema_config.get('tables', {}).get('blacklist', [])
-    udf = schema_config.get('tables', {}).get('udf', [])
     # Handle empty custom tables attribute - convert None to empty dict
     tables_config = schema_config.get('tables', {})
     custom_tables = tables_config.get('custom', {})
@@ -193,7 +192,17 @@ def create_user_defined_functions(token, pipeline_id, source_schema, target_sche
             print(f"Skipping table: {table_name}")
             continue
 
-        handle_udf_function_definition(table_name, pipeline_id, udf, token)
+        # Extract UDFs from table-level custom properties
+        table_config = custom_tables.get(table_name, {})
+        table_custom_properties = table_config.get('customProperties', {})
+        target_custom_properties = table_custom_properties.get('target', {})
+        table_udfs = target_custom_properties.get('udf', [])
+        
+        if table_udfs:
+            print(f"Found UDFs for table {table_name}: {table_udfs}")
+            handle_udf_function_definition(table_name, pipeline_id, table_udfs, token)
+        else:
+            print(f"No UDFs defined for table {table_name}")
 
 def main(pipeline_id, source_schema, target_schema, source_type, target_type, yaml_file, token, skip_errors=False,
          chunk_size=50):

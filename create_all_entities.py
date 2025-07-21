@@ -106,7 +106,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
     yaml_target_schema = schema_config.get('target', target_schema)
     whitelist = schema_config.get('tables', {}).get('whitelist', [])
     blacklist = schema_config.get('tables', {}).get('blacklist', [])
-    udf = schema_config.get('tables', {}).get('udf', [])
     # Handle empty custom tables attribute - convert None to empty dict
     tables_config = schema_config.get('tables', {})
     custom_tables = tables_config.get('custom', {})
