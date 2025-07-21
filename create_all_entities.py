@@ -27,6 +27,7 @@ from commons import get_node_info, get_table_columns, fetch_core_hub, get_pipeli
     get_agent_tables, create_entity_schedules, map_data_type, create_pipeline_schedules, load_yaml_config, \
     process_filter_clauses, ENABLE_SCHEDULING, create_group
 from create_all_tables import handle_table_creation
+from create_user_defined_functions import handle_udf_function_definition
 from utils.log import get_logger, create_log_file, log_success, log_failure, lockfile_failure, lockfile_complete, exit_on_fail
 from utils.core_hub_client import CoreHubClient
 
@@ -334,6 +335,23 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             "groupId": groupId_map.get(custom_config.get('groupId', '_default'), custom_config.get('groupId', '_default'))  # Use mapped groupId or fallback to YAML/default
         }
         entities.append(entity)
+        
+        # Process UDFs if defined for this table
+        table_custom_properties = custom_config.get('customProperties', {})
+        target_custom_properties = table_custom_properties.get('target', {})
+        table_udfs = target_custom_properties.get('udf', [])
+        
+        if table_udfs:
+            logger.info(f"Found UDFs for table {table_name}: {table_udfs}")
+            try:
+                handle_udf_function_definition(table_name, pipeline_id, table_udfs, token)
+                logger.info(f"Successfully processed UDFs for table {table_name}")
+            except Exception as e:
+                logger.error(f"Failed to process UDFs for table {table_name}: {str(e)}")
+                if not skip_errors:
+                    raise
+        else:
+            logger.debug(f"No UDFs defined for table {table_name}")
 
     # Process MultiTable entities first
     multi_table_entities = []
