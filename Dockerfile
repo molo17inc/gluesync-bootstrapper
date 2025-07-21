@@ -36,6 +36,7 @@ ARG TARGET_SCHEMA
 ARG ENTITY_START_TIMEOUT=1
 ARG TABLE_LIST_YAML=/opt/config/TABLE_LIST.yaml
 ARG LOG_DIR=/logs
+ARG UDF_PATH=/opt/udfs
 ARG DEFAULT_PASSWORD
 ARG GLUESYNC_LICENSE_FILE
 ARG GLUESYNC_MODULE_TAG=gluesync-bootstrapper
@@ -58,6 +59,7 @@ ENV TARGET_SCHEMA=${TARGET_SCHEMA}
 ENV ENTITY_START_TIMEOUT=${ENTITY_START_TIMEOUT}
 ENV TABLE_LIST_YAML=${TABLE_LIST_YAML}
 ENV LOG_DIR=${LOG_DIR}
+ENV UDF_PATH=${UDF_PATH}
 ENV DEFAULT_PASSWORD=""
 ENV USE_SDK=${USE_SDK}
 ENV GLUESYNC_LICENSE_FILE=${GLUESYNC_LICENSE_FILE}
@@ -130,8 +132,9 @@ WORKDIR /opt/python
 # Copy the license file
 COPY ${GLUESYNC_LICENSE_FILE} /opt/gluesync/data/gs-license.dat
 
-# Create logs directory
+# Create logs and UDF directories
 RUN mkdir -p ${LOG_DIR} && chmod 777 ${LOG_DIR}
+RUN mkdir -p ${UDF_PATH} && chmod 777 ${UDF_PATH}
 
 # Command to run the application
 CMD ["python", "main.py"]

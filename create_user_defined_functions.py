@@ -83,8 +83,8 @@ class UdfFunctionCompileRequest(BaseModel):
 def get_udf_function_for_table(table_name: str, udf: list[dict]) -> dict:
     return next((item for item in udf if item.get("name") == table_name), {})
 
-def find_udf_definition_in_path(table_name: str, udf_type: UdfFunctionType) -> PosixPath:
-    filename = f"{UDF_CLASS_FILENAME}For{table_name}{udf_type.extension()}"
+def find_udf_definition_in_path(udf_name: str, udf_type: UdfFunctionType) -> PosixPath:
+    filename = f"{udf_name}{udf_type.extension()}"
     path_location = Path(UDF_PATH)
     file_path = next((p for p in path_location.rglob(filename)), None)
     return file_path
@@ -121,7 +121,7 @@ def check_and_compile_udf_function(table_name: str, udf_definition: dict, pipeli
     udf_type = UdfFunctionType(udf_definition.get("type"))
     logger.info(f"Processing UDF '{udf_name}' for table {table_name} (type: {udf_type})")
     
-    file_path = find_udf_definition_in_path(table_name, udf_type)
+    file_path = find_udf_definition_in_path(udf_name, udf_type)
     if file_path:
         logger.info(f"Found UDF file at: {file_path}")
         try:
@@ -135,7 +135,10 @@ def check_and_compile_udf_function(table_name: str, udf_definition: dict, pipeli
             logger.error(f"Failed to process UDF '{udf_name}' for table {table_name}: {str(e)}")
             raise
     else:
-        logger.warning(f"Missing UDF file for '{udf_name}' (table: {table_name}, type: {udf_type}). Expected file path: {file_path}")
+        expected_filename = f"{udf_name}{udf_type.extension()}"
+        error_msg = f"Missing UDF file for '{udf_name}' (table: {table_name}, type: {udf_type}). Expected filename: {expected_filename} in directory: {UDF_PATH or 'current directory'}"
+        logger.error(error_msg)
+        raise FileNotFoundError(error_msg)
 
 def handle_udf_function_definition(table_name, pipeline_id, udf, token):
     logger.info(f"Checking UDF definitions for table {table_name}")
