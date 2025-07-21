@@ -24,6 +24,7 @@ import os
 import json
 from enum import Enum
 
+from annotated_types import T
 import requests
 import urllib3
 import argparse
@@ -57,20 +58,31 @@ core_hub_client = CoreHubClient(CORE_HUB_URL)
 
 class UdfFunctionType(str, Enum):
     java = 'java'
-    python = 'python'
-    ruby = 'ruby'
-    javascript = 'javascript'
+    kotlin = 'kotlin'
+    # python = 'python'
+    # javascript = 'javascript'
+    # ruby = 'ruby'
 
     def extension(self):
         match self:
             case UdfFunctionType.java:
                 return ".java"
-            case UdfFunctionType.ruby:
-                return ".rb"
-            case UdfFunctionType.python:
-                return ".py"
-            case UdfFunctionType.javascript:
-                return ".js"
+            case UdfFunctionType.kotlin:
+                return ".kt"
+            # case UdfFunctionType.python:
+            #     return ".py"
+            # case UdfFunctionType.javascript:
+            #     return ".js"
+            # case UdfFunctionType.rust:
+            #     return ".rs"
+            # case UdfFunctionType.go:
+            #     return ".go"
+            # case UdfFunctionType.r:
+            #     return ".r"
+            # case UdfFunctionType.ruby:
+            #     return ".rb"
+            # case UdfFunctionType.scala:
+            #     return ".scala"
             case _:
                 raise NotImplementedError("not implemented")
 
