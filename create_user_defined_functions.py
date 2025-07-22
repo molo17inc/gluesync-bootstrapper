@@ -145,7 +145,7 @@ def compile_udf_function(pipeline_id: str, token: str, udf_compile_request: UdfF
         logger.error(f"Failed to compile UDF function for entity {udf_compile_request.udfName}: {error_msg}")
         raise
 
-def compile_udf_function(table_name: str, udf_definition: dict, pipeline_id: str, token: str):
+def check_and_compile_udf_function(table_name: str, udf_definition: dict, pipeline_id: str, token: str):
     udf_name = udf_definition.get("name")
     udf_type = UdfFunctionType(udf_definition.get("type"))
     logger.info(f"Processing UDF '{udf_name}' for table {table_name} (type: {udf_type})...")
