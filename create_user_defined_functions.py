@@ -57,8 +57,8 @@ UDF_CLASS_FILENAME = "UserDefinedFunctionTemplate"
 core_hub_client = CoreHubClient(CORE_HUB_URL)
 
 class UdfFunctionType(str, Enum):
-    java = 'java'
-    kotlin = 'kotlin'
+    java = 'Java'
+    kotlin = 'Kotlin'
     # python = 'python'
     # javascript = 'javascript'
     # ruby = 'ruby'
@@ -71,7 +71,7 @@ class UdfFunctionType(str, Enum):
                 return ".kt"
             # case UdfFunctionType.python:
             #     return ".py"
-            # case UdfFunctionType.javascript:
+            # case UdfFunctionType.javascript:s
             #     return ".js"
             # case UdfFunctionType.rust:
             #     return ".rs"
@@ -90,7 +90,7 @@ class UdfFunctionCompileRequest(BaseModel):
     model_config = ConfigDict(use_enum_values=True)
     code: str
     type: UdfFunctionType
-    entityName: str
+    udfName: str
 
 def get_udf_function_for_table(table_name: str, udf: list[dict]) -> dict:
     return next((item for item in udf if item.get("name") == table_name), {})
@@ -113,19 +113,19 @@ def read_file(filepath):
 
 def compile_udf_function(pipeline_id: str, token: str, udf_compile_request: UdfFunctionCompileRequest) -> str:
     try:
-        logger.info(f"Compiling UDF function for entity {udf_compile_request.entityName} (type: {udf_compile_request.type})")
-        logger.debug(f"Compile mapping function request: {udf_compile_request.model_dump()}")
+        logger.info(f"Compiling UDF function for entity {udf_compile_request.udfName} (type: {udf_compile_request.type})")
+        logger.debug(f"Compile UDF function request: {udf_compile_request.model_dump()}")
         response = fetch_core_hub(
             f"/pipelines/{pipeline_id}/config/entities/mapping-functions/compile-mapping-function",
             method="POST",
             token=token,
             body=udf_compile_request.model_dump()
         )
-        logger.info(f"Successfully compiled UDF function for entity {udf_compile_request.entityName}")
+        logger.info(f"Successfully compiled UDF function for entity {udf_compile_request.udfName}")
         return response
     except requests.exceptions.RequestException as e:
         error_msg = str(e)
-        logger.error(f"Failed to compile UDF function for entity {udf_compile_request.entityName}: {error_msg}")
+        logger.error(f"Failed to compile UDF function for entity {udf_compile_request.udfName}: {error_msg}")
         raise
 
 def check_and_compile_udf_function(table_name: str, udf_definition: dict, pipeline_id: str, token: str):
@@ -140,7 +140,7 @@ def check_and_compile_udf_function(table_name: str, udf_definition: dict, pipeli
             file_data = read_file(file_path)
             logger.debug(f"Read {len(file_data)} characters from UDF file")
             b64_file_data = base64.b64encode(file_data.encode())
-            udf_compile_request = UdfFunctionCompileRequest(code=b64_file_data, type=udf_type, entityName=table_name)
+            udf_compile_request = UdfFunctionCompileRequest(code=b64_file_data, type=udf_type, udfName=udf_name)
             compile_udf_function(pipeline_id=pipeline_id, token=token, udf_compile_request=udf_compile_request)
             logger.info(f"Successfully processed UDF '{udf_name}' for table {table_name}")
         except Exception as e:
