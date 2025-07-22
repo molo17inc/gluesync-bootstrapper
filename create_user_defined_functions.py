@@ -111,6 +111,23 @@ def read_file(filepath):
     else:
         return content
 
+def test_udf_function(pipeline_id: str, token: str, udf_compile_request: UdfFunctionCompileRequest) -> str:
+    try:
+        logger.info(f"Testing UDF function for entity {udf_compile_request.udfName} (type: {udf_compile_request.type})")
+        logger.debug(f"Test UDF function request: {udf_compile_request.model_dump()}")
+        response = fetch_core_hub(
+            f"/pipelines/{pipeline_id}/config/entities/mapping-functions/test-mapping-function",
+            method="POST",
+            token=token,
+            body=udf_compile_request.model_dump()
+        )
+        logger.info(f"Successfully tested UDF function for entity {udf_compile_request.udfName}")
+        return response
+    except requests.exceptions.RequestException as e:
+        error_msg = str(e)
+        logger.error(f"Failed to compile UDF function for entity {udf_compile_request.udfName}: {error_msg}")
+        raise
+
 def compile_udf_function(pipeline_id: str, token: str, udf_compile_request: UdfFunctionCompileRequest) -> str:
     try:
         logger.info(f"Compiling UDF function for entity {udf_compile_request.udfName} (type: {udf_compile_request.type})")
@@ -128,10 +145,10 @@ def compile_udf_function(pipeline_id: str, token: str, udf_compile_request: UdfF
         logger.error(f"Failed to compile UDF function for entity {udf_compile_request.udfName}: {error_msg}")
         raise
 
-def check_and_compile_udf_function(table_name: str, udf_definition: dict, pipeline_id: str, token: str):
+def compile_udf_function(table_name: str, udf_definition: dict, pipeline_id: str, token: str):
     udf_name = udf_definition.get("name")
     udf_type = UdfFunctionType(udf_definition.get("type"))
-    logger.info(f"Processing UDF '{udf_name}' for table {table_name} (type: {udf_type})")
+    logger.info(f"Processing UDF '{udf_name}' for table {table_name} (type: {udf_type})...")
     
     file_path = find_udf_definition_in_path(udf_name, udf_type)
     if file_path:
@@ -143,6 +160,69 @@ def check_and_compile_udf_function(table_name: str, udf_definition: dict, pipeli
             udf_compile_request = UdfFunctionCompileRequest(code=b64_file_data, type=udf_type, udfName=udf_name)
             compile_udf_function(pipeline_id=pipeline_id, token=token, udf_compile_request=udf_compile_request)
             logger.info(f"Successfully processed UDF '{udf_name}' for table {table_name}")
+
+            # TODO: enable UDF testing by following this body mock
+            #             {
+            #    "data":{
+            #       "ID":721979669,
+            #       "STREET":"ZEAnKAL3Dl",
+            #       "CITY":"C9OLgoQaaj",
+            #       "STREET_NUMBER":269871002,
+            #       "STREET_SUFFIX":"yca0cSk5Or",
+            #       "COUNTRY":"XzAugDTWjJ",
+            #       "POSTAL_CODE":"NTLE3AUDvD",
+            #       "NOTES":"OVwYNmxi2t"
+            #    },
+            #    "operation":"Insert",
+            #    "type":"Java",
+            #    "udfName":"UDF_fd9cdaf2f1784ef7bb59438578275acc",
+            #    "targetColumns":[
+            #       {
+            #          "name":"ID",
+            #          "type":"INT",
+            #          "isPrimaryKey":true
+            #       },
+            #       {
+            #          "name":"STREET",
+            #          "type":"STRING",
+            #          "isPrimaryKey":false
+            #       },
+            #       {
+            #          "name":"CITY",
+            #          "type":"STRING",
+            #          "isPrimaryKey":false
+            #       },
+            #       {
+            #          "name":"STREET_NUMBER",
+            #          "type":"INT",
+            #          "isPrimaryKey":false
+            #       },
+            #       {
+            #          "name":"STREET_SUFFIX",
+            #          "type":"STRING",
+            #          "isPrimaryKey":false
+            #       },
+            #       {
+            #          "name":"COUNTRY",
+            #          "type":"STRING",
+            #          "isPrimaryKey":false
+            #       },
+            #       {
+            #          "name":"POSTAL_CODE",
+            #          "type":"STRING",
+            #          "isPrimaryKey":false
+            #       },
+            #       {
+            #          "name":"NOTES",
+            #          "type":"STRING",
+            #          "isPrimaryKey":false
+            #       }
+            #    ]
+            # }
+            # logger.info(f"Testing UDF '{udf_name}' for table {table_name}...")
+            # test_udf_function(pipeline_id=pipeline_id, token=token, udf_compile_request=udf_compile_request)
+            # logger.info(f"Successfully tested UDF '{udf_name}' for table {table_name}")
+
         except Exception as e:
             logger.error(f"Failed to process UDF '{udf_name}' for table {table_name}: {str(e)}")
             raise

@@ -279,6 +279,16 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         if processed_filters:
             target_entity_type["filter"] = processed_filters
 
+        if target_custom_properties.get("udf"):
+            # Get the first UDF definition (assuming one UDF per table for now)
+            udf_list = target_custom_properties.get("udf")
+            if udf_list and len(udf_list) > 0:
+                udf_def = udf_list[0]  # Take the first UDF
+                target_entity_type["mappingFunctionInfo"] = {
+                    "name": udf_def.get("name"),
+                    "type": udf_def.get("type")
+                }
+
         target_entity = {
             "type": "NoSqlEntity" if target_type.lower() == "nosql" else "SingleTable",
             "entityType": target_entity_type,
