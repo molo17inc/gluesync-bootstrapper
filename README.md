@@ -157,6 +157,21 @@ DRIVERS:
       task_type: "entity_snapshot"  # entity_start, entity_stop, entity_snapshot
       cron_expression: "0 0 * * *"  # Every day at midnight
       enabled: true
+  
+  # User Defined Functions (UDF) configuration (optional)
+  customProperties:
+    target:
+      udf:  # Define UDFs to be applied to this table
+        - name: "UPPERCASE_NAMES"  # Name of the UDF function (must match the filename without extension)
+          type: "Java"  # Currently supports Java or Kotlin
+  
+  # Example with TTL and UDF combined
+  # customProperties:
+  #   target:
+  #     ttlValue: 20000000  # TTL in milliseconds
+  #     udf:
+  #       - name: "FORMAT_PHONE"
+  #         type: "Kotlin"
 ```
 
 The column configuration supports:
@@ -164,6 +179,95 @@ The column configuration supports:
 - Target column name via the `name` property
 - Column type via the `type` property
 - Automatic type mapping between different database systems
+
+## User Defined Functions (UDFs)
+
+GlueSync supports User Defined Functions (UDFs) for custom data transformation during synchronization. UDFs can be written in Java or Kotlin and are automatically compiled and deployed when entities are created.
+
+### UDF Configuration
+
+UDFs are configured at the table level in the YAML configuration. Each UDF requires:
+
+- `name`: The name of the UDF function (must match the filename without extension)
+- `type`: The programming language (Java or Kotlin)
+
+Example configuration:
+
+```yaml
+customProperties:
+  target:
+    udf:
+      - name: "UPPERCASE_NAMES"
+        type: "Java"
+      - name: "FORMAT_PHONE"
+        type: "Kotlin"
+```
+
+### UDF File Structure
+
+UDF source files should be placed in a directory specified by the `UDF_PATH` environment variable (defaults to current directory). The file must be named exactly as the UDF name with the appropriate extension:
+
+- Java: `.java`
+- Kotlin: `.kt`
+
+Example for `UPPERCASE_NAMES.java`:
+
+```java
+public class UPPERCASE_NAMES {
+    public String transform(String value) {
+        return value != null ? value.toUpperCase() : null;
+    }
+}
+```
+
+### Docker Integration
+
+When running in a Docker container:
+
+1. Mount your UDF source directory to `/opt/udfs` in the container
+2. Set `UDF_PATH` environment variable if using a different path
+
+Example docker-compose.yml:
+
+```yaml
+services:
+  gluesync-bootstrapper:
+    environment:
+      - UDF_PATH=/opt/udfs
+    volumes:
+      - ./my-udfs:/opt/udfs
+```
+
+### Logging
+
+UDF processing logs are written to the standard log file with `UDF` prefix. Look for entries like:
+
+```log
+[UDF] Compiling UDF: UPPERCASE_NAMES (Java) from /opt/udfs/UPPERCASE_NAMES.java
+[UDF] Successfully compiled UDF: UPPERCASE_NAMES
+```
+
+### Best Practices
+
+1. **Naming Conventions**:
+   - Use UPPERCASE_UNDERSCORE for UDF names to match database naming conventions
+   - Keep UDF names descriptive but concise
+   - Match the class name exactly to the UDF name in the configuration
+
+2. **Error Handling**:
+   - Always handle null inputs in your UDFs
+   - Include input validation for type safety
+   - Use try-catch blocks for operations that might fail
+
+3. **Performance**:
+   - Keep UDFs lightweight as they're executed for each row
+   - Avoid complex computations or external service calls in UDFs
+   - Consider caching expensive operations when possible
+
+4. **Testing**:
+   - Test UDFs thoroughly before deployment
+   - Include edge cases in your tests (null values, empty strings, etc.)
+   - Verify behavior with different input types
 
 ### Agent Configuration
 
