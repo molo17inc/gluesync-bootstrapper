@@ -44,6 +44,36 @@ dbo:
       with_snapshot: false
       snapshot_write_method: "UPSERT"  # INSERT or UPSERT (default: UPSERT)
       enabled: true
+  group_schedules:
+      finance:
+        - name: "Daily finance group snapshot"
+          description: "Create snapshot of all finance entities daily at 2 AM"
+          task_type: "group_snapshot"  # group_start, group_stop, group_snapshot
+          cron_expression: "0 2 * * *"
+          enabled: true
+        - name: "Weekly finance group restart"
+          description: "Restart all finance entities weekly on Sunday"
+          task_type: "group_start"
+          schedule:
+            days_of_week: ["sunday"]
+            hour: 3
+            minute: 0
+          enabled: true
+      
+      sales:
+        - name: "Hourly sales snapshot"
+          description: "Create snapshot of sales entities every hour during business hours"
+          task_type: "group_snapshot"
+          cron_expression: "0 9-17 * * 1-5"  # Every hour from 9 AM to 5 PM, weekdays only
+          enabled: true
+        - name: "End of day sales stop"
+          description: "Stop all sales entities at end of business day"
+          task_type: "group_stop"
+          schedule:
+            days_of_week: ["monday", "tuesday", "wednesday", "thursday", "friday"]
+            hour: 18
+            minute: 0
+          enabled: false  # Disabled by default
   tables:
     whitelist:
       - DRIVERS
