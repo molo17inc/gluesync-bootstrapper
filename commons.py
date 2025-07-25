@@ -158,6 +158,60 @@ def create_entity_schedules(token, pipeline_id, entity_id, entity_name, schedule
             # Continue creating other schedules even if one fails
 
 
+def create_group_schedules(token, pipeline_id, group_schedules):
+    """Create schedules for groups based on the YAML configuration."""
+    if not group_schedules or not ENABLE_SCHEDULING:
+        return
+
+    logger.info(f"Creating group-level schedules for pipeline {pipeline_id}")
+
+    chronos_client = ChronosClient(CHRONOS_URL)
+
+    for group_id, schedules_config in group_schedules.items():
+        logger.info(f"Processing schedules for group: {group_id}")
+        
+        for schedule_config in schedules_config:
+            try:
+                # Extract schedule parameters
+                task_type = schedule_config.get('task_type')
+                name = schedule_config.get('name')
+                description = schedule_config.get('description')
+                with_snapshot = schedule_config.get('with_snapshot', False)
+                enabled = schedule_config.get('enabled', True)
+
+                # Create a configuration dict for the chronos client
+                schedule_data = {}
+                if 'cron_expression' in schedule_config:
+                    schedule_data['cron_expression'] = schedule_config['cron_expression']
+                elif 'schedule' in schedule_config:
+                    schedule_data['schedule'] = schedule_config['schedule']
+                else:
+                    logger.warning(
+                        f"Schedule for group {group_id} is missing both 'cron_expression' and 'schedule'. Skipping.")
+                    continue
+
+                # Create the schedule
+                result = chronos_client.create_group_schedule(
+                    pipeline_id=pipeline_id,
+                    group_id=group_id,
+                    task_type=task_type,
+                    schedule_config=schedule_data,
+                    name=name,
+                    description=description,
+                    with_snapshot=with_snapshot,
+                    enabled=enabled
+                )
+
+                log_success(logger, f"Created {task_type} schedule for group {group_id}: {name}")
+                logger.debug(f"Schedule details: {json.dumps(result)}")
+
+            except Exception as e:
+                error_msg = f"Failed to create schedule for group {group_id}: {str(e)}"
+                log_failure(logger, error_msg)
+                logger.error(traceback.format_exc())
+                # Continue creating other schedules even if one fails
+
+
 def create_pipeline_schedules(token, pipeline_id, pipeline_schedules):
     """Create schedules for the entire pipeline based on the YAML configuration."""
     if not pipeline_schedules or not ENABLE_SCHEDULING:
