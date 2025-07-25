@@ -121,7 +121,7 @@ class ChronosClient:
         return self._request(f'api/jobs/{job_id}', method='DELETE')
     
     def create_entity_schedule(self, pipeline_id, entity_id, task_type, schedule_config, 
-                              name=None, description=None, with_snapshot=False, enabled=True):
+                              name=None, description=None, with_snapshot=False, enabled=True, snapshot_write_method=None):
         """
         Create a schedule for an entity with the specified configuration.
         
@@ -134,6 +134,7 @@ class ChronosClient:
             description (str, optional): Description for the job
             with_snapshot (bool, optional): Whether to include snapshot when starting entities
             enabled (bool, optional): Whether the job is enabled initially
+            snapshot_write_method (str, optional): Write method for snapshots (INSERT or UPSERT, default: UPSERT)
             
         Returns:
             dict: The created job details
@@ -163,6 +164,14 @@ class ChronosClient:
             'enabled': enabled
         }
         
+        # Add snapshot_write_method if provided, otherwise default to UPSERT
+        if snapshot_write_method:
+            if snapshot_write_method not in ('INSERT', 'UPSERT'):
+                raise ValueError(f"Invalid snapshot_write_method: {snapshot_write_method}. Must be 'INSERT' or 'UPSERT'")
+            job_data['snapshot_write_method'] = snapshot_write_method
+        else:
+            job_data['snapshot_write_method'] = 'UPSERT'  # Default value
+        
         # Add either cron_expression or schedule
         if 'cron_expression' in schedule_config:
             job_data['cron_expression'] = schedule_config['cron_expression']
@@ -174,7 +183,7 @@ class ChronosClient:
         return self.create_job(job_data)
     
     def create_pipeline_schedule(self, pipeline_id, task_type, schedule_config,
-                                name=None, description=None, with_snapshot=False, enabled=True):
+                                name=None, description=None, with_snapshot=False, enabled=True, snapshot_write_method=None):
         """
         Create a schedule for a pipeline with the specified configuration.
         
@@ -186,6 +195,7 @@ class ChronosClient:
             description (str, optional): Description for the job
             with_snapshot (bool, optional): Whether to include snapshot when starting pipeline
             enabled (bool, optional): Whether the job is enabled initially
+            snapshot_write_method (str, optional): Write method for snapshots (INSERT or UPSERT, default: UPSERT)
             
         Returns:
             dict: The created job details
@@ -213,6 +223,14 @@ class ChronosClient:
             'with_snapshot': with_snapshot,
             'enabled': enabled
         }
+        
+        # Add snapshot_write_method if provided, otherwise default to UPSERT
+        if snapshot_write_method:
+            if snapshot_write_method not in ('INSERT', 'UPSERT'):
+                raise ValueError(f"Invalid snapshot_write_method: {snapshot_write_method}. Must be 'INSERT' or 'UPSERT'")
+            job_data['snapshot_write_method'] = snapshot_write_method
+        else:
+            job_data['snapshot_write_method'] = 'UPSERT'  # Default value
         
         # Add either cron_expression or schedule
         if 'cron_expression' in schedule_config:

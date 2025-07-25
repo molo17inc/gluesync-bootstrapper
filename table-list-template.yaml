@@ -41,6 +41,7 @@ schemas:
         # Alternatively, you can use cron expression:
         # cron_expression: "0 7 * * 1-5"
         with_snapshot: false
+        snapshot_write_method: "UPSERT"  # INSERT or UPSERT (default: UPSERT)
         enabled: true
     tables:
       whitelist:
@@ -83,6 +84,7 @@ schemas:
               description: "Create snapshot of driver data daily at midnight"
               task_type: "entity_snapshot"  # entity_start, entity_stop, entity_snapshot
               cron_expression: "0 0 * * *"  # Every day at midnight
+              snapshot_write_method: "INSERT"  # INSERT or UPSERT (default: UPSERT)
               enabled: true
             # Second schedule for entity (runs on weekends at 2:00 AM)
             - name: "Weekend driver data refresh"
@@ -93,6 +95,7 @@ schemas:
                 hour: 2
                 minute: 0
               with_snapshot: true
+              snapshot_write_method: "UPSERT"  # INSERT or UPSERT (default: UPSERT)
               enabled: true
           # New filter configuration
           filter:

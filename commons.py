@@ -122,6 +122,7 @@ def create_entity_schedules(token, pipeline_id, entity_id, entity_name, schedule
             description = schedule_config.get('description')
             with_snapshot = schedule_config.get('with_snapshot', False)
             enabled = schedule_config.get('enabled', True)
+            snapshot_write_method = schedule_config.get('snapshot_write_method')
 
             # Create a configuration dict for the chronos client
             schedule_data = {}
@@ -143,7 +144,8 @@ def create_entity_schedules(token, pipeline_id, entity_id, entity_name, schedule
                 name=name,
                 description=description,
                 with_snapshot=with_snapshot,
-                enabled=enabled
+                enabled=enabled,
+                snapshot_write_method=snapshot_write_method
             )
 
             log_success(logger, f"Created {task_type} schedule for entity {entity_name}: {name}")
@@ -173,6 +175,7 @@ def create_pipeline_schedules(token, pipeline_id, pipeline_schedules):
             description = schedule_config.get('description')
             with_snapshot = schedule_config.get('with_snapshot', False)
             enabled = schedule_config.get('enabled', True)
+            snapshot_write_method = schedule_config.get('snapshot_write_method')
 
             # Create a configuration dict for the chronos client
             schedule_data = {}
@@ -192,7 +195,8 @@ def create_pipeline_schedules(token, pipeline_id, pipeline_schedules):
                 name=name,
                 description=description,
                 with_snapshot=with_snapshot,
-                enabled=enabled
+                enabled=enabled,
+                snapshot_write_method=snapshot_write_method
             )
 
             log_success(logger, f"Created {task_type} schedule for pipeline {pipeline_id}: {name}")
