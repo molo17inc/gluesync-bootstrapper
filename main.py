@@ -38,6 +38,7 @@ from urllib.parse import urlparse
 from utils.log import get_logger, create_log_file, log_success, log_failure, lockfile_failure, exit_on_fail, lockfile_complete
 from utils.gluesync_sdk_client import initialize_gluesync_sdk, get_token, get_gluesync_client
 from utils.core_hub_client import CoreHubClient
+from commons import extract_schemas_from_yaml
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -98,11 +99,12 @@ if not core_hub_url:
 default_user = 'admin'
 default_password = ''
 user_defined_password = os.getenv('DEFAULT_PASSWORD', default_password)
-create_entities_from_schema = os.getenv('CREATE_ENTITIES_FROM_SCHEMA')
-target_schema = os.getenv('TARGET_SCHEMA')
 source_type = os.getenv('SOURCE_TYPE', 'SQL')
 target_type = os.getenv('TARGET_TYPE', 'NoSQL')
 TABLE_LIST_YAML = os.getenv('TABLE_LIST_YAML', 'TABLE_LIST.yaml')
+
+# Extract schema information from YAML file
+source_schema, target_schema = extract_schemas_from_yaml(TABLE_LIST_YAML)
 AUTH_TOKEN_PATH = os.path.join('/opt/config', 'auth_token.json')
 
 ENTITY_START_TIMEOUT = 1
@@ -644,9 +646,7 @@ def main():
 
     configure_entities(agents_to_conf, pipeline_id, token)
 
-    if create_entities_from_schema:
-        source_schema = create_entities_from_schema
-
+    if source_schema:
         # Invoke the entity creation script
         entity_creation_script = 'create_all_entities.py'
         try:

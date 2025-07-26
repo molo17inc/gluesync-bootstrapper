@@ -337,8 +337,6 @@ Alternatively, you can configure the script using environment variables:
 export FILE_CONF_PATH="./my-config.json"
 export CORE_HUB_URL="https://my-corehub:1717"
 export DEFAULT_PASSWORD="my-secure-password"
-export CREATE_ENTITIES_FROM_SCHEMA="true"
-export TARGET_SCHEMA="public"
 export SOURCE_TYPE="mssql"
 export TARGET_TYPE="couchbase"
 
@@ -351,10 +349,10 @@ Available environment variables:
 - `FILE_CONF_PATH`: Path to the configuration file (default: `./config.json`)
 - `CORE_HUB_URL`: URL of the CoreHub service (default: `https://localhost:1717`)
 - `DEFAULT_PASSWORD`: Password for authentication (default: `admin`)
-- `CREATE_ENTITIES_FROM_SCHEMA`: Whether to create entities from schema (if set to any value)
-- `TARGET_SCHEMA`: Target schema name for entity creation
 - `SOURCE_TYPE`: Source agent type (default: `SQL`)
 - `TARGET_TYPE`: Target agent type (default: `NoSQL`)
+
+**Note**: Source and target schema information is now automatically read from the `table-list-template.yaml` file in the `schemas` section, eliminating the need for `CREATE_ENTITIES_FROM_SCHEMA` and `TARGET_SCHEMA` environment variables.
 
 Parameters:
 

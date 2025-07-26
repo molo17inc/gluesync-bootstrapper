@@ -340,6 +340,37 @@ def load_yaml_config(file_path):
         return {}
 
 
+def extract_schemas_from_yaml(yaml_file_path):
+    """
+    Extract source and target schema information from the YAML configuration file.
+    Returns a tuple of (source_schema, target_schema) or (None, None) if not found.
+    """
+    try:
+        yaml_config = load_yaml_config(yaml_file_path)
+        if not yaml_config or 'schemas' not in yaml_config:
+            logger.warning(f"No schemas section found in YAML file: {yaml_file_path}")
+            return None, None
+        
+        schemas = yaml_config['schemas']
+        if not schemas:
+            logger.warning(f"Empty schemas section in YAML file: {yaml_file_path}")
+            return None, None
+        
+        # Get the first schema as source schema
+        source_schema = list(schemas.keys())[0]
+        schema_config = schemas[source_schema]
+        
+        # Get target schema from the configuration
+        target_schema = schema_config.get('target', source_schema)
+        
+        logger.info(f"Extracted schemas from YAML - Source: {source_schema}, Target: {target_schema}")
+        return source_schema, target_schema
+        
+    except Exception as e:
+        logger.error(f"Error extracting schemas from YAML file {yaml_file_path}: {e}")
+        return None, None
+
+
 def process_filter_clauses(filter_config, columns_info):
     """
     Process filter clauses from YAML configuration into the required format

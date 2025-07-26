@@ -11,9 +11,7 @@ services:
       - CORE_HUB_URL=http://host.docker.internal:1717
       - CHRONOS_URL=http://gluesync-chronos:8000
       - DEFAULT_PASSWORD=admin
-      - CREATE_ENTITIES_FROM_SCHEMA=dbo
       - TARGET_TYPE=NoSQL
-      - TARGET_SCHEMA=dbo
       - ENTITY_START_TIMEOUT=4
       - ENABLE_SCHEDULING=true
       - USE_SDK=true
