@@ -359,21 +359,39 @@ def extract_schemas_from_yaml(yaml_file_path):
             logger.warning(f"YAML file is empty or could not be loaded: {yaml_file_path}")
             return None, None
             
-        if 'schemas' not in yaml_config:
-            logger.warning(f"No 'schemas' section found in YAML file: {yaml_file_path}")
+        # Handle two possible YAML formats:
+        # Format 1: schemas wrapper (template format)
+        # Format 2: source schema as top-level key (user format)
+        
+        if 'schemas' in yaml_config:
+            # Format 1: schemas wrapper
+            logger.info("Found 'schemas' section in YAML file")
+            schemas = yaml_config['schemas']
+            if not schemas:
+                logger.warning(f"Empty schemas section in YAML file: {yaml_file_path}")
+                return None, None
+            
+            logger.info(f"Found schemas: {list(schemas.keys())}")
+            source_schema = list(schemas.keys())[0]
+            schema_config = schemas[source_schema]
+        else:
+            # Format 2: source schema as top-level key
+            logger.info("No 'schemas' section found, treating top-level keys as source schemas")
             logger.info(f"Available top-level keys: {list(yaml_config.keys())}")
-            return None, None
-        
-        schemas = yaml_config['schemas']
-        if not schemas:
-            logger.warning(f"Empty schemas section in YAML file: {yaml_file_path}")
-            return None, None
-        
-        logger.info(f"Found schemas: {list(schemas.keys())}")
-        
-        # Get the first schema as source schema
-        source_schema = list(schemas.keys())[0]
-        schema_config = schemas[source_schema]
+            
+            # Find the first key that has a 'target' property (indicating it's a schema config)
+            schema_candidates = []
+            for key, value in yaml_config.items():
+                if isinstance(value, dict) and ('target' in value or 'tables' in value):
+                    schema_candidates.append(key)
+            
+            if not schema_candidates:
+                logger.warning(f"No valid schema configurations found in YAML file: {yaml_file_path}")
+                return None, None
+            
+            source_schema = schema_candidates[0]
+            schema_config = yaml_config[source_schema]
+            logger.info(f"Using top-level key '{source_schema}' as source schema")
         
         # Get target schema from the configuration
         target_schema = schema_config.get('target', source_schema)
