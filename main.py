@@ -103,15 +103,7 @@ source_type = os.getenv('SOURCE_TYPE', 'SQL')
 target_type = os.getenv('TARGET_TYPE', 'NoSQL')
 TABLE_LIST_YAML = os.getenv('TABLE_LIST_YAML', '/opt/config/TABLE_LIST.yaml')
 
-# Extract schema information from YAML file
-logger.info(f"Attempting to extract schemas from YAML file: {TABLE_LIST_YAML}")
-source_schema, target_schema = extract_schemas_from_yaml(TABLE_LIST_YAML)
-logger.info(f"Extracted schemas - Source: {source_schema}, Target: {target_schema}")
-
-if not source_schema:
-    logger.warning("No source schema found in YAML file. Entity creation will be skipped.")
-else:
-    logger.info(f"Schema extraction successful. Will create entities for source schema: {source_schema}")
+# Schema extraction will be done after logger initialization
 AUTH_TOKEN_PATH = os.path.join('/opt/config', 'auth_token.json')
 
 ENTITY_START_TIMEOUT = 1
@@ -437,6 +429,16 @@ def main():
     logger.info("\n" + ascii_art)
     logger.info("Starting Gluesync Bootstrapper module...")
 
+    # Extract schema information from YAML file
+    logger.info(f"Attempting to extract schemas from YAML file: {TABLE_LIST_YAML}")
+    source_schema, target_schema = extract_schemas_from_yaml(TABLE_LIST_YAML)
+    logger.info(f"Extracted schemas - Source: {source_schema}, Target: {target_schema}")
+
+    if not source_schema:
+        logger.warning("No source schema found in YAML file. Entity creation will be skipped.")
+    else:
+        logger.info(f"Schema extraction successful. Will create entities for source schema: {source_schema}")
+
     # Initialize variables that might be used in different code paths
     change_required = False
     new_password = user_defined_password
@@ -653,6 +655,9 @@ def main():
 
     configure_entities(agents_to_conf, pipeline_id, token)
 
+    # Debug: Check schema values before entity creation
+    logger.info(f"DEBUG: About to check entity creation. source_schema='{source_schema}', target_schema='{target_schema}'")
+    
     if source_schema:
         # Invoke the entity creation script
         entity_creation_script = 'create_all_entities.py'
