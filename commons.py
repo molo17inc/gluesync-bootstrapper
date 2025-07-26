@@ -346,15 +346,30 @@ def extract_schemas_from_yaml(yaml_file_path):
     Returns a tuple of (source_schema, target_schema) or (None, None) if not found.
     """
     try:
+        # Check if file exists first
+        import os
+        if not os.path.exists(yaml_file_path):
+            logger.error(f"YAML file does not exist: {yaml_file_path}")
+            return None, None
+        
+        logger.info(f"Loading YAML configuration from: {yaml_file_path}")
         yaml_config = load_yaml_config(yaml_file_path)
-        if not yaml_config or 'schemas' not in yaml_config:
-            logger.warning(f"No schemas section found in YAML file: {yaml_file_path}")
+        
+        if not yaml_config:
+            logger.warning(f"YAML file is empty or could not be loaded: {yaml_file_path}")
+            return None, None
+            
+        if 'schemas' not in yaml_config:
+            logger.warning(f"No 'schemas' section found in YAML file: {yaml_file_path}")
+            logger.info(f"Available top-level keys: {list(yaml_config.keys())}")
             return None, None
         
         schemas = yaml_config['schemas']
         if not schemas:
             logger.warning(f"Empty schemas section in YAML file: {yaml_file_path}")
             return None, None
+        
+        logger.info(f"Found schemas: {list(schemas.keys())}")
         
         # Get the first schema as source schema
         source_schema = list(schemas.keys())[0]
@@ -368,6 +383,7 @@ def extract_schemas_from_yaml(yaml_file_path):
         
     except Exception as e:
         logger.error(f"Error extracting schemas from YAML file {yaml_file_path}: {e}")
+        logger.error(f"Exception details: {traceback.format_exc()}")
         return None, None
 
 

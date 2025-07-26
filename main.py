@@ -101,10 +101,17 @@ default_password = ''
 user_defined_password = os.getenv('DEFAULT_PASSWORD', default_password)
 source_type = os.getenv('SOURCE_TYPE', 'SQL')
 target_type = os.getenv('TARGET_TYPE', 'NoSQL')
-TABLE_LIST_YAML = os.getenv('TABLE_LIST_YAML', 'TABLE_LIST.yaml')
+TABLE_LIST_YAML = os.getenv('TABLE_LIST_YAML', '/opt/config/TABLE_LIST.yaml')
 
 # Extract schema information from YAML file
+logger.info(f"Attempting to extract schemas from YAML file: {TABLE_LIST_YAML}")
 source_schema, target_schema = extract_schemas_from_yaml(TABLE_LIST_YAML)
+logger.info(f"Extracted schemas - Source: {source_schema}, Target: {target_schema}")
+
+if not source_schema:
+    logger.warning("No source schema found in YAML file. Entity creation will be skipped.")
+else:
+    logger.info(f"Schema extraction successful. Will create entities for source schema: {source_schema}")
 AUTH_TOKEN_PATH = os.path.join('/opt/config', 'auth_token.json')
 
 ENTITY_START_TIMEOUT = 1
