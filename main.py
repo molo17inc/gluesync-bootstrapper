@@ -101,7 +101,7 @@ default_password = ''
 user_defined_password = os.getenv('DEFAULT_PASSWORD', default_password)
 source_type = os.getenv('SOURCE_TYPE', 'SQL')
 target_type = os.getenv('TARGET_TYPE', 'NoSQL')
-TABLE_LIST_YAML = os.getenv('TABLE_LIST_YAML', '/opt/config/TABLE_LIST.yaml')
+TABLE_LIST_YAML = os.getenv('TABLE_LIST_YAML', '/opt/config/tables-list.yaml')
 
 # Schema extraction will be done after logger initialization
 AUTH_TOKEN_PATH = os.path.join('/opt/config', 'auth_token.json')
