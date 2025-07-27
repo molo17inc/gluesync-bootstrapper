@@ -19,34 +19,34 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-schemas:
-  dbo:
-    target: public
-    customProperties:
-      source: 
-        maxItemsCountPerIteration: 1000
-        pollingIntervalMilliseconds: 100
-      target:
-        ttlValue: 10000000
-    # Optional pipeline-level schedule configurations
-    schedules:
-      # Pipeline start schedule (runs on weekdays at 7:00 AM)
-      - name: "Daily pipeline startup"
-        description: "Start the entire pipeline every weekday morning"
-        task_type: "pipeline_start"  # pipeline_start, pipeline_stop, pipeline_snapshot
-        schedule:
-          days_of_week: ["monday", "tuesday", "wednesday", "thursday", "friday"]
-          hour: 7
-          minute: 0
-        # Alternatively, you can use cron expression:
-        # cron_expression: "0 7 * * 1-5"
-        with_snapshot: false
-        snapshot_write_method: "UPSERT"  # INSERT or UPSERT (default: UPSERT)
-        enabled: true
-    tables:
-      whitelist:
-        - DRIVERS
-        - VEHICLES
+# Direct schema configuration (no 'schemas' wrapper)
+dbo:
+  target: dbo
+  customProperties:
+    source: 
+      maxItemsCountPerIteration: 1000
+      pollingIntervalMilliseconds: 100
+    target:
+      ttlValue: 10000000
+  # Optional pipeline-level schedule configurations
+  schedules:
+    # Pipeline start schedule (runs on weekdays at 7:00 AM)
+    - name: "Daily pipeline startup"
+      description: "Start the entire pipeline every weekday morning"
+      task_type: "pipeline_start"  # pipeline_start, pipeline_stop, pipeline_snapshot
+      schedule:
+        days_of_week: ["monday", "tuesday", "wednesday", "thursday", "friday"]
+        hour: 7
+        minute: 0
+      # Alternatively, you can use cron expression:
+      # cron_expression: "0 7 * * 1-5"
+      with_snapshot: false
+      snapshot_write_method: "UPSERT"  # INSERT or UPSERT (default: UPSERT)
+      enabled: true
+  tables:
+    whitelist:
+      - DRIVERS
+      - VEHICLES
       custom:
         DRIVERS:
           keys:
