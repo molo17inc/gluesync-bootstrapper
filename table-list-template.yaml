@@ -47,7 +47,7 @@ dbo:
     whitelist:
       - DRIVERS
       - VEHICLES
-      custom:
+    custom:
         DRIVERS:
           keys:
             - ID:
