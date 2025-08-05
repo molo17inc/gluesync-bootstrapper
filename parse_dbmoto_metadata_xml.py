@@ -168,9 +168,12 @@ def parse_xml():
     
     print(f"Found {table_count} tables linked to schemas (out of {len(tables)} total tables)")
     
-    # Extract fields
-    print("Extracting fields...")
+    # Extract fields and primary keys
+    print("Extracting fields and primary keys...")
     field_count = 0
+    primary_key_count = 0
+    skipped_composite_keys = 0
+    
     for field_elem in root.findall("./tables/DBMMFields"):
         field_id = field_elem.findtext("FieldID")
         table_id = field_elem.findtext("TableID")
@@ -193,6 +196,9 @@ def parse_xml():
         field_precision = field_elem.findtext("Precision") or "0"
         field_scale = field_elem.findtext("Scale") or "0"
         
+        # Extract primary key position
+        primary_key_pos = field_elem.findtext("PrimaryKeyPos")
+        
         # Format the type string based on the data type - strip out size/precision specifications
         sql_type = field_type.lower()
         
@@ -200,20 +206,39 @@ def parse_xml():
         if table_id in tables:
             if "fields" not in tables[table_id]:
                 tables[table_id]["fields"] = []
+            if "primary_keys" not in tables[table_id]:
+                tables[table_id]["primary_keys"] = []
             
             field_data = {
                 "name": field_name,
                 "type": sql_type
             }
             tables[table_id]["fields"].append(field_data)
+            
+            # Handle primary key information
+            if primary_key_pos is not None:
+                if primary_key_pos == "1":
+                    # This is a primary key (position 1)
+                    tables[table_id]["primary_keys"].append(field_name)
+                    primary_key_count += 1
+                    print(f"    Found primary key: {field_name} in table {tables[table_id]['name']} (Table ID: {table_id})")
+                elif primary_key_pos == "0":
+                    # This is not a primary key (position 0) - log and skip
+                    skipped_composite_keys += 1
+                    print(f"    Skipping non-primary key: {field_name} in table {tables[table_id]['name']} (Table ID: {table_id}) - PrimaryKeyPos=0")
+        
         field_count += 1
     
     print(f"Found {field_count} fields linked to tables")
+    print(f"Found {primary_key_count} primary keys (PrimaryKeyPos=1)")
+    print(f"Skipped {skipped_composite_keys} non-primary key fields (PrimaryKeyPos=0)")
     
     # Print summary of tables with/without fields
     tables_with_fields = sum(1 for t in tables.values() if t["fields"])
+    tables_with_primary_keys = sum(1 for t in tables.values() if t.get("primary_keys"))
     print(f"Tables with fields: {tables_with_fields}")
     print(f"Tables without fields: {len(tables) - tables_with_fields}")
+    print(f"Tables with primary keys: {tables_with_primary_keys}")
     
     # Print summary of groups and chains
     print(f"\nFound {len(groups)} groups and {len(chains)} chains in the DBMoto configuration")
@@ -314,9 +339,17 @@ def export_as_yaml(connections, groups, chains, replications, output_dir=None, t
                     # Create the table entry with column definitions
                     table_config = {
                         "name": table_name,  # Preserve original case
-                        "keys": [{"name": "id"}],  # Default primary key
                         "columns": columns
                     }
+                    
+                    # Add primary keys if found, otherwise let engine autodiscover
+                    if table.get("primary_keys"):
+                        # Use simple string array format to match template
+                        table_config["keys"] = table["primary_keys"]
+                        print(f"      Added {len(table['primary_keys'])} primary key(s) to table {table_name}: {table['primary_keys']}")
+                    else:
+                        # No primary keys found - let engine autodiscover them
+                        print(f"      No primary keys found for table {table_name}, will be autodiscovered by engine")
                     
                     # Add group/chain assignments if this table is in any replication
                     if table["id"] in table_assignments:
