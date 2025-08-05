@@ -40,3 +40,4 @@ ENV/
 *.swo
 *~
 .DS_Store
+metadata.xml
