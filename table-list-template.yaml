@@ -62,21 +62,11 @@ dbo:
           name: drivers
           groupId: "_default"
           columns:
-            - FIRST_NAME:
-                name: firstName
-                type: varchar(50)
-            - LAST_NAME:
-                name: lastName
-                type: varchar(100)
-            - AGE:
-                name: age
-                type: int
-            - DRIVING_LICENSE_EXPIRE_DATE:
-                name: licenseExpiry
-                type: datetime
-            - EMAIL:
-                name: email
-                type: varchar(255)
+            - FIRST_NAME: "firstName"
+            - LAST_NAME: "lastName"
+            - AGE: "age"
+            - DRIVING_LICENSE_EXPIRE_DATE: "licenseExpiry"
+            - EMAIL: "email"
           # Entity-level schedule configurations
           schedules:
             # First schedule for entity (runs every day at midnight)
@@ -128,18 +118,10 @@ dbo:
             - VEHICLE_ID
           name: vehicles
           columns:
-            - VEHICLE_ID:
-                name: id
-                type: varchar(36)
-            - MODEL:
-                name: model
-                type: varchar(100)
-            - YEAR:
-                name: year
-                type: int
-            - REGISTRATION_DATE:
-                name: registrationDate
-                type: datetime
+            - VEHICLE_ID: "id"
+            - MODEL: "model"
+            - YEAR: "year"
+            - REGISTRATION_DATE: "registrationDate"
           # Entity-level schedule configurations
           schedules:
             - name: "Weekly vehicles snapshot"
@@ -171,30 +153,14 @@ dbo:
             - ID
           name: orders_headers
           columns:
-            - ID:
-                name: id
-                type: int
-            - ORDER_NUMBER:
-                name: orderNumber
-                type: varchar(50)
-            - ORDER_DATE:
-                name: orderDate
-                type: varchar(50)
-            - STATUS:
-                name: status
-                type: int
-            - CUSTOMER_ID:
-                name: customerId
-                type: int
-            - ADDRESS_ID:
-                name: addressId
-                type: int
-            - NOTES:
-                name: notes
-                type: varchar(255)
-            - DRIVER_ID:
-                name: driverId
-                type: int
+            - ID: "id"
+            - ORDER_NUMBER: "orderNumber"
+            - ORDER_DATE: "orderDate"
+            - STATUS: "status"
+            - CUSTOMER_ID: "customerId"
+            - ADDRESS_ID: "addressId"
+            - NOTES: "notes"
+            - DRIVER_ID: "driverId"
           customProperties:
             source:
               maxItemsCountPerIteration: 1000
@@ -210,21 +176,11 @@ dbo:
             - ID
           name: orders_rows
           columns:
-            - ID:
-                name: id
-                type: int
-            - ARTICLE_ID:
-                name: articleId
-                type: int
-            - QUANTITY:
-                name: quantity
-                type: int
-            - ORDER_ID:
-                name: orderId
-                type: int
-            - NOTES:
-                name: notes
-                type: varchar(255)
+            - ID: "id"
+            - ARTICLE_ID: "articleId"
+            - QUANTITY: "quantity"
+            - ORDER_ID: "orderId"
+            - NOTES: "notes"
           customProperties:
             source:
               maxItemsCountPerIteration: 1000

@@ -327,12 +327,9 @@ def export_as_yaml(connections, groups, chains, replications, output_dir=None, t
                     # Convert field list to column definitions matching template format
                     columns = []
                     for field in table["fields"]:
-                        # Each column is a dict with field name as key and properties as value
+                        # Each column is a simple key-value pair: source_name -> target_name
                         column_entry = {
-                            field["name"]: {
-                                "name": field["name"]  # Preserve original case 
-                                # "type": field.get("type", "varchar(255)").split('(')[0]  # Type commented out
-                            }
+                            field["name"]: field["name"]  # Simple mapping: source -> target
                         }
                         columns.append(column_entry)
                     
@@ -391,7 +388,10 @@ def export_as_yaml(connections, groups, chains, replications, output_dir=None, t
                 
                 with open(filepath, "w") as f:
                     # Write header comment with source database information
+                    from datetime import datetime
+                    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     f.write(f"# Generated from DbMoto metadata XML\n")
+                    f.write(f"# Conversion timestamp: {timestamp}\n")
                     f.write(f"# Source database connection: {conn_name}\n")
                     f.write(f"# Schema: {schema_name}\n")
                     f.write(f"# Tables converted: {len(whitelist)}\n\n")
