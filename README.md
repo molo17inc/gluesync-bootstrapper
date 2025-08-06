@@ -484,12 +484,16 @@ Parameters:
 - `--pipeline`: Required. The ID of the pipeline to create entities for
 - `--source-schema`: Required. Source schema name
 - `--target-schema`: Required. Target schema name
-- `--source-type`: Required. Source agent type (e.g., mssql, postgres)
-- `--target-type`: Required. Target agent type (e.g., couchbase, aerospike)
+- `--source-type`: Required. Source agent type (e.g., `SQL` for RDBMSs, `NoSQL` for NoSQL databases)
+- `--target-type`: Required. Target agent type (e.g., `NoSQL` for NoSQL databases, `SQL` for RDBMSs)
 - `--yaml-file`: Required. Path to the YAML configuration file
 - `--token`: Required. Authentication token for API access
 - `--skip-errors`: Optional. Continue execution even if errors occur
 - `--chunk-size`: Optional. Number of entities to process in each chunk (default: 50)
+
+Accepted values for `source-type` and `target-type`:
+- `SQL` (for any RDBMS)
+- `NoSQL` (for NoSQL databases, Kafka, AWSS3, etc.)
 
 ## Requirements
 
