@@ -366,26 +366,36 @@ def export_as_yaml(connections, groups, chains, replications, output_dir=None, t
                 schedules = template_schema.get('schedules', []) if template_schema else []
                 
                 # Create the schema structure that matches table-list-template.yaml
+                # Use direct schema name as root key (no 'schemas' wrapper)
                 yaml_data = {
-                    "schemas": {
-                        schema_name: {
-                            "target": target_schema,
-                            "customProperties": custom_props,
-                            "schedules": schedules,
-                            "tables": {
-                                "whitelist": whitelist,
-                                "custom": custom_tables
-                            },
-                            "_source_database": conn_name  # Keeping this for reference
+                    schema_name: {
+                        "target": target_schema,
+                        "tables": {
+                            "whitelist": whitelist,
+                            "custom": custom_tables
                         }
                     }
                 }
+                
+                # Only add customProperties if they exist and are not empty
+                if custom_props:
+                    yaml_data[schema_name]["customProperties"] = custom_props
+                    
+                # Only add schedules if they exist and are not empty
+                if schedules:
+                    yaml_data[schema_name]["schedules"] = schedules
                 
                 # Create filename and write YAML
                 filename = f"{conn_name}__{schema_name}.yaml".replace("/", "_")
                 filepath = os.path.join(output_dir, filename)
                 
                 with open(filepath, "w") as f:
+                    # Write header comment with source database information
+                    f.write(f"# Generated from DbMoto metadata XML\n")
+                    f.write(f"# Source database connection: {conn_name}\n")
+                    f.write(f"# Schema: {schema_name}\n")
+                    f.write(f"# Tables converted: {len(whitelist)}\n\n")
+                    
                     yaml.dump(yaml_data, f, sort_keys=False, default_flow_style=False, allow_unicode=True)
                 
                 exported_count += 1
