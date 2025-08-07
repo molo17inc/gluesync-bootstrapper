@@ -270,6 +270,26 @@ def export_as_yaml(connections, groups, chains, replications, output_dir=None, t
     # Create a mapping of table IDs to their group/chain assignments from replications
     table_assignments = {}
     
+    # Create a mapping of source table IDs to target schema names from replications
+    source_to_target_schema = {}
+    
+    # Build the source-to-target schema mapping
+    for repl_id, repl in replications.items():
+        src_table_id = repl['src_table_id']
+        trg_table_id = repl['trg_table_id']
+        
+        # Find target table and its schema
+        if src_table_id and trg_table_id:
+            # Look up target table in all connections/schemas to find its schema name
+            for conn_id, conn in connections.items():
+                for schema_id, schema in conn["schemas"].items():
+                    if trg_table_id in schema["tables"]:
+                        source_to_target_schema[src_table_id] = schema["name"]
+                        print(f"  Mapped source table {src_table_id} -> target schema '{schema['name']}'")
+                        break
+    
+    print(f"Found {len(source_to_target_schema)} source-to-target schema mappings")
+    
     # Assign groups and chains to tables
     for repl_id, repl in replications.items():
         group_id = repl['group_id']
@@ -357,8 +377,28 @@ def export_as_yaml(connections, groups, chains, replications, output_dir=None, t
                 # Find matching template for this schema
                 template_schema = find_matching_template_schema(schema_name)
                 
-                # Use template values if found, otherwise use source schema name as target
-                target_schema = template_schema.get('target', schema_name) if template_schema else schema_name
+                # Determine target schema using multiple sources in priority order:
+                # 1. Template file (if exists and has target defined)
+                # 2. Replication mapping (derived from source-to-target table mappings)
+                # 3. Source schema name as fallback
+                target_schema = None
+                if template_schema and template_schema.get('target'):
+                    target_schema = template_schema['target']
+                    print(f"      Using target schema '{target_schema}' from template")
+                else:
+                    # Try to find target schema from replication mappings
+                    # Look for any table in this schema that has a replication mapping
+                    for table_name, table in tables_with_fields.items():
+                        table_id = table["id"]
+                        if table_id in source_to_target_schema:
+                            target_schema = source_to_target_schema[table_id]
+                            print(f"      Using target schema '{target_schema}' from replication mapping")
+                            break
+                    
+                    # If no replication mapping found, use source schema as fallback
+                    if not target_schema:
+                        target_schema = schema_name
+                        print(f"      Using source schema '{target_schema}' as fallback (no replication mapping found)")
                 custom_props = template_schema.get('customProperties', {}) if template_schema else {}
                 schedules = template_schema.get('schedules', []) if template_schema else []
                 
