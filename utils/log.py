@@ -12,7 +12,7 @@ init(autoreset=True)
 # Default to INFO if no environment variable is set or if invalid level provided
 _logger = None
 try:
-    LOG_LEVEL = getattr(logging, os.environ.get('LOG_LEVEL', 'INFO').upper())
+    LOG_LEVEL = getattr(logging, os.environ.get('LOG_LEVEL', 'DEBUG').upper())
 except (AttributeError, ValueError):
     LOG_LEVEL = logging.INFO
     print(f"Invalid log level specified, falling back to INFO")
@@ -83,6 +83,7 @@ def add_handlers(logger: logging.Logger, log_file=None):
         logstash_port, 
         database_path='logstash_events.db'
     )
+    logstash_handler.setLevel(logging.DEBUG)
     
     # Add custom fields to the Logstash formatter
     formatter = logging.Formatter(
