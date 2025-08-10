@@ -1,5 +1,6 @@
 import logging
 import os
+from logstash_async.handler import AsynchronousLogstashHandler
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -73,6 +74,39 @@ def add_handlers(logger: logging.Logger, log_file=None):
         )
         file_handler.setFormatter(file_formatter)
         logger.addHandler(file_handler)
+
+    # Add Logstash handler
+    logstash_host = '10.17.3.235'
+    logstash_port = 5000
+    logstash_handler = AsynchronousLogstashHandler(
+        logstash_host, 
+        logstash_port, 
+        database_path='logstash_events.db'
+    )
+    
+    # Add custom fields to the Logstash formatter
+    formatter = logging.Formatter(
+        fmt='%(asctime)s [%(filename)s:%(lineno)d] - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%dT%H:%M:%S%z'
+    )
+    logstash_handler.setFormatter(formatter)
+
+    # Add extra context to all log records
+    class ContextFilter(logging.Filter):
+        def filter(self, record):
+            record.extra_fields = {
+                'appname': os.environ.get('APP_NAME', 'gluesync-bootstrapper'),
+                'environment': 'INTEGRATION_TEST',
+                'user': 'MOLO17',
+                'test_name': os.environ.get('TEST_NAME', 'not_set')
+            }
+            return True
+
+    # Avoid adding the filter multiple times
+    if not any(isinstance(f, ContextFilter) for f in logger.filters):
+        logger.addFilter(ContextFilter())
+        
+    logger.addHandler(logstash_handler)
 
 
 def create_log_file(log_dir=None):
