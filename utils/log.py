@@ -85,12 +85,6 @@ def add_handlers(logger: logging.Logger, log_file=None):
     )
     logstash_handler.setLevel(logging.DEBUG)
     
-    # Add custom fields to the Logstash formatter
-    formatter = logging.Formatter(
-        fmt='%(asctime)s [%(filename)s:%(lineno)d] - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%dT%H:%M:%S%z'
-    )
-    logstash_handler.setFormatter(formatter)
 
     # Add extra context to all log records
     class ContextFilter(logging.Filter):
