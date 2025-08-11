@@ -92,7 +92,7 @@ def add_handlers(logger: logging.Logger, log_file=None):
             record.extra_fields = {
                 'appname': os.environ.get('APP_NAME', 'gluesync-bootstrapper'),
                 'environment': 'INTEGRATION_TEST',
-                'user': {'name': 'MOLO17'},
+                'user': 'MOLO17',
                 'test_name': os.environ.get('TEST_NAME', 'not_set')
             }
             return True
