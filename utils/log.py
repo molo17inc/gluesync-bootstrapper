@@ -90,10 +90,12 @@ def add_handlers(logger: logging.Logger, log_file=None):
     class ContextFilter(logging.Filter):
         def filter(self, record):
             record.extra_fields = {
-                'appname': os.environ.get('APP_NAME', 'gluesync-bootstrapper'),
+                'appname': 'gluesync-bootstrapper',
                 'environment': 'INTEGRATION_TEST',
                 'user': {'name': 'MOLO17'},
-                'test_name': os.environ.get('TEST_NAME', 'not_set')
+                'test_name': os.environ.get('TEST_NAME', 'not_set'),
+                'job_id': os.environ.get('JOB_ID', 'not_set'),
+
             }
             return True
 
