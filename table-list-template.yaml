@@ -28,6 +28,7 @@ dbo:
       pollingIntervalMilliseconds: 100
     target:
       ttlValue: 10000000
+      skipDeletion: true
   # Optional pipeline-level schedule configurations
   schedules:
     # Pipeline start schedule (runs on weekdays at 7:00 AM)
