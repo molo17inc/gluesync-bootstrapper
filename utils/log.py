@@ -95,7 +95,7 @@ def add_handlers(logger: logging.Logger, log_file=None):
                 'user': {'name': 'MOLO17'},
                 'test_name': os.environ.get('TEST_NAME', 'not_set'),
                 'job_id': os.environ.get('JOB_ID', 'not_set'),
-
+                'version': os.environ.get('VERSION', 'not_set')
             }
             return True
 
