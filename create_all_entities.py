@@ -47,6 +47,33 @@ CREATE_TABLE_IF_NOT_EXISTS = os.getenv('CREATE_TABLE_IF_NOT_EXISTS', 'true').low
 # Initialize the CoreHub client
 core_hub_client = CoreHubClient(CORE_HUB_URL)
 
+def get_allowed_operations(target_custom_properties):
+    """
+    Get allowedOperations array from target custom properties.
+    
+    Args:
+        target_custom_properties (dict): Target custom properties from YAML config
+        
+    Returns:
+        list: Array of allowed operations, defaults to ["INSERT", "DELETE", "UPDATE", "TRUNCATE"] if not specified
+    """
+    # Check if allowedOperations is explicitly defined
+    if 'allowedOperations' in target_custom_properties:
+        allowed_ops = target_custom_properties['allowedOperations']
+        if isinstance(allowed_ops, list) and len(allowed_ops) > 0:
+            logger.info(f"Using configured allowedOperations: {allowed_ops}")
+            return allowed_ops
+    
+    # Check for legacy skipDeletion property for backward compatibility
+    if target_custom_properties.get('skipDeletion', False):
+        logger.info("Found legacy skipDeletion=true, converting to allowedOperations without DELETE")
+        return ["INSERT", "UPDATE", "TRUNCATE"]
+    
+    # Default values if nothing is declared
+    default_ops = ["INSERT", "DELETE", "UPDATE", "TRUNCATE"]
+    logger.info(f"Using default allowedOperations: {default_ops}")
+    return default_ops
+
 def create_entities(token, pipeline_id, source_schema, target_schema, tables, source_agent_id, target_agent_id, source_type, target_type, yaml_config, skip_errors=False, chunk_size=50):
     # First, collect all unique group names and chain IDs from the YAML configuration
     group_names = set()
@@ -275,7 +302,21 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             "tablesProperties": {source_table_key: {}}
         }
 
-        target_entity_type = {**target_custom_properties, "type": "Target"}
+        # Get allowed operations for the target entity
+        allowed_operations = get_allowed_operations(target_custom_properties)
+        
+        # Create target entity type with allowedOperations
+        target_entity_type = {
+            "type": "Target",
+            "allowedOperations": allowed_operations,
+            "snapshotWritingConcurrency": target_custom_properties.get('snapshotWritingConcurrency', 1)
+        }
+        
+        # Add other target custom properties (excluding the ones we handle separately)
+        excluded_props = {'allowedOperations', 'skipDeletion', 'snapshotWritingConcurrency'}
+        for key, value in target_custom_properties.items():
+            if key not in excluded_props:
+                target_entity_type[key] = value
         if processed_filters:
             target_entity_type["filter"] = processed_filters
 
@@ -560,6 +601,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             target_keys.append({"name": table_key, "schema": target_schema})
             target_keys.append(keys)
 
+        # Get allowed operations for the target entity
+        allowed_operations = get_allowed_operations(target_custom_properties)
+        
         target_entity = {
             "type": "MultiTable",
             "entityId": "",
@@ -567,7 +611,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             "agentEntityId": "",
             "entityType": {
                 "type": "Target",
-                "skipDeletion": target_custom_properties.get('skipDeletion', False),
+                "allowedOperations": allowed_operations,
                 "snapshotWritingConcurrency": target_custom_properties.get('snapshotWritingConcurrency', 1)
             },
             "agentId": target_agent_id,

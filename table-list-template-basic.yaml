@@ -86,6 +86,7 @@ schemas:
           customProperties:
             target:
               ttlValue: 20000000
+              allowedOperations: ["INSERT", "UPDATE", "TRUNCATE"]
         
         VEHICLES:
           keys:

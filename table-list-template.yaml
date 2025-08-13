@@ -28,7 +28,7 @@ dbo:
       pollingIntervalMilliseconds: 100
     target:
       ttlValue: 10000000
-      skipDeletion: true
+      allowedOperations: ["INSERT", "DELETE", "TRUNCATE"] # leave empty to allow all operations
   # Optional pipeline-level schedule configurations
   schedules:
     # Pipeline start schedule (runs on weekdays at 7:00 AM)
