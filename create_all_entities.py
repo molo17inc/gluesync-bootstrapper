@@ -380,10 +380,14 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         if document_key:
             target_entity["keyMapping"] = document_key
 
+        group_id = groupId_map.get(custom_config.get('groupId', '_default'), custom_config.get('groupId', '_default'))
+        group_name = next((name for name, gid in groupId_map.items() if gid == group_id), group_id)
+        logger.info(f"Assigning entity '{source_schema}.{table_name}' to group: {group_name} (ID: {group_id})")
+        
         entity = {
             "entityName": f"{source_schema}.{table_name}",
             "agentEntities": [source_entity, target_entity],
-            "groupId": groupId_map.get(custom_config.get('groupId', '_default'), custom_config.get('groupId', '_default'))  # Use mapped groupId or fallback to YAML/default
+            "groupId": group_id
         }
         entities.append(entity)
         
@@ -623,13 +627,18 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             "keys": target_keys
         }
 
+        # Get group info for multi-table entity
+        group_id = groupId_map.get(table_data.get('groupId', '_default'), table_data.get('groupId', '_default'))
+        group_name = next((name for name, gid in groupId_map.items() if gid == group_id), group_id)
+        logger.info(f"Assigning multi-table entity '{entity_name}' to group: {group_name} (ID: {group_id})")
+        
         # Create the MultiTable entity
         multi_table_entity = {
             "entities": [{
                 "entityId": "",
                 "entityName": entity_name,
                 "agentEntities": [source_entity, target_entity],
-                "groupId": groupId_map.get(table_data.get('groupId', '_default'), table_data.get('groupId', '_default')),
+                "groupId": group_id,
                 "orderIndex": first_table_order_index  # Use the first table's orderIndex for the entire entity
             }]
         }
