@@ -25,7 +25,7 @@ import urllib3
 import argparse
 from commons import get_node_info, get_table_columns, fetch_core_hub, get_pipeline_config, get_pipeline_agents, \
     get_agent_tables, create_entity_schedules, map_data_type, create_pipeline_schedules, load_yaml_config, \
-    process_filter_clauses, ENABLE_SCHEDULING, create_group
+    process_filter_clauses, create_group
 from create_all_tables import handle_table_creation
 from create_user_defined_functions import handle_udf_function_definition
 from utils.log import get_logger, create_log_file, log_success, log_failure, lockfile_failure, lockfile_complete, exit_on_fail
@@ -757,7 +757,34 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
     print(f"- Failed MultiTable entities: {failed_multi_tables}")
 
     # Create entity schedules if successful
-    if successful_entities > 0 and ENABLE_SCHEDULING:
+    if successful_entities > 0:
+        # Check if any schedules are defined in the YAML config
+        has_schedules = False
+        if yaml_config:
+            schemas_dict = yaml_config.get('schemas', {})
+            if not schemas_dict:
+                # Check if top-level keys are schemas
+                schemas_dict = {k: v for k, v in yaml_config.items() if isinstance(v, dict)}
+            
+            # Check for pipeline-level schedules
+            for schema_config in schemas_dict.values():
+                if 'schedules' in schema_config:
+                    has_schedules = True
+                    break
+                
+                # Check for entity-level schedules
+                if 'tables' in schema_config and 'custom' in schema_config['tables']:
+                    for table_data in schema_config['tables']['custom'].values():
+                        if 'schedules' in table_data:
+                            has_schedules = True
+                            break
+                    if has_schedules:
+                        break
+        
+        if not has_schedules:
+            logger.debug("No schedules defined in YAML config, skipping schedule creation")
+            return {"successful": successful_entities, "failed": failed_entities, "total": total_entities}
+            
         logger.info("Creating schedules for entities...")
 
         # Get updated entity IDs from the pipeline config
@@ -918,8 +945,6 @@ if __name__ == "__main__":
     parser.add_argument('--target-type', required=True, help="Target agent type")
     parser.add_argument('--yaml-file', help="YAML configuration file path")
     parser.add_argument('--token', required=True, help="Authentication token")
-    parser.add_argument('--enable-scheduling', action='store_true',
-                        help="Enable creation of schedules from YAML config")
 
     args = parser.parse_args()
 
