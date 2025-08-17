@@ -400,11 +400,6 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    # Get command line arguments for scheduling
-    if args.enable_scheduling:
-        # Override the environment variable setting
-        ENABLE_SCHEDULING = True
-
     main(
         args.pipeline,
         args.source_schema,

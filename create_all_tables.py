@@ -394,15 +394,8 @@ if __name__ == "__main__":
     parser.add_argument('--target-type', required=True, help="Target agent type")
     parser.add_argument('--yaml-file', help="YAML configuration file path")
     parser.add_argument('--token', required=True, help="Authentication token")
-    parser.add_argument('--enable-scheduling', action='store_true',
-                        help="Enable creation of schedules from YAML config")
-
+    
     args = parser.parse_args()
-
-    # Get command line arguments for scheduling
-    if args.enable_scheduling:
-        # Override the environment variable setting
-        ENABLE_SCHEDULING = True
 
     main(
         args.pipeline,
@@ -412,5 +405,5 @@ if __name__ == "__main__":
         args.target_type,
         args.yaml_file,
         args.token,
-        args.skip_errors,
+        args.skip_errors
     )
