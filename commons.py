@@ -564,7 +564,16 @@ def create_group(token, pipeline_id, group_name):
     Create a new group in the pipeline if it doesn't exist.
     Returns the group ID.
     """
-    if group_name == "_default":
+    logger.debug(f"create_group called with name: '{group_name}' (type: {type(group_name)})")
+    
+    if not group_name or group_name == "_default":
+        logger.debug("Using default group")
+        return "_default"
+
+    # Ensure group_name is a string
+    group_name = str(group_name).strip()
+    if not group_name:
+        logger.warning("Empty group name provided, using default group")
         return "_default"
 
     # Generate a random color in hex format
@@ -575,18 +584,23 @@ def create_group(token, pipeline_id, group_name):
 
     # First, try to get existing groups
     try:
+        logger.debug(f"Fetching existing groups for pipeline {pipeline_id}")
         groups = fetch_core_hub(
             f"/pipelines/{pipeline_id}/config/groups",
             method='GET',
             token=token
         )
+        logger.debug(f"Found {len(groups)} existing groups")
 
         # Check if group already exists
         for group in groups:
-            if group.get('name') == group_name:
-                group_id = group.get('id', '_default')
-                logger.info(f"Found existing group '{group_name}' with ID: {group_id}")
-                return group_id
+            current_name = group.get('name')
+            current_id = group.get('id', '_default')
+            logger.debug(f"Checking group: name='{current_name}' (type: {type(current_name)}), id={current_id}")
+            
+            if current_name == group_name:
+                logger.info(f"Found existing group '{group_name}' with ID: {current_id}")
+                return current_id
     except Exception as e:
         logger.warning(f"Failed to fetch existing groups: {str(e)}")
 
@@ -600,20 +614,46 @@ def create_group(token, pipeline_id, group_name):
         }
 
         logger.info(f"Creating new group: {group_name}")
+        logger.debug(f"Group data: {json.dumps(group_data, indent=2)}")
+        
         response = fetch_core_hub(
             f"/pipelines/{pipeline_id}/config/groups",
-            method='PUT',
+            method='POST',
             token=token,
             body=group_data
         )
-
-        if isinstance(response, dict) and 'id' in response:
-            group_id = response['id']
-            logger.info(f"Successfully created group '{group_name}' with ID: {group_id}")
-            return group_id
+        
+        logger.debug(f"Create group response: {json.dumps(response, indent=2) if response else 'None'}")
+        
+        if response and 'id' in response:
+            group_id = str(response['id']).strip()
+            if group_id and group_id.lower() != 'none':
+                logger.info(f"Successfully created group '{group_name}' with ID: {group_id}")
+                return group_id
+            else:
+                logger.warning(f"Received empty or invalid group ID in response: {response}")
         else:
-            logger.error(f"Unexpected response when creating group: {response}")
-            return "_default"
+            logger.warning(f"Unexpected response format when creating group '{group_name}'. Response: {response}")
+            
+        # If we got here, try one more time to find the group
+        logger.debug("Attempting to find group after creation failure...")
+        groups = fetch_core_hub(
+            f"/pipelines/{pipeline_id}/config/groups",
+            method='GET',
+            token=token
+        )
+        
+        for group in groups:
+            if str(group.get('name', '')).strip() == group_name:
+                found_id = str(group.get('id', '')).strip()
+                if found_id and found_id.lower() != 'none':
+                    logger.info(f"Found group '{group_name}' after creation attempt with ID: {found_id}")
+                    return found_id
+        
+        logger.warning(f"Could not verify creation of group '{group_name}'")
+        return "_default"
+            
     except Exception as e:
-        logger.error(f"Failed to create group {group_name}: {str(e)}")
+        logger.error(f"Error creating group '{group_name}': {str(e)}")
+        logger.debug(f"Traceback: {traceback.format_exc()}")
         return "_default"

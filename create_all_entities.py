@@ -117,8 +117,13 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
     # Create groups before creating entities
     groupId_map = {}
+    logger.debug(f"Groups to create: {group_names}")
+    
     for group_name in group_names:
+        logger.debug(f"Processing group: '{group_name}' (type: {type(group_name)})")
         group_id = create_group(token, pipeline_id, group_name)
+        logger.debug(f"Group '{group_name}' creation result: {group_id}")
+        
         if group_id and group_id != '_default':
             # Map the group name to its ID for later use
             groupId_map[group_name] = group_id
@@ -405,32 +410,35 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         # Initialize group_id as None - we'll set it only if we find a valid mapping
         group_id = None
         
+        # Log the group mapping for debugging
+        logger.debug(f"Available group mappings: {json.dumps(groupId_map, indent=2)}")
+        logger.debug(f"Looking for group: '{requested_group}' (type: {type(requested_group)})")
+        
         # If a group was requested and it's not '_default', try to find its ID in our mapping
         if requested_group and requested_group != '_default':
-            # First try exact match
+            # First try exact match with original case
             group_id = groupId_map.get(requested_group)
+            logger.debug(f"Exact match result: {group_id}")
             
             # If not found, try case-insensitive match
             if not group_id or group_id == '_default':
                 # Find a case-insensitive match
                 for name, gid in groupId_map.items():
-                    if name.lower() == requested_group.lower():
+                    if name and str(name).lower() == str(requested_group).lower():
                         group_id = gid
                         requested_group = name  # Use the correct case for logging
+                        logger.debug(f"Case-insensitive match found: {name} -> {gid}")
                         break
             
-            if not group_id or group_id == '_default':
-                logger.warning(f"Entity '{source_schema}.{table_name}': No valid group ID found for group '{requested_group}'. Using default group. Available groups: {list(groupId_map.keys())}")
-                group_id = None
+            # Log the result of group lookup
+            if group_id and group_id != '_default':
+                logger.info(f"Successfully mapped group '{requested_group}' to ID: {group_id}")
             else:
-                # For logging, find the group name that corresponds to this ID
-                group_name = next((name for name, gid in groupId_map.items() if gid == group_id), requested_group)
-                logger.info(f"Assigning entity '{source_schema}.{table_name}' to group: {group_name} (ID: {group_id})")
+                logger.warning(f"Could not find valid group ID for '{requested_group}'. Available groups: {list(groupId_map.keys())}")
+        else:
+            logger.debug("No specific group requested or using default group")
         
-        # If we get here, either no group was requested or we couldn't find a valid ID
-        if not group_id:
-            logger.debug(f"Entity '{source_schema}.{table_name}' will use default group (no group specified or group not found)")
-        
+        # Create the entity
         entity = {
             "entityName": f"{source_schema}.{table_name}",
             "agentEntities": [source_entity, target_entity]
@@ -439,6 +447,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         # Only add groupId to the entity if we have a valid group ID
         if group_id and group_id != '_default':
             entity["groupId"] = group_id
+        
         entities.append(entity)
         
         # Process UDFs if defined for this table
