@@ -784,7 +784,13 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         if not group_id or group_id == '_default':
                             logger.debug(f"Entity {entity_id} has no group specified, will use _default")
                             continue
-                            
+                        
+                        # If group_id is a name, try to get the mapped ID
+                        if group_id in groupId_map:
+                            mapped_group_id = groupId_map[group_id]
+                            logger.debug(f"Mapped group name '{group_id}' to ID: {mapped_group_id}")
+                            group_id = mapped_group_id
+                        
                         if group_id not in entities_by_group:
                             entities_by_group[group_id] = []
                         entities_by_group[group_id].append(entity_id)
@@ -792,10 +798,17 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             # Make assignment requests for each group
             for group_id, entity_ids in entities_by_group.items():
                 if entity_ids:  # Only proceed if we have entities to assign
-                    logger.info(f"Assigning {len(entity_ids)} entities to group {group_id}")
+                    # Skip if group_id is _default or None
+                    if not group_id or group_id == '_default':
+                        logger.debug(f"Skipping assignment for default group")
+                        continue
+                        
+                    logger.info(f"Assigning {len(entity_ids)} entities to group ID: {group_id}")
                     success = assign_entities_to_group(token, pipeline_id, group_id, entity_ids)
                     if not success and not skip_errors:
                         raise Exception(f"Failed to assign entities to group {group_id}")
+                    elif success:
+                        logger.info(f"Successfully assigned {len(entity_ids)} entities to group {group_id}")
                     
         except Exception as e:
             logger.error(f"Error during group assignment: {str(e)}")
