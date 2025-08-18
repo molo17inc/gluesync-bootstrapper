@@ -561,7 +561,9 @@ def create_group(token, pipeline_id, group_name):
         # Check if group already exists
         for group in groups:
             if group.get('name') == group_name:
-                return group.get('id', '_default')
+                group_id = group.get('id', '_default')
+                logger.info(f"Found existing group '{group_name}' with ID: {group_id}")
+                return group_id
     except Exception as e:
         logger.warning(f"Failed to fetch existing groups: {str(e)}")
 
@@ -574,6 +576,7 @@ def create_group(token, pipeline_id, group_name):
             "color": random_color()
         }
 
+        logger.info(f"Creating new group: {group_name}")
         response = fetch_core_hub(
             f"/pipelines/{pipeline_id}/config/groups",
             method='PUT',
@@ -582,8 +585,12 @@ def create_group(token, pipeline_id, group_name):
         )
 
         if isinstance(response, dict) and 'id' in response:
-            return response['id']
-        return "_default"
+            group_id = response['id']
+            logger.info(f"Successfully created group '{group_name}' with ID: {group_id}")
+            return group_id
+        else:
+            logger.error(f"Unexpected response when creating group: {response}")
+            return "_default"
     except Exception as e:
         logger.error(f"Failed to create group {group_name}: {str(e)}")
         return "_default"

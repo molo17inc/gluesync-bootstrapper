@@ -114,6 +114,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         else:
             logger.warning(f"Failed to create/retrieve group '{group_name}'. Using default group.")
             groupId_map[group_name] = '_default'
+    
+    # Log all group mappings for debugging
+    logger.info(f"Group name to ID mappings: {json.dumps(groupId_map, indent=2)}")
 
     """Create entities for the pipeline."""
     if not yaml_config:
@@ -614,6 +617,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         # Get allowed operations for the target entity
         allowed_operations = get_allowed_operations(target_custom_properties)
         
+        # Create the target entity for MultiTable
         target_entity = {
             "type": "MultiTable",
             "entityId": "",
@@ -634,9 +638,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         }
 
         # Get group info for multi-table entity
-        # Get the group ID from the mapping, or use the provided ID if it's not in our mapping
         group_id = groupId_map.get(table_data.get('groupId', '_default'), table_data.get('groupId', '_default'))
-        # For logging purposes, find the group name that corresponds to this ID
         group_name = next((name for name, gid in groupId_map.items() if gid == group_id), group_id)
         logger.info(f"Assigning multi-table entity '{entity_name}' to group: {group_name} (ID: {group_id})")
         
@@ -646,7 +648,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 "entityId": "",
                 "entityName": entity_name,
                 "agentEntities": [source_entity, target_entity],
-                "groupId": group_id,
+                "groupId": group_id if group_id != '_default' else None,  # Use None instead of '_default' for the API
                 "orderIndex": first_table_order_index  # Use the first table's orderIndex for the entire entity
             }]
         }
