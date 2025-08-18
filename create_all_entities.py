@@ -86,10 +86,22 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             schemas_dict = {k: v for k, v in yaml_config.items() if isinstance(v, dict)}
 
         for schema_name, schema_config in schemas_dict.items():
+            # Look for tables in both direct and nested 'tables.custom' structures
+            tables_config = {}
             if 'tables' in schema_config and 'custom' in schema_config['tables']:
-                for table_key, table_data in schema_config['tables']['custom'].items():
-                    if 'groupId' in table_data and table_data['groupId'] != '_default':
-                        group_names.add(table_data['groupId'])
+                tables_config = schema_config['tables']['custom']
+            elif 'custom' in schema_config:
+                tables_config = schema_config['custom']
+            
+            # Process each table in the config
+            for table_key, table_data in tables_config.items():
+                if 'groupId' in table_data and table_data['groupId'] != '_default':
+                    group_name = str(table_data['groupId']).strip()
+                    if group_name:  # Only add non-empty group names
+                        group_names.add(group_name)
+                        logger.debug(f"Found group '{group_name}' for table {schema_name}.{table_key}")
+                    else:
+                        logger.warning(f"Empty group ID found for table {schema_name}.{table_key}")
 
                     # Collect chainId information
                     if 'chainId' in table_data:
@@ -387,17 +399,46 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         if document_key:
             target_entity["keyMapping"] = document_key
 
-        # Get the group ID from the mapping, or use the provided ID if it's not in our mapping
-        group_id = groupId_map.get(custom_config.get('groupId', '_default'), custom_config.get('groupId', '_default'))
-        # For logging purposes, find the group name that corresponds to this ID
-        group_name = next((name for name, gid in groupId_map.items() if gid == group_id), group_id)
-        logger.info(f"Assigning entity '{source_schema}.{table_name}' to group: {group_name} (ID: {group_id})")
+        # Get the requested group from config, default to '_default'
+        requested_group = str(custom_config.get('groupId', '_default')).strip()
+        
+        # Initialize group_id as None - we'll set it only if we find a valid mapping
+        group_id = None
+        
+        # If a group was requested and it's not '_default', try to find its ID in our mapping
+        if requested_group and requested_group != '_default':
+            # First try exact match
+            group_id = groupId_map.get(requested_group)
+            
+            # If not found, try case-insensitive match
+            if not group_id or group_id == '_default':
+                # Find a case-insensitive match
+                for name, gid in groupId_map.items():
+                    if name.lower() == requested_group.lower():
+                        group_id = gid
+                        requested_group = name  # Use the correct case for logging
+                        break
+            
+            if not group_id or group_id == '_default':
+                logger.warning(f"Entity '{source_schema}.{table_name}': No valid group ID found for group '{requested_group}'. Using default group. Available groups: {list(groupId_map.keys())}")
+                group_id = None
+            else:
+                # For logging, find the group name that corresponds to this ID
+                group_name = next((name for name, gid in groupId_map.items() if gid == group_id), requested_group)
+                logger.info(f"Assigning entity '{source_schema}.{table_name}' to group: {group_name} (ID: {group_id})")
+        
+        # If we get here, either no group was requested or we couldn't find a valid ID
+        if not group_id:
+            logger.debug(f"Entity '{source_schema}.{table_name}' will use default group (no group specified or group not found)")
         
         entity = {
             "entityName": f"{source_schema}.{table_name}",
-            "agentEntities": [source_entity, target_entity],
-            "groupId": group_id
+            "agentEntities": [source_entity, target_entity]
         }
+        
+        # Only add groupId to the entity if we have a valid group ID
+        if group_id and group_id != '_default':
+            entity["groupId"] = group_id
         entities.append(entity)
         
         # Process UDFs if defined for this table
