@@ -406,37 +406,22 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
         # Get the requested group from config, default to '_default'
         requested_group = str(custom_config.get('groupId', '_default')).strip()
+        group_id = "_default"  # Default group ID
         
-        # Initialize group_id as None - we'll set it only if we find a valid mapping
-        group_id = None
+        # Log the requested group for debugging
+        logger.debug(f"Requested group: '{requested_group}' (type: {type(requested_group)})")
         
-        # Log the group mapping for debugging
-        logger.debug(f"Available group mappings: {json.dumps(groupId_map, indent=2)}")
-        logger.debug(f"Looking for group: '{requested_group}' (type: {type(requested_group)})")
-        
-        # If a group was requested and it's not '_default', try to find its ID in our mapping
+        # If a specific group was requested and it's not '_default'
         if requested_group and requested_group != '_default':
-            # First try exact match with original case
-            group_id = groupId_map.get(requested_group)
-            logger.debug(f"Exact match result: {group_id}")
+            # Try to create or get the group
+            group_id = create_group(token, pipeline_id, requested_group)
             
-            # If not found, try case-insensitive match
-            if not group_id or group_id == '_default':
-                # Find a case-insensitive match
-                for name, gid in groupId_map.items():
-                    if name and str(name).lower() == str(requested_group).lower():
-                        group_id = gid
-                        requested_group = name  # Use the correct case for logging
-                        logger.debug(f"Case-insensitive match found: {name} -> {gid}")
-                        break
-            
-            # Log the result of group lookup
-            if group_id and group_id != '_default':
-                logger.info(f"Successfully mapped group '{requested_group}' to ID: {group_id}")
+            if group_id != "_default":
+                logger.info(f"Using group '{requested_group}' with ID: {group_id}")
             else:
-                logger.warning(f"Could not find valid group ID for '{requested_group}'. Available groups: {list(groupId_map.keys())}")
+                logger.warning(f"Could not use group '{requested_group}'. Using default group.")
         else:
-            logger.debug("No specific group requested or using default group")
+            logger.debug("Using default group as no specific group was requested")
         
         # Create the entity
         entity = {
