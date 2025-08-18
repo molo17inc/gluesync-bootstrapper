@@ -241,3 +241,55 @@ class ChronosClient:
             raise ValueError("Either cron_expression or schedule must be provided")
             
         return self.create_job(job_data)
+    def create_group_schedule(self, pipeline_id, group_id, task_type, schedule_config,
+                             name=None, description=None, with_snapshot=False, enabled=True):
+        """
+        Create a schedule for a group with the specified configuration.
+        
+        Args:
+            pipeline_id (str): ID of the pipeline
+            group_id (str): ID of the group
+            task_type (str): Type of task to schedule (group_start, group_stop, group_snapshot)
+            schedule_config (dict): Schedule configuration dict with either 'cron_expression' or 'schedule'
+            name (str, optional): Name for the job 
+            description (str, optional): Description for the job
+            with_snapshot (bool, optional): Whether to include snapshot when starting group
+            enabled (bool, optional): Whether the job is enabled initially
+            
+        Returns:
+            dict: The created job details
+        """
+        if not pipeline_id or not group_id:
+            raise ValueError("Both pipeline_id and group_id are required")
+            
+        if task_type not in ('group_start', 'group_stop', 'group_snapshot'):
+            raise ValueError(f"Invalid task_type for group: {task_type}")
+            
+        # Generate a name if not provided
+        if not name:
+            task_name_map = {
+                'group_start': 'Start',
+                'group_stop': 'Stop',
+                'group_snapshot': 'Snapshot'
+            }
+            name = f"{task_name_map.get(task_type, 'Schedule')} for group {group_id}"
+            
+        job_data = {
+            'name': name,
+            'description': description,
+            'task_type': task_type,
+            'pipeline_id': pipeline_id,
+            'group_id': group_id,
+            'with_snapshot': with_snapshot,
+            'enabled': enabled
+        }
+        
+        # Add either cron_expression or schedule
+        if 'cron_expression' in schedule_config:
+            job_data['cron_expression'] = schedule_config['cron_expression']
+        elif 'schedule' in schedule_config:
+            job_data['schedule'] = schedule_config['schedule']
+        else:
+            raise ValueError("Either cron_expression or schedule must be provided")
+            
+        return self.create_job(job_data)
