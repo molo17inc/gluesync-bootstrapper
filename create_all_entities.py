@@ -25,7 +25,7 @@ import urllib3
 import argparse
 from commons import get_node_info, get_table_columns, fetch_core_hub, get_pipeline_config, get_pipeline_agents, \
     get_agent_tables, create_entity_schedules, map_data_type, create_pipeline_schedules, load_yaml_config, \
-    process_filter_clauses, create_group
+    process_filter_clauses, create_group, assign_entities_to_group
 from create_all_tables import handle_table_creation
 from create_user_defined_functions import handle_udf_function_definition
 from utils.log import get_logger, create_log_file, log_success, log_failure, lockfile_failure, lockfile_complete, exit_on_fail
@@ -755,6 +755,42 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
     print(f"- Total MultiTable entities: {total_multi_tables}")
     print(f"- Successfully created MultiTable entities: {successful_multi_tables}")
     print(f"- Failed MultiTable entities: {failed_multi_tables}")
+
+    # Assign entities to their groups if successful
+    if successful_entities > 0:
+        # Group entities by their target group
+        entities_by_group = {}
+        
+        # Get all created entities
+        try:
+            response = fetch_core_hub(f"/pipelines/{pipeline_id}/entities", token=token)
+            if isinstance(response, list):
+                for entity in response:
+                    if 'entity' in entity and 'entityId' in entity['entity']:
+                        entity_id = entity['entity']['entityId']
+                        group_id = entity['entity'].get('groupId', '_default')
+                        
+                        # Skip if no group is specified (will use _default)
+                        if not group_id or group_id == '_default':
+                            logger.debug(f"Entity {entity_id} has no group specified, will use _default")
+                            continue
+                            
+                        if group_id not in entities_by_group:
+                            entities_by_group[group_id] = []
+                        entities_by_group[group_id].append(entity_id)
+            
+            # Make assignment requests for each group
+            for group_id, entity_ids in entities_by_group.items():
+                if entity_ids:  # Only proceed if we have entities to assign
+                    logger.info(f"Assigning {len(entity_ids)} entities to group {group_id}")
+                    success = assign_entities_to_group(token, pipeline_id, group_id, entity_ids)
+                    if not success and not skip_errors:
+                        raise Exception(f"Failed to assign entities to group {group_id}")
+                    
+        except Exception as e:
+            logger.error(f"Error during group assignment: {str(e)}")
+            if not skip_errors:
+                raise
 
     # Create entity schedules if successful
     if successful_entities > 0:

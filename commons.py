@@ -456,6 +456,32 @@ def process_filter_clauses(filter_config, columns_info):
     return None
 
 
+def assign_entities_to_group(token, pipeline_id, group_id, entity_ids):
+    """
+    Assign entities to a group using the /assign endpoint
+    Args:
+        token: Authentication token
+        pipeline_id: ID of the pipeline
+        group_id: ID of the target group
+        entity_ids: List of entity IDs to assign to the group
+    """
+    if not entity_ids or not group_id or group_id == '_default':
+        return False
+
+    try:
+        response = fetch_core_hub(
+            f"/pipelines/{pipeline_id}/config/groups/{group_id}/assign",
+            method='POST',
+            token=token,
+            body=entity_ids
+        )
+        logger.info(f"Assigned {len(entity_ids)} entities to group {group_id}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to assign entities to group {group_id}: {str(e)}")
+        return False
+
+
 def create_group(token, pipeline_id, group_name):
     """
     Create a new group in the pipeline if it doesn't exist.
