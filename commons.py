@@ -519,20 +519,43 @@ def assign_entities_to_group(token, pipeline_id, group_id, entity_ids):
         group_id: ID of the target group
         entity_ids: List of entity IDs to assign to the group
     """
-    if not entity_ids or not group_id or group_id == '_default':
+    if not entity_ids:
+        logger.warning("No entity IDs provided for group assignment")
+        return False
+    
+    if not group_id or group_id == '_default':
+        logger.debug("Skipping group assignment: no group ID or using default group")
         return False
 
     try:
+        logger.debug(f"Assigning {len(entity_ids)} entities to group ID: {group_id}")
+        logger.debug(f"Entities to assign: {entity_ids}")
+        
+        # Ensure we're using the correct endpoint format
+        endpoint = f"/pipelines/{pipeline_id}/config/groups/{group_id}/assign"
+        logger.debug(f"Using endpoint: {endpoint}")
+        
+        # Make sure entity_ids is a list of strings
+        if not isinstance(entity_ids, list):
+            entity_ids = [entity_ids]
+            
+        # Ensure all entity IDs are strings
+        entity_ids = [str(eid) for eid in entity_ids]
+        
         response = fetch_core_hub(
-            f"/pipelines/{pipeline_id}/config/groups/{group_id}/assign",
+            endpoint,
             method='POST',
             token=token,
             body=entity_ids
         )
-        logger.info(f"Assigned {len(entity_ids)} entities to group {group_id}")
+        
+        logger.debug(f"Assignment response: {response}")
+        logger.info(f"Successfully assigned {len(entity_ids)} entities to group {group_id}")
         return True
     except Exception as e:
-        logger.error(f"Failed to assign entities to group {group_id}: {str(e)}")
+        logger.error(f"Failed to assign entities to group {group_id}")
+        logger.error(f"Error details: {str(e)}")
+        logger.debug(f"Traceback: {traceback.format_exc()}")
         return False
 
 
