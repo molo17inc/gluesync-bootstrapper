@@ -106,10 +106,14 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
     # Create groups before creating entities
     groupId_map = {}
     for group_name in group_names:
-        groupId = create_group(token, pipeline_id, group_name)
-        if groupId != '_default':
-            groupId_map[group_name] = groupId
-            logger.info(f"Created/retrieved group '{group_name}' with ID: {groupId}")
+        group_id = create_group(token, pipeline_id, group_name)
+        if group_id and group_id != '_default':
+            # Map the group name to its ID for later use
+            groupId_map[group_name] = group_id
+            logger.info(f"Created/retrieved group '{group_name}' with ID: {group_id}")
+        else:
+            logger.warning(f"Failed to create/retrieve group '{group_name}'. Using default group.")
+            groupId_map[group_name] = '_default'
 
     """Create entities for the pipeline."""
     if not yaml_config:
@@ -380,7 +384,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         if document_key:
             target_entity["keyMapping"] = document_key
 
+        # Get the group ID from the mapping, or use the provided ID if it's not in our mapping
         group_id = groupId_map.get(custom_config.get('groupId', '_default'), custom_config.get('groupId', '_default'))
+        # For logging purposes, find the group name that corresponds to this ID
         group_name = next((name for name, gid in groupId_map.items() if gid == group_id), group_id)
         logger.info(f"Assigning entity '{source_schema}.{table_name}' to group: {group_name} (ID: {group_id})")
         
@@ -628,7 +634,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         }
 
         # Get group info for multi-table entity
+        # Get the group ID from the mapping, or use the provided ID if it's not in our mapping
         group_id = groupId_map.get(table_data.get('groupId', '_default'), table_data.get('groupId', '_default'))
+        # For logging purposes, find the group name that corresponds to this ID
         group_name = next((name for name, gid in groupId_map.items() if gid == group_id), group_id)
         logger.info(f"Assigning multi-table entity '{entity_name}' to group: {group_name} (ID: {group_id})")
         
