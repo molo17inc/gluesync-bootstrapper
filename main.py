@@ -32,6 +32,7 @@ import ssl
 import secrets
 import string
 import traceback
+import argparse
 from requests.adapters import HTTPAdapter
 from urllib3.util.ssl_ import create_urllib3_context
 from urllib.parse import urlparse
@@ -414,8 +415,13 @@ def change_password(token, old_password, new_password):
 
     return new_token
 
-def main():    
-     # Display ASCII art at startup
+def main():
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Gluesync Bootstrapper')
+    parser.add_argument('--pipeline-name', type=str, help='Optional name for the pipeline')
+    args = parser.parse_args()
+    
+    # Display ASCII art at startup
     ascii_art = """
                                                                                                         
 ██████   ██████   ██████  ████████ ███████ ████████ ██████   █████  ██████  ██████  ███████ ██████  
@@ -577,14 +583,21 @@ def main():
     logger.debug(f"Unassigned agents: {json.dumps(unassigned_agents, indent=2)}")
     logger.debug(f"Config agents: {json.dumps(conf_test['agents'], indent=2)}")
 
-    fancy_names = generate_fancy_names(2)
+    # Use provided pipeline name or generate a fancy one
+    if args.pipeline_name:
+        pipeline_name = args.pipeline_name
+        pipeline_description = f"Pipeline {pipeline_name}"
+    else:
+        fancy_names = generate_fancy_names(2)
+        pipeline_name = fancy_names[0]
+        pipeline_description = fancy_names[1]
 
     # Create pipeline
     pipeline_response = fetch_core_hub(
         '/pipelines',
         method='POST',
         token=token,
-        body={'name': fancy_names[0], 'description': fancy_names[1], 'configurationCompleted': False}
+        body={'name': pipeline_name, 'description': pipeline_description, 'configurationCompleted': False}
     )
     pipeline_id = pipeline_response.get('pipelineId')
     if not pipeline_id:
