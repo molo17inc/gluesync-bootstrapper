@@ -327,8 +327,10 @@ The `main.py` script is the main entry point for the Gluesync Bootstrapper. It i
 To run the script, use the following command:
 
 ```bash
-python main.py --config <path_to_config> --token <auth_token> [--skip-errors] [--chunk-size <number>]
+python main.py --config <path_to_config> --token <auth_token> [--pipeline-name NAME] [--skip-errors] [--chunk-size <number>]
 ```
+
+- `--pipeline-name`: Optional name for the pipeline. If not provided, a random name will be generated.
 
 Alternatively, you can configure the script using environment variables:
 
