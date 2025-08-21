@@ -75,35 +75,60 @@ def add_handlers(logger: logging.Logger, log_file=None):
         file_handler.setFormatter(file_formatter)
         logger.addHandler(file_handler)
 
-    # Add Logstash handler
-    logstash_host = '10.17.3.235'
-    logstash_port = 5000
-    logstash_handler = AsynchronousLogstashHandler(
-        logstash_host, 
-        logstash_port, 
-        database_path='logstash_events.db'
-    )
-    logstash_handler.setLevel(logging.DEBUG)
+    # Check if running in Docker container
+    is_docker = os.path.exists('/.dockerenv')
     
+    if is_docker:
+        try:
+            # Add Logstash handler only in Docker container
+            logstash_host = '10.17.3.235'
+            logstash_port = 5000
+            
+            # Initialize Logstash handler with error handling
+            logstash_handler = AsynchronousLogstashHandler(
+                host=logstash_host,
+                port=logstash_port,
+                database_path='/tmp/logstash_events.db',  # Using /tmp for better Docker compatibility
+                ssl_enable=False,  # Disable SSL by default
+                ssl_verify=False,  # Disable SSL verification
+                transport='logstash_async.transport.TcpTransport',
+                ssl_details=None
+            )
+            logstash_handler.setLevel(logging.DEBUG)
+            
+            # Add extra context to all log records
+            class ContextFilter(logging.Filter):
+                def filter(self, record):
+                    record.extra_fields = {
+                        'appname': 'gluesync-bootstrapper',
+                        'environment': 'INTEGRATION_TEST',
+                        'user': {'name': 'MOLO17'},
+                        'test_name': os.environ.get('TEST_NAME', 'not_set'),
+                        'job_id': os.environ.get('JOB_ID', 'not_set'),
+                        'version': os.environ.get('VERSION', 'not_set')
+                    }
+                    return True
 
-    # Add extra context to all log records
-    class ContextFilter(logging.Filter):
-        def filter(self, record):
-            record.extra_fields = {
-                'appname': 'gluesync-bootstrapper',
-                'environment': 'INTEGRATION_TEST',
-                'user': {'name': 'MOLO17'},
-                'test_name': os.environ.get('TEST_NAME', 'not_set'),
-                'job_id': os.environ.get('JOB_ID', 'not_set'),
-                'version': os.environ.get('VERSION', 'not_set')
-            }
-            return True
-
-    # Avoid adding the filter multiple times
-    if not any(isinstance(f, ContextFilter) for f in logger.filters):
-        logger.addFilter(ContextFilter())
-        
-    logger.addHandler(logstash_handler)
+            # Avoid adding the filter multiple times
+            if not any(isinstance(f, ContextFilter) for f in logger.filters):
+                logger.addFilter(ContextFilter())
+                
+            # Test the connection by sending a test message
+            logstash_handler.emit(logging.makeLogRecord({
+                'msg': 'Testing Logstash connection',
+                'levelno': logging.INFO,
+                'levelname': 'INFO'
+            }))
+            
+            logger.addHandler(logstash_handler)
+            logger.info("Logstash logging enabled (Docker container detected)")
+            
+        except Exception as e:
+            # Log the error but don't let it crash the application
+            logger.warning(f"Failed to initialize Logstash logging: {str(e)}. Continuing without Logstash logging.")
+            logger.debug("Logstash connection error details:", exc_info=True)
+    else:
+        logger.debug("Logstash logging disabled (not running in Docker container)")
 
 
 def create_log_file(log_dir=None):
