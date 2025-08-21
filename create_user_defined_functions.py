@@ -253,7 +253,7 @@ def handle_udf_function_definition(table_name, pipeline_id, udf, token):
 
 def create_user_defined_functions(token, pipeline_id, source_schema, target_schema, tables, source_agent_id,
                                   target_agent_id,
-                                  source_type, target_type, yaml_config, skip_errors=False, chunk_size=50):
+                                  source_type, target_type, yaml_config, skip_errors=True, chunk_size=50):
     """Create entities for the pipeline."""
     if not yaml_config:
         yaml_config = {}
@@ -324,7 +324,7 @@ def create_user_defined_functions(token, pipeline_id, source_schema, target_sche
         else:
             print(f"No UDFs defined for table {table_name}")
 
-def main(pipeline_id, source_schema, target_schema, source_type, target_type, yaml_file, token, skip_errors=False,
+def main(pipeline_id, source_schema, target_schema, source_type, target_type, yaml_file, token, skip_errors=True,
          chunk_size=50):
     """
     Main function to create entities for a pipeline

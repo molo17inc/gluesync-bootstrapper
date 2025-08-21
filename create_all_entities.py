@@ -74,7 +74,7 @@ def get_allowed_operations(target_custom_properties):
     logger.info(f"Using default allowedOperations: {default_ops}")
     return default_ops
 
-def create_entities(token, pipeline_id, source_schema, target_schema, tables, source_agent_id, target_agent_id, source_type, target_type, yaml_config, skip_errors=False, chunk_size=50):
+def create_entities(token, pipeline_id, source_schema, target_schema, tables, source_agent_id, target_agent_id, source_type, target_type, yaml_config, skip_errors=True, chunk_size=50):
     # First, collect all unique group names and chain IDs from the YAML configuration
     group_names = set()
     chain_ids = set()
@@ -967,7 +967,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
     return {"successful": successful_entities, "failed": failed_entities, "total": total_entities}
 
 
-def main(pipeline_id, source_schema, target_schema, source_type, target_type, yaml_file, token, skip_errors=False,
+def main(pipeline_id, source_schema, target_schema, source_type, target_type, yaml_file, token, skip_errors=True,
          chunk_size=50):
     """
     Main function to create entities for a pipeline

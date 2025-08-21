@@ -360,7 +360,7 @@ Parameters:
 
 - `--config`: Required. Path to the agent configuration file
 - `--token`: Required. Authentication token for API access
-- `--skip-errors`: Optional. Continue execution even if errors occur
+- `--skip-errors`: Optional, default is `true`. Continue execution even if errors occur
 - `--chunk-size`: Optional. Number of entities to process in each chunk (default: 50)
 - `--enable-scheduling`: Optional. Enable creation of schedules from YAML config
 

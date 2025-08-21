@@ -114,7 +114,7 @@ def create_target_table(pipeline_id: str, create_table_request: CreateTableReque
 
 
 def create_tables(token, pipeline_id, source_schema, target_schema, tables, source_agent_id, target_agent_id,
-                  source_type, target_type, yaml_config, skip_errors=False):
+                  source_type, target_type, yaml_config, skip_errors=True):
     # First, collect all unique group names from the YAML configuration
     group_names = set()
     if yaml_config:
@@ -322,7 +322,7 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
         print(f"table: {target_table_name} already exists")
 
 
-def main(pipeline_id, source_schema, target_schema, source_type, target_type, yaml_file, token, skip_errors=False):
+def main(pipeline_id, source_schema, target_schema, source_type, target_type, yaml_file, token, skip_errors=True):
     """
     Main function to create entities for a pipeline
     """
