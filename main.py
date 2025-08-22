@@ -39,7 +39,7 @@ from urllib.parse import urlparse
 from utils.log import get_logger, create_log_file, log_success, log_failure, lockfile_failure, exit_on_fail, lockfile_complete
 from utils.gluesync_sdk_client import initialize_gluesync_sdk, get_token, get_gluesync_client
 from utils.core_hub_client import CoreHubClient
-from commons import extract_schemas_from_yaml
+from commons import extract_schemas_from_yaml, extract_all_schemas_from_yaml
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -437,13 +437,11 @@ def main():
 
     # Extract schema information from YAML file
     logger.info(f"Attempting to extract schemas from YAML file: {TABLE_LIST_YAML}")
-    source_schema, target_schema = extract_schemas_from_yaml(TABLE_LIST_YAML)
-    logger.info(f"Extracted schemas - Source: {source_schema}, Target: {target_schema}")
-
-    if not source_schema:
-        logger.warning("No source schema found in YAML file. Entity creation will be skipped.")
+    schema_pairs = extract_all_schemas_from_yaml(TABLE_LIST_YAML)
+    if not schema_pairs:
+        logger.warning("No schemas found in YAML file. Entity creation will be skipped.")
     else:
-        logger.info(f"Schema extraction successful. Will create entities for source schema: {source_schema}")
+        logger.info(f"Schema extraction successful. {len(schema_pairs)} schema pair(s) found: {schema_pairs}")
 
     # Initialize variables that might be used in different code paths
     change_required = False
@@ -668,39 +666,35 @@ def main():
 
     configure_entities(agents_to_conf, pipeline_id, token)
 
-    # Debug: Check schema values before entity creation
-    logger.info(f"DEBUG: About to check entity creation. source_schema='{source_schema}', target_schema='{target_schema}'")
-    
-    if source_schema:
-        # Invoke the entity creation script
+    # Create entities sequentially for each schema pair
+    if schema_pairs:
         entity_creation_script = 'create_all_entities.py'
-        try:
-            cmd = [
-                'python',
-                entity_creation_script,
-                '--pipeline', pipeline_id,
-                '--source-schema', source_schema,
-                '--source-type', source_type,
-                '--target-type', target_type,
-                '--token', token
-            ]
+        for idx, (source_schema, target_schema) in enumerate(schema_pairs, start=1):
+            logger.info(f"[Schema {idx}/{len(schema_pairs)}] Starting entity creation for source='{source_schema}', target='{target_schema}'")
+            try:
+                cmd = [
+                    'python3',
+                    entity_creation_script,
+                    '--pipeline', pipeline_id,
+                    '--source-schema', source_schema,
+                    '--source-type', source_type,
+                    '--target-type', target_type,
+                    '--token', token,
+                    '--target-schema', target_schema or source_schema
+                ]
 
-            if target_schema:
-                cmd.extend(['--target-schema', target_schema])
-            else:
-                cmd.extend(['--target-schema', source_schema])
+                if os.path.exists(TABLE_LIST_YAML):
+                    cmd.extend(['--yaml-file', TABLE_LIST_YAML])
+                    logger.info(f"Using TABLE_LIST.yaml: {TABLE_LIST_YAML}")
+                else:
+                    logger.warning(f"TABLE_LIST.yaml not found at {TABLE_LIST_YAML}. Proceeding without it.")
 
-            if os.path.exists(TABLE_LIST_YAML):
-                cmd.extend(['--yaml-file', TABLE_LIST_YAML])
-                logger.info(f"Using TABLE_LIST.yaml: {TABLE_LIST_YAML}")
-            else:
-                logger.warning(f"TABLE_LIST.yaml not found at {TABLE_LIST_YAML}. Proceeding without it.")
-
-            subprocess.run(cmd, check=True)
-            log_success(logger, f"Entity creation completed for pipeline {pipeline_id}, source schema {source_schema}, target schema {target_schema or source_schema}, source type {source_type}, target type {target_type}")
-        except subprocess.CalledProcessError as e:
-            log_failure(logger, f"Error running entity creation script: {e}")
-            lockfile_failure()
+                subprocess.run(cmd, check=True)
+                log_success(logger, f"[Schema {idx}/{len(schema_pairs)}] Entity creation completed for source {source_schema} -> target {target_schema or source_schema}")
+            except subprocess.CalledProcessError as e:
+                log_failure(logger, f"[Schema {idx}/{len(schema_pairs)}] Error running entity creation script: {e}")
+                # Continue with next schema without failing entire process
+                continue
 
     try:
         # Set pipeline as ready (exiting from Draft status)

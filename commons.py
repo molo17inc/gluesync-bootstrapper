@@ -462,6 +462,63 @@ def extract_schemas_from_yaml(yaml_file_path):
         return None, None
 
 
+def extract_all_schemas_from_yaml(yaml_file_path):
+    """
+    Extract all source and target schema pairs from the YAML configuration file.
+    Supports both formats:
+    - Format 1: Top-level 'schemas' dict where each key is a source schema
+    - Format 2: Multiple top-level keys each representing a schema configuration
+
+    Returns a list of tuples: [(source_schema, target_schema), ...]
+    Returns an empty list if none found or file missing.
+    """
+    try:
+        if not os.path.exists(yaml_file_path):
+            logger.error(f"YAML file does not exist: {yaml_file_path}")
+            return []
+
+        logger.info(f"Loading YAML configuration from: {yaml_file_path}")
+        yaml_config = load_yaml_config(yaml_file_path)
+
+        if not yaml_config:
+            logger.warning(f"YAML file is empty or could not be loaded: {yaml_file_path}")
+            return []
+
+        schema_pairs = []
+
+        # Format 1: schemas wrapper
+        if isinstance(yaml_config.get('schemas'), dict) and yaml_config.get('schemas'):
+            logger.info("Found 'schemas' section in YAML file")
+            for source_schema, schema_config in yaml_config['schemas'].items():
+                if not isinstance(schema_config, dict):
+                    continue
+                target_schema = schema_config.get('target', source_schema)
+                schema_pairs.append((source_schema, target_schema))
+
+        else:
+            # Format 2: top-level keys treated as schema configs
+            logger.info("No 'schemas' section found, treating top-level keys as source schemas")
+            for key, value in yaml_config.items():
+                # Skip non-dicts
+                if not isinstance(value, dict):
+                    continue
+                # Skip reserved key if present
+                if key == 'schemas':
+                    continue
+                # Consider as schema if contains either 'target' or 'tables'
+                if 'target' in value or 'tables' in value:
+                    source_schema = key
+                    target_schema = value.get('target', source_schema)
+                    schema_pairs.append((source_schema, target_schema))
+
+        logger.info(f"Extracted {len(schema_pairs)} schema pair(s) from YAML: {schema_pairs}")
+        return schema_pairs
+
+    except Exception as e:
+        logger.error(f"Error extracting schemas from YAML file {yaml_file_path}: {e}")
+        logger.error(f"Exception details: {traceback.format_exc()}")
+        return []
+
 def process_filter_clauses(filter_config, columns_info):
     """
     Process filter clauses from YAML configuration into the required format
