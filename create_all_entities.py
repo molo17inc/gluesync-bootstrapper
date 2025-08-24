@@ -947,22 +947,29 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 if isinstance(group_scheds_cfg, dict) and group_scheds_cfg:
                     logger.info("Creating group-level schedules...")
                     try:
-                        # Only use IDs we already have from group creation (via tables)
+                        # Only use groups we already created earlier in this run
                         # Accept either:
-                        # - key equals a known group name in groupId_map
-                        # - key equals an existing group ID (value of groupId_map)
+                        # - key equals a known group NAME in groupId_map
+                        # - key equals a known group ID (value of groupId_map)
                         known_ids = {gid for gid in groupId_map.values() if gid and gid != '_default'}
                         group_schedules_by_id = {}
                         for grp_key, schedules_cfg in group_scheds_cfg.items():
                             if not isinstance(schedules_cfg, list) or not schedules_cfg:
                                 continue
 
-                            grp_id = str(grp_key).strip()
-                            if grp_id not in known_ids:
-                                logger.warning(f"Skipping group schedules for '{grp_id}': not a known group ID from this run")
+                            grp_key_str = str(grp_key).strip()
+
+                            # Resolve by name first
+                            if grp_key_str in groupId_map and groupId_map[grp_key_str] and groupId_map[grp_key_str] != '_default':
+                                resolved_id = groupId_map[grp_key_str]
+                            # Or accept raw ID if it matches one we created
+                            elif grp_key_str in known_ids:
+                                resolved_id = grp_key_str
+                            else:
+                                logger.warning(f"Skipping group schedules for '{grp_key_str}': group not created in this run")
                                 continue
 
-                            group_schedules_by_id[grp_id] = schedules_cfg
+                            group_schedules_by_id[resolved_id] = schedules_cfg
 
                         if group_schedules_by_id:
                             create_group_schedules(token, pipeline_id, group_schedules_by_id)
