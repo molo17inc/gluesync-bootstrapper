@@ -241,26 +241,66 @@ class ChronosClient:
             raise ValueError("Either cron_expression or schedule must be provided")
             
         return self.create_job(job_data)
-    def create_group_schedule(self, pipeline_id, group_id, task_type, schedule_config,
-                             name=None, description=None, with_snapshot=False, enabled=True):
+    def create_group_schedule(self, pipeline_id, group_ids, task_type, schedule_config,
+                             name=None, description=None, with_snapshot=False, enabled=True, snapshot_write_method=None):
         """
-        Create a schedule for a group with the specified configuration.
+        Create a schedule for one or more groups with the specified configuration.
         
         Args:
             pipeline_id (str): ID of the pipeline
-            group_id (str): ID of the group
+            group_ids (str or list): ID or list of IDs of the groups
             task_type (str): Type of task to schedule (group_start, group_stop, group_snapshot)
             schedule_config (dict): Schedule configuration dict with either 'cron_expression' or 'schedule'
             name (str, optional): Name for the job 
             description (str, optional): Description for the job
             with_snapshot (bool, optional): Whether to include snapshot when starting group
             enabled (bool, optional): Whether the job is enabled initially
+            snapshot_write_method (str, optional): Write method for snapshots (INSERT or UPSERT, default: UPSERT)
             
         Returns:
             dict: The created job details
+            
+        Example:
+            # Using cron expression
+            create_group_schedule(
+                pipeline_id="b5ba417a",
+                group_ids=["fe9d40c8", "group-2", "group-3"],
+                task_type="group_snapshot",
+                schedule_config={
+                    "cron_expression": "30 2 * * 1-5"
+                },
+                name="Daily Group Backup",
+                description="Daily group snapshot at 2:30 AM",
+                with_snapshot=True,
+                snapshot_write_method="UPSERT",
+                enabled=True
+            )
+            
+            # Using schedule with days and time
+            create_group_schedule(
+                pipeline_id="b5ba417a",
+                group_ids=["fe9d40c8"],
+                task_type="group_snapshot",
+                schedule_config={
+                    "schedule": {
+                        "days_of_week": ["monday", "tuesday", "wednesday", "thursday", "friday"],
+                        "hour": 2,
+                        "minute": 30
+                    }
+                },
+                name="Weekday Group Backup",
+                description="Weekday group snapshot at 2:30 AM"
+            )
         """
-        if not pipeline_id or not group_id:
-            raise ValueError("Both pipeline_id and group_id are required")
+        if not pipeline_id or not group_ids:
+            raise ValueError("Both pipeline_id and group_ids are required")
+            
+        # Convert single group_id to list for consistent handling
+        if isinstance(group_ids, str):
+            group_ids = [group_ids]
+            
+        if not isinstance(group_ids, list) or not all(isinstance(gid, str) for gid in group_ids):
+            raise ValueError("group_ids must be a string or a list of strings")
             
         if task_type not in ('group_start', 'group_stop', 'group_snapshot'):
             raise ValueError(f"Invalid task_type for group: {task_type}")
@@ -272,24 +312,39 @@ class ChronosClient:
                 'group_stop': 'Stop',
                 'group_snapshot': 'Snapshot'
             }
-            name = f"{task_name_map.get(task_type, 'Schedule')} for group {group_id}"
+            group_names = ", ".join(group_ids[:3])
+            if len(group_ids) > 3:
+                group_names += f" and {len(group_ids) - 3} more"
+            name = f"{task_name_map.get(task_type, 'Schedule')} for groups: {group_names}"
             
         job_data = {
             'name': name,
             'description': description,
             'task_type': task_type,
             'pipeline_id': pipeline_id,
-            'group_id': group_id,
+            'group_ids': group_ids,  # Now accepts a list of group IDs
             'with_snapshot': with_snapshot,
-            'enabled': enabled
+            'enabled': enabled,
+            'snapshot_write_method': 'UPSERT'  # Default value
         }
         
-        # Add either cron_expression or schedule
+        # Add snapshot_write_method if provided
+        if snapshot_write_method:
+            if snapshot_write_method not in ('INSERT', 'UPSERT'):
+                raise ValueError(f"Invalid snapshot_write_method: {snapshot_write_method}. Must be 'INSERT' or 'UPSERT'")
+            job_data['snapshot_write_method'] = snapshot_write_method
+        
+        # Handle both cron_expression and schedule formats
         if 'cron_expression' in schedule_config:
             job_data['cron_expression'] = schedule_config['cron_expression']
         elif 'schedule' in schedule_config:
-            job_data['schedule'] = schedule_config['schedule']
+            # For the new schedule format with days_of_week, hour, minute
+            if isinstance(schedule_config['schedule'], dict):
+                job_data['schedule'] = schedule_config['schedule']
+            else:
+                # Backward compatibility for simple schedule format
+                job_data['schedule'] = schedule_config['schedule']
         else:
-            raise ValueError("Either cron_expression or schedule must be provided")
+            raise ValueError("Either cron_expression or schedule must be provided in schedule_config")
             
         return self.create_job(job_data)

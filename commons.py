@@ -162,57 +162,112 @@ def create_entity_schedules(token, pipeline_id, entity_id, entity_name, schedule
 
 
 def create_group_schedules(token, pipeline_id, group_schedules):
-    """Create schedules for groups based on the YAML configuration."""
+    """
+    Create schedules for groups based on the YAML configuration.
+    
+    Args:
+        token (str): Authentication token
+        pipeline_id (str): ID of the pipeline
+        group_schedules (dict): Dictionary mapping group IDs to their schedule configurations
+                               or a list of schedule configurations for multiple groups
+    """
     if not group_schedules or not ENABLE_SCHEDULING:
         return
 
     logger.info(f"Creating group-level schedules for pipeline {pipeline_id}")
 
     chronos_client = ChronosClient(CHRONOS_URL)
-
+    
+    # Handle case where group_schedules is a list of schedule configs for multiple groups
+    if isinstance(group_schedules, list):
+        for schedule_config in group_schedules:
+            _process_group_schedule(chronos_client, pipeline_id, None, schedule_config)
+        return
+    
+    # Handle case where group_schedules is a dict mapping group IDs to schedule configs
     for group_id, schedules_config in group_schedules.items():
-        logger.info(f"Processing schedules for group: {group_id}")
+        if isinstance(schedules_config, dict) and 'task_type' in schedules_config:
+            # Single schedule config for this group
+            _process_group_schedule(chronos_client, pipeline_id, [group_id], schedules_config)
+        elif isinstance(schedules_config, list):
+            # Multiple schedule configs for this group
+            for schedule_config in schedules_config:
+                _process_group_schedule(chronos_client, pipeline_id, [group_id], schedule_config)
+
+def _process_group_schedule(chronos_client, pipeline_id, group_ids, schedule_config):
+    """
+    Process a single group schedule configuration.
+    
+    Args:
+        chronos_client (ChronosClient): The Chronos client instance
+        pipeline_id (str): ID of the pipeline
+        group_ids (list): List of group IDs this schedule applies to
+        schedule_config (dict): Schedule configuration
+    """
+    try:
+        # Extract schedule parameters with defaults
+        task_type = schedule_config.get('task_type')
+        name = schedule_config.get('name')
+        description = schedule_config.get('description')
+        with_snapshot = schedule_config.get('with_snapshot', False)
+        enabled = schedule_config.get('enabled', True)
+        snapshot_write_method = schedule_config.get('snapshot_write_method')
         
-        for schedule_config in schedules_config:
-            try:
-                # Extract schedule parameters
-                task_type = schedule_config.get('task_type')
-                name = schedule_config.get('name')
-                description = schedule_config.get('description')
-                with_snapshot = schedule_config.get('with_snapshot', False)
-                enabled = schedule_config.get('enabled', True)
+        # Support both 'group_ids' and 'groups' for specifying multiple groups
+        if 'group_ids' in schedule_config:
+            group_ids = schedule_config['group_ids']
+            if isinstance(group_ids, str):
+                group_ids = [group_ids]
+        elif 'groups' in schedule_config:
+            group_ids = schedule_config['groups']
+            if isinstance(group_ids, str):
+                group_ids = [group_ids]
+        
+        # If no group_ids provided at all, use the one from the function parameter
+        if not group_ids and 'group_id' in schedule_config:
+            group_ids = [schedule_config['group_id']]
+        
+        if not group_ids:
+            logger.warning("No group IDs provided for schedule. Skipping.")
+            return
+            
+        # Create a configuration dict for the chronos client
+        schedule_data = {}
+        if 'cron_expression' in schedule_config:
+            schedule_data['cron_expression'] = schedule_config['cron_expression']
+        elif 'schedule' in schedule_config:
+            # Support both direct schedule object and nested under 'schedule' key
+            schedule_data['schedule'] = schedule_config['schedule']
+        else:
+            logger.warning("Schedule is missing both 'cron_expression' and 'schedule'. Skipping.")
+            return
 
-                # Create a configuration dict for the chronos client
-                schedule_data = {}
-                if 'cron_expression' in schedule_config:
-                    schedule_data['cron_expression'] = schedule_config['cron_expression']
-                elif 'schedule' in schedule_config:
-                    schedule_data['schedule'] = schedule_config['schedule']
-                else:
-                    logger.warning(
-                        f"Schedule for group {group_id} is missing both 'cron_expression' and 'schedule'. Skipping.")
-                    continue
+        # Create the schedule
+        result = chronos_client.create_group_schedule(
+            pipeline_id=pipeline_id,
+            group_ids=group_ids,
+            task_type=task_type,
+            schedule_config=schedule_data,
+            name=name,
+            description=description,
+            with_snapshot=with_snapshot,
+            enabled=enabled,
+            snapshot_write_method=snapshot_write_method
+        )
 
-                # Create the schedule
-                result = chronos_client.create_group_schedule(
-                    pipeline_id=pipeline_id,
-                    group_id=group_id,
-                    task_type=task_type,
-                    schedule_config=schedule_data,
-                    name=name,
-                    description=description,
-                    with_snapshot=with_snapshot,
-                    enabled=enabled
-                )
+        group_names = ", ".join(group_ids[:3])
+        if len(group_ids) > 3:
+            group_names += f" and {len(group_ids) - 3} more"
+            
+        log_success(logger, f"Created {task_type} schedule for groups {group_names}: {name}")
+        logger.debug(f"Schedule details: {json.dumps(result, indent=2)}")
 
-                log_success(logger, f"Created {task_type} schedule for group {group_id}: {name}")
-                logger.debug(f"Schedule details: {json.dumps(result)}")
-
-            except Exception as e:
-                error_msg = f"Failed to create schedule for group {group_id}: {str(e)}"
-                log_failure(logger, error_msg)
-                logger.error(traceback.format_exc())
-                # Continue creating other schedules even if one fails
+    except Exception as e:
+        group_info = f"groups {group_ids}" if group_ids else "unknown group"
+        error_msg = f"Failed to create schedule for {group_info}: {str(e)}"
+        log_failure(logger, error_msg)
+        logger.error(traceback.format_exc())
+        # Continue creating other schedules even if one fails
 
 
 def create_pipeline_schedules(token, pipeline_id, pipeline_schedules):

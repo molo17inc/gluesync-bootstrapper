@@ -44,36 +44,62 @@ dbo:
       with_snapshot: false
       snapshot_write_method: "UPSERT"  # INSERT or UPSERT (default: UPSERT)
       enabled: true
+  # Group schedules can be defined in two ways:
+  # 1. As a list of schedule configurations that can apply to multiple groups (recommended)
+  # 2. As a dictionary mapping group IDs to their schedules (legacy format)
   group_schedules:
-      finance:
-        - name: "Daily finance group snapshot"
-          description: "Create snapshot of all finance entities daily at 2 AM"
-          task_type: "group_snapshot"  # group_start, group_stop, group_snapshot
-          cron_expression: "0 2 * * *"
-          enabled: true
-        - name: "Weekly finance group restart"
-          description: "Restart all finance entities weekly on Sunday"
-          task_type: "group_start"
-          schedule:
-            days_of_week: ["sunday"]
-            hour: 3
-            minute: 0
-          enabled: true
-      
-      sales:
-        - name: "Hourly sales snapshot"
-          description: "Create snapshot of sales entities every hour during business hours"
-          task_type: "group_snapshot"
-          cron_expression: "0 9-17 * * 1-5"  # Every hour from 9 AM to 5 PM, weekdays only
-          enabled: true
-        - name: "End of day sales stop"
-          description: "Stop all sales entities at end of business day"
-          task_type: "group_stop"
-          schedule:
-            days_of_week: ["monday", "tuesday", "wednesday", "thursday", "friday"]
-            hour: 18
-            minute: 0
-          enabled: false  # Disabled by default
+    # Format 1: List of schedule configurations (recommended)
+    - name: "Daily finance and accounting snapshot"
+      description: "Create snapshot of all finance and accounting entities daily at 2 AM"
+      task_type: "group_snapshot"
+      # Specify groups using either 'group_ids' or 'groups' key
+      group_ids: ["finance", "accounting"]
+      # Alternative: groups: ["finance", "accounting"]
+      cron_expression: "0 2 * * *"
+      with_snapshot: true
+      snapshot_write_method: "UPSERT"  # INSERT or UPSERT (default: UPSERT)
+      enabled: true
+
+    - name: "Weekend maintenance for all groups"
+      description: "Weekly maintenance for all groups on Sunday at 3 AM"
+      task_type: "group_start"
+      # Apply to all groups (special value "*" means all groups)
+      group_ids: ["*"]
+      schedule:
+        days_of_week: ["sunday"]
+        hour: 3
+        minute: 0
+      with_snapshot: false
+      enabled: true
+
+    - name: "Mid-month reconciliation"
+      description: "Run reconciliation for finance and accounting on the 15th of each month"
+      task_type: "group_snapshot"
+      group_ids: ["finance", "accounting"]
+      cron_expression: "0 4 15 * *"  # 4 AM on the 15th of every month
+      with_snapshot: true
+      snapshot_write_method: "INSERT"  # Use INSERT instead of UPSERT for reconciliation
+      enabled: true
+
+    # Format 2: Legacy format converted to new format
+    - name: "Hourly sales snapshot"
+      description: "Create snapshot of sales entities every hour during business hours"
+      task_type: "group_snapshot"
+      group_ids: ["sales"]
+      cron_expression: "0 9-17 * * 1-5"  # Every hour from 9 AM to 5 PM, weekdays only
+      with_snapshot: true
+      snapshot_write_method: "UPSERT"
+      enabled: true
+
+    - name: "End of day sales stop"
+      description: "Stop all sales entities at end of business day"
+      task_type: "group_stop"
+      group_ids: ["sales"]
+      schedule:
+        days_of_week: ["monday", "tuesday", "wednesday", "thursday", "friday"]
+        hour: 18
+        minute: 0
+      enabled: false  # Disabled by default
   tables:
     whitelist:
       - DRIVERS
