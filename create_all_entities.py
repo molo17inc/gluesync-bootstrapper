@@ -75,6 +75,11 @@ def get_allowed_operations(target_custom_properties):
     return default_ops
 
 def create_entities(token, pipeline_id, source_schema, target_schema, tables, source_agent_id, target_agent_id, source_type, target_type, yaml_config, skip_errors=True, chunk_size=50):
+    # Skip entity discovery if we're creating tables if they don't exist
+    if CREATE_TABLE_IF_NOT_EXISTS:
+        logger.info("Skipping entity discovery as CREATE_TABLE_IF_NOT_EXISTS is enabled")
+        return {"successful": [], "failed": [], "total": 0, "skipped_discovery": True}
+        
     # First, collect all unique group names and chain IDs from the YAML configuration
     group_names = set()
     chain_ids = set()
@@ -1032,11 +1037,14 @@ def main(pipeline_id, source_schema, target_schema, source_type, target_type, ya
             raise Exception(error_msg)
 
         # Create entities
-        create_entities(
+        result = create_entities(
             token, pipeline_id, source_schema, target_schema,
             tables, source_agent['agentId'], target_agent['agentId'],
             source_type, target_type, yaml_config, skip_errors, chunk_size
         )
+        
+        if result.get('skipped_discovery', False):
+            logger.info("Entity discovery was skipped as tables will be created on demand")
 
     except Exception as e:
         log_failure(logger, f"Error: {str(e)}")
