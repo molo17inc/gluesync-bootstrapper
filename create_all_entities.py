@@ -468,17 +468,15 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         if not tables_list:
             continue
 
-        # Sort tables by orderIndex
-        sorted_tables = sorted(tables_list, key=lambda x: x[2])
-
+        # Tables are processed in the order they appear in the YAML file
         # Log table ordering for debugging
-        logger.info(f"Creating MultiTable entity for chainId: {chain_id} with {len(sorted_tables)} tables in order:")
-        for idx, (table_key, _, order_index) in enumerate(sorted_tables):
-            logger.info(f"  {idx+1}. Table {table_key} with orderIndex: {order_index}")
+        logger.info(f"Creating MultiTable entity for chainId: {chain_id} with {len(tables_list)} tables in YAML order:")
+        for idx, (table_key, _, _) in enumerate(tables_list):
+            logger.info(f"  {idx+1}. Table {table_key}")
 
 
         # We'll use the first table's name as the entity name prefix
-        first_table_key, first_table_data, first_table_order_index = sorted_tables[0]
+        first_table_key, first_table_data, _ = tables_list[0]
         entity_name = f"{source_schema}.{first_table_key}"
 
         # Initialize tables, columns, and keys for the MultiTable entity
@@ -487,8 +485,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         multi_keys = []
         tables_properties = {}
 
-        # Process each table in the chain
-        for table_key, table_data, order_index in sorted_tables:
+        # Process each table in the chain (in YAML order)
+        for table_key, table_data, _ in tables_list:
             # Get columns for this table
             columns = get_table_columns(token, pipeline_id, source_agent_id, source_schema, table_key)
 
@@ -581,7 +579,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 "unchangedDataFilterType": "ENTIRE_ROW"
             },
             "agentId": source_agent_id,
-            "orderIndex": first_table_order_index,  # Use the first table's orderIndex for the source entity
+            "orderIndex": 0,  # Fixed order index as order is determined by YAML order
             "customProperties": {},
             "tablesProperties": tables_properties,
             "tables": multi_tables,
@@ -589,15 +587,14 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             "keys": multi_keys
         }
 
-        # Create target entity for MultiTable
-        target_custom_properties = table_data.get('customProperties', {}).get('target', {})
+        # Initialize target tables and properties
         target_tables = []
+        target_tables_properties = {}
         target_columns = []
         target_keys = []
-        target_tables_properties = {}
 
-        # Process each table for the target
-        for table_key, table_data, order_index in sorted_tables:
+        # Process each table for the target (in YAML order)
+        for table_key, table_data, _ in tables_list:
             # Add table to the list
             target_table_obj = {
                 "name": table_key,
@@ -673,7 +670,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 "snapshotWritingConcurrency": target_custom_properties.get('snapshotWritingConcurrency', 1)
             },
             "agentId": target_agent_id,
-            "orderIndex": first_table_order_index,  # Use the first table's orderIndex for the target entity
+            "orderIndex": 0,  # Fixed order index as order is determined by YAML order
             "customProperties": {"ttlValue": target_custom_properties.get('ttlValue', 0)},
             "tablesProperties": target_tables_properties,
             "tables": target_tables,
@@ -693,7 +690,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 "entityName": entity_name,
                 "agentEntities": [source_entity, target_entity],
                 "groupId": group_id if group_id != '_default' else None,  # Use None instead of '_default' for the API
-                "orderIndex": first_table_order_index  # Use the first table's orderIndex for the entire entity
+                "orderIndex": 0  # Fixed order index as order is determined by YAML order
             }]
         }
 
