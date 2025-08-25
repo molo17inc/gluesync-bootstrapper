@@ -69,6 +69,11 @@ class CreateTableRequest(BaseModel):
 
 
 def table_exists(pipeline_id: str, schema_name: str, table_name: str, token: str) -> bool:
+    if not CREATE_TABLE_IF_NOT_EXISTS:
+        # If we're not going to create tables that don't exist, assume the table exists
+        # to avoid unnecessary API calls that will return 404
+        return True
+        
     try:
         fetch_core_hub(
             f"/pipelines/{pipeline_id}/config/entities/schemas/{schema_name}/tables/{table_name}",
