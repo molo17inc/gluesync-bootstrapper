@@ -3,52 +3,6 @@
 Copyright (c) 2024 MOLO17
 Author: Daniele Angeli
 
-## DBMoto Metadata Conversion
-
-### Overview
-The included `parse_dbmoto_metadata_xml.py` script converts DbMoto metadata XML files into YAML configurations compatible with the GlueSync bootstrapper. It extracts database schemas, tables, and fields from the XML and generates structured YAML files.
-
-### Prerequisites
-- Python 3.6 or higher
-- PyYAML package (`pip3 install pyyaml --break-system-packages`)
-
-### Usage
-
-#### Basic Conversion
-```bash
-python3 parse_dbmoto_metadata_xml.py /path/to/your/dbmoto_export.xml
-```
-
-#### Advanced Options
-```bash
-python3 parse_dbmoto_metadata_xml.py /path/to/your/dbmoto_export.xml \
-  --output-dir ./output_configs \
-  --template ./custom-template.yaml
-```
-
-#### Arguments
-- `xml_path` (required): Path to the DbMoto metadata XML file
-- `--output-dir`: Directory to save generated YAML files (default: `schemas_yaml`)
-- `--template`: Path to a template YAML file (default: `table-list-template-basic.yaml` in script directory)
-
-### Output
-The script will:
-1. Parse the DbMoto XML file
-2. Extract connections, schemas, tables, and fields
-3. Generate YAML files in the specified output directory
-4. Preserve the hierarchical structure of your database
-
-### Notes
-- The script automatically handles different naming conventions in the XML
-- Missing names will be automatically generated (e.g., `Schema_123`, `Table_456`)
-- Field types are converted to lowercase for consistency
-- A summary of extracted items is printed to the console
-
-### Troubleshooting
-- Ensure the XML file is a valid DbMoto metadata export
-- Check file permissions for both input and output directories
-- Verify that the template file (if specified) is a valid YAML file
-
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
 in the Software without restriction, including without limitation the rights
@@ -561,6 +515,48 @@ The script will:
 - Check file permissions for both input and output directories
 - Verify that the template file (if specified) is a valid YAML file
 
-## Project Status
+## DBMoto Metadata Conversion
 
-Active development
+### Overview
+The included `parse_dbmoto_metadata_xml.py` script converts DbMoto metadata XML files into YAML configurations compatible with the GlueSync bootstrapper. It extracts database schemas, tables, and fields from the XML and generates structured YAML files.
+
+### Prerequisites
+- Python 3.6 or higher
+- PyYAML package (`pip3 install pyyaml --break-system-packages`)
+
+### Usage
+
+#### Basic Conversion
+```bash
+python3 parse_dbmoto_metadata_xml.py /path/to/your/dbmoto_export.xml
+```
+
+#### Advanced Options
+```bash
+python3 parse_dbmoto_metadata_xml.py /path/to/your/dbmoto_export.xml \
+  --output-dir ./output_configs \
+  --template ./custom-template.yaml
+```
+
+#### Arguments
+- `xml_path` (required): Path to the DbMoto metadata XML file
+- `--output-dir`: Directory to save generated YAML files (default: `schemas_yaml`)
+- `--template`: Path to a template YAML file (default: `table-list-template-basic.yaml` in script directory)
+
+### Output
+The script will:
+1. Parse the DbMoto XML file
+2. Extract connections, schemas, tables, and fields
+3. Generate YAML files in the specified output directory
+4. Preserve the hierarchical structure of your database
+
+### Notes
+- The script automatically handles different naming conventions in the XML
+- Missing names will be automatically generated (e.g., `Schema_123`, `Table_456`)
+- Field types are converted to lowercase for consistency
+- A summary of extracted items is printed to the console
+
+### Troubleshooting
+- Ensure the XML file is a valid DbMoto metadata export
+- Check file permissions for both input and output directories
+- Verify that the template file (if specified) is a valid YAML file
