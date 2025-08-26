@@ -680,13 +680,18 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         logger.info(f"Assigning multi-table entity '{entity_name}' to group: {group_name} (ID: {group_id})")
         
         # Create the MultiTable entity
+        entity_payload = {
+            "entityId": "",
+            "entityName": entity_name,
+            "agentEntities": [source_entity, target_entity]
+        }
+        
+        # Only add groupId if it's not the default
+        if group_id and group_id != '_default':
+            entity_payload["groupId"] = group_id
+            
         multi_table_entity = {
-            "entities": [{
-                "entityId": "",
-                "entityName": entity_name,
-                "agentEntities": [source_entity, target_entity],
-                "groupId": group_id if group_id != '_default' else None,  # Use None instead of '_default' for the API
-            }]
+            "entities": [entity_payload]
         }
 
         # Add to multi_table_entities for separate processing
