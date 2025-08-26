@@ -100,6 +100,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             
             # Process each table in the config
             for table_key, table_data in tables_config.items():
+                # Process groupId
                 if 'groupId' in table_data and table_data['groupId'] != '_default':
                     group_name = str(table_data['groupId']).strip()
                     if group_name:  # Only add non-empty group names
@@ -108,17 +109,14 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     else:
                         logger.warning(f"Empty group ID found for table {schema_name}.{table_key}")
 
-                    # Collect chainId information
-                    if 'chainId' in table_data:
-                        chain_id = table_data['chainId']
-                        chain_ids.add(chain_id)
+                # Collect chainId information (independent of groupId)
+                if 'chainId' in table_data:
+                    chain_id = table_data['chainId']
+                    chain_ids.add(chain_id)
 
-                        # Get orderIndex, default to 0 if not specified
-                        order_index = table_data.get('orderIndex', 0)
-
-                        if chain_id not in chained_tables:
-                            chained_tables[chain_id] = []
-                        chained_tables[chain_id].append((table_key, table_data, order_index))
+                    if chain_id not in chained_tables:
+                        chained_tables[chain_id] = []
+                    chained_tables[chain_id].append((table_key, table_data))
 
             # Note: Do NOT add group names from group-level schedules to group_names here,
             # because keys might be group IDs and we must not try to create groups using IDs as names.
@@ -471,12 +469,12 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         # Tables are processed in the order they appear in the YAML file
         # Log table ordering for debugging
         logger.info(f"Creating MultiTable entity for chainId: {chain_id} with {len(tables_list)} tables in YAML order:")
-        for idx, (table_key, _, _) in enumerate(tables_list):
+        for idx, (table_key, _) in enumerate(tables_list):
             logger.info(f"  {idx+1}. Table {table_key}")
 
 
         # We'll use the first table's name as the entity name prefix
-        first_table_key, first_table_data, _ = tables_list[0]
+        first_table_key, first_table_data = tables_list[0]
         entity_name = f"{source_schema}.{first_table_key}"
 
         # Initialize tables, columns, and keys for the MultiTable entity
@@ -486,7 +484,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         tables_properties = {}
 
         # Process each table in the chain (in YAML order)
-        for table_key, table_data, _ in tables_list:
+        for table_key, table_data in tables_list:
             # Get columns for this table
             columns = get_table_columns(token, pipeline_id, source_agent_id, source_schema, table_key)
 
@@ -579,7 +577,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 "unchangedDataFilterType": "ENTIRE_ROW"
             },
             "agentId": source_agent_id,
-            "orderIndex": 0,  # Fixed order index as order is determined by YAML order
             "customProperties": {},
             "tablesProperties": tables_properties,
             "tables": multi_tables,
@@ -594,7 +591,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         target_keys = []
 
         # Process each table for the target (in YAML order)
-        for table_key, table_data, _ in tables_list:
+        for table_key, table_data in tables_list:
             # Add table to the list
             target_table_obj = {
                 "name": table_key,
@@ -670,7 +667,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 "snapshotWritingConcurrency": target_custom_properties.get('snapshotWritingConcurrency', 1)
             },
             "agentId": target_agent_id,
-            "orderIndex": 0,  # Fixed order index as order is determined by YAML order
             "customProperties": {"ttlValue": target_custom_properties.get('ttlValue', 0)},
             "tablesProperties": target_tables_properties,
             "tables": target_tables,
@@ -690,7 +686,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 "entityName": entity_name,
                 "agentEntities": [source_entity, target_entity],
                 "groupId": group_id if group_id != '_default' else None,  # Use None instead of '_default' for the API
-                "orderIndex": 0  # Fixed order index as order is determined by YAML order
             }]
         }
 
@@ -708,7 +703,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
             # Check if this table is in any chain
             for tables_list in chained_tables.values():
-                for table_key, _, _ in tables_list:
+                for table_key, _ in tables_list:
                     if table_key == table_name:
                         is_chained = True
                         break
