@@ -81,7 +81,7 @@ def add_handlers(logger: logging.Logger, log_file=None):
     if is_docker:
         try:
             # Add Logstash handler only in Docker container
-            logstash_host = '10.17.3.250'
+            logstash_host = '10.17.3.230'
             logstash_port = 5000
             
             # Initialize Logstash handler with error handling
