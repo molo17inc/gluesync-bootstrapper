@@ -475,7 +475,7 @@ For support and bug reports, please create an issue in the GitLab repository.
 The included `parse_dbmoto_metadata_xml.py` script converts DbMoto metadata XML files into YAML configurations compatible with the GlueSync bootstrapper. It extracts database schemas, tables, and fields from the XML and generates structured YAML files.
 
 ### Prerequisites
-- Python 3.6 or higher
+- Python 3.10
 - PyYAML package (`pip3 install pyyaml --break-system-packages`)
 
 ### Usage
@@ -521,7 +521,7 @@ The script will:
 The included `parse_dbmoto_metadata_xml.py` script converts DbMoto metadata XML files into YAML configurations compatible with the GlueSync bootstrapper. It extracts database schemas, tables, and fields from the XML and generates structured YAML files.
 
 ### Prerequisites
-- Python 3.6 or higher
+- Python 3.10
 - PyYAML package (`pip3 install pyyaml --break-system-packages`)
 
 ### Usage
