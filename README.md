@@ -451,6 +451,18 @@ Accepted values for `source-type` and `target-type`:
 - `SQL` (for any RDBMS)
 - `NoSQL` (for NoSQL databases, Kafka, AWSS3, etc.)
 
+Available environment variables:
+- `CREATE_TABLE_IF_NOT_EXISTS`: Create table if not exists (default: `false`)
+- `CORE_HUB_URL`: URL of the CoreHub service (default: `https://localhost:1717`)
+- `DEFAULT_PASSWORD`: Password for authentication (default: `admin`)
+- `TARGET_TYPE`: Target agent type (default: `NoSQL`)
+- `ENTITY_START_TIMEOUT`: Entity start timeout (default: `4`)
+- `ENABLE_SCHEDULING`: Enable scheduling (default: `true`)
+- `USE_SDK`: Use SDK (default: `true`)
+- `SSL_ENABLED`: Enable SSL (default: `false`)
+- `SSL_SKIP_VERIFY`: Skip SSL verification (default: `false`)
+- `CHRONOS_URL`: URL of the Chronos service (default: `http://gluesync-chronos:8000`)
+
 ## Requirements
 
 - Source database system (e.g., MS SQL Server)
