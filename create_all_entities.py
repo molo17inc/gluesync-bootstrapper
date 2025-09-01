@@ -338,19 +338,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     "type": udf_def.get("type")
                 }
 
-        target_entity = {
-            "type": "NoSqlEntity" if target_type.lower() == "nosql" else "SingleTable",
-            "entityType": target_entity_type,
-            "agentId": target_agent_id,
-            "entityObject": {
-                "scope": yaml_target_schema,
-                "collection": target_table_name
-            },
-            "table": {
-                "schema": yaml_target_schema,
-                "name": target_table_name
-            },
-            "columns": [
+        columns_def = [
                 {
                     "name": target_name,
                     "alias": target_name,
@@ -366,15 +354,48 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     "alias": col["name"],
                     "type": map_data_type(col["type"], source_node_info, target_node_info)
                 } for col in columns["columns"]
-            ],
-            "keys": [
+            ]
+
+        print(f"Columns definition for {table_name}: {columns_def}")
+
+        # Process keys and other configurations as before...
+        if custom_config and 'keys' in custom_config:
+            keys = [
                 {
-                    "name": key["name"],
-                    "alias": key["name"],
-                    "type": map_data_type(key["type"], source_node_info, target_node_info) if key.get("type") and key[
-                        "type"] != "unknown" else key["type"]
-                } for key in keys
-            ],
+                    "name": target_name,
+                    "alias": target_name,
+                    "type": col["type"]
+                }
+                for col in columns["columns"]
+                for column_map in custom_config.get('columns', [])
+                for source_name, target_name in column_map.items()
+                if col["name"] == source_name and col["name"] in custom_config["keys"]
+            ]
+            print(f"Using custom keys for {table_name}: {keys}")
+        else:
+            keys = [
+                {
+                    "name": col["name"],
+                    "alias": col["name"],
+                    "type": col["type"]
+                } for col in columns["columns"] if col.get("isPrimaryKey")
+            ]
+            print(f"Using primary keys for {table_name}: {keys}")
+
+        target_entity = {
+            "type": "NoSqlEntity" if target_type.lower() == "nosql" else "SingleTable",
+            "entityType": target_entity_type,
+            "agentId": target_agent_id,
+            "entityObject": {
+                "scope": yaml_target_schema,
+                "collection": target_table_name
+            },
+            "table": {
+                "schema": yaml_target_schema,
+                "name": target_table_name
+            },
+            "columns": columns_def,
+            "keys": keys,
             "customProperties": target_custom_properties,
             "tablesProperties": {target_table_key: {}},
             "sourceAgent": source_agent_id,
