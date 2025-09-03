@@ -238,46 +238,57 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             }
             print(f"Document key configuration for {table_name}: {document_key}")
 
+        columns_def = [
+            {
+                "name": col["name"],
+                "alias": target_name,
+                "type": col["type"]
+            }
+            for col in columns["columns"]
+            for column_map in custom_config.get('columns', [])
+            for source_name, target_name in column_map.items()
+            if source_name == col["name"]
+        ] if custom_config.get('columns') else [
+            {
+                "name": col["name"],
+                "alias": col["name"],
+                "type": col["type"]
+            } for col in columns["columns"]
+        ]
+
+        print(f"Columns definition for {table_name}: {columns_def}")
+
         # Process keys and other configurations as before...
         if custom_config and 'keys' in custom_config:
             keys = []
-            for key_def in custom_config['keys']:
-                # Handle both string (key name) and dict (key with name/alias) formats
-                if isinstance(key_def, dict):
-                    # Handle the case where the key is specified as a dict with 'name' and optional 'alias'
-                    key_name = next(iter(key_def)) if not key_def.get('name') else key_def['name']
-                    key_config = key_def.get(key_name, {}) if isinstance(key_def.get(key_name), dict) else {}
-
-                    # Get the key name (either from the dict key or from the 'name' field)
-                    key_name = key_name or key_config.get('name')
-                    # Get the alias (defaults to the key name if not specified)
-                    key_alias = key_config.get('name', key_name)
-
-                    # Get the key type from the config or find it in the columns
-                    key_type = key_config.get('type')
-                else:
-                    # Simple string format - use the string as both name and alias
-                    key_name = key_def
-                    key_alias = key_def
-                    key_type = None
-
-                # Try to find the key in the columns to get its type if not specified
-                key_column = next((col for col in columns["columns"] if col["name"] == key_name), None)
-
-                if key_column:
-                    keys.append({
-                        "name": key_name,
-                        "alias": key_alias,
-                        "type": key_type or key_column["type"]
-                    })
-                else:
-                    print(
-                        f"Warning: Key {key_name} not found in columns for table {table_name}. Adding with unknown type.")
-                    keys.append({
-                        "name": key_name,
-                        "alias": key_alias,
-                        "type": key_type or "unknown"
-                    })
+            
+            # Check if we have column mappings
+            if custom_config.get('columns'):
+                # Use column mappings for keys
+                keys = [
+                    {
+                        "name": col["name"],
+                        "alias": target_name,
+                        "type": col["type"]
+                    }
+                    for col in columns["columns"]
+                    for column_map in custom_config['columns']
+                    for source_name, target_name in column_map.items()
+                    if col["name"] == source_name and col["name"] in custom_config["keys"]
+                ]
+            else:
+                # No column mappings, use keys directly from source columns
+                for key_name in custom_config['keys']:
+                    key_column = next((col for col in columns["columns"] if col["name"] == key_name), None)
+                    if key_column:
+                        keys.append({
+                            "name": key_column["name"],
+                            "alias": key_column["name"],
+                            "type": key_column["type"]
+                        })
+                    else:
+                        print(f"Warning: Key '{key_name}' not found in columns for table '{table_name}'")
+            
             print(f"Using custom keys for {table_name}: {keys}")
         else:
             keys = [
@@ -311,23 +322,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 "name": table_name,
                 "schema": source_schema
             },
-            "columns": [
-                {
-                    "name": col["name"],
-                    "alias": target_name,
-                    "type": col["type"]
-                }
-                for col in columns["columns"]
-                for column_map in custom_config.get('columns', [])
-                for source_name, target_name in column_map.items()
-                if source_name == col["name"]
-            ] if custom_config.get('columns') else [
-                {
-                    "name": col["name"],
-                    "alias": col["name"],
-                    "type": col["type"]
-                } for col in columns["columns"]
-            ],
+            "columns": columns_def,
             "keys": keys,
             "customProperties": source_custom_properties,
             "tablesProperties": {source_table_key: {}}
@@ -335,14 +330,14 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
         # Get allowed operations for the target entity
         allowed_operations = get_allowed_operations(target_custom_properties)
-        
+
         # Create target entity type with allowedOperations
         target_entity_type = {
             "type": "Target",
             "allowedOperations": allowed_operations,
             "snapshotWritingConcurrency": target_custom_properties.get('snapshotWritingConcurrency', 1)
         }
-        
+
         # Add other target custom properties (excluding the ones we handle separately)
         excluded_props = {'allowedOperations', 'skipDeletion', 'snapshotWritingConcurrency'}
         for key, value in target_custom_properties.items():
@@ -361,19 +356,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     "type": udf_def.get("type")
                 }
 
-        target_entity = {
-            "type": "NoSqlEntity" if target_type.lower() == "nosql" else "SingleTable",
-            "entityType": target_entity_type,
-            "agentId": target_agent_id,
-            "entityObject": {
-                "scope": yaml_target_schema,
-                "collection": target_table_name
-            },
-            "table": {
-                "schema": yaml_target_schema,
-                "name": target_table_name
-            },
-            "columns": [
+        columns_def = [
                 {
                     "name": target_name,
                     "alias": target_name,
@@ -389,15 +372,66 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     "alias": col["name"],
                     "type": map_data_type(col["type"], source_node_info, target_node_info)
                 } for col in columns["columns"]
-            ],
-            "keys": [
+            ]
+
+        print(f"Columns definition for {table_name}: {columns_def}")
+
+        # Process keys and other configurations as before...
+        if custom_config and 'keys' in custom_config:
+            keys = []
+            
+            # Check if we have column mappings
+            if custom_config.get('columns'):
+                # Use column mappings for keys
+                keys = [
+                    {
+                        "name": target_name,
+                        "alias": target_name,
+                        "type": col["type"]
+                    }
+                    for col in columns["columns"]
+                    for column_map in custom_config['columns']
+                    for source_name, target_name in column_map.items()
+                    if col["name"] == source_name and col["name"] in custom_config["keys"]
+                ]
+            else:
+                # No column mappings, use keys directly from source columns
+                for key_name in custom_config['keys']:
+                    key_column = next((col for col in columns["columns"] if col["name"] == key_name), None)
+                    if key_column:
+                        keys.append({
+                            "name": key_column["name"],
+                            "alias": key_column["name"],
+                            "type": key_column["type"]
+                        })
+                    else:
+                        print(f"Warning: Key '{key_name}' not found in columns for table '{table_name}'")
+            
+            print(f"Using custom keys for {table_name}: {keys}")
+        else:
+            keys = [
                 {
-                    "name": key.get("alias", key["name"]),
-                    "alias": key.get("alias", key["name"]),
-                    "type": map_data_type(key["type"], source_node_info, target_node_info) if key.get("type") and key[
-                        "type"] != "unknown" else key["type"]
-                } for key in keys
-            ],
+                    "name": col["name"],
+                    "alias": col["name"],
+                    "type": col["type"]
+                } for col in columns["columns"] if col.get("isPrimaryKey")
+            ]
+            print(f"Using primary keys for {table_name}: {keys}")
+
+        target_entity = {
+            "type": "NoSqlEntity" if target_type.lower() == "nosql" else "SingleTable",
+            "entityType": target_entity_type,
+            "agentId": target_agent_id,
+            "entityObject": {
+                "scope": yaml_target_schema,
+                "collection": target_table_name
+            },
+            "table": {
+                "schema": yaml_target_schema,
+                "name": target_table_name
+            },
+            "columns": columns_def,
+            "keys": keys,
             "customProperties": target_custom_properties,
             "tablesProperties": {target_table_key: {}},
             "sourceAgent": source_agent_id,

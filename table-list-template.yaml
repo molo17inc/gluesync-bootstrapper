@@ -106,9 +106,7 @@ dbo:
       - VEHICLES
     custom:
         DRIVERS:
-          keys:
-            - ID:
-                name: id
+          keys: [ID]
           documentKey:
             prefix: "TESTPREFIX"
             suffix: "TESTSUFFIX"
@@ -124,6 +122,7 @@ dbo:
             - AGE: "age"
             - DRIVING_LICENSE_EXPIRE_DATE: "licenseExpiry"
             - EMAIL: "email"
+            - ID: "id"
           # Entity-level schedule configurations
           schedules:
             # First schedule for entity (runs every day at midnight)
