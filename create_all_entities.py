@@ -260,17 +260,35 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
         # Process keys and other configurations as before...
         if custom_config and 'keys' in custom_config:
-            keys = [
-                {
-                    "name": col["name"],
-                    "alias": target_name,
-                    "type": col["type"]
-                }
-                for col in columns["columns"]
-                for column_map in custom_config.get('columns', [])
-                for source_name, target_name in column_map.items()
-                if col["name"] == source_name and col["name"] in custom_config["keys"]
-            ]
+            keys = []
+            
+            # Check if we have column mappings
+            if custom_config.get('columns'):
+                # Use column mappings for keys
+                keys = [
+                    {
+                        "name": col["name"],
+                        "alias": target_name,
+                        "type": col["type"]
+                    }
+                    for col in columns["columns"]
+                    for column_map in custom_config['columns']
+                    for source_name, target_name in column_map.items()
+                    if col["name"] == source_name and col["name"] in custom_config["keys"]
+                ]
+            else:
+                # No column mappings, use keys directly from source columns
+                for key_name in custom_config['keys']:
+                    key_column = next((col for col in columns["columns"] if col["name"] == key_name), None)
+                    if key_column:
+                        keys.append({
+                            "name": key_column["name"],
+                            "alias": key_column["name"],
+                            "type": key_column["type"]
+                        })
+                    else:
+                        print(f"Warning: Key '{key_name}' not found in columns for table '{table_name}'")
+            
             print(f"Using custom keys for {table_name}: {keys}")
         else:
             keys = [
@@ -360,17 +378,35 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
         # Process keys and other configurations as before...
         if custom_config and 'keys' in custom_config:
-            keys = [
-                {
-                    "name": target_name,
-                    "alias": target_name,
-                    "type": col["type"]
-                }
-                for col in columns["columns"]
-                for column_map in custom_config.get('columns', [])
-                for source_name, target_name in column_map.items()
-                if col["name"] == source_name and col["name"] in custom_config["keys"]
-            ]
+            keys = []
+            
+            # Check if we have column mappings
+            if custom_config.get('columns'):
+                # Use column mappings for keys
+                keys = [
+                    {
+                        "name": target_name,
+                        "alias": target_name,
+                        "type": col["type"]
+                    }
+                    for col in columns["columns"]
+                    for column_map in custom_config['columns']
+                    for source_name, target_name in column_map.items()
+                    if col["name"] == source_name and col["name"] in custom_config["keys"]
+                ]
+            else:
+                # No column mappings, use keys directly from source columns
+                for key_name in custom_config['keys']:
+                    key_column = next((col for col in columns["columns"] if col["name"] == key_name), None)
+                    if key_column:
+                        keys.append({
+                            "name": key_column["name"],
+                            "alias": key_column["name"],
+                            "type": key_column["type"]
+                        })
+                    else:
+                        print(f"Warning: Key '{key_name}' not found in columns for table '{table_name}'")
+            
             print(f"Using custom keys for {table_name}: {keys}")
         else:
             keys = [
