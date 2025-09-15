@@ -50,6 +50,7 @@ ARG LOG_LEVEL=INFO
 ARG TEST_NAME=DRY_RUN
 ARG VERSION=latest
 ARG JOB_ID=not_set
+ARG HANDLE_WITH_CONDUCTOR=false
 
 # Set environment variables
 ENV FILE_CONF_PATH=${FILE_CONF_PATH}
@@ -125,12 +126,12 @@ RUN if [ -d "./gluesync-client-sdk/gluesync_sdk" ]; then \
     echo "SDK copied to $SITE_PACKAGES/gluesync_sdk/"; \
     # Verify the installation
     python -c "import gluesync_sdk; print('SDK import successful')" || exit 1; \
-else \
+    else \
     echo "ERROR: SDK submodule not found"; \
     ls -la; \
     ls -la ./gluesync-client-sdk || echo "gluesync-client-sdk directory not found"; \
     exit 1; \
-fi
+    fi
 
 # Stay in the python directory
 WORKDIR /opt/python
