@@ -504,10 +504,27 @@ python3 parse_dbmoto_metadata_xml.py /path/to/your/dbmoto_export.xml \
   --template ./custom-template.yaml
 ```
 
+#### Processing Target Connections
+```bash
+# Include schemas from target connections (IsSource=N), when perhaps in DBMoto they were used as bi-directional replications
+python3 parse_dbmoto_metadata_xml.py /path/to/your/dbmoto_export.xml \
+  --include-targets
+```
+
+#### Force Schema Mappings
+```bash
+# Force specific source->target schema mappings
+python3 parse_dbmoto_metadata_xml.py /path/to/your/dbmoto_export.xml \
+  --include-targets \
+  --force-schemas "SNDDATOS:ASESP,SCHEMA2:TARGET2"
+```
+
 #### Arguments
 - `xml_path` (required): Path to the DbMoto metadata XML file
 - `--output-dir`: Directory to save generated YAML files (default: `schemas_yaml`)
 - `--template`: Path to a template YAML file (default: `table-list-template-basic.yaml` in script directory)
+- `--include-targets`: Also process schemas from target connections (IsSource=N). By default, only source connections are processed
+- `--force-schemas`: Force specific schema mappings (format: `SOURCE:TARGET,SOURCE2:TARGET2`). Useful for schemas without replication definitions
 
 ### Output
 The script will:
