@@ -139,12 +139,10 @@ To determine source-to-target schema mappings:
 ## Special Cases
 
 ### Orphaned Schemas
-Some schemas may exist in the metadata but have no associated replications:
-- Example: SNDDATOS (8 tables, no replications as source or target)
+Some schemas may exist in the metadata but have no associated replications
 
 ### Multiple Target Mappings
-A source schema may map to multiple target schemas:
-- Example: ASESP maps to LBDATOS, USDATOS, SCDATOS (multiple warnings)
+A source schema may map to multiple target schemas
 
 ### Missing Mappings
 Schemas without replication mappings fall back to using source schema name as target
