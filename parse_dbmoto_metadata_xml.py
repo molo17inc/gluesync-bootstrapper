@@ -8,9 +8,14 @@ def parse_arguments():
     parser.add_argument('xml_path', type=str, help='Path to the DbMoto metadata XML file')
     parser.add_argument('--output-dir', type=str, default='schemas_yaml',
                       help='Directory to save generated YAML files (default: schemas_yaml)')
+    template_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'table-list-template-basic.yaml')
     parser.add_argument('--template', type=str, 
-                      default=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'table-list-template-basic.yaml'),
-                      help='Path to template YAML file (default: table-list-template-basic.yaml in script directory)')
+                      help='Path to template YAML file (optional)',
+                      default=template_path)
+    parser.add_argument('--include-targets', action='store_true',
+                    help='Also process schemas from target connections (IsSource=N)')
+    parser.add_argument('--force-schemas', type=str,
+                    help='Force schema mappings (format: SOURCE:TARGET,SOURCE2:TARGET2)')
     return parser.parse_args()
 
 # Parse command line arguments
@@ -74,9 +79,12 @@ def parse_xml():
                 "group_priority": int(properties.get('GroupPriority', '0')) if group_id in chains else 0
             }
     
-    # Extract database connections
+    # Extract database connections and identify source vs target
     print("Extracting connections...")
     connections = {}
+    source_connections = set()
+    target_connections = set()
+    
     for conn_elem in root.findall("./tables/DBMMConnections"):
         conn_id = conn_elem.findtext("ConnectionID")
         
@@ -91,15 +99,25 @@ def parse_xml():
         if not conn_name:
             conn_name = f"Connection_{conn_id}"
         
+        # Check if this is a source or target connection
+        is_source = conn_elem.findtext("IsSource", "N").upper() == "Y"
+        
         if conn_id:
             connections[conn_id] = {
                 "id": conn_id,
                 "name": conn_name,
+                "is_source": is_source,
                 "schemas": {}
             }
-            print(f"  Found connection: {conn_name} (ID: {conn_id})")
+            
+            if is_source:
+                source_connections.add(conn_id)
+                print(f"  Found SOURCE connection: {conn_name} (ID: {conn_id})")
+            else:
+                target_connections.add(conn_id)
+                print(f"  Found TARGET connection: {conn_name} (ID: {conn_id})")
     
-    print(f"Found {len(connections)} database connections")
+    print(f"Found {len(connections)} database connections ({len(source_connections)} source, {len(target_connections)} target)")
     
     # Extract schemas
     print("Extracting schemas...")
@@ -245,13 +263,59 @@ def parse_xml():
     print(f"Tables without fields: {len(tables) - tables_with_fields}")
     print(f"Tables with primary keys: {tables_with_primary_keys}")
     
+    # Build source-to-target schema mapping from replications
+    print("\nBuilding source-to-target schema mappings...")
+    source_to_target_schemas = {}
+    
+    for repl_id, repl in replications.items():
+        src_table_id = repl['src_table_id']
+        trg_table_id = repl['trg_table_id']
+        
+        if src_table_id and trg_table_id:
+            # Find source table's schema
+            src_schema_name = None
+            src_conn_name = None
+            for conn_id, conn in connections.items():
+                if conn['is_source']:  # Only look in source connections
+                    for schema_id, schema in conn["schemas"].items():
+                        if src_table_id in schema["tables"]:
+                            src_schema_name = schema["name"]
+                            src_conn_name = conn["name"]
+                            break
+                    if src_schema_name:
+                        break
+            
+            # Find target table's schema
+            trg_schema_name = None
+            trg_conn_name = None
+            for conn_id, conn in connections.items():
+                if not conn['is_source']:  # Only look in target connections
+                    for schema_id, schema in conn["schemas"].items():
+                        if trg_table_id in schema["tables"]:
+                            trg_schema_name = schema["name"]
+                            trg_conn_name = conn["name"]
+                            break
+                    if trg_schema_name:
+                        break
+            
+            # Map source schema to target schema
+            if src_schema_name and trg_schema_name:
+                if src_schema_name not in source_to_target_schemas:
+                    source_to_target_schemas[src_schema_name] = trg_schema_name
+                    print(f"  Mapped source schema '{src_schema_name}' ({src_conn_name}) -> target schema '{trg_schema_name}' ({trg_conn_name})")
+                elif source_to_target_schemas[src_schema_name] != trg_schema_name:
+                    # Multiple target schemas for same source - log warning but keep first mapping
+                    print(f"  Warning: Source schema '{src_schema_name}' maps to multiple targets: '{source_to_target_schemas[src_schema_name]}' and '{trg_schema_name}'")
+    
+    print(f"Found {len(source_to_target_schemas)} unique source-to-target schema mappings")
+    
     # Print summary of groups and chains
     print(f"\nFound {len(groups)} groups and {len(chains)} chains in the DBMoto configuration")
     print(f"Found {len(replications)} replications with group/chain assignments")
     
-    return connections, groups, chains, replications
+    return connections, groups, chains, replications, source_to_target_schemas
 
-def export_as_yaml(connections, groups, chains, replications, output_dir=None, template_file=None):
+def export_as_yaml(connections, groups, chains, replications, source_to_target_schemas, output_dir=None, template_file=None):
     # Use command line arguments if parameters are not provided
     if output_dir is None:
         output_dir = args.output_dir
@@ -274,26 +338,6 @@ def export_as_yaml(connections, groups, chains, replications, output_dir=None, t
     
     # Create a mapping of table IDs to their group/chain assignments from replications
     table_assignments = {}
-    
-    # Create a mapping of source table IDs to target schema names from replications
-    source_to_target_schema = {}
-    
-    # Build the source-to-target schema mapping
-    for repl_id, repl in replications.items():
-        src_table_id = repl['src_table_id']
-        trg_table_id = repl['trg_table_id']
-        
-        # Find target table and its schema
-        if src_table_id and trg_table_id:
-            # Look up target table in all connections/schemas to find its schema name
-            for conn_id, conn in connections.items():
-                for schema_id, schema in conn["schemas"].items():
-                    if trg_table_id in schema["tables"]:
-                        source_to_target_schema[src_table_id] = schema["name"]
-                        print(f"  Mapped source table {src_table_id} -> target schema '{schema['name']}'")
-                        break
-    
-    print(f"Found {len(source_to_target_schema)} source-to-target schema mappings")
     
     # Assign groups and chains to tables
     for repl_id, repl in replications.items():
@@ -329,8 +373,23 @@ def export_as_yaml(connections, groups, chains, replications, output_dir=None, t
         # No match found, return None
         return None
     
+    # Process connections and schemas based on mode
+    # Check for manual override schemas
+    manual_overrides = {}
+    if args.force_schemas:
+        # Parse format: SOURCE_SCHEMA:TARGET_SCHEMA,SOURCE_SCHEMA2:TARGET_SCHEMA2
+        for mapping in args.force_schemas.split(','):
+            if ':' in mapping:
+                src, tgt = mapping.split(':', 1)
+                manual_overrides[src.strip()] = tgt.strip()
+                print(f"Manual override: {src.strip()} -> {tgt.strip()}")
+    
     # Process each connection and schema
     for conn in connections.values():
+        # Skip target connections UNLESS we have manual overrides or --include-targets flag
+        if not conn["is_source"] and not args.include_targets and not manual_overrides:
+            continue
+            
         conn_name = conn["name"]
         for schema in conn["schemas"].values():
             schema_name = schema["name"]
@@ -383,27 +442,24 @@ def export_as_yaml(connections, groups, chains, replications, output_dir=None, t
                 template_schema = find_matching_template_schema(schema_name)
                 
                 # Determine target schema using multiple sources in priority order:
-                # 1. Template file (if exists and has target defined)
-                # 2. Replication mapping (derived from source-to-target table mappings)
-                # 3. Source schema name as fallback
+                # 1. Manual override (command line)
+                # 2. Template file (if exists and has target defined)
+                # 3. Schema-level replication mapping (from source_to_target_schemas)
+                # 4. Source schema name as fallback
                 target_schema = None
-                if template_schema and template_schema.get('target'):
+                if schema_name in manual_overrides:
+                    target_schema = manual_overrides[schema_name]
+                    print(f"      Using target schema '{target_schema}' from manual override")
+                elif template_schema and template_schema.get('target'):
                     target_schema = template_schema['target']
                     print(f"      Using target schema '{target_schema}' from template")
+                elif schema_name in source_to_target_schemas:
+                    target_schema = source_to_target_schemas[schema_name]
+                    print(f"      Using target schema '{target_schema}' from replication mapping")
                 else:
-                    # Try to find target schema from replication mappings
-                    # Look for any table in this schema that has a replication mapping
-                    for table_name, table in tables_with_fields.items():
-                        table_id = table["id"]
-                        if table_id in source_to_target_schema:
-                            target_schema = source_to_target_schema[table_id]
-                            print(f"      Using target schema '{target_schema}' from replication mapping")
-                            break
-                    
-                    # If no replication mapping found, use source schema as fallback
-                    if not target_schema:
-                        target_schema = schema_name
-                        print(f"      Using source schema '{target_schema}' as fallback (no replication mapping found)")
+                    # No replication mapping found, use source schema as fallback
+                    target_schema = schema_name
+                    print(f"      Using source schema '{target_schema}' as fallback (no replication mapping found)")
                 custom_props = template_schema.get('customProperties', {}) if template_schema else {}
                 schedules = template_schema.get('schedules', []) if template_schema else []
                 
@@ -465,8 +521,8 @@ if __name__ == "__main__":
     # Ensure output directory exists
     os.makedirs(args.output_dir, exist_ok=True)
     
-    # Parse the XML and get connections, groups, chains, and replications
-    connections, groups, chains, replications = parse_xml()
+    # Parse the XML and get connections, groups, chains, replications, and schema mappings
+    connections, groups, chains, replications, source_to_target_schemas = parse_xml()
     
     # Print hierarchy summary
     print("\n=== Database Structure ===")
@@ -478,7 +534,7 @@ if __name__ == "__main__":
     
     # Export as YAML files
     print("\nExporting to YAML files...")
-    exported = export_as_yaml(connections, groups, chains, replications)
+    exported = export_as_yaml(connections, groups, chains, replications, source_to_target_schemas)
     print(f"\nDone! {exported} YAML files created in {os.path.abspath(args.output_dir)}/")
     print("These files match the structure needed for table-list-template.yaml in gluesync-bootstrapper.")
     
