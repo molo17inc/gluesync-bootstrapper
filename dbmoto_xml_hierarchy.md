@@ -103,8 +103,9 @@ Source Connection (IsSource=Y)
 ## Key Business Rules
 
 1. **Connection Types**:
-   - `IsSource=Y`: Source database connections (data originates here)
-   - `IsSource=N`: Target database connections (data destinations)
+   - `IsSource=Y`: Connections with CDC (Change Data Capture) capabilities for transaction log reading
+   - `IsSource=N`: Connections typically used as replication targets
+   - **Note**: DbMoto allows cross-connection replications regardless of IsSource flag
 
 2. **Replication Direction**:
    - All replications flow from source connections to target connections
@@ -139,13 +140,16 @@ To determine source-to-target schema mappings:
 ## Special Cases
 
 ### Orphaned Schemas
-Some schemas may exist in the metadata but have no associated replications
+Some schemas may exist in the metadata but have no associated replications:
+- These schemas won't be processed by default unless using `--include-targets` flag
 
 ### Multiple Target Mappings
-A source schema may map to multiple target schemas
+A source schema may map to multiple target schemas:
+- The script keeps the first mapping found
 
 ### Missing Mappings
-Schemas without replication mappings fall back to using source schema name as target
+Schemas without replication mappings fall back to using source schema name as target:
+- Can be overridden using `--force-schemas` parameter
 
 ## Properties Field Structure
 
