@@ -80,10 +80,37 @@ def table_exists(pipeline_id: str, schema_name: str, table_name: str, token: str
             method="GET",
             token=token
         )
+        print(f"Table {table_name} exists in schema {schema_name}")
         return True
     except requests.exceptions.RequestException as e:
         error_msg = str(e)
-        print(f"checking table existence: {error_msg}")
+        print(f"Initial table existence check failed for {table_name}: {error_msg}")
+        
+        # Try opposite casing
+        if table_name != table_name.lower():
+            # Original has uppercase, try lowercase
+            alternate_table_name = table_name.lower()
+            print(f"Trying lowercase version: {alternate_table_name}")
+        elif table_name != table_name.upper():
+            # Original is lowercase, try uppercase
+            alternate_table_name = table_name.upper()
+            print(f"Trying uppercase version: {alternate_table_name}")
+        else:
+            # All same case, no alternate to try
+            return False
+        
+        try:
+            fetch_core_hub(
+                f"/pipelines/{pipeline_id}/config/entities/schemas/{schema_name}/tables/{alternate_table_name}",
+                method="GET",
+                token=token
+            )
+            print(f"Table found with alternate casing: {alternate_table_name}")
+            return True
+        except requests.exceptions.RequestException as e2:
+            error_msg2 = str(e2)
+            print(f"Alternate casing check also failed for {alternate_table_name}: {error_msg2}")
+        
         return False
 
 
