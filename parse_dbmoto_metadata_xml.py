@@ -217,20 +217,25 @@ def parse_xml():
             
             # Handle primary key information
             if primary_key_pos is not None:
-                if primary_key_pos == "1":
-                    # This is a primary key (position 1)
-                    tables[table_id]["primary_keys"].append(field_name)
-                    primary_key_count += 1
-                    print(f"    Found primary key: {field_name} in table {tables[table_id]['name']} (Table ID: {table_id})")
-                elif primary_key_pos == "0":
-                    # This is not a primary key (position 0) - log and skip
-                    skipped_composite_keys += 1
-                    print(f"    Skipping non-primary key: {field_name} in table {tables[table_id]['name']} (Table ID: {table_id}) - PrimaryKeyPos=0")
+                try:
+                    pk_pos_int = int(primary_key_pos)
+                    if pk_pos_int >= 1:
+                        # This is a primary key (position >= 1) - handles clustered indexes with multiple PK columns
+                        tables[table_id]["primary_keys"].append(field_name)
+                        primary_key_count += 1
+                        print(f"    Found primary key: {field_name} in table {tables[table_id]['name']} (Table ID: {table_id}) - PrimaryKeyPos={primary_key_pos}")
+                    elif pk_pos_int == 0:
+                        # This is not a primary key (position 0) - log and skip
+                        skipped_composite_keys += 1
+                        print(f"    Skipping non-primary key: {field_name} in table {tables[table_id]['name']} (Table ID: {table_id}) - PrimaryKeyPos=0")
+                except ValueError:
+                    # Handle non-numeric PrimaryKeyPos values
+                    print(f"    Warning: Invalid PrimaryKeyPos value '{primary_key_pos}' for field {field_name} in table {tables[table_id]['name']} (Table ID: {table_id})")
         
         field_count += 1
     
     print(f"Found {field_count} fields linked to tables")
-    print(f"Found {primary_key_count} primary keys (PrimaryKeyPos=1)")
+    print(f"Found {primary_key_count} primary keys (PrimaryKeyPos>=1)")
     print(f"Skipped {skipped_composite_keys} non-primary key fields (PrimaryKeyPos=0)")
     
     # Print summary of tables with/without fields
