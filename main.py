@@ -555,7 +555,13 @@ def main():
                     token_data = json.load(f)
                     token = token_data.get('token')
                     if token:
-                        logger.info("Using token from saved authentication")
+                        logger.info("Found saved token, verifying...")
+                        # Verify the token is still valid
+                        if verify_token(token):
+                            logger.info("Successfully verified saved authentication token")
+                        else:
+                            logger.warning("Saved token is invalid or expired, will re-authenticate")
+                            token = None
             except FileNotFoundError:
                 logger.info("No saved token found, will authenticate with credentials")
                 token = None
@@ -677,7 +683,13 @@ def main():
                     token_data = json.load(f)
                     token = token_data.get('token')
                     if token:
-                        logger.info("Using token from saved authentication")
+                        logger.info("Found saved token, verifying...")
+                        # Verify the token is still valid
+                        if verify_token(token):
+                            logger.info("Successfully verified saved authentication token")
+                        else:
+                            logger.warning("Saved token is invalid or expired, will re-authenticate")
+                            token = None
             except FileNotFoundError:
                 logger.info("No saved token found, will authenticate with credentials")
                 token = None
