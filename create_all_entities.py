@@ -222,10 +222,18 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         target_table_name = custom_config.get('name', table_name)
         print(f"Using target table name: {target_table_name} for source table: {table_name}")
 
-        # Get and process filter configuration
+        # Get and process filter configurations
         filter_config = custom_config.get('filter')
+        snapshot_delete_filter_config = custom_config.get('snapshotDeleteFilter')
+        
+        # Process regular filter
         processed_filters = process_filter_clauses(filter_config, columns) if filter_config else None
         print(f"Processed filters for {table_name}: {processed_filters}")
+        
+        # Process snapshot delete filter
+        processed_snapshot_delete_filters = process_filter_clauses(snapshot_delete_filter_config, columns) if snapshot_delete_filter_config else None
+        if processed_snapshot_delete_filters:
+            print(f"Processed snapshot delete filters for {table_name}: {processed_snapshot_delete_filters}")
 
         # Get document key configuration if it exists
         document_key = None
@@ -339,41 +347,29 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             "snapshotWritingConcurrency": target_custom_properties.get('snapshotWritingConcurrency', 1)
         }
 
-        # Add other target custom properties (excluding the ones we handle separately)
-        excluded_props = {'allowedOperations', 'skipDeletion', 'snapshotWritingConcurrency'}
-        for key, value in target_custom_properties.items():
-            if key not in excluded_props:
-                target_entity_type[key] = value
+        # Add filters if they exist
         if processed_filters:
             target_entity_type["filter"] = processed_filters
-
-        if target_custom_properties.get("udf"):
-            # Get the first UDF definition (assuming one UDF per table for now)
-            udf_list = target_custom_properties.get("udf")
-            if udf_list and len(udf_list) > 0:
-                udf_def = udf_list[0]  # Take the first UDF
-                target_entity_type["mappingFunctionInfo"] = {
-                    "name": udf_def.get("name"),
-                    "type": udf_def.get("type")
-                }
+        if processed_snapshot_delete_filters:
+            target_entity_type["snapshotDeleteFilter"] = processed_snapshot_delete_filters
 
         columns_def = [
-                {
-                    "name": target_name,
-                    "alias": target_name,
-                    "type": map_data_type(col["type"], source_node_info, target_node_info)
-                }
-                for col in columns["columns"]
-                for column_map in custom_config.get('columns', [])
-                for source_name, target_name in column_map.items()
-                if source_name == col["name"]
-            ] if custom_config.get('columns') else [
-                {
-                    "name": col["name"],
-                    "alias": col["name"],
-                    "type": map_data_type(col["type"], source_node_info, target_node_info)
-                } for col in columns["columns"]
-            ]
+            {
+                "name": target_name,
+                "alias": target_name,
+                "type": map_data_type(col["type"], source_node_info, target_node_info)
+            }
+            for col in columns["columns"]
+            for column_map in custom_config.get('columns', [])
+            for source_name, target_name in column_map.items()
+            if source_name == col["name"]
+        ] if custom_config.get('columns') else [
+            {
+                "name": col["name"],
+                "alias": col["name"],
+                "type": map_data_type(col["type"], source_node_info, target_node_info)
+            } for col in columns["columns"]
+        ]
 
         print(f"Columns definition for {table_name}: {columns_def}")
 
@@ -688,7 +684,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             target_keys.append(keys)
 
         # Get allowed operations for the target entity
-        allowed_operations = get_allowed_operations(target_custom_properties)
+        allowed_operations = get_allowed_operations(table_data.get('customProperties', {}).get('target', {}))
         
         # Create the target entity for MultiTable
         target_entity = {
@@ -699,10 +695,10 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             "entityType": {
                 "type": "Target",
                 "allowedOperations": allowed_operations,
-                "snapshotWritingConcurrency": target_custom_properties.get('snapshotWritingConcurrency', 1)
+                "snapshotWritingConcurrency": table_data.get('customProperties', {}).get('target', {}).get('snapshotWritingConcurrency', 1)
             },
             "agentId": target_agent_id,
-            "customProperties": {"ttlValue": target_custom_properties.get('ttlValue', 0)},
+            "customProperties": {"ttlValue": table_data.get('customProperties', {}).get('target', {}).get('ttlValue', 0)},
             "tablesProperties": target_tables_properties,
             "tables": target_tables,
             "columns": target_columns,

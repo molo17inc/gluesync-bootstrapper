@@ -82,7 +82,8 @@ Each table can be configured with:
 - Primary keys
 - Custom document keys
 - Column mappings with types
-- Filtering rules
+- Filtering rules for data synchronization
+- Snapshot delete filtering rules
 - Custom properties
 
 Example table configuration with typed columns:
@@ -119,13 +120,29 @@ DRIVERS:
         - name: "UPPERCASE_NAMES"  # Name of the UDF function (must match the filename without extension)
           type: "Java"  # Currently supports Java or Kotlin
   
+  # Filter configuration for data synchronization
+  filter:
+    clauses:
+      - column: "STATUS"
+        type: "string"
+        operation: "Equal"
+        value: "ACTIVE"
+  
+  # Snapshot delete filter - controls which records are deleted during snapshot
+  snapshotDeleteFilter:
+    clauses:
+      - column: "STATUS"
+        type: "string"
+        operation: "NotEqual"
+        value: "ARCHIVED"
+
   # Example with TTL and UDF combined
-  # customProperties:
-  #   target:
-  #     ttlValue: 20000000  # TTL in milliseconds
-  #     udf:
-  #       - name: "FORMAT_PHONE"
-  #         type: "Kotlin"
+  customProperties:
+    target:
+      ttlValue: 20000000  # TTL in milliseconds
+      udf:
+        - name: "FORMAT_PHONE"
+          type: "Kotlin"
 ```
 
 The column configuration supports:
