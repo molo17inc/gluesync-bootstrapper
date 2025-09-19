@@ -440,29 +440,55 @@ def load_configuration():
         lockfile_failure()
         return None
 
+def verify_token(token):
+    """Verify if the provided token is still valid."""
+    if not token:
+        return False
+    
+    try:
+        check_token = fetch_core_hub(
+            '/pipelines',
+            method='GET',
+            token=token
+        )
+        return isinstance(check_token, list)
+    except Exception as e:
+        if "401" in str(e):
+            logger.warning("Token verification failed: Unauthorized (401)")
+        else:
+            logger.warning(f"Token verification failed: {str(e)}")
+        return False
+
 def get_authentication_token():
     """Get authentication token either from SDK or saved token file."""
     token = None
+    
+    # First try to get token from SDK if enabled
     if use_sdk and 'GluesyncSDK' in globals():
         logger.info("Attempting to get token from Gluesync SDK")
         sdk_client = get_gluesync_client()
         if sdk_client:
             token = get_token()
-            if token:
-                logger.info("Successfully retrieved token from Gluesync SDK")
+            if token and verify_token(token):
+                logger.info("Successfully retrieved and verified token from Gluesync SDK")
+                return token
+            token = None  # Reset token if verification failed
     
-    if not token:
-        # Try to load token from file
-        try:
-            with open(AUTH_TOKEN_PATH, 'r') as f:
-                token_data = json.load(f)
-                token = token_data.get('token')
-                if token:
-                    logger.info("Using token from saved authentication")
-        except FileNotFoundError:
-            logger.warning("No saved token found, authentication may fail")
+    # If SDK token not available or invalid, try loading from file
+    try:
+        with open(AUTH_TOKEN_PATH, 'r') as f:
+            token_data = json.load(f)
+            token = token_data.get('token')
+            if token and verify_token(token):
+                logger.info("Successfully verified saved authentication token")
+                return token
+            logger.warning("Saved token is invalid or expired")
+    except FileNotFoundError:
+        logger.info("No saved token found")
+    except Exception as e:
+        logger.warning(f"Error reading token file: {str(e)}")
     
-    return token
+    return None  # Return None if no valid token was found
 
 def main():
     # Parse command line arguments
