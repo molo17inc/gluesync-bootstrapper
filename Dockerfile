@@ -51,6 +51,7 @@ ARG TEST_NAME=DRY_RUN
 ARG VERSION=latest
 ARG JOB_ID=not_set
 ARG HANDLE_WITH_CONDUCTOR=false
+ARG SKIP_INITIAL_SETUP=false
 
 # Set environment variables
 ENV FILE_CONF_PATH=${FILE_CONF_PATH}
@@ -77,6 +78,7 @@ ENV LOG_LEVEL=${LOG_LEVEL}
 ENV TEST_NAME=${TEST_NAME}
 ENV VERSION=${VERSION}
 ENV JOB_ID=${JOB_ID}
+ENV SKIP_INITIAL_SETUP=${SKIP_INITIAL_SETUP}
 
 # Copy requirements.txt and install dependencies
 COPY requirements.txt .
