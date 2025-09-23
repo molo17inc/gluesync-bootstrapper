@@ -161,6 +161,22 @@ dbo:
                 type: string
                 operation: Regex
                 value: ".*@company\\.com"
+          # Snapshot delete filter - controls which records are NOT deleted during snapshot
+          # These records will be preserved in the target even if they don't exist in the source
+          snapshotDeleteFilter:
+            clauses:
+              - column: STATUS
+                type: string
+                operation: Equal
+                value: "ARCHIVED"  # Don't delete archived drivers during snapshot
+              - column: LAST_MODIFIED
+                type: string
+                operation: Greater
+                value: "2024-01-01"  # Also preserve recently modified records
+          # Snapshot write method - controls how records are written during snapshot
+          # UPSERT: Update existing records or insert new ones (default)
+          # INSERT: Only insert new records, skip existing ones
+          snapshotWriteMethod: "UPSERT"
           customProperties:
             target:
               ttlValue: 20000000
@@ -198,6 +214,15 @@ dbo:
                 type: string
                 operation: In
                 value: ["ACTIVE", "MAINTENANCE"]
+          # Example of snapshot delete filter for vehicles
+          snapshotDeleteFilter:
+            clauses:
+              - column: STATUS
+                type: string
+                operation: NotEqual
+                value: "SOLD"  # Preserve sold vehicles in target during snapshot
+          # Use INSERT mode for vehicles to avoid updating existing records
+          snapshotWriteMethod: "INSERT"
                 
         # MultiTable entity example with chainId
         # The following tables will be combined into a single MultiTable entity

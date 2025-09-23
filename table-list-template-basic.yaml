@@ -83,6 +83,15 @@ schemas:
                 type: string
                 operation: Regex
                 value: ".*@company\\.com"
+          # Snapshot delete filter example - preserves records matching the criteria
+          snapshotDeleteFilter:
+            clauses:
+              - column: STATUS
+                type: string
+                operation: Equal
+                value: "ARCHIVED"  # Archived records won't be deleted during snapshot
+          # Snapshot write method - UPSERT or INSERT (default: UPSERT)
+          snapshotWriteMethod: "UPSERT"
           customProperties:
             target:
               ttlValue: 20000000

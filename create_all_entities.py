@@ -210,10 +210,21 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 f"Warning: Custom config for table {table_name} is present but empty in YAML. Converting to empty dict.")
         print(f"Custom config for {table_name}: {custom_config}")
 
+        # Get snapshot write method configuration FIRST (UPSERT or INSERT, default is UPSERT)
+        snapshot_write_method = custom_config.get('snapshotWriteMethod', 'UPSERT').upper()
+        if snapshot_write_method not in ['UPSERT', 'INSERT']:
+            print(f"Warning: Invalid snapshotWriteMethod '{snapshot_write_method}' for {table_name}. Using default 'UPSERT'")
+            snapshot_write_method = 'UPSERT'
+        print(f"Snapshot write method for {table_name}: {snapshot_write_method}")
+        
         # Get table-specific custom properties and merge with global properties
         table_custom_properties = custom_config.get('customProperties', {})
         source_custom_properties = {**global_source_custom_properties, **table_custom_properties.get('source', {})}
         target_custom_properties = {**global_target_custom_properties, **table_custom_properties.get('target', {})}
+        
+        # Add snapshotWriteMethod to target custom properties for later use
+        # This will be stored with the entity and retrieved when starting syncs
+        target_custom_properties['snapshotWriteMethod'] = snapshot_write_method
 
         print(f"Source custom properties for {table_name}: {source_custom_properties}")
         print(f"Target custom properties for {table_name}: {target_custom_properties}")

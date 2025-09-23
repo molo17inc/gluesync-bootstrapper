@@ -325,10 +325,22 @@ if not handle_with_conductor:
             if 'entity' in item and isinstance(item['entity'], dict):
                 entity = item['entity']
                 if 'entityId' in entity and 'entityName' in entity:
-                    entities.append({
+                    entity_data = {
                         'entityId': entity['entityId'],
                         'entityName': entity['entityName']
-                    })
+                    }
+                    
+                    # Extract snapshotWriteMethod from target agent's custom properties if available
+                    if 'agentEntities' in entity and isinstance(entity['agentEntities'], list):
+                        for agent_entity in entity['agentEntities']:
+                            if agent_entity.get('entityType', {}).get('type') == 'Target':
+                                custom_props = agent_entity.get('customProperties', {})
+                                if 'snapshotWriteMethod' in custom_props:
+                                    entity_data['snapshotWriteMethod'] = custom_props['snapshotWriteMethod']
+                                    logger.debug(f"Found snapshotWriteMethod for {entity['entityName']}: {custom_props['snapshotWriteMethod']}")
+                                break
+                    
+                    entities.append(entity_data)
 
         return entities
 
@@ -373,17 +385,23 @@ if not handle_with_conductor:
         for entity in entities:
             entityId = entity['entityId']
             entityName = entity['entityName']
+            
+            # Get the snapshotWriteMethod for this entity (default to UPSERT)
+            snapshot_write_method = entity.get('snapshotWriteMethod', 'UPSERT')
+            logger.info(f"Using snapshotWriteMethod '{snapshot_write_method}' for entity {entityName}")
 
             try:
                 encoded_entity_id = safe_encode(entityId)
-                query_params = f"entity={encoded_entity_id}"
+                
+                # Build query parameters with entity and snapshotWriteMethod
+                query_params = f"entity={encoded_entity_id}&snapshotWriteMethod={snapshot_write_method}"
 
                 response = fetch_core_hub(
                     f"/pipelines/{pipeline_id}/commands/sync/start?withSnapshot=true&{query_params}",
                     method='POST',
                     token=token
                 )
-                print(f"Started sync for entity: {entityName} (ID: {entityId})")
+                print(f"Started sync for entity: {entityName} (ID: {entityId}) with snapshotWriteMethod: {snapshot_write_method}")
                 print(f"Response: {response}")
 
                 time.sleep(ENTITY_START_TIMEOUT)

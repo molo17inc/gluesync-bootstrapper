@@ -135,6 +135,11 @@ DRIVERS:
         type: "string"
         operation: "NotEqual"
         value: "ARCHIVED"
+  
+  # Snapshot write method - controls how records are written during snapshot
+  # UPSERT: Update existing records or insert new ones (default)
+  # INSERT: Only insert new records, skip existing ones
+  snapshotWriteMethod: "UPSERT"
 
   # Example with TTL and UDF combined
   customProperties:
@@ -150,6 +155,167 @@ The column configuration supports:
 - Target column name via the `name` property
 - Column type via the `type` property
 - Automatic type mapping between different database systems
+
+## Snapshot Delete Filter
+
+The `snapshotDeleteFilter` configuration controls which records are deleted from the target during snapshot synchronization operations. This is particularly useful when you want to preserve certain records in the target system that meet specific criteria, even if they're no longer present in the source.
+
+### How It Works
+
+During a snapshot operation, GlueSync normally deletes all records in the target that don't exist in the source. The `snapshotDeleteFilter` modifies this behavior by excluding records that match the filter criteria from deletion.
+
+### Configuration
+
+The filter is configured using a `clauses` array, where each clause specifies:
+- `column`: The name of the column to filter on
+- `type`: The data type of the column (string, number, boolean, date)
+- `operation`: The comparison operation to perform
+- `value`: The value to compare against
+
+### Supported Operations
+
+For string columns:
+- `Equal`: Exact match
+- `NotEqual`: Does not match
+- `Contains`: Contains substring
+- `NotContains`: Does not contain substring
+- `StartsWith`: Starts with prefix
+- `EndsWith`: Ends with suffix
+
+For numeric columns:
+- `Equal`: Equals
+- `NotEqual`: Not equals
+- `GreaterThan`: Greater than
+- `GreaterThanOrEqual`: Greater than or equal
+- `LessThan`: Less than
+- `LessThanOrEqual`: Less than or equal
+
+For boolean columns:
+- `Equal`: True or False
+- `NotEqual`: Opposite of the specified value
+
+For date columns:
+- `Equal`: Exact date match
+- `NotEqual`: Not the specified date
+- `Before`: Before the specified date
+- `After`: After the specified date
+
+### Examples
+
+#### Example 1: Preserve Archived Records
+
+Don't delete records marked as ARCHIVED:
+
+```yaml
+snapshotDeleteFilter:
+  clauses:
+    - column: "STATUS"
+      type: "string"
+      operation: "Equal"
+      value: "ARCHIVED"
+```
+
+#### Example 2: Preserve Records Modified After a Date
+
+Keep records modified after January 1, 2024:
+
+```yaml
+snapshotDeleteFilter:
+  clauses:
+    - column: "LAST_MODIFIED"
+      type: "date"
+      operation: "After"
+      value: "2024-01-01"
+```
+
+#### Example 3: Multiple Conditions (AND logic)
+
+Preserve records that are both archived AND have high priority:
+
+```yaml
+snapshotDeleteFilter:
+  clauses:
+    - column: "STATUS"
+      type: "string"
+      operation: "Equal"
+      value: "ARCHIVED"
+    - column: "PRIORITY"
+      type: "number"
+      operation: "GreaterThan"
+      value: 5
+```
+
+### Use Cases
+
+1. **Soft Deletes**: Preserve soft-deleted records in the target system
+2. **Historical Data**: Keep historical records that no longer exist in the source
+3. **Audit Trail**: Maintain audit records for compliance
+4. **Data Archiving**: Preserve archived data while syncing active records
+5. **Partial Sync**: Only sync and delete records within a specific date range
+
+## Snapshot Write Method
+
+The `snapshotWriteMethod` configuration controls how records are written to the target during snapshot synchronization operations.
+
+### Available Methods
+
+- **UPSERT** (default): Updates existing records if they exist, otherwise inserts new ones. This ensures the target is an exact mirror of the source.
+- **INSERT**: Only inserts new records that don't exist in the target. Existing records are not updated.
+
+### Configuration
+
+Set the `snapshotWriteMethod` at the entity/table level in your YAML configuration:
+
+```yaml
+DRIVERS:
+  keys: [ID]
+  snapshotWriteMethod: "UPSERT"  # Default behavior
+  
+VEHICLES:
+  keys: [VEHICLE_ID]
+  snapshotWriteMethod: "INSERT"  # Only add new vehicles, don't update existing
+```
+
+### Use Cases
+
+#### UPSERT Mode (Default)
+
+Best for:
+
+- **Full synchronization**: Keep target as an exact copy of source
+- **Master data management**: Ensure all changes are propagated
+- **Real-time replication**: Maintain consistency between systems
+
+#### INSERT Mode
+
+Best for:
+
+- **Append-only logs**: Historical records that should never be modified
+- **Audit trails**: Preserve original entries without updates
+- **Time-series data**: Add new data points without changing historical values
+- **Incremental loading**: When you only want to add new records
+
+### Interaction with Snapshot Delete Filter
+
+The `snapshotWriteMethod` works in conjunction with `snapshotDeleteFilter`:
+- `snapshotWriteMethod` controls HOW records are written (UPSERT vs INSERT)
+- `snapshotDeleteFilter` controls WHICH records are preserved from deletion
+
+Example combining both:
+
+```yaml
+ORDERS:
+  keys: [ORDER_ID]
+  # Only insert new orders, don't update existing ones
+  snapshotWriteMethod: "INSERT"
+  # Don't delete completed orders during snapshot
+  snapshotDeleteFilter:
+    clauses:
+      - column: "STATUS"
+        type: "string"
+        operation: "Equal"
+        value: "COMPLETED"
+```
 
 ## User Defined Functions (UDFs)
 
