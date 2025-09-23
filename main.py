@@ -21,6 +21,7 @@
 
 import os
 import json
+import yaml
 import requests
 from add_agents_with_conductor import add_agents_with_conductor
 from faker import Faker
@@ -325,24 +326,41 @@ if not handle_with_conductor:
             if 'entity' in item and isinstance(item['entity'], dict):
                 entity = item['entity']
                 if 'entityId' in entity and 'entityName' in entity:
-                    entity_data = {
+                    entities.append({
                         'entityId': entity['entityId'],
                         'entityName': entity['entityName']
-                    }
-                    
-                    # Extract snapshotWriteMethod from target agent's custom properties if available
-                    if 'agentEntities' in entity and isinstance(entity['agentEntities'], list):
-                        for agent_entity in entity['agentEntities']:
-                            if agent_entity.get('entityType', {}).get('type') == 'Target':
-                                custom_props = agent_entity.get('customProperties', {})
-                                if 'snapshotWriteMethod' in custom_props:
-                                    entity_data['snapshotWriteMethod'] = custom_props['snapshotWriteMethod']
-                                    logger.debug(f"Found snapshotWriteMethod for {entity['entityName']}: {custom_props['snapshotWriteMethod']}")
-                                break
-                    
-                    entities.append(entity_data)
+                    })
 
         return entities
+    
+    def get_snapshot_write_method_from_yaml(entity_name, yaml_path):
+        """Extract snapshotWriteMethod for a specific entity from YAML configuration."""
+        try:
+            # Parse entity name to get schema and table
+            parts = entity_name.split('.')
+            if len(parts) != 2:
+                return 'UPSERT'  # Default
+            
+            schema_name, table_name = parts
+            
+            # Load YAML configuration
+            with open(yaml_path, 'r') as file:
+                yaml_content = yaml.safe_load(file)
+            
+            # Navigate to the table configuration
+            if schema_name in yaml_content:
+                schema_config = yaml_content[schema_name]
+                if 'tables' in schema_config and 'custom' in schema_config['tables']:
+                    custom_tables = schema_config['tables']['custom']
+                    if table_name in custom_tables:
+                        table_config = custom_tables[table_name]
+                        return table_config.get('snapshotWriteMethod', 'UPSERT')
+            
+            return 'UPSERT'  # Default if not found
+            
+        except Exception as e:
+            logger.debug(f"Could not get snapshotWriteMethod from YAML for {entity_name}: {e}")
+            return 'UPSERT'  # Default on error
 
     def configure_entities(agents_to_conf, pipeline_id, token):
         entities_payload = {"entities": []}
@@ -381,14 +399,18 @@ if not handle_with_conductor:
     def start_entity_syncs(token, pipeline_id):
         entities = get_entities(token, pipeline_id)
         print(f"Retrieved the following entities: {entities}")
+        
+        # Get YAML path from environment or use default
+        yaml_path = os.environ.get('TABLE_LIST_YAML', '/opt/config/TABLE_LIST.yaml')
 
         for entity in entities:
             entityId = entity['entityId']
             entityName = entity['entityName']
             
-            # Get the snapshotWriteMethod for this entity (default to UPSERT)
-            snapshot_write_method = entity.get('snapshotWriteMethod', 'UPSERT')
-            logger.info(f"Using snapshotWriteMethod '{snapshot_write_method}' for entity {entityName}")
+            # Get the snapshotWriteMethod from YAML configuration
+            snapshot_write_method = get_snapshot_write_method_from_yaml(entityName, yaml_path)
+            if snapshot_write_method != 'UPSERT':
+                logger.info(f"Using snapshotWriteMethod '{snapshot_write_method}' for entity {entityName}")
 
             try:
                 encoded_entity_id = safe_encode(entityId)

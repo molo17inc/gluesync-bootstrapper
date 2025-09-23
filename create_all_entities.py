@@ -222,9 +222,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         source_custom_properties = {**global_source_custom_properties, **table_custom_properties.get('source', {})}
         target_custom_properties = {**global_target_custom_properties, **table_custom_properties.get('target', {})}
         
-        # Add snapshotWriteMethod to target custom properties for later use
-        # This will be stored with the entity and retrieved when starting syncs
-        target_custom_properties['snapshotWriteMethod'] = snapshot_write_method
+        # Note: snapshotWriteMethod is kept separately and NOT added to custom properties
+        # It will be read directly from YAML config when needed during sync operations
 
         print(f"Source custom properties for {table_name}: {source_custom_properties}")
         print(f"Target custom properties for {table_name}: {target_custom_properties}")
