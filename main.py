@@ -407,23 +407,27 @@ if not handle_with_conductor:
             entityId = entity['entityId']
             entityName = entity['entityName']
             
+            # TODO: Implement snapshotWriteMethod when API supports it
+            # Currently the API doesn't accept snapshotWriteMethod as a query parameter
             # Get the snapshotWriteMethod from YAML configuration
-            snapshot_write_method = get_snapshot_write_method_from_yaml(entityName, yaml_path)
-            if snapshot_write_method != 'UPSERT':
-                logger.info(f"Using snapshotWriteMethod '{snapshot_write_method}' for entity {entityName}")
+            # snapshot_write_method = get_snapshot_write_method_from_yaml(entityName, yaml_path)
+            # if snapshot_write_method != 'UPSERT':
+            #     logger.info(f"Using snapshotWriteMethod '{snapshot_write_method}' for entity {entityName}")
 
             try:
                 encoded_entity_id = safe_encode(entityId)
                 
-                # Build query parameters with entity and snapshotWriteMethod
-                query_params = f"entity={encoded_entity_id}&snapshotWriteMethod={snapshot_write_method}"
+                # Build query parameters - currently only with entity ID
+                # TODO: Add snapshotWriteMethod when API supports it
+                query_params = f"entity={encoded_entity_id}"
+                # Future: query_params = f"entity={encoded_entity_id}&snapshotWriteMethod={snapshot_write_method}"
 
                 response = fetch_core_hub(
                     f"/pipelines/{pipeline_id}/commands/sync/start?withSnapshot=true&{query_params}",
                     method='POST',
                     token=token
                 )
-                print(f"Started sync for entity: {entityName} (ID: {entityId}) with snapshotWriteMethod: {snapshot_write_method}")
+                print(f"Started sync for entity: {entityName} (ID: {entityId})")
                 print(f"Response: {response}")
 
                 time.sleep(ENTITY_START_TIMEOUT)
