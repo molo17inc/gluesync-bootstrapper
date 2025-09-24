@@ -706,6 +706,82 @@ With unlocked schema, the UDF can:
 
 This flexibility is not possible with standard locked schema where column counts and types must match.
 
+## Target-Only Columns
+
+### Overview
+
+Target-only columns are fields that exist only in the target system but not in the source. This feature is **only supported with unlocked schema** and allows you to have additional columns in the target that are populated by UDFs.
+
+### Requirements
+
+⚠️ **Important**: Target-only columns require `unlockedSchema: true` to be set for the table. They are not supported with locked schema (default).
+
+### Use Cases
+
+- **Metadata fields**: Adding sync timestamps, processing status, or audit trails
+- **Calculated fields**: Derived or computed values not present in source
+- **System fields**: Internal identifiers or tracking information
+- **Extended attributes**: Additional business data specific to the target system
+
+### Configuration
+
+Target-only columns can be declared using the `targetOnlyColumns` field in your table configuration when `unlockedSchema: true` is set. The feature supports two formats:
+
+#### Simple Format (Recommended)
+
+```yaml
+ARTICLES:
+  keys: [ID]
+  unlockedSchema: true  # Required for targetOnlyColumns
+  targetOnlyColumns:
+    - CURRENCY
+    - CREATED_AT
+    - PROCESSING_STATUS
+```
+
+#### Object Format (Optional - when you need to specify types)
+```yaml
+ARTICLES:
+  unlockedSchema: true
+  targetOnlyColumns:
+    - name: CURRENCY
+      type: varchar
+    - name: CREATED_AT
+      type: timestamp
+```
+
+### Example Usage
+
+```yaml
+ARTICLES:
+  unlockedSchema: true
+  targetOnlyColumns:
+    - CURRENCY
+    - CREATED_AT
+    - PROCESSING_STATUS
+  customProperties:
+    target:
+      udf:
+        - name: UDF_ARTICLES_TRANSFORM
+          type: java
+```
+
+### Technical Details
+
+- **Column IDs**: Target-only columns receive sequential IDs following the mapped source columns
+- **Column Mapping**: In `columnsMappingMatrix`, target-only columns have `sourceColumnId: 0` indicating no source mapping
+- **Default Type**: When type is not specified, defaults to `varchar`
+- **UDF Integration**: UDFs can populate these columns with calculated values or metadata
+
+### Important Notes
+
+1. **Requires Unlocked Schema**: Target-only columns are only supported when `unlockedSchema: true` is set
+2. **UDF is Mandatory**: Since target-only columns work only with unlocked schema, a UDF is always required
+3. Target-only columns are added after all source-mapped columns in the target definition
+4. The column type is optional and defaults to `varchar` when not specified
+5. These columns can be populated through UDF transformations
+6. In `columnsMappingMatrix`, target-only columns have `sourceColumnId: 0` to indicate no source mapping
+
 ## Support
 
 For support and bug reports, please create an issue in the GitLab repository.

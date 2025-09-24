@@ -451,14 +451,29 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             
             logger.info(f"Table {table_name} using locked schema with {column_idx} column mappings")
         
+        # Add mappings for target-only columns if they exist (sourceColumnId = 0)
+        target_only_columns = custom_config.get('targetOnlyColumns', [])
+        if target_only_columns and not is_unlocked_schema:
+            # Start target column ID from where we left off
+            target_only_start_idx = column_idx + 1
+            for idx, target_col in enumerate(target_only_columns):
+                columns_mapping_matrix.append({
+                    "sourceTableObjectId": source_table_id,
+                    "targetTableObjectId": target_table_id,
+                    "sourceColumnId": 0,  # 0 indicates no source column
+                    "targetColumnId": target_only_start_idx + idx
+                })
+            logger.info(f"Added {len(target_only_columns)} target-only column mappings with sourceColumnId=0")
+        
         # Add columnsMappingMatrix to entityType
         target_entity_type["columnsMappingMatrix"] = columns_mapping_matrix
 
         # Build target columns definition with IDs
         target_columns_def = []
+        target_col_idx = 1
+        
         if custom_config.get('columns'):
             # Custom column mappings for target
-            target_col_idx = 1
             for col in columns["columns"]:
                 for column_map in custom_config.get('columns', []):
                     for source_name, target_name in column_map.items():
@@ -472,14 +487,45 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             target_col_idx += 1
         else:
             # No column mappings - use columns as-is with mapped types
-            target_columns_def = [
-                {
-                    "id": idx,
+            for col in columns["columns"]:
+                target_columns_def.append({
+                    "id": target_col_idx,
                     "name": col["name"],
                     "alias": col["name"],
                     "type": map_data_type(col["type"], source_node_info, target_node_info)
-                } for idx, col in enumerate(columns["columns"], start=1)
-            ]
+                })
+                target_col_idx += 1
+        
+        # Add target-only columns if specified (only supported with unlocked schema)
+        target_only_columns = custom_config.get('targetOnlyColumns', [])
+        if target_only_columns:
+            if not is_unlocked_schema:
+                logger.warning(f"Target-only columns are specified for table {table_name} but unlockedSchema is not true. Skipping target-only columns.")
+                logger.warning(f"To use target-only columns, set 'unlockedSchema: true' for table {table_name}")
+            elif is_unlocked_schema:
+                logger.info(f"Adding {len(target_only_columns)} target-only columns for table {table_name}")
+                for target_col in target_only_columns:
+                    # Support both string format and object format
+                    if isinstance(target_col, str):
+                        # Simple string format: just the column name
+                        col_name = target_col
+                        col_type = 'varchar'  # Default type
+                    else:
+                        # Object format with optional type
+                        col_name = target_col.get('name')
+                        col_type = target_col.get('type', 'varchar')  # Default to varchar if not specified
+                    
+                    # Map the column type to target node type
+                    mapped_type = map_data_type(col_type, source_node_info, target_node_info)
+                    
+                    target_columns_def.append({
+                        "id": target_col_idx,
+                        "name": col_name,
+                        "alias": col_name,
+                        "type": mapped_type
+                    })
+                    logger.debug(f"Added target-only column: {col_name} (type: {mapped_type}, id: {target_col_idx})")
+                    target_col_idx += 1
 
         print(f"Columns definition for {table_name}: {columns_def}")
 

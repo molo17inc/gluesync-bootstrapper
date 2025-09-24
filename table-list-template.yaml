@@ -193,6 +193,11 @@ dbo:
           unlockedSchema: true  # Enable unlocked schema for this table
           # In unlocked schema mode, columns definition can be omitted or partial
           # The UDF will handle the mapping between source and target columns
+          # Target-only columns: These columns exist only in the target, not in source
+          targetOnlyColumns:
+            - CURRENCY  # Simple string format
+            - CREATED_AT
+            - PROCESSING_STATUS
           customProperties:
             target:
               # UDF is mandatory for unlocked schema tables
