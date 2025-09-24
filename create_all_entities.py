@@ -25,7 +25,7 @@ import urllib3
 import argparse
 from commons import get_node_info, get_table_columns, fetch_core_hub, get_pipeline_config, get_pipeline_agents, \
     get_agent_tables, create_entity_schedules, map_data_type, create_pipeline_schedules, create_group_schedules, load_yaml_config, \
-    process_filter_clauses, create_group, assign_entities_to_group
+    process_filter_clauses, create_group, assign_entities_to_group, get_table_id
 from create_all_tables import handle_table_creation
 from create_user_defined_functions import handle_udf_function_definition
 from utils.log import get_logger, create_log_file, log_success, log_failure, lockfile_failure, lockfile_complete, exit_on_fail
@@ -227,6 +227,16 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         # Store UDF configuration separately (will be added to entityType, not customProperties)
         udf_config = target_custom_properties.pop('udf', None)
         
+        # Check if this table is configured for unlocked schema
+        is_unlocked_schema = custom_config.get('unlockedSchema', False)
+        
+        # Validate: UDF is mandatory for unlocked schema
+        if is_unlocked_schema and not udf_config:
+            logger.error(f"Table {table_name} is configured with unlockedSchema=true but no UDF is defined. UDF is mandatory for unlocked schema.")
+            if not skip_errors:
+                raise ValueError(f"UDF is mandatory for table {table_name} with unlocked schema")
+            continue
+        
         # Note: snapshotWriteMethod is kept separately and NOT added to custom properties
         # It will be read directly from YAML config when needed during sync operations
 
@@ -262,23 +272,30 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             }
             print(f"Document key configuration for {table_name}: {document_key}")
 
-        columns_def = [
-            {
-                "name": col["name"],
-                "alias": target_name,
-                "type": col["type"]
-            }
-            for col in columns["columns"]
-            for column_map in custom_config.get('columns', [])
-            for source_name, target_name in column_map.items()
-            if source_name == col["name"]
-        ] if custom_config.get('columns') else [
-            {
-                "name": col["name"],
-                "alias": col["name"],
-                "type": col["type"]
-            } for col in columns["columns"]
-        ]
+        # Build columns definition with IDs
+        columns_def = []
+        if custom_config.get('columns'):
+            # Custom column mappings
+            for idx, col in enumerate(columns["columns"], start=1):
+                for column_map in custom_config.get('columns', []):
+                    for source_name, target_name in column_map.items():
+                        if source_name == col["name"]:
+                            columns_def.append({
+                                "id": idx,  # Column ID is the ordinal position
+                                "name": col["name"],
+                                "alias": target_name,
+                                "type": col["type"]
+                            })
+        else:
+            # No column mappings - use columns as-is
+            columns_def = [
+                {
+                    "id": idx,  # Column ID is the ordinal position
+                    "name": col["name"],
+                    "alias": col["name"],
+                    "type": col["type"]
+                } for idx, col in enumerate(columns["columns"], start=1)
+            ]
 
         print(f"Columns definition for {table_name}: {columns_def}")
 
@@ -330,6 +347,10 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         handle_table_creation(pipeline_id, target_table_name, yaml_target_schema, keys, token, columns, custom_config,
                               source_node_info, target_node_info)
 
+        # Generate table IDs for use in entities
+        source_table_id = get_table_id(source_schema, table_name)
+        target_table_id = get_table_id(yaml_target_schema, target_table_name)
+
         # Create source and target table property keys
         source_table_key = f"{source_schema}.{table_name}"
         target_table_key = f"{yaml_target_schema}.{target_table_name}"
@@ -343,6 +364,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 "collection": table_name
             },
             "table": {
+                "id": source_table_id,
                 "name": table_name,
                 "schema": source_schema
             },
@@ -374,24 +396,87 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             target_entity_type["udf"] = udf_config
             # Also add mappingFunctionInfo for the first UDF
             target_entity_type["mappingFunctionInfo"] = udf_config[0]
+        
+        # Generate columnsMappingMatrix
+        columns_mapping_matrix = []
+        
+        if is_unlocked_schema:
+            # For unlocked schema, add single entry with column IDs as 0
+            columns_mapping_matrix.append({
+                "sourceTableObjectId": source_table_id,
+                "targetTableObjectId": target_table_id,
+                "sourceColumnId": 0,
+                "targetColumnId": 0
+            })
+            
+            # Add tablesWithUnlockedSchema array with target table ID
+            target_entity_type["tablesWithUnlockedSchema"] = [target_table_id]
+            target_entity_type["tablesWithUnlockedDataTypes"] = []
+            
+            logger.info(f"Table {table_name} configured with unlocked schema. Target table ID: {target_table_id}")
+        else:
+            # For locked schema, create mapping for each column
+            # Get the actual columns from the discovery API response
+            column_idx = 0
+            if 'columns' in columns and isinstance(columns['columns'], list):
+                for idx, col in enumerate(columns['columns'], start=1):
+                    # Find if this column has a mapping
+                    target_col_idx = idx
+                    
+                    # Check if column mappings exist
+                    if custom_config.get('columns'):
+                        # Find the target column index based on mapping
+                        mapped_idx = 1
+                        for column_map in custom_config.get('columns', []):
+                            for source_name, target_name in column_map.items():
+                                if source_name == col['name']:
+                                    target_col_idx = mapped_idx
+                                    break
+                                mapped_idx += 1
+                    
+                    columns_mapping_matrix.append({
+                        "sourceTableObjectId": source_table_id,
+                        "targetTableObjectId": target_table_id,
+                        "sourceColumnId": idx,
+                        "targetColumnId": target_col_idx
+                    })
+                    column_idx += 1
+            
+            # Add empty arrays for locked schema
+            target_entity_type["tablesWithUnlockedSchema"] = []
+            target_entity_type["tablesWithUnlockedDataTypes"] = []
+            
+            logger.info(f"Table {table_name} using locked schema with {column_idx} column mappings")
+        
+        # Add columnsMappingMatrix to entityType
+        target_entity_type["columnsMappingMatrix"] = columns_mapping_matrix
 
-        columns_def = [
-            {
-                "name": target_name,
-                "alias": target_name,
-                "type": map_data_type(col["type"], source_node_info, target_node_info)
-            }
-            for col in columns["columns"]
-            for column_map in custom_config.get('columns', [])
-            for source_name, target_name in column_map.items()
-            if source_name == col["name"]
-        ] if custom_config.get('columns') else [
-            {
-                "name": col["name"],
-                "alias": col["name"],
-                "type": map_data_type(col["type"], source_node_info, target_node_info)
-            } for col in columns["columns"]
-        ]
+        # Build target columns definition with IDs
+        target_columns_def = []
+        if custom_config.get('columns'):
+            # Custom column mappings for target
+            target_col_idx = 1
+            for col in columns["columns"]:
+                for column_map in custom_config.get('columns', []):
+                    for source_name, target_name in column_map.items():
+                        if source_name == col["name"]:
+                            target_columns_def.append({
+                                "id": target_col_idx,
+                                "name": target_name,
+                                "alias": target_name,
+                                "type": map_data_type(col["type"], source_node_info, target_node_info)
+                            })
+                            target_col_idx += 1
+        else:
+            # No column mappings - use columns as-is with mapped types
+            target_columns_def = [
+                {
+                    "id": idx,
+                    "name": col["name"],
+                    "alias": col["name"],
+                    "type": map_data_type(col["type"], source_node_info, target_node_info)
+                } for idx, col in enumerate(columns["columns"], start=1)
+            ]
 
         print(f"Columns definition for {table_name}: {columns_def}")
 
@@ -446,10 +531,11 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 "collection": target_table_name
             },
             "table": {
+                "id": target_table_id,
                 "schema": yaml_target_schema,
                 "name": target_table_name
             },
-            "columns": columns_def,
+            "columns": target_columns_def,  # Use target columns definition
             "keys": keys,
             "customProperties": target_custom_properties,
             "tablesProperties": {target_table_key: {}},

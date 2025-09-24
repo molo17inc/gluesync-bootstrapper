@@ -652,6 +652,60 @@ Available environment variables:
 - Target database system (e.g., Couchbase)
 - Proper network connectivity between source and target systems
 
+## Unlocked Schema Feature
+
+### Overview
+
+The unlocked schema feature allows tables to have different column counts and data types between source and target systems. This is particularly useful when:
+
+- The target has additional columns not present in the source
+- Data types need to be transformed differently than standard mappings
+- Complex transformations are required that go beyond simple column mappings
+
+### Configuration
+
+To enable unlocked schema for a table, add the `unlockedSchema: true` flag in the table configuration:
+
+```yaml
+ARTICLES:
+  keys: [ID]
+  name: ARTICLES
+  unlockedSchema: true  # Enable unlocked schema
+  customProperties:
+    target:
+      # UDF is mandatory for unlocked schema tables
+      udf:
+        - name: UDF_ARTICLES_TRANSFORM
+          type: java
+```
+
+### Important Notes
+
+1. **UDF is Mandatory**: When using unlocked schema, a User Defined Function (UDF) is required to handle the data transformation between source and target
+2. **Column Mappings**: Column definitions can be omitted or partial when using unlocked schema, as the UDF handles the actual mapping
+3. **Validation**: The system will validate that a UDF is defined for any table with `unlockedSchema: true`
+
+### Technical Details
+
+When unlocked schema is enabled:
+
+- The `columnsMappingMatrix` contains a single entry with `sourceColumnId: 0` and `targetColumnId: 0`
+- The `tablesWithUnlockedSchema` array includes the target table ID
+- Column and data type validation is bypassed, delegating all transformation logic to the UDF
+
+### Example Use Case
+
+Consider a scenario where:
+- Source has columns: `ID`, `ARTICLE_NAME`, `DESCRIPTION`
+- Target needs columns: `ID`, `CURRENCY` (with `ARTICLE_NAME` and `DESCRIPTION` excluded)
+
+With unlocked schema, the UDF can:
+1. Map only the `ID` field
+2. Add a default or calculated value for `CURRENCY`
+3. Exclude unwanted source columns
+
+This flexibility is not possible with standard locked schema where column counts and types must match.
+
 ## Support
 
 For support and bug reports, please create an issue in the GitLab repository.

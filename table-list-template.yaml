@@ -184,6 +184,22 @@ dbo:
                 - name: UPPERCASE_DRIVERS
                   type: java
           
+        # Example of a table with unlocked schema
+        # This allows different column counts and data types between source and target
+        # UDF is mandatory when using unlocked schema
+        ARTICLES:
+          keys: [ID]
+          name: ARTICLES
+          unlockedSchema: true  # Enable unlocked schema for this table
+          # In unlocked schema mode, columns definition can be omitted or partial
+          # The UDF will handle the mapping between source and target columns
+          customProperties:
+            target:
+              # UDF is mandatory for unlocked schema tables
+              udf:
+                - name: UDF_ARTICLES_TRANSFORM
+                  type: java
+          
         VEHICLES:
           groupId: "finance"
           keys:

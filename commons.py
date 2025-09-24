@@ -124,6 +124,27 @@ def get_table_columns(token, pipeline_id, agent_id, schema_name, table_name):
     params = {'tableschema': schema_name, 'tablename': table_name}
     return fetch_core_hub(f"/pipelines/{pipeline_id}/agents/{agent_id}/discovery/columns", token=token, params=params)
 
+def compute_java_hashcode(s):
+    """
+    Compute Java-style hashCode for a string.
+    The Java hashCode algorithm is: h = s[0]*31^(n-1) + s[1]*31^(n-2) + ... + s[n-1]
+    where n is the length of the string.
+    """
+    h = 0
+    for char in s:
+        # Java's int wraps around at 2^31 - 1 and -(2^31)
+        h = (31 * h + ord(char)) & 0xFFFFFFFF
+        # Convert unsigned to signed
+        if h > 0x7FFFFFFF:
+            h = h - 0x100000000
+    return h
+
+def get_table_id(schema, table_name):
+    """
+    Generate the table ID using Java hashCode of "schema.tableName".
+    """
+    return compute_java_hashcode(f"{schema}.{table_name}")
+
 
 def get_node_info(token, pipeline_id, agent_id):
     return fetch_core_hub(f"/pipelines/{pipeline_id}/agents/{agent_id}/discovery/node-info", token=token)
