@@ -306,27 +306,29 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             # Check if we have column mappings
             if custom_config.get('columns'):
                 # Use column mappings for keys
-                keys = [
-                    {
-                        "name": col["name"],
-                        "alias": target_name,
-                        "type": col["type"]
-                    }
-                    for col in columns["columns"]
-                    for column_map in custom_config['columns']
-                    for source_name, target_name in column_map.items()
-                    if col["name"] == source_name and col["name"] in custom_config["keys"]
-                ]
+                for idx, col in enumerate(columns["columns"], start=1):
+                    for column_map in custom_config['columns']:
+                        for source_name, target_name in column_map.items():
+                            if col["name"] == source_name and col["name"] in custom_config["keys"]:
+                                keys.append({
+                                    "id": idx,  # Add column ID to keys
+                                    "name": col["name"],
+                                    "alias": target_name,
+                                    "type": col["type"]
+                                })
             else:
                 # No column mappings, use keys directly from source columns
                 for key_name in custom_config['keys']:
-                    key_column = next((col for col in columns["columns"] if col["name"] == key_name), None)
-                    if key_column:
-                        keys.append({
-                            "name": key_column["name"],
-                            "alias": key_column["name"],
-                            "type": key_column["type"]
-                        })
+                    # Find the column and its index
+                    for idx, col in enumerate(columns["columns"], start=1):
+                        if col["name"] == key_name:
+                            keys.append({
+                                "id": idx,  # Add column ID to keys
+                                "name": col["name"],
+                                "alias": col["name"],
+                                "type": col["type"]
+                            })
+                            break
                     else:
                         print(f"Warning: Key '{key_name}' not found in columns for table '{table_name}'")
             
@@ -334,10 +336,11 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         else:
             keys = [
                 {
+                    "id": idx,  # Add column ID to keys
                     "name": col["name"],
                     "alias": col["name"],
                     "type": col["type"]
-                } for col in columns["columns"] if col.get("isPrimaryKey")
+                } for idx, col in enumerate(columns["columns"], start=1) if col.get("isPrimaryKey")
             ]
             print(f"Using primary keys for {table_name}: {keys}")
 
@@ -480,47 +483,53 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
         print(f"Columns definition for {table_name}: {columns_def}")
 
-        # Process keys and other configurations as before...
+        # Process target keys with proper IDs
+        target_keys = []
         if custom_config and 'keys' in custom_config:
-            keys = []
-            
             # Check if we have column mappings
             if custom_config.get('columns'):
-                # Use column mappings for keys
-                keys = [
-                    {
-                        "name": target_name,
-                        "alias": target_name,
-                        "type": col["type"]
-                    }
-                    for col in columns["columns"]
-                    for column_map in custom_config['columns']
-                    for source_name, target_name in column_map.items()
-                    if col["name"] == source_name and col["name"] in custom_config["keys"]
-                ]
+                # Use column mappings for keys - need to find target column index
+                target_col_idx = 1
+                for col in columns["columns"]:
+                    for column_map in custom_config['columns']:
+                        for source_name, target_name in column_map.items():
+                            if source_name == col["name"]:
+                                if col["name"] in custom_config["keys"]:
+                                    target_keys.append({
+                                        "id": target_col_idx,  # Target column ID
+                                        "name": target_name,
+                                        "alias": target_name,
+                                        "type": map_data_type(col["type"], source_node_info, target_node_info)
+                                    })
+                                target_col_idx += 1
+                                break
             else:
                 # No column mappings, use keys directly from source columns
                 for key_name in custom_config['keys']:
-                    key_column = next((col for col in columns["columns"] if col["name"] == key_name), None)
-                    if key_column:
-                        keys.append({
-                            "name": key_column["name"],
-                            "alias": key_column["name"],
-                            "type": key_column["type"]
-                        })
+                    # Find the column and its index
+                    for idx, col in enumerate(columns["columns"], start=1):
+                        if col["name"] == key_name:
+                            target_keys.append({
+                                "id": idx,  # Column ID
+                                "name": col["name"],
+                                "alias": col["name"],
+                                "type": map_data_type(col["type"], source_node_info, target_node_info)
+                            })
+                            break
                     else:
                         print(f"Warning: Key '{key_name}' not found in columns for table '{table_name}'")
             
-            print(f"Using custom keys for {table_name}: {keys}")
+            print(f"Using custom target keys for {table_name}: {target_keys}")
         else:
-            keys = [
+            target_keys = [
                 {
+                    "id": idx,  # Add column ID to keys
                     "name": col["name"],
                     "alias": col["name"],
-                    "type": col["type"]
-                } for col in columns["columns"] if col.get("isPrimaryKey")
+                    "type": map_data_type(col["type"], source_node_info, target_node_info)
+                } for idx, col in enumerate(columns["columns"], start=1) if col.get("isPrimaryKey")
             ]
-            print(f"Using primary keys for {table_name}: {keys}")
+            print(f"Using primary target keys for {table_name}: {target_keys}")
 
         target_entity = {
             "type": "NoSqlEntity" if target_type.lower() == "nosql" else "SingleTable",
@@ -536,7 +545,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 "name": target_table_name
             },
             "columns": target_columns_def,  # Use target columns definition
-            "keys": keys,
+            "keys": target_keys,  # Use target keys with proper IDs
             "customProperties": target_custom_properties,
             "tablesProperties": {target_table_key: {}},
             "sourceAgent": source_agent_id,
@@ -669,32 +678,28 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         key_alias = key_def
                         key_type = None
 
-                    # Try to find the key in the columns to get its type if not specified
-                    key_column = next((col for col in columns["columns"] if col["name"] == key_name), None)
-
-                    if key_column:
-                        keys.append({
-                            "name": key_name,
-                            "alias": key_alias,
-                            "table": {"name": table_key, "schema": source_schema},
-                            "type": key_type or key_column["type"]
-                        })
+                    # Try to find the key in the columns to get its type and ID if not specified
+                    for idx, col in enumerate(columns["columns"], start=1):
+                        if col["name"] == key_name:
+                            keys.append({
+                                "id": idx,  # Add column ID
+                                "name": key_name,
+                                "alias": key_alias,
+                                "table": {"name": table_key, "schema": source_schema},
+                                "type": key_type or col["type"]
+                            })
+                            break
                     else:
-                        print(f"Warning: Key {key_name} not found in columns for table {table_key}. Adding with unknown type.")
-                        keys.append({
-                            "name": key_name,
-                            "alias": key_alias,
-                            "table": {"name": table_key, "schema": source_schema},
-                            "type": key_type or "unknown"
-                        })
+                        print(f"Warning: Key {key_name} not found in columns for table {table_key}")
             else:
                 keys = [
                     {
+                        "id": idx,  # Add column ID
                         "name": col["name"],
                         "alias": col["name"],
                         "table": {"name": table_key, "schema": source_schema},
                         "type": col["type"]
-                    } for col in columns["columns"] if col.get("isPrimaryKey")
+                    } for idx, col in enumerate(columns["columns"], start=1) if col.get("isPrimaryKey")
                 ]
 
             # Add keys for this table
@@ -756,7 +761,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             target_columns.append({"name": table_key, "schema": target_schema})
             target_columns.append(target_table_columns)
 
-            # Process keys for target
+            # Process keys for target with IDs
             custom_config = table_data
             if custom_config and 'keys' in custom_config:
                 keys = []
@@ -766,25 +771,24 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     else:
                         key_name = key_def
 
-                    # Try to find the key in the columns to get its type
-                    key_column = next((col for col in columns["columns"] if col["name"] == key_name), None)
-
-                    if key_column:
-                        keys.append({
-                            "name": key_name,
-                            "type": map_data_type(key_column["type"], source_node_info, target_node_info)
-                        })
+                    # Try to find the key in the columns to get its type and ID
+                    for idx, col in enumerate(columns["columns"], start=1):
+                        if col["name"] == key_name:
+                            keys.append({
+                                "id": idx,  # Add column ID
+                                "name": key_name,
+                                "type": map_data_type(col["type"], source_node_info, target_node_info)
+                            })
+                            break
                     else:
-                        keys.append({
-                            "name": key_name,
-                            "type": "unknown"
-                        })
+                        print(f"Warning: Key {key_name} not found in columns for table {table_key}")
             else:
                 keys = [
                     {
+                        "id": idx,  # Add column ID
                         "name": col["name"],
                         "type": map_data_type(col["type"], source_node_info, target_node_info)
-                    } for col in columns["columns"] if col.get("isPrimaryKey")
+                    } for idx, col in enumerate(columns["columns"], start=1) if col.get("isPrimaryKey")
                 ]
 
             # Add keys for this table
