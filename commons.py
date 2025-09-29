@@ -633,10 +633,24 @@ def process_filter_clauses(filter_config, columns_info):
 
         column_name = clause['column']
         operation_type = clause['operation']
+        
+        # Find the column ID from columns_info
+        column_id = None
+        if columns_info and 'columns' in columns_info:
+            for idx, col in enumerate(columns_info['columns'], start=1):
+                if col.get('name') == column_name:
+                    column_id = idx
+                    break
+        
+        # If column ID not found, use a default or skip
+        if column_id is None:
+            print(f"Warning: Column '{column_name}' not found in table columns, using index 1 as default")
+            column_id = 1
 
-        # Create the basic filter clause
+        # Create the basic filter clause with ID
         filter_clause = {
             "column": {
+                "id": column_id,
                 "name": column_name,
                 "type": clause.get('type', 'string')
             },
