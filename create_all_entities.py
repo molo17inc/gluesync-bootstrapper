@@ -264,11 +264,28 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         document_key = None
         if custom_config and 'documentKey' in custom_config:
             doc_key_config = custom_config['documentKey']
+
+            # Convert column names to column IDs
+            key_ids = []
+            if 'keys' in doc_key_config:
+                for key_name in doc_key_config['keys']:
+                    # Find the column ID from the columns list
+                    column_id = None
+                    for idx, col in enumerate(columns["columns"], start=1):
+                        if col.get('name') == key_name:
+                            column_id = idx
+                            break
+
+                    if column_id is not None:
+                        key_ids.append(column_id)
+                    else:
+                        print(f"Warning: Column '{key_name}' not found in table columns for document key")
+
             document_key = {
                 "prefix": doc_key_config.get('prefix', ''),
                 "suffix": doc_key_config.get('suffix', ''),
                 "separator": doc_key_config.get('separator', '-'),
-                "keys": doc_key_config.get('keys', [])
+                "keys": key_ids  # Use column IDs instead of names
             }
             print(f"Document key configuration for {table_name}: {document_key}")
 
