@@ -727,7 +727,11 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 })
 
             # Add columns for this table
-            multi_columns.append({"name": table_key, "schema": source_schema})
+            multi_columns.append({
+                "id": str(get_table_id(source_schema, table_key)),
+                "name": table_key,
+                "schema": source_schema
+            })
             multi_columns.append(table_columns)
 
             # Process keys
@@ -781,7 +785,11 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 ]
 
             # Add keys for this table
-            multi_keys.append({"name": table_key, "schema": source_schema})
+            multi_keys.append({
+                "id": str(get_table_id(source_schema, table_key)),
+                "name": table_key,
+                "schema": source_schema
+            })
             multi_keys.append(keys)
 
         # Create source entity for MultiTable
@@ -837,7 +845,11 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 })
 
             # Add columns for this table
-            target_columns.append({"name": table_key, "schema": target_schema})
+            target_columns.append({
+                "id": str(get_table_id(target_schema, table_key)),
+                "name": table_key,
+                "schema": target_schema
+            })
             target_columns.append(target_table_columns)
 
             # Process keys for target with IDs
@@ -871,7 +883,11 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 ]
 
             # Add keys for this table
-            target_keys.append({"name": table_key, "schema": target_schema})
+            target_keys.append({
+                "id": str(get_table_id(target_schema, table_key)),
+                "name": table_key,
+                "schema": target_schema
+            })
             target_keys.append(keys)
 
         # Get allowed operations for the target entity
