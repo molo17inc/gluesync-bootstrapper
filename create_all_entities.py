@@ -271,9 +271,13 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 for key_name in doc_key_config['keys']:
                     # Find the column ID from the columns list
                     column_id = None
-                    for idx, col in enumerate(columns["columns"], start=1):
+                    for col in columns["columns"]:
                         if col.get('name') == key_name:
-                            column_id = idx
+                            # Use ordinalPosition from API if available
+                            column_id = col.get('ordinalPosition', col.get('id'))
+                            if column_id is None:
+                                # Fallback to finding position if not provided
+                                column_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
                             break
 
                     if column_id is not None:
@@ -293,26 +297,38 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         columns_def = []
         if custom_config.get('columns'):
             # Custom column mappings
-            for idx, col in enumerate(columns["columns"], start=1):
+            for col in columns["columns"]:
+                # Use ordinalPosition from API if available
+                col_id = col.get('ordinalPosition', col.get('id'))
+                if col_id is None:
+                    # Fallback to finding position if not provided
+                    col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
+                    
                 for column_map in custom_config.get('columns', []):
                     for source_name, target_name in column_map.items():
                         if source_name == col["name"]:
                             columns_def.append({
-                                "id": idx,  # Column ID is the ordinal position
+                                "id": col_id,  # Use actual ordinal position from database
                                 "name": col["name"],
                                 "alias": target_name,
                                 "type": col["type"]
                             })
         else:
             # No column mappings - use columns as-is
-            columns_def = [
-                {
-                    "id": idx,  # Column ID is the ordinal position
+            columns_def = []
+            for col in columns["columns"]:
+                # Use ordinalPosition from API if available
+                col_id = col.get('ordinalPosition', col.get('id'))
+                if col_id is None:
+                    # Fallback to finding position if not provided
+                    col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
+                    
+                columns_def.append({
+                    "id": col_id,  # Use actual ordinal position from database
                     "name": col["name"],
                     "alias": col["name"],
                     "type": col["type"]
-                } for idx, col in enumerate(columns["columns"], start=1)
-            ]
+                })
 
         print(f"Columns definition for {table_name}: {columns_def}")
 
@@ -323,12 +339,18 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             # Check if we have column mappings
             if custom_config.get('columns'):
                 # Use column mappings for keys
-                for idx, col in enumerate(columns["columns"], start=1):
+                for col in columns["columns"]:
+                    # Use ordinalPosition from API if available
+                    col_id = col.get('ordinalPosition', col.get('id'))
+                    if col_id is None:
+                        # Fallback to finding position if not provided
+                        col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
+                        
                     for column_map in custom_config['columns']:
                         for source_name, target_name in column_map.items():
                             if col["name"] == source_name and col["name"] in custom_config["keys"]:
                                 keys.append({
-                                    "id": idx,  # Add column ID to keys
+                                    "id": col_id,  # Use actual ordinal position from database
                                     "name": col["name"],
                                     "alias": target_name,
                                     "type": col["type"]
@@ -337,10 +359,16 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 # No column mappings, use keys directly from source columns
                 for key_name in custom_config['keys']:
                     # Find the column and its index
-                    for idx, col in enumerate(columns["columns"], start=1):
+                    for col in columns["columns"]:
                         if col["name"] == key_name:
+                            # Use ordinalPosition from API if available
+                            col_id = col.get('ordinalPosition', col.get('id'))
+                            if col_id is None:
+                                # Fallback to finding position if not provided
+                                col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
+                                
                             keys.append({
-                                "id": idx,  # Add column ID to keys
+                                "id": col_id,  # Use actual ordinal position from database
                                 "name": col["name"],
                                 "alias": col["name"],
                                 "type": col["type"]
@@ -351,14 +379,21 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             
             print(f"Using custom keys for {table_name}: {keys}")
         else:
-            keys = [
-                {
-                    "id": idx,  # Add column ID to keys
-                    "name": col["name"],
-                    "alias": col["name"],
-                    "type": col["type"]
-                } for idx, col in enumerate(columns["columns"], start=1) if col.get("isPrimaryKey")
-            ]
+            keys = []
+            for col in columns["columns"]:
+                if col.get("isPrimaryKey"):
+                    # Use ordinalPosition from API if available
+                    col_id = col.get('ordinalPosition', col.get('id'))
+                    if col_id is None:
+                        # Fallback to finding position if not provided
+                        col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
+                        
+                    keys.append({
+                        "id": col_id,  # Use actual ordinal position from database
+                        "name": col["name"],
+                        "alias": col["name"],
+                        "type": col["type"]
+                    })
             print(f"Using primary keys for {table_name}: {keys}")
 
         if not keys:
@@ -488,31 +523,45 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
         # Build target columns definition with IDs
         target_columns_def = []
-        target_col_idx = 1
+        max_target_col_id = 0
         
         if custom_config.get('columns'):
             # Custom column mappings for target
             for col in columns["columns"]:
+                # Use ordinalPosition from API if available
+                col_id = col.get('ordinalPosition', col.get('id'))
+                if col_id is None:
+                    # Fallback to finding position if not provided
+                    col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
+                
+                max_target_col_id = max(max_target_col_id, col_id)
+                
                 for column_map in custom_config.get('columns', []):
                     for source_name, target_name in column_map.items():
                         if source_name == col["name"]:
                             target_columns_def.append({
-                                "id": target_col_idx,
+                                "id": col_id,  # Use actual ordinal position from database
                                 "name": target_name,
                                 "alias": target_name,
                                 "type": map_data_type(col["type"], source_node_info, target_node_info)
                             })
-                            target_col_idx += 1
         else:
             # No column mappings - use columns as-is with mapped types
             for col in columns["columns"]:
+                # Use ordinalPosition from API if available
+                col_id = col.get('ordinalPosition', col.get('id'))
+                if col_id is None:
+                    # Fallback to finding position if not provided
+                    col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
+                
+                max_target_col_id = max(max_target_col_id, col_id)
+                
                 target_columns_def.append({
-                    "id": target_col_idx,
+                    "id": col_id,  # Use actual ordinal position from database
                     "name": col["name"],
                     "alias": col["name"],
                     "type": map_data_type(col["type"], source_node_info, target_node_info)
                 })
-                target_col_idx += 1
         
         # Add target-only columns if specified (only supported with unlocked schema)
         target_only_columns = custom_config.get('targetOnlyColumns', [])
@@ -523,6 +572,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             elif is_unlocked_schema:
                 logger.info(f"Adding {len(target_only_columns)} target-only columns for table {table_name}")
                 for target_col in target_only_columns:
+                    # Increment from the maximum target column ID
+                    max_target_col_id += 1
+                    
                     # Support both string format and object format
                     if isinstance(target_col, str):
                         # Simple string format: just the column name
@@ -537,13 +589,12 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     mapped_type = map_data_type(col_type, source_node_info, target_node_info)
                     
                     target_columns_def.append({
-                        "id": target_col_idx,
+                        "id": max_target_col_id,  # Continue from last target column ID
                         "name": col_name,
                         "alias": col_name,
                         "type": mapped_type
                     })
-                    logger.debug(f"Added target-only column: {col_name} (type: {mapped_type}, id: {target_col_idx})")
-                    target_col_idx += 1
+                    logger.debug(f"Added target-only column: {col_name} (type: {mapped_type}, id: {max_target_col_id})")
 
         print(f"Columns definition for {table_name}: {columns_def}")
 
@@ -552,29 +603,39 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         if custom_config and 'keys' in custom_config:
             # Check if we have column mappings
             if custom_config.get('columns'):
-                # Use column mappings for keys - need to find target column index
-                target_col_idx = 1
+                # Use column mappings for keys - need to find target column by its ID
                 for col in columns["columns"]:
+                    # Use ordinalPosition from API if available
+                    col_id = col.get('ordinalPosition', col.get('id'))
+                    if col_id is None:
+                        # Fallback to finding position if not provided
+                        col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
+                        
                     for column_map in custom_config['columns']:
                         for source_name, target_name in column_map.items():
                             if source_name == col["name"]:
                                 if col["name"] in custom_config["keys"]:
                                     target_keys.append({
-                                        "id": target_col_idx,  # Target column ID
+                                        "id": col_id,  # Use actual ordinal position from database
                                         "name": target_name,
                                         "alias": target_name,
                                         "type": map_data_type(col["type"], source_node_info, target_node_info)
                                     })
-                                target_col_idx += 1
                                 break
             else:
                 # No column mappings, use keys directly from source columns
                 for key_name in custom_config['keys']:
-                    # Find the column and its index
-                    for idx, col in enumerate(columns["columns"], start=1):
+                    # Find the column and its ID
+                    for col in columns["columns"]:
                         if col["name"] == key_name:
+                            # Use ordinalPosition from API if available
+                            col_id = col.get('ordinalPosition', col.get('id'))
+                            if col_id is None:
+                                # Fallback to finding position if not provided
+                                col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
+                                
                             target_keys.append({
-                                "id": idx,  # Column ID
+                                "id": col_id,  # Use actual ordinal position from database
                                 "name": col["name"],
                                 "alias": col["name"],
                                 "type": map_data_type(col["type"], source_node_info, target_node_info)
@@ -585,14 +646,21 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             
             print(f"Using custom target keys for {table_name}: {target_keys}")
         else:
-            target_keys = [
-                {
-                    "id": idx,  # Add column ID to keys
-                    "name": col["name"],
-                    "alias": col["name"],
-                    "type": map_data_type(col["type"], source_node_info, target_node_info)
-                } for idx, col in enumerate(columns["columns"], start=1) if col.get("isPrimaryKey")
-            ]
+            target_keys = []
+            for col in columns["columns"]:
+                if col.get("isPrimaryKey"):
+                    # Use ordinalPosition from API if available
+                    col_id = col.get('ordinalPosition', col.get('id'))
+                    if col_id is None:
+                        # Fallback to finding position if not provided
+                        col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
+                        
+                    target_keys.append({
+                        "id": col_id,  # Use actual ordinal position from database
+                        "name": col["name"],
+                        "alias": col["name"],
+                        "type": map_data_type(col["type"], source_node_info, target_node_info)
+                    })
             print(f"Using primary target keys for {table_name}: {target_keys}")
 
         target_entity = {
@@ -714,9 +782,15 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
             # Process columns
             table_columns = []
-            for idx, col in enumerate(columns["columns"], start=1):
+            for col in columns["columns"]:
+                # Use ordinalPosition from API if available, otherwise fallback to index
+                col_id = col.get('ordinalPosition', col.get('id'))
+                if col_id is None:
+                    # Fallback to finding position if not provided
+                    col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
+                    
                 table_columns.append({
-                    "id": idx,  # Add column ID (ordinal position)
+                    "id": col_id,  # Use actual ordinal position from database
                     "name": col["name"],
                     "alias": col["name"],
                     "table": {
@@ -754,10 +828,16 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         key_type = None
 
                     # Try to find the key in the columns to get its type and ID if not specified
-                    for idx, col in enumerate(columns["columns"], start=1):
+                    for col in columns["columns"]:
                         if col["name"] == key_name:
+                            # Use ordinalPosition from API if available
+                            col_id = col.get('ordinalPosition', col.get('id'))
+                            if col_id is None:
+                                # Fallback to finding position if not provided
+                                col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
+                                
                             keys.append({
-                                "id": idx,  # Add column ID
+                                "id": col_id,  # Use actual ordinal position from database
                                 "name": key_name,
                                 "alias": key_alias,
                                 "table": {
@@ -771,19 +851,26 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     else:
                         print(f"Warning: Key {key_name} not found in columns for table {table_key}")
             else:
-                keys = [
-                    {
-                        "id": idx,  # Add column ID
-                        "name": col["name"],
-                        "alias": col["name"],
-                        "table": {
-                            "id": str(get_table_id(source_schema, table_key)),
-                            "name": table_key,
-                            "schema": source_schema
-                        },
-                        "type": col["type"]
-                    } for idx, col in enumerate(columns["columns"], start=1) if col.get("isPrimaryKey")
-                ]
+                keys = []
+                for col in columns["columns"]:
+                    if col.get("isPrimaryKey"):
+                        # Use ordinalPosition from API if available
+                        col_id = col.get('ordinalPosition', col.get('id'))
+                        if col_id is None:
+                            # Fallback to finding position if not provided
+                            col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
+                            
+                        keys.append({
+                            "id": col_id,  # Use actual ordinal position from database
+                            "name": col["name"],
+                            "alias": col["name"],
+                            "table": {
+                                "id": str(get_table_id(source_schema, table_key)),
+                                "name": table_key,
+                                "schema": source_schema
+                            },
+                            "type": col["type"]
+                        })
 
             # Add keys for this table
             multi_keys.append({
@@ -839,12 +926,32 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
             # Process columns for target
             target_table_columns = []
-            for idx, col in enumerate(columns["columns"], start=1):
+            max_target_col_id = 0
+            
+            # First add all source columns mapped to target with their actual ordinal positions
+            for col in columns["columns"]:
+                # Use ordinalPosition from API if available
+                col_id = col.get('ordinalPosition', col.get('id'))
+                if col_id is None:
+                    # Fallback to finding position if not provided
+                    col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
+                    
+                max_target_col_id = max(max_target_col_id, col_id)
                 target_table_columns.append({
-                    "id": idx,  # Add column ID (ordinal position)
+                    "id": col_id,  # Use actual ordinal position from database
                     "name": col["name"],
                     "type": map_data_type(col["type"], source_node_info, target_node_info)
                 })
+            
+            # TODO: Add any target-only columns here by incrementing from max_target_col_id
+            # Example: If target has additional columns not in source, add them like:
+            # max_target_col_id += 1
+            # target_table_columns.append({
+            #     "id": max_target_col_id,
+            #     "name": "target_only_column",
+            #     "type": "target_column_type"
+            # })
+            # For now, we only have source columns mapped to target
 
             # Add columns for this table
             target_columns.append({
@@ -865,10 +972,16 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         key_name = key_def
 
                     # Try to find the key in the columns to get its type and ID
-                    for idx, col in enumerate(columns["columns"], start=1):
+                    for col in columns["columns"]:
                         if col["name"] == key_name:
+                            # Use ordinalPosition from API if available
+                            col_id = col.get('ordinalPosition', col.get('id'))
+                            if col_id is None:
+                                # Fallback to finding position if not provided
+                                col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
+                                
                             keys.append({
-                                "id": idx,  # Add column ID
+                                "id": col_id,  # Use actual ordinal position from database
                                 "name": key_name,
                                 "type": map_data_type(col["type"], source_node_info, target_node_info)
                             })
@@ -876,13 +989,20 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     else:
                         print(f"Warning: Key {key_name} not found in columns for table {table_key}")
             else:
-                keys = [
-                    {
-                        "id": idx,  # Add column ID
-                        "name": col["name"],
-                        "type": map_data_type(col["type"], source_node_info, target_node_info)
-                    } for idx, col in enumerate(columns["columns"], start=1) if col.get("isPrimaryKey")
-                ]
+                keys = []
+                for col in columns["columns"]:
+                    if col.get("isPrimaryKey"):
+                        # Use ordinalPosition from API if available
+                        col_id = col.get('ordinalPosition', col.get('id'))
+                        if col_id is None:
+                            # Fallback to finding position if not provided
+                            col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
+                            
+                        keys.append({
+                            "id": col_id,  # Use actual ordinal position from database
+                            "name": col["name"],
+                            "type": map_data_type(col["type"], source_node_info, target_node_info)
+                        })
 
             # Add keys for this table
             target_keys.append({
