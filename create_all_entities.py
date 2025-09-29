@@ -714,8 +714,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
             # Process columns
             table_columns = []
-            for col in columns["columns"]:
+            for idx, col in enumerate(columns["columns"], start=1):
                 table_columns.append({
+                    "id": idx,  # Add column ID (ordinal position)
                     "name": col["name"],
                     "alias": col["name"],
                     "table": {
@@ -838,8 +839,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
             # Process columns for target
             target_table_columns = []
-            for col in columns["columns"]:
+            for idx, col in enumerate(columns["columns"], start=1):
                 target_table_columns.append({
+                    "id": idx,  # Add column ID (ordinal position)
                     "name": col["name"],
                     "type": map_data_type(col["type"], source_node_info, target_node_info)
                 })
