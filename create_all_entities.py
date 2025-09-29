@@ -718,7 +718,11 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 table_columns.append({
                     "name": col["name"],
                     "alias": col["name"],
-                    "table": {"name": table_key, "schema": source_schema},
+                    "table": {
+                        "id": str(get_table_id(source_schema, table_key)),
+                        "name": table_key,
+                        "schema": source_schema
+                    },
                     "type": col["type"]
                 })
 
@@ -751,7 +755,11 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                 "id": idx,  # Add column ID
                                 "name": key_name,
                                 "alias": key_alias,
-                                "table": {"name": table_key, "schema": source_schema},
+                                "table": {
+                                    "id": str(get_table_id(source_schema, table_key)),
+                                    "name": table_key,
+                                    "schema": source_schema
+                                },
                                 "type": key_type or col["type"]
                             })
                             break
@@ -763,7 +771,11 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         "id": idx,  # Add column ID
                         "name": col["name"],
                         "alias": col["name"],
-                        "table": {"name": table_key, "schema": source_schema},
+                        "table": {
+                            "id": str(get_table_id(source_schema, table_key)),
+                            "name": table_key,
+                            "schema": source_schema
+                        },
                         "type": col["type"]
                     } for idx, col in enumerate(columns["columns"], start=1) if col.get("isPrimaryKey")
                 ]
