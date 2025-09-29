@@ -367,11 +367,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 "scope": source_schema,
                 "collection": table_name
             },
-            "table": {
-                "id": source_table_id,
-                "name": table_name,
-                "schema": source_schema
-            },
             "columns": columns_def,
             "keys": keys,
             "customProperties": source_custom_properties,
