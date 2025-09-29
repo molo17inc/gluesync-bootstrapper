@@ -363,9 +363,14 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             "entityType": {**source_custom_properties, "type": "Source"},
             "agentId": source_agent_id,
             "entityObject": {
-                "id": source_table_id,
+                "id": str(source_table_id),
                 "scope": source_schema,
                 "collection": table_name
+            },
+            "table": {
+                "id": str(source_table_id),
+                "name": table_name,
+                "schema": source_schema
             },
             "columns": columns_def,
             "keys": keys,
@@ -578,12 +583,12 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             "entityType": target_entity_type,
             "agentId": target_agent_id,
             "entityObject": {
-                "id": target_table_id,
+                "id": str(target_table_id),
                 "scope": yaml_target_schema,
                 "collection": target_table_name
             },
             "table": {
-                "id": target_table_id,
+                "id": str(target_table_id),
                 "schema": yaml_target_schema,
                 "name": target_table_name
             },
