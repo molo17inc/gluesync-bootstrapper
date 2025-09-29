@@ -703,6 +703,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
             # Add table to the list
             table_obj = {
+                "id": str(get_table_id(source_schema, table_key)),
                 "name": table_key,
                 "schema": source_schema
             }
@@ -803,6 +804,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         for table_key, table_data in tables_list:
             # Add table to the list
             target_table_obj = {
+                "id": str(get_table_id(target_schema, table_key)),
                 "name": table_key,
                 "schema": target_schema
             }
