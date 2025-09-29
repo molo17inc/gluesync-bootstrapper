@@ -473,48 +473,43 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         else:
             # For locked schema, create mapping for each column
             # Get the actual columns from the discovery API response
-            column_idx = 0
+            max_target_col_id = 0
             if 'columns' in columns and isinstance(columns['columns'], list):
-                for idx, col in enumerate(columns['columns'], start=1):
-                    # Find if this column has a mapping
-                    target_col_idx = idx
+                for col in columns['columns']:
+                    # Use ordinalPosition from API if available
+                    source_col_id = col.get('ordinalPosition', col.get('id'))
+                    if source_col_id is None:
+                        # Fallback to finding position if not provided
+                        source_col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
                     
-                    # Check if column mappings exist
-                    if custom_config.get('columns'):
-                        # Find the target column index based on mapping
-                        mapped_idx = 1
-                        for column_map in custom_config.get('columns', []):
-                            for source_name, target_name in column_map.items():
-                                if source_name == col['name']:
-                                    target_col_idx = mapped_idx
-                                    break
-                                mapped_idx += 1
+                    # For target column ID, it's the same as source unless there's a mapping
+                    target_col_id = source_col_id
                     
                     columns_mapping_matrix.append({
                         "sourceTableObjectId": source_table_id,
                         "targetTableObjectId": target_table_id,
-                        "sourceColumnId": idx,
-                        "targetColumnId": target_col_idx
+                        "sourceColumnId": source_col_id,
+                        "targetColumnId": target_col_id
                     })
-                    column_idx += 1
+                    max_target_col_id = max(max_target_col_id, target_col_id)
             
             # Add empty arrays for locked schema
             target_entity_type["tablesWithUnlockedSchema"] = []
             target_entity_type["tablesWithUnlockedDataTypes"] = []
             
-            logger.info(f"Table {table_name} using locked schema with {column_idx} column mappings")
+            logger.info(f"Table {table_name} using locked schema with {len(columns_mapping_matrix)} column mappings")
         
         # Add mappings for target-only columns if they exist (sourceColumnId = 0)
         target_only_columns = custom_config.get('targetOnlyColumns', [])
         if target_only_columns and not is_unlocked_schema:
-            # Start target column ID from where we left off
-            target_only_start_idx = column_idx + 1
+            # Continue from the maximum target column ID
             for idx, target_col in enumerate(target_only_columns):
+                max_target_col_id += 1
                 columns_mapping_matrix.append({
                     "sourceTableObjectId": source_table_id,
                     "targetTableObjectId": target_table_id,
                     "sourceColumnId": 0,  # 0 indicates no source column
-                    "targetColumnId": target_only_start_idx + idx
+                    "targetColumnId": max_target_col_id
                 })
             logger.info(f"Added {len(target_only_columns)} target-only column mappings with sourceColumnId=0")
         
