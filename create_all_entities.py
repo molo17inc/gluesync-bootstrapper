@@ -1052,7 +1052,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         entity_payload = {
             "entityId": "",
             "entityName": entity_name,
-            "agentEntities": [source_entity, target_entity]
+            "agentEntities": [source_entity, target_entity],
+            "tableMappingMatrix": table_mapping_matrix  # Also add at entity level
         }
         
         # Only add groupId if it's not the default
