@@ -1018,7 +1018,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             logger.info(f"Table mapping for {table_key}: source_id={source_table_id}, target_id={target_table_id}")
 
             # Get columns for this table to create mappings for each column
-            columns = get_columns(source_schema, table_key, source_agent_id, token)
+            columns = get_table_columns(token, pipeline_id, source_agent_id, source_schema, table_key)
             if columns and 'columns' in columns:
                 for col in columns['columns']:
                     # Use ordinalPosition from API if available, otherwise use index + 1
