@@ -1021,8 +1021,11 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             columns = get_table_columns(token, pipeline_id, source_agent_id, source_schema, table_key)
             if columns and 'columns' in columns:
                 for col in columns['columns']:
-                    # Use ordinalPosition from API if available, otherwise use index + 1
-                    col_id = col.get('ordinalPosition', columns['columns'].index(col) + 1)
+                    # Use ordinalPosition from API if available, otherwise use id, then fallback to position
+                    col_id = col.get('ordinalPosition', col.get('id'))
+                    if col_id is None:
+                        # Fallback to finding position if not provided
+                        col_id = next((i for i, c in enumerate(columns['columns'], 1) if c == col), 1)
                     columns_mapping_matrix.append({
                         "sourceTableObjectId": source_table_id,
                         "targetTableObjectId": target_table_id,
