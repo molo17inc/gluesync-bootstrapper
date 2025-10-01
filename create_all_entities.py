@@ -1010,6 +1010,18 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         # Get allowed operations for the target entity
         allowed_operations = get_allowed_operations(table_data.get('customProperties', {}).get('target', {}))
         
+        # Create table mapping matrix for MultiTable entities
+        table_mapping_matrix = []
+        for table_key, _ in tables_list:
+            source_table_id = get_table_id(source_schema, table_key)
+            target_table_id = get_table_id(target_schema, table_key)
+            table_mapping_matrix.append({
+                "sourceTableObjectId": source_table_id,
+                "targetTableObjectId": target_table_id,
+                "sourceColumnId": 0,
+                "targetColumnId": 0
+            })
+        
         # Create the target entity for MultiTable
         target_entity = {
             "type": "MultiTable",
@@ -1019,7 +1031,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             "entityType": {
                 "type": "Target",
                 "allowedOperations": allowed_operations,
-                "snapshotWritingConcurrency": table_data.get('customProperties', {}).get('target', {}).get('snapshotWritingConcurrency', 1)
+                "snapshotWritingConcurrency": table_data.get('customProperties', {}).get('target', {}).get('snapshotWritingConcurrency', 1),
+                "tableMappingMatrix": table_mapping_matrix
             },
             "agentId": target_agent_id,
             "customProperties": {"ttlValue": table_data.get('customProperties', {}).get('target', {}).get('ttlValue', 0)},
