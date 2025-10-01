@@ -1033,7 +1033,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 "type": "Target",
                 "allowedOperations": allowed_operations,
                 "snapshotWritingConcurrency": table_data.get('customProperties', {}).get('target', {}).get('snapshotWritingConcurrency', 1),
-                "tableMappingMatrix": table_mapping_matrix
+                "columnsMappingMatrix": table_mapping_matrix
             },
             "agentId": target_agent_id,
             "customProperties": {"ttlValue": table_data.get('customProperties', {}).get('target', {}).get('ttlValue', 0)},
@@ -1053,7 +1053,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             "entityId": "",
             "entityName": entity_name,
             "agentEntities": [source_entity, target_entity],
-            "tableMappingMatrix": table_mapping_matrix  # Also add at entity level
+            "columnsMappingMatrix": table_mapping_matrix  # Also add at entity level
         }
         
         # Only add groupId if it's not the default
