@@ -1013,8 +1013,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         # Create table mapping matrix for MultiTable entities
         table_mapping_matrix = []
         for table_key, _ in tables_list:
-            source_table_id = get_table_id(source_schema, table_key)
-            target_table_id = get_table_id(target_schema, table_key)
+            source_table_id = str(get_table_id(source_schema, table_key))
+            target_table_id = str(get_table_id(target_schema, table_key))
+            logger.info(f"Table mapping for {table_key}: source_id={source_table_id}, target_id={target_table_id}")
             table_mapping_matrix.append({
                 "sourceTableObjectId": source_table_id,
                 "targetTableObjectId": target_table_id,
