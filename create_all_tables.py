@@ -55,6 +55,8 @@ core_hub_client = CoreHubClient(CORE_HUB_URL)
 class ColumnDto(BaseModel):
     name: str
     type: str
+    id: int
+    ordinalPosition: int
     isPrimaryKey: bool = False
     isNullable: bool = False
     dataLength: int = 0
@@ -365,6 +367,8 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                     columnDto=ColumnDto(
                         name=target_name,
                         type=map_data_type(col["type"], source_node_info, target_node_info),
+                        id=col.get("ordinalPosition", col.get("id", 1)),
+                        ordinalPosition=col.get("ordinalPosition", col.get("id", 1)),
                         isPrimaryKey=target_name in keys
                     ),
                     gluesyncDataType=get_gluesync_data_type(col["type"], source_node_info)
@@ -378,6 +382,8 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                     columnDto=ColumnDto(
                         name=col["name"], 
                         type=map_data_type(col["type"], source_node_info, target_node_info),
+                        id=col.get("ordinalPosition", col.get("id", 1)),
+                        ordinalPosition=col.get("ordinalPosition", col.get("id", 1)),
                         isPrimaryKey=col["isPrimaryKey"]
                     ),
                     gluesyncDataType=get_gluesync_data_type(col["type"], source_node_info)
