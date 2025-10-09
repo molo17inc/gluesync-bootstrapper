@@ -60,20 +60,51 @@ class ColumnDto(BaseModel):
     dataLength: int = 0
 
 
+class ColumnWithGluesyncDataTypeDto(BaseModel):
+    columnDto: ColumnDto
+    gluesyncDataType: str
+
+
 class GenerateTableStatementRequest(BaseModel):
     columns: List[ColumnDto]
+
+
+class GenerateCreateTargetTableStatementRequest(BaseModel):
+    columns: List[ColumnWithGluesyncDataTypeDto]
 
 
 class CreateTableRequest(BaseModel):
     statement: str
 
 
+def get_gluesync_data_type(source_type: str, source_node_info) -> str:
+    """
+    Get the Gluesync data type for a source column type.
+    This extracts the gluesyncDataType from node info, similar to map_data_type.
+    """
+    source_matrix = source_node_info['dataTypesMatrix']
+    
+    normalized_source_type = source_type.split('(')[0].lower()
+    
+    # Find matching source type in matrix
+    source_item = next(
+        (item for item in source_matrix
+         if any(t.lower() == normalized_source_type for t in item['supportedTypes'])),
+        None
+    )
+    
+    if source_item:
+        return source_item['gluesyncDataType']
+    
+    # Default fallback
+    print(f"Warning: No gluesyncDataType mapping found for source type {source_type}. Using 'STRING' as fallback.")
+    return 'STRING'
+
+
 def table_exists(pipeline_id: str, schema_name: str, table_name: str, token: str) -> bool:
-    if not CREATE_TABLE_IF_NOT_EXISTS:
-        # If we're not going to create tables that don't exist, assume the table exists
-        # to avoid unnecessary API calls that will return 404
-        return True
-        
+    """
+    Check if a table exists in the given schema.
+    """
     try:
         fetch_core_hub(
             f"/pipelines/{pipeline_id}/config/entities/schemas/{schema_name}/tables/{table_name}",
@@ -115,7 +146,7 @@ def table_exists(pipeline_id: str, schema_name: str, table_name: str, token: str
 
 
 def generate_create_table_statement(pipeline_id: str, schema_name: str, table_name: str, token: str,
-                                    table_data: GenerateTableStatementRequest) -> str:
+                                    table_data: GenerateCreateTargetTableStatementRequest) -> str:
     try:
         print(f"table data: {table_data.model_dump()}")
         response = fetch_core_hub(
@@ -329,17 +360,28 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                         token=token):
         if CREATE_TABLE_IF_NOT_EXISTS:
             print(f"table: {target_table_name} does not exists, creating it")
-            table_data = GenerateTableStatementRequest(columns=[
-                ColumnDto(name=target_name,
-                          type=map_data_type(col["type"], source_node_info, target_node_info),
-                          isPrimaryKey=target_name in keys)
+            table_data = GenerateCreateTargetTableStatementRequest(columns=[
+                ColumnWithGluesyncDataTypeDto(
+                    columnDto=ColumnDto(
+                        name=target_name,
+                        type=map_data_type(col["type"], source_node_info, target_node_info),
+                        isPrimaryKey=target_name in keys
+                    ),
+                    gluesyncDataType=get_gluesync_data_type(col["type"], source_node_info)
+                )
                 for col in columns["columns"]
                 for column_map in custom_config.get('columns', [])
                 for source_name, target_name in column_map.items()
                 if source_name == col["name"]
             ] if custom_config.get('columns') else [
-                ColumnDto(name=col["name"], type=map_data_type(col["type"], source_node_info, target_node_info),
-                          isPrimaryKey=col["isPrimaryKey"])
+                ColumnWithGluesyncDataTypeDto(
+                    columnDto=ColumnDto(
+                        name=col["name"], 
+                        type=map_data_type(col["type"], source_node_info, target_node_info),
+                        isPrimaryKey=col["isPrimaryKey"]
+                    ),
+                    gluesyncDataType=get_gluesync_data_type(col["type"], source_node_info)
+                )
                 for col in columns["columns"]
             ])
             statement = generate_create_table_statement(pipeline_id=pipeline_id, schema_name=yaml_target_schema,
