@@ -655,10 +655,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         "type": map_data_type(col["type"], source_node_info, target_node_info)
                     })
             logger.debug(f"Using primary target keys for {table_name}: {target_keys}")
-                        "alias": col["name"],
-                        "type": map_data_type(col["type"], source_node_info, target_node_info)
-                    })
-            print(f"Using primary target keys for {table_name}: {target_keys}")
 
         target_entity = {
             "type": "NoSqlEntity" if target_type.lower() == "nosql" else "SingleTable",
