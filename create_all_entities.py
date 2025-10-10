@@ -153,15 +153,15 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
     source_node_info = get_node_info(token, pipeline_id, source_agent_id)
     target_node_info = get_node_info(token, pipeline_id, target_agent_id)
 
-    print("Source Node Info:")
-    print(json.dumps(source_node_info, indent=2))
-    print("Target Node Info:")
-    print(json.dumps(target_node_info, indent=2))
+    logger.debug("Source Node Info:")
+    logger.debug(json.dumps(source_node_info, indent=2))
+    logger.debug("Target Node Info:")
+    logger.debug(json.dumps(target_node_info, indent=2))
 
-    print(f"Full YAML config: {json.dumps(yaml_config, indent=2)}")
+    logger.debug(f"Full YAML config: {json.dumps(yaml_config, indent=2)}")
 
     schema_config = yaml_config.get(source_schema, {})
-    print(f"Schema config for {source_schema}: {json.dumps(schema_config, indent=2)}")
+    logger.debug(f"Schema config for {source_schema}: {json.dumps(schema_config, indent=2)}")
 
     yaml_target_schema = schema_config.get('target', target_schema)
     whitelist = schema_config.get('tables', {}).get('whitelist', [])
@@ -171,19 +171,19 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
     custom_tables = tables_config.get('custom', {})
     if custom_tables is None:
         custom_tables = {}
-        print("Warning: 'custom' attribute is present but empty in YAML. Converting to empty dict.")
+        logger.warning("Warning: 'custom' attribute is present but empty in YAML. Converting to empty dict.")
 
     # Get schema-level custom properties
     schema_custom_properties = schema_config.get('customProperties', {})
     global_source_custom_properties = schema_custom_properties.get('source', {})
     global_target_custom_properties = schema_custom_properties.get('target', {})
 
-    print(f"Target schema: {yaml_target_schema}")
-    print(f"Whitelist: {whitelist}")
-    print(f"Blacklist: {blacklist}")
-    print(f"Custom tables: {custom_tables}")
-    print(f"Global source custom properties: {global_source_custom_properties}")
-    print(f"Global target custom properties: {global_target_custom_properties}")
+    logger.debug(f"Target schema: {yaml_target_schema}")
+    logger.debug(f"Whitelist: {whitelist}")
+    logger.debug(f"Blacklist: {blacklist}")
+    logger.debug(f"Custom tables: {custom_tables}")
+    logger.debug(f"Global source custom properties: {global_source_custom_properties}")
+    logger.debug(f"Global target custom properties: {global_target_custom_properties}")
 
     for table in tables:
         if isinstance(table, str):
@@ -192,13 +192,13 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             table_name = table.get("name")
 
         if not table_name:
-            print(f"Warning: Table without name encountered. Skipping.")
+            logger.warning(f"Warning: Table without name encountered. Skipping.")
             continue
 
         if (table_name.startswith("sys") or
                 (blacklist and table_name in blacklist) or
                 (whitelist and table_name not in whitelist)):
-            print(f"Skipping table: {table_name}")
+            logger.info(f"Skipping table: {table_name}")
             continue
 
         columns = get_table_columns(token, pipeline_id, source_agent_id, source_schema, table_name)
@@ -206,16 +206,14 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         custom_config = custom_tables.get(table_name, {})
         if custom_config is None:
             custom_config = {}
-            print(
-                f"Warning: Custom config for table {table_name} is present but empty in YAML. Converting to empty dict.")
-        print(f"Custom config for {table_name}: {custom_config}")
+            logger.warning(f"Warning: Custom config for table {table_name} is present but empty in YAML. Converting to empty dict.")
+        logger.debug(f"Custom config for {table_name}: {custom_config}")
 
         # Get snapshot write method configuration (UPSERT or INSERT, default is UPSERT)
         snapshot_write_method = custom_config.get('snapshotWriteMethod', 'UPSERT').upper()
         if snapshot_write_method not in ['UPSERT', 'INSERT']:
-            print(f"Warning: Invalid snapshotWriteMethod '{snapshot_write_method}' for {table_name}. Using default 'UPSERT'")
-            snapshot_write_method = 'UPSERT'
-        print(f"Snapshot write method for {table_name}: {snapshot_write_method}")
+            logger.warning(f"Warning: Invalid snapshotWriteMethod '{snapshot_write_method}' for {table_name}. Using default 'UPSERT'")
+        logger.info(f"Snapshot write method for {table_name}: {snapshot_write_method}")
         
         # Get table-specific custom properties and merge with global properties
         table_custom_properties = custom_config.get('customProperties', {})
@@ -238,12 +236,12 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         # Note: snapshotWriteMethod is kept separately and NOT added to custom properties
         # It will be read directly from YAML config when needed during sync operations
 
-        print(f"Source custom properties for {table_name}: {source_custom_properties}")
-        print(f"Target custom properties for {table_name}: {target_custom_properties}")
+        logger.debug(f"Source custom properties for {table_name}: {source_custom_properties}")
+        logger.debug(f"Target custom properties for {table_name}: {target_custom_properties}")
 
         # Get custom target table name if specified
         target_table_name = custom_config.get('name', table_name)
-        print(f"Using target table name: {target_table_name} for source table: {table_name}")
+        logger.info(f"Using target table name: {target_table_name} for source table: {table_name}")
 
         # Get and process filter configurations
         filter_config = custom_config.get('filter')
@@ -251,12 +249,12 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         
         # Process regular filter
         processed_filters = process_filter_clauses(filter_config, columns) if filter_config else None
-        print(f"Processed filters for {table_name}: {processed_filters}")
+        logger.debug(f"Processed filters for {table_name}: {processed_filters}")
         
         # Process snapshot delete filter
         processed_snapshot_delete_filters = process_filter_clauses(snapshot_delete_filter_config, columns) if snapshot_delete_filter_config else None
         if processed_snapshot_delete_filters:
-            print(f"Processed snapshot delete filters for {table_name}: {processed_snapshot_delete_filters}")
+            logger.debug(f"Processed snapshot delete filters for {table_name}: {processed_snapshot_delete_filters}")
 
         # Get document key configuration if it exists
         document_key = None
@@ -281,7 +279,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     if column_id is not None:
                         key_ids.append(column_id)
                     else:
-                        print(f"Warning: Column '{key_name}' not found in table columns for document key")
+                        logger.warning(f"Warning: Column '{key_name}' not found in table columns for document key")
 
             document_key = {
                 "prefix": doc_key_config.get('prefix', ''),
@@ -289,7 +287,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 "separator": doc_key_config.get('separator', '-'),
                 "keys": key_ids  # Use column IDs instead of names
             }
-            print(f"Document key configuration for {table_name}: {document_key}")
+            logger.debug(f"Document key configuration for {table_name}: {document_key}")
 
         # Build columns definition with IDs
         columns_def = []
@@ -328,7 +326,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     "type": col["type"]
                 })
 
-        print(f"Columns definition for {table_name}: {columns_def}")
+        logger.debug(f"Columns definition for {table_name}: {columns_def}")
 
         # Process keys and other configurations as before...
         if custom_config and 'keys' in custom_config:
@@ -373,9 +371,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             })
                             break
                     else:
-                        print(f"Warning: Key '{key_name}' not found in columns for table '{table_name}'")
+                        logger.warning(f"Warning: Key '{key_name}' not found in columns for table '{table_name}'")
             
-            print(f"Using custom keys for {table_name}: {keys}")
+            logger.debug(f"Using custom keys for {table_name}: {keys}")
         else:
             keys = []
             for col in columns["columns"]:
@@ -392,10 +390,10 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         "alias": col["name"],
                         "type": col["type"]
                     })
-            print(f"Using primary keys for {table_name}: {keys}")
+            logger.debug(f"Using primary keys for {table_name}: {keys}")
 
         if not keys:
-            print(f"Warning: No keys specified for {table_name}. Table will have no keys.")
+            logger.warning(f"Warning: No keys specified for {table_name}. Table will have no keys.")
 
         handle_table_creation(pipeline_id, target_table_name, yaml_target_schema, keys, token, columns, custom_config,
                               source_node_info, target_node_info)
@@ -635,9 +633,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             })
                             break
                     else:
-                        print(f"Warning: Key '{key_name}' not found in columns for table '{table_name}'")
+                        logger.warning(f"Key '{key_name}' not found in columns for table '{table_name}'")
             
-            print(f"Using custom target keys for {table_name}: {target_keys}")
+            logger.debug(f"Using custom target keys for {table_name}: {target_keys}")
         else:
             target_keys = []
             for col in columns["columns"]:
@@ -651,6 +649,10 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     target_keys.append({
                         "id": col_id,  # Use actual ordinal position from database
                         "name": col["name"],
+                        "alias": col["name"],
+                        "type": map_data_type(col["type"], source_node_info, target_node_info)
+                    })
+            logger.debug(f"Using primary target keys for {table_name}: {target_keys}")
                         "alias": col["name"],
                         "type": map_data_type(col["type"], source_node_info, target_node_info)
                     })
@@ -842,7 +844,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             })
                             break
                     else:
-                        print(f"Warning: Key {key_name} not found in columns for table {table_key}")
+                        logger.warning(f"Warning: Key {key_name} not found in columns for table {table_key}")
             else:
                 keys = []
                 for col in columns["columns"]:
@@ -980,7 +982,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             })
                             break
                     else:
-                        print(f"Warning: Key {key_name} not found in columns for table {table_key}")
+                        logger.warning(f"Warning: Key {key_name} not found in columns for table {table_key}")
             else:
                 keys = []
                 for col in columns["columns"]:
