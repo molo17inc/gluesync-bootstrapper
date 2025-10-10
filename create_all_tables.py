@@ -358,49 +358,48 @@ def create_tables(token, pipeline_id, source_schema, target_schema, tables, sour
 
 def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_schema: str, keys: list, token: str,
                           columns: list, custom_config, source_node_info, target_node_info):
-    if not CREATE_TABLE_IF_NOT_EXISTS:
-        logger.info(f"CREATE_TABLE_IF_NOT_EXISTS is disabled - skipping table existence check for {target_table_name}")
-        return
-
     if not table_exists(pipeline_id=pipeline_id, schema_name=yaml_target_schema, table_name=target_table_name,
                         token=token):
-        logger.info(f"table: {target_table_name} does not exists, creating it")
-        table_data = GenerateCreateTargetTableStatementRequest(columns=[
-            ColumnWithGluesyncDataTypeDto(
-                columnDto=ColumnDto(
-                    name=col["name"],
-                    type=map_data_type(col["type"], source_node_info, target_node_info),
-                    id=col.get("ordinalPosition", col.get("id", 1)),
-                    ordinalPosition=col.get("ordinalPosition", col.get("id", 1)),
-                    isPrimaryKey=any(key.get("name") == col["name"] for key in keys)
-                ),
-                gluesyncDataType=get_gluesync_data_type(col["type"], source_node_info)
-            )
-            for col in columns["columns"]
-            for column_map in custom_config.get('columns', [])
-            for source_name, target_name in column_map.items()
-            if source_name == col["name"]
-        ] if custom_config.get('columns') else [
-            ColumnWithGluesyncDataTypeDto(
-                columnDto=ColumnDto(
-                    name=col["name"],
-                    type=map_data_type(col["type"], source_node_info, target_node_info),
-                    id=col.get("ordinalPosition", col.get("id", 1)),
-                    ordinalPosition=col.get("ordinalPosition", col.get("id", 1)),
-                    isPrimaryKey=col["isPrimaryKey"]
-                ),
-                gluesyncDataType=get_gluesync_data_type(col["type"], source_node_info)
-            )
-            for col in columns["columns"]
-        ])
-        statement = generate_create_table_statement(pipeline_id=pipeline_id, schema_name=yaml_target_schema,
-                                                    table_name=target_table_name, token=token,
-                                                    table_data=table_data)
-        logger.debug(f"create table statement: {statement}")
-        create_target_table(pipeline_id=pipeline_id, create_table_request=CreateTableRequest(statement=statement),
-                            token=token)
+        if CREATE_TABLE_IF_NOT_EXISTS:
+            print(f"table: {target_table_name} does not exists, creating it")
+            table_data = GenerateCreateTargetTableStatementRequest(columns=[
+                ColumnWithGluesyncDataTypeDto(
+                    columnDto=ColumnDto(
+                        name=target_name,
+                        type=map_data_type(col["type"], source_node_info, target_node_info),
+                        id=col.get("ordinalPosition", col.get("id", 1)),
+                        ordinalPosition=col.get("ordinalPosition", col.get("id", 1)),
+                        isPrimaryKey=target_name in keys
+                    ),
+                    gluesyncDataType=get_gluesync_data_type(col["type"], source_node_info)
+                )
+                for col in columns["columns"]
+                for column_map in custom_config.get('columns', [])
+                for source_name, target_name in column_map.items()
+                if source_name == col["name"]
+            ] if custom_config.get('columns') else [
+                ColumnWithGluesyncDataTypeDto(
+                    columnDto=ColumnDto(
+                        name=col["name"], 
+                        type=map_data_type(col["type"], source_node_info, target_node_info),
+                        id=col.get("ordinalPosition", col.get("id", 1)),
+                        ordinalPosition=col.get("ordinalPosition", col.get("id", 1)),
+                        isPrimaryKey=col["isPrimaryKey"]
+                    ),
+                    gluesyncDataType=get_gluesync_data_type(col["type"], source_node_info)
+                )
+                for col in columns["columns"]
+            ])
+            statement = generate_create_table_statement(pipeline_id=pipeline_id, schema_name=yaml_target_schema,
+                                                        table_name=target_table_name, token=token,
+                                                        table_data=table_data)
+            print(f"create table statement: {statement}")
+            create_target_table(pipeline_id=pipeline_id, create_table_request=CreateTableRequest(statement=statement),
+                                token=token)
+        else:
+            print(f"table: {target_table_name} does not exists, skipping creation as CREATE_TABLE_IF_NOT_EXISTS is false")
     else:
-        logger.info(f"table: {target_table_name} already exists")
+        print(f"table: {target_table_name} already exists")
 
 
 def main(pipeline_id, source_schema, target_schema, source_type, target_type, yaml_file, token, skip_errors=True):
