@@ -573,10 +573,18 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         # Simple string format: just the column name
                         col_name = target_col
                         col_type = 'varchar'  # Default type
+                        col_data_length = 1024  # Default data length
+                        col_numeric_precision = 0  # Default numeric precision
+                        col_numeric_scale = 0  # Default numeric scale
+                        col_is_nullable = False  # Default nullable
                     else:
-                        # Object format with optional type
+                        # Object format with required fields
                         col_name = target_col.get('name')
                         col_type = target_col.get('type', 'varchar')  # Default to varchar if not specified
+                        col_data_length = target_col.get('dataLength', 1024)  # Default data length
+                        col_numeric_precision = target_col.get('numericPrecision', 0)  # Default numeric precision
+                        col_numeric_scale = target_col.get('numericScale', 0)  # Default numeric scale
+                        col_is_nullable = target_col.get('isNullable', False)  # Default nullable
                     
                     # Map the column type to target node type
                     mapped_type = map_data_type(col_type, source_node_info, target_node_info)
@@ -585,7 +593,11 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         "id": max_target_col_id,  # Continue from last target column ID
                         "name": col_name,
                         "alias": col_name,
-                        "type": mapped_type
+                        "type": mapped_type,
+                        "dataLength": col_data_length,
+                        "numericPrecision": col_numeric_precision,
+                        "numericScale": col_numeric_scale,
+                        "isNullable": col_is_nullable
                     })
                     logger.debug(f"Added target-only column: {col_name} (type: {mapped_type}, id: {max_target_col_id})")
 

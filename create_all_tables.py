@@ -60,11 +60,10 @@ class ColumnDto(BaseModel):
     isPrimaryKey: bool = False
     isNullable: bool = False
     dataLength: int = 0
+    numericPrecision: int = 0
+    numericScale: int = 0
 
 
-class ColumnWithGluesyncDataTypeDto(BaseModel):
-    columnDto: ColumnDto
-    gluesyncDataType: str
 
 
 class GenerateTableStatementRequest(BaseModel):
@@ -72,7 +71,7 @@ class GenerateTableStatementRequest(BaseModel):
 
 
 class GenerateCreateTargetTableStatementRequest(BaseModel):
-    columns: List[ColumnWithGluesyncDataTypeDto]
+    columns: List[ColumnDto]
 
 
 class CreateTableRequest(BaseModel):
@@ -362,34 +361,42 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                         token=token):
         if CREATE_TABLE_IF_NOT_EXISTS:
             print(f"table: {target_table_name} does not exists, creating it")
-            table_data = GenerateCreateTargetTableStatementRequest(columns=[
-                ColumnWithGluesyncDataTypeDto(
-                    columnDto=ColumnDto(
-                        name=target_name,
-                        type=map_data_type(col["type"], source_node_info, target_node_info),
-                        id=col.get("ordinalPosition", col.get("id", 1)),
-                        ordinalPosition=col.get("ordinalPosition", col.get("id", 1)),
-                        isPrimaryKey=target_name in keys
-                    ),
-                    gluesyncDataType=get_gluesync_data_type(col["type"], source_node_info)
-                )
-                for col in columns["columns"]
-                for column_map in custom_config.get('columns', [])
-                for source_name, target_name in column_map.items()
-                if source_name == col["name"]
-            ] if custom_config.get('columns') else [
-                ColumnWithGluesyncDataTypeDto(
-                    columnDto=ColumnDto(
+            # Create ColumnDto objects using source column properties for matching target columns
+            column_dtos = []
+            
+            if custom_config.get('columns'):
+                # When columns mapping is specified, use source column properties for each mapped column
+                for source_name, target_name in custom_config.get('columns', []):
+                    # Find the source column
+                    source_col = next((col for col in columns["columns"] if col["name"] == source_name), None)
+                    if source_col:
+                        column_dtos.append(ColumnDto(
+                            name=target_name,
+                            type=source_col["type"],
+                            id=source_col.get("ordinalPosition", source_col.get("id", 1)),
+                            ordinalPosition=source_col.get("ordinalPosition", source_col.get("id", 1)),
+                            isPrimaryKey=target_name in [key.get("name", key) for key in keys],
+                            isNullable=source_col.get("isNullable", False),
+                            dataLength=source_col.get("dataLength", 0),
+                            numericPrecision=source_col.get("numericPrecision", 0),
+                            numericScale=source_col.get("numericScale", 0)
+                        ))
+            else:
+                # When no columns mapping is specified, use source column properties directly
+                for col in columns["columns"]:
+                    column_dtos.append(ColumnDto(
                         name=col["name"], 
-                        type=map_data_type(col["type"], source_node_info, target_node_info),
+                        type=col["type"],
                         id=col.get("ordinalPosition", col.get("id", 1)),
                         ordinalPosition=col.get("ordinalPosition", col.get("id", 1)),
-                        isPrimaryKey=col["isPrimaryKey"]
-                    ),
-                    gluesyncDataType=get_gluesync_data_type(col["type"], source_node_info)
-                )
-                for col in columns["columns"]
-            ])
+                        isPrimaryKey=col.get("isPrimaryKey", False),
+                        isNullable=col.get("isNullable", False),
+                        dataLength=col.get("dataLength", 0),
+                        numericPrecision=col.get("numericPrecision", 0),
+                        numericScale=col.get("numericScale", 0)
+                    ))
+            
+            table_data = GenerateCreateTargetTableStatementRequest(columns=column_dtos)
             statement = generate_create_table_statement(pipeline_id=pipeline_id, schema_name=yaml_target_schema,
                                                         table_name=target_table_name, token=token,
                                                         table_data=table_data)

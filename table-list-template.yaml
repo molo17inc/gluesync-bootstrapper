@@ -194,10 +194,21 @@ dbo:
           # In unlocked schema mode, columns definition can be omitted or partial
           # The UDF will handle the mapping between source and target columns
           # Target-only columns: These columns exist only in the target, not in source
+          # For object format, you must specify: name, type, dataLength, numericPrecision, numericScale, isNullable
           targetOnlyColumns:
-            - CURRENCY  # Simple string format
-            - CREATED_AT
-            - PROCESSING_STATUS
+            - CURRENCY  # Simple string format (uses defaults: varchar, dataLength=1024, nullable=false)
+            - name: CREATED_AT
+              type: datetime
+              dataLength: 19  # Length for datetime format like "2024-01-01 12:00:00"
+              numericPrecision: 0
+              numericScale: 0
+              isNullable: false
+            - name: PROCESSING_STATUS
+              type: varchar
+              dataLength: 50
+              numericPrecision: 0
+              numericScale: 0
+              isNullable: true
           customProperties:
             target:
               # UDF is mandatory for unlocked schema tables

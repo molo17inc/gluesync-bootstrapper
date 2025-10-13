@@ -739,15 +739,23 @@ ARTICLES:
     - PROCESSING_STATUS
 ```
 
-#### Object Format (Optional - when you need to specify types)
+#### Object Format (Required for complete column specification)
 ```yaml
 ARTICLES:
   unlockedSchema: true
   targetOnlyColumns:
     - name: CURRENCY
       type: varchar
+      dataLength: 10
+      numericPrecision: 0
+      numericScale: 0
+      isNullable: false
     - name: CREATED_AT
-      type: timestamp
+      type: datetime
+      dataLength: 19
+      numericPrecision: 0
+      numericScale: 0
+      isNullable: false
 ```
 
 ### Example Usage
@@ -770,17 +778,19 @@ ARTICLES:
 
 - **Column IDs**: Target-only columns receive sequential IDs following the mapped source columns
 - **Column Mapping**: In `columnsMappingMatrix`, target-only columns have `sourceColumnId: 0` indicating no source mapping
-- **Default Type**: When type is not specified, defaults to `varchar`
+- **Required Fields**: When using object format, you must specify: `name`, `type`, `dataLength`, `numericPrecision`, `numericScale`, `isNullable`
+- **Default Values**: When using simple string format, defaults are: `varchar` type, `dataLength: 1024`, `numericPrecision: 0`, `numericScale: 0`, `isNullable: false`
 - **UDF Integration**: UDFs can populate these columns with calculated values or metadata
 
 ### Important Notes
 
 1. **Requires Unlocked Schema**: Target-only columns are only supported when `unlockedSchema: true` is set
 2. **UDF is Mandatory**: Since target-only columns work only with unlocked schema, a UDF is always required
-3. Target-only columns are added after all source-mapped columns in the target definition
-4. The column type is optional and defaults to `varchar` when not specified
-5. These columns can be populated through UDF transformations
-6. In `columnsMappingMatrix`, target-only columns have `sourceColumnId: 0` to indicate no source mapping
+3. **Target-only columns are added after all source-mapped columns in the target definition**
+4. **Required Fields for Object Format**: When using object format, you must specify: `name`, `type`, `dataLength`, `numericPrecision`, `numericScale`, `isNullable`
+5. **Default Values for String Format**: When using simple string format, defaults are: `varchar` type, `dataLength: 1024`, `numericPrecision: 0`, `numericScale: 0`, `isNullable: false`
+6. **These columns can be populated through UDF transformations**
+7. **In `columnsMappingMatrix`, target-only columns have `sourceColumnId: 0` to indicate no source mapping**
 
 ## Support
 
