@@ -500,7 +500,7 @@ def main():
             lockfile_failure()
             raise RuntimeError(reply["error"])
 
-        logger.info(f"POST /agents accepted {len(reply['agents'])} definition(s)")
+        logger.info(f"POST /services accepted {len(reply['services'])} definition(s)")
         if reply["containers_started"]:
             logger.info("Containers started successfully; they will shortly appear in /containers")
         else:
