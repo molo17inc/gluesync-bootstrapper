@@ -508,8 +508,8 @@ def main():
 
         logger.debug("Full reply:\n" + json.dumps(reply, indent=2))
 
-        print("Waiting 70 seconds before returning to let agents warm up...")
-        time.sleep(70)
+        print("Waiting 10 seconds before returning to let agents warm up...")
+        time.sleep(10)
         print("Starting bootstrapper now...")
 
         # If this is conductor-only mode, exit here
