@@ -500,7 +500,7 @@ def main():
             lockfile_failure()
             raise RuntimeError(reply["error"])
 
-        logger.info(f"POST /agents accepted {len(reply['agents'])} definition(s)")
+        logger.info(f"POST /services accepted {len(reply['services'])} definition(s)")
         if reply["containers_started"]:
             logger.info("Containers started successfully; they will shortly appear in /containers")
         else:
@@ -508,8 +508,8 @@ def main():
 
         logger.debug("Full reply:\n" + json.dumps(reply, indent=2))
 
-        print("Waiting 10 seconds before returning to let agents warm up...")
-        time.sleep(10)
+        print("Waiting 70 seconds before returning to let agents warm up...")
+        time.sleep(70)
         print("Starting bootstrapper now...")
 
         # If this is conductor-only mode, exit here

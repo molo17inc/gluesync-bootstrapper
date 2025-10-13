@@ -13,11 +13,11 @@ Return structure
 ----------------
 {
   "service_names":      [...],     # service IDs from Conductor
-  "agents":             [...],     # payload sent to /agents
+  "services":             [...],     # payload sent to /services
   "containers_started": true|false,
   "start_response":     {...}      # Conductor reply (on success)
   "start_error":        "…"        # only if start failed
-  …fields echoed back by /agents…
+  …fields echoed back by /services…
 }
 """
 
@@ -62,8 +62,6 @@ def _build_agent_spec(agent: dict, globals_cfg: dict) -> Dict[str, Any]:
     """
     tag = agent["agentTag"].lower()
     agent_type = agent["agentType"].lower()
-    version = os.getenv('GSCOREVERSION', 'latest')
-    logger.info(f"GSCOREVERSION: {version}")
     
     # Build environment variables
     env_vars = agent.get("environment", {})
@@ -78,8 +76,6 @@ def _build_agent_spec(agent: dict, globals_cfg: dict) -> Dict[str, Any]:
             env_vars["JAVA_TOOL_OPTIONS"] = "--add-opens=java.base/java.nio=ALL-UNNAMED"
     
     # Build volumes array (strings per OpenAPI spec)
-    log_dir = os.getenv('LOG_DIR', '/tmp/logs')
-
     volumes = agent.get("volumes", [])
     log_volumes = [
         f"./gluesync-{tag}-{agent_type}-agent:/opt/gluesync/logs"
@@ -87,16 +83,6 @@ def _build_agent_spec(agent: dict, globals_cfg: dict) -> Dict[str, Any]:
 
     volumes += log_volumes
 
-    if not volumes:
-        volumes = [
-            f"{globals_cfg.get('commonDir', '/commons/gluesync')}/scripts:/scripts",
-            f"{globals_cfg.get('licenseFile', './gs-license.dat')}:/opt/gluesync/data/gs-license.dat:ro",
-            f"{globals_cfg.get('logbackFile', './logback.xml')}:/opt/gluesync/data/logback.xml:ro",
-            f"{globals_cfg.get('securityConfig', './security-config.json')}:/opt/gluesync/data/security-config.json:ro",
-            f"{globals_cfg.get('keystore', './gluesync.com.jks')}:/opt/gluesync/data/gluesync.com.jks:ro",
-            # f"{globals_cfg.get('coreHubBootstrap', './bootstrap-core-hub.json')}:/opt/gluesync/data/bootstrap-core-hub.json:ro",
-        ]
-    
     # Build labels object
     labels = {
         "com.molo17.conductor.unique_id": tag,
@@ -113,14 +99,15 @@ def _build_agent_spec(agent: dict, globals_cfg: dict) -> Dict[str, Any]:
     # Return full agent specification per OpenAPI schema
     return {
         "imageName": f"gluesync-{tag}",
-        "type": agent_type,
+        "type": "agent",
+        "agentType": agent_type,
         "environment": env_vars,
         "labels": labels,
         "ports": agent.get("ports", []),
         "volumes": volumes,
         "reservations": agent.get("reservations", {}),
         "limits": agent.get("limits", {}),
-        "dependsOn": depends_on  # camelCase per OpenAPI spec
+        # "dependsOn": depends_on  # camelCase per OpenAPI spec
     }
 
 def add_agents_with_conductor(
@@ -142,24 +129,42 @@ def add_agents_with_conductor(
         spec = _build_agent_spec(agent, globals_cfg)
         agent_specs.append(spec)
 
-    # 3. POST /agents with full specifications
-    payload = {"agents": agent_specs}
+    # 3. POST /services with full specifications
+    payload = {"services": agent_specs}
     headers = {"Content-Type": "application/json"}
     if auth_token:
         headers["apiKey"] = auth_token
 
+    # **LOG REQUEST DETAILS**
+    logger.info(f"POST {conductor_url}/services")
+    logger.info(f"Headers: {headers}")
+    logger.info(f"Payload: {json.dumps(payload, indent=2)}")
+
     try:
         resp = requests.post(
-            f"{conductor_url}/agents",
+            f"{conductor_url}/services",
             json=payload,
             headers=headers,
             timeout=30
         )
+        
+        # **LOG RESPONSE DETAILS**
+        logger.info(f"Response Status: {resp.status_code}")
+        logger.info(f"Response Headers: {dict(resp.headers)}")
+        logger.info(f"Response Body: {resp.text}")
+        
         resp.raise_for_status()
         result = resp.json()
         logger.info(f"Add Agents result: {result}")
+    except requests.exceptions.HTTPError as exc:
+        # **LOG ERROR RESPONSE BODY**
+        logger.error(f"HTTP Error: {exc}")
+        logger.error(f"Response Text: {resp.text}")
+        return {"error": f"Request to /services failed: {exc}", "response_body": resp.text}
     except Exception as exc:
-        return {"error": f"Request to /agents failed: {exc}"}
+        logger.error(f"Request failed: {exc}")
+        return {"error": f"Request to /services failed: {exc}"}
+
 
     # 4. Extract service names from Conductor response
     service_names = []
@@ -169,7 +174,7 @@ def add_agents_with_conductor(
     # 5. POST /containers action=start using Conductor's service IDs
     if service_names:
         start_body = {"action": "start", "ids": service_names}
-        logger.info(f"Start Agents result: {start_body}")
+        logger.info(f"Start services result: {start_body}")
         try:
             start_r = requests.post(
                 f"{conductor_url}/containers",
@@ -189,12 +194,12 @@ def add_agents_with_conductor(
     else:
         containers_ok = False
         start_json = {}
-        start_err = "No service names returned from /agents"
+        start_err = "No service names returned from /services"
 
     # 6. Return enriched response
     result.update({
         "service_names": service_names,
-        "agents": agent_specs,
+        "services": agent_specs,
         "containers_started": containers_ok
     })
     
