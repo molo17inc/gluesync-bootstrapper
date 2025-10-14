@@ -51,7 +51,6 @@ CREATE_TABLE_IF_NOT_EXISTS = os.getenv('CREATE_TABLE_IF_NOT_EXISTS', 'true').low
 # Initialize the CoreHub client
 core_hub_client = CoreHubClient(CORE_HUB_URL)
 
-
 class ColumnDto(BaseModel):
     name: str
     type: str
@@ -63,20 +62,14 @@ class ColumnDto(BaseModel):
     numericPrecision: int = 0
     numericScale: int = 0
 
-
-
-
 class GenerateTableStatementRequest(BaseModel):
     columns: List[ColumnDto]
-
 
 class GenerateCreateTargetTableStatementRequest(BaseModel):
     columns: List[ColumnDto]
 
-
 class CreateTableRequest(BaseModel):
     statement: str
-
 
 def format_column_type(col_type: str, data_length: int, numeric_precision: int = 0, numeric_scale: int = 0) -> str:
     """
@@ -123,7 +116,6 @@ def get_gluesync_data_type(source_type: str, source_node_info) -> str:
     logger.info(f"Warning: No gluesyncDataType mapping found for source type {source_type}. Using 'STRING' as fallback.")
     return 'STRING'
 
-
 def table_exists(pipeline_id: str, schema_name: str, table_name: str, token: str) -> bool:
     """
     Check if a table exists in the given schema.
@@ -167,7 +159,6 @@ def table_exists(pipeline_id: str, schema_name: str, table_name: str, token: str
         
         return False
 
-
 def generate_create_table_statement(pipeline_id: str, schema_name: str, table_name: str, token: str,
                                     table_data: GenerateCreateTargetTableStatementRequest) -> str:
     try:
@@ -184,7 +175,6 @@ def generate_create_table_statement(pipeline_id: str, schema_name: str, table_na
         logger.info(f"generate create table statement: {error_msg}")
         raise
 
-
 def create_target_table(pipeline_id: str, create_table_request: CreateTableRequest, token: str):
     try:
         fetch_core_hub(
@@ -197,7 +187,6 @@ def create_target_table(pipeline_id: str, create_table_request: CreateTableReque
         error_msg = str(e)
         logger.info(f"generate create table statement: {error_msg}")
         raise
-
 
 def create_tables(token, pipeline_id, source_schema, target_schema, tables, source_agent_id, target_agent_id,
                   source_type, target_type, yaml_config, skip_errors=True):
@@ -530,7 +519,6 @@ def main(pipeline_id, source_schema, target_schema, source_type, target_type, ya
     # Log successful completion
     log_success(logger, f"Table creation completed successfully for pipeline {pipeline_id}")
     lockfile_complete()
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Gluesync Entity Creation Script")
