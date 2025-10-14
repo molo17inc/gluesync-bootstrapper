@@ -73,24 +73,10 @@ class CreateTableRequest(BaseModel):
 
 def format_column_type(col_type: str, data_length: int, numeric_precision: int = 0, numeric_scale: int = 0) -> str:
     """
-    Format column type to include length/precision information for CREATE TABLE statements.
-    For VARCHAR and similar types, include the length in parentheses.
-    For NUMERIC/DECIMAL types, include precision and scale.
+    Format column type for ColumnDto - return the base type without length formatting.
+    The dataLength field should contain the length information separately.
     """
-    col_type_lower = col_type.lower()
-    
-    # For VARCHAR and similar string types, include length if > 0
-    if col_type_lower in ['varchar', 'nvarchar', 'char', 'nchar'] and data_length > 0:
-        return f"{col_type}({data_length})"
-    
-    # For NUMERIC/DECIMAL types, include precision and scale if specified
-    elif col_type_lower in ['numeric', 'decimal'] and numeric_precision > 0:
-        if numeric_scale > 0:
-            return f"{col_type}({numeric_precision},{numeric_scale})"
-        else:
-            return f"{col_type}({numeric_precision})"
-    
-    # For other types, return as-is
+    # For all types, return as-is (the API will handle length/precision formatting)
     return col_type
     
 def get_gluesync_data_type(source_type: str, source_node_info) -> str:
