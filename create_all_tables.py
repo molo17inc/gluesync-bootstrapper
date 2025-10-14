@@ -98,7 +98,7 @@ def get_gluesync_data_type(source_type: str, source_node_info) -> str:
         return source_item['gluesyncDataType']
     
     # Default fallback
-    print(f"Warning: No gluesyncDataType mapping found for source type {source_type}. Using 'STRING' as fallback.")
+    logger.info(f"Warning: No gluesyncDataType mapping found for source type {source_type}. Using 'STRING' as fallback.")
     return 'STRING'
 
 
@@ -112,21 +112,21 @@ def table_exists(pipeline_id: str, schema_name: str, table_name: str, token: str
             method="GET",
             token=token
         )
-        print(f"Table {table_name} exists in schema {schema_name}")
+        logger.info(f"Table {table_name} exists in schema {schema_name}")
         return True
     except requests.exceptions.RequestException as e:
         error_msg = str(e)
-        print(f"Initial table existence check failed for {table_name}: {error_msg}")
+        logger.info(f"Initial table existence check failed for {table_name}: {error_msg}")
         
         # Try opposite casing
         if table_name != table_name.lower():
             # Original has uppercase, try lowercase
             alternate_table_name = table_name.lower()
-            print(f"Trying lowercase version: {alternate_table_name}")
+            logger.info(f"Trying lowercase version: {alternate_table_name}")
         elif table_name != table_name.upper():
             # Original is lowercase, try uppercase
             alternate_table_name = table_name.upper()
-            print(f"Trying uppercase version: {alternate_table_name}")
+            logger.info(f"Trying uppercase version: {alternate_table_name}")
         else:
             # All same case, no alternate to try
             return False
@@ -137,11 +137,11 @@ def table_exists(pipeline_id: str, schema_name: str, table_name: str, token: str
                 method="GET",
                 token=token
             )
-            print(f"Table found with alternate casing: {alternate_table_name}")
+            logger.info(f"Table found with alternate casing: {alternate_table_name}")
             return True
         except requests.exceptions.RequestException as e2:
             error_msg2 = str(e2)
-            print(f"Alternate casing check also failed for {alternate_table_name}: {error_msg2}")
+            logger.info(f"Alternate casing check also failed for {alternate_table_name}: {error_msg2}")
         
         return False
 
@@ -149,7 +149,7 @@ def table_exists(pipeline_id: str, schema_name: str, table_name: str, token: str
 def generate_create_table_statement(pipeline_id: str, schema_name: str, table_name: str, token: str,
                                     table_data: GenerateCreateTargetTableStatementRequest) -> str:
     try:
-        print(f"table data: {table_data.model_dump()}")
+        logger.info(f"table data: {table_data.model_dump()}")
         response = fetch_core_hub(
             f"/pipelines/{pipeline_id}/config/entities/schemas/{schema_name}/tables/{table_name}/statements/create-table",
             method="PUT",
@@ -159,7 +159,7 @@ def generate_create_table_statement(pipeline_id: str, schema_name: str, table_na
         return response
     except requests.exceptions.RequestException as e:
         error_msg = str(e)
-        print(f"generate create table statement: {error_msg}")
+        logger.info(f"generate create table statement: {error_msg}")
         raise
 
 
@@ -173,7 +173,7 @@ def create_target_table(pipeline_id: str, create_table_request: CreateTableReque
         )
     except requests.exceptions.RequestException as e:
         error_msg = str(e)
-        print(f"generate create table statement: {error_msg}")
+        logger.info(f"generate create table statement: {error_msg}")
         raise
 
 
@@ -210,15 +210,15 @@ def create_tables(token, pipeline_id, source_schema, target_schema, tables, sour
     source_node_info = get_node_info(token, pipeline_id, source_agent_id)
     target_node_info = get_node_info(token, pipeline_id, target_agent_id)
 
-    print("Source Node Info:")
-    print(json.dumps(source_node_info, indent=2))
-    print("Target Node Info:")
-    print(json.dumps(target_node_info, indent=2))
+    logger.info("Source Node Info:")
+    logger.info(json.dumps(source_node_info, indent=2))
+    logger.info("Target Node Info:")
+    logger.info(json.dumps(target_node_info, indent=2))
 
-    print(f"Full YAML config: {json.dumps(yaml_config, indent=2)}")
+    logger.info(f"Full YAML config: {json.dumps(yaml_config, indent=2)}")
 
     schema_config = yaml_config.get(source_schema, {})
-    print(f"Schema config for {source_schema}: {json.dumps(schema_config, indent=2)}")
+    logger.info(f"Schema config for {source_schema}: {json.dumps(schema_config, indent=2)}")
 
     yaml_target_schema = schema_config.get('target', target_schema)
     whitelist = schema_config.get('tables', {}).get('whitelist', [])
@@ -228,19 +228,19 @@ def create_tables(token, pipeline_id, source_schema, target_schema, tables, sour
     custom_tables = tables_config.get('custom', {})
     if custom_tables is None:
         custom_tables = {}
-        print("Warning: 'custom' attribute is present but empty in YAML. Converting to empty dict.")
+        prilogger.infont("Warning: 'custom' attribute is present but empty in YAML. Converting to empty dict.")
 
     # Get schema-level custom properties
     schema_custom_properties = schema_config.get('customProperties', {})
     global_source_custom_properties = schema_custom_properties.get('source', {})
     global_target_custom_properties = schema_custom_properties.get('target', {})
 
-    print(f"Target schema: {yaml_target_schema}")
-    print(f"Whitelist: {whitelist}")
-    print(f"Blacklist: {blacklist}")
-    print(f"Custom tables: {custom_tables}")
-    print(f"Global source custom properties: {global_source_custom_properties}")
-    print(f"Global target custom properties: {global_target_custom_properties}")
+    logger.info(f"Target schema: {yaml_target_schema}")
+    logger.info(f"Whitelist: {whitelist}")
+    logger.info(f"Blacklist: {blacklist}")
+    logger.info(f"Custom tables: {custom_tables}")
+    logger.info(f"Global source custom properties: {global_source_custom_properties}")
+    logger.info(f"Global target custom properties: {global_target_custom_properties}")
 
     for table in tables:
         if isinstance(table, str):
@@ -249,13 +249,13 @@ def create_tables(token, pipeline_id, source_schema, target_schema, tables, sour
             table_name = table.get("name")
 
         if not table_name:
-            print(f"Warning: Table without name encountered. Skipping.")
+            logger.info(f"Warning: Table without name encountered. Skipping.")
             continue
 
         if (table_name.startswith("sys") or
                 (blacklist and table_name in blacklist) or
                 (whitelist and table_name not in whitelist)):
-            print(f"Skipping table: {table_name}")
+            logger.info(f"Skipping table: {table_name}")
             continue
 
         columns = get_table_columns(token, pipeline_id, source_agent_id, source_schema, table_name)
@@ -263,26 +263,26 @@ def create_tables(token, pipeline_id, source_schema, target_schema, tables, sour
         custom_config = custom_tables.get(table_name, {})
         if custom_config is None:
             custom_config = {}
-            print(
+            logger.info(
                 f"Warning: Custom config for table {table_name} is present but empty in YAML. Converting to empty dict.")
-        print(f"Custom config for {table_name}: {custom_config}")
+        logger.info(f"Custom config for {table_name}: {custom_config}")
 
         # Get table-specific custom properties and merge with global properties
         table_custom_properties = custom_config.get('customProperties', {})
         source_custom_properties = {**global_source_custom_properties, **table_custom_properties.get('source', {})}
         target_custom_properties = {**global_target_custom_properties, **table_custom_properties.get('target', {})}
 
-        print(f"Source custom properties for {table_name}: {source_custom_properties}")
-        print(f"Target custom properties for {table_name}: {target_custom_properties}")
+        logger.info(f"Source custom properties for {table_name}: {source_custom_properties}")
+        logger.info(f"Target custom properties for {table_name}: {target_custom_properties}")
 
         # Get custom target table name if specified
         target_table_name = custom_config.get('name', table_name)
-        print(f"Using target table name: {target_table_name} for source table: {table_name}")
+        logger.info(f"Using target table name: {target_table_name} for source table: {table_name}")
 
         # Get and process filter configuration
         filter_config = custom_config.get('filter')
         processed_filters = process_filter_clauses(filter_config, columns) if filter_config else None
-        print(f"Processed filters for {table_name}: {processed_filters}")
+        logger.info(f"Processed filters for {table_name}: {processed_filters}")
 
         # Get document key configuration if it exists
         document_key = None
@@ -294,7 +294,7 @@ def create_tables(token, pipeline_id, source_schema, target_schema, tables, sour
                 "separator": doc_key_config.get('separator', '-'),
                 "keys": doc_key_config.get('keys', [])
             }
-            print(f"Document key configuration for {table_name}: {document_key}")
+            logger.info(f"Document key configuration for {table_name}: {document_key}")
 
         # Process keys and other configurations as before...
         if custom_config and 'keys' in custom_config:
@@ -329,14 +329,14 @@ def create_tables(token, pipeline_id, source_schema, target_schema, tables, sour
                         "type": key_type or key_column["type"]
                     })
                 else:
-                    print(
+                    logger.info(
                         f"Warning: Key {key_name} not found in columns for table {table_name}. Adding with unknown type.")
                     keys.append({
                         "name": key_name,
                         "alias": key_alias,
                         "type": key_type or "unknown"
                     })
-            print(f"Using custom keys for {table_name}: {keys}")
+            logger.info(f"Using custom keys for {table_name}: {keys}")
         else:
             keys = [
                 {
@@ -345,10 +345,10 @@ def create_tables(token, pipeline_id, source_schema, target_schema, tables, sour
                     "type": col["type"]
                 } for col in columns["columns"] if col.get("isPrimaryKey")
             ]
-            print(f"Using primary keys for {table_name}: {keys}")
+            logger.info(f"Using primary keys for {table_name}: {keys}")
 
         if not keys:
-            print(f"Warning: No keys specified for {table_name}. Table will have no keys.")
+            logger.info(f"Warning: No keys specified for {table_name}. Table will have no keys.")
 
         # check if the table exists on the target
         handle_table_creation(pipeline_id, target_table_name, yaml_target_schema, keys, token, columns, custom_config,
@@ -360,7 +360,7 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
     if not table_exists(pipeline_id=pipeline_id, schema_name=yaml_target_schema, table_name=target_table_name,
                         token=token):
         if CREATE_TABLE_IF_NOT_EXISTS:
-            print(f"table: {target_table_name} does not exists, creating it")
+            logger.info(f"table: {target_table_name} does not exists, creating it")
             # Create ColumnDto objects using source column properties for matching target columns
             column_dtos = []
             
@@ -400,13 +400,13 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
             statement = generate_create_table_statement(pipeline_id=pipeline_id, schema_name=yaml_target_schema,
                                                         table_name=target_table_name, token=token,
                                                         table_data=table_data)
-            print(f"create table statement: {statement}")
+            logger.info(f"create table statement: {statement}")
             create_target_table(pipeline_id=pipeline_id, create_table_request=CreateTableRequest(statement=statement),
                                 token=token)
         else:
-            print(f"table: {target_table_name} does not exists, skipping creation as CREATE_TABLE_IF_NOT_EXISTS is false")
+            logger.info(f"table: {target_table_name} does not exists, skipping creation as CREATE_TABLE_IF_NOT_EXISTS is false")
     else:
-        print(f"table: {target_table_name} already exists")
+        logger.info(f"table: {target_table_name} already exists")
 
 
 def main(pipeline_id, source_schema, target_schema, source_type, target_type, yaml_file, token, skip_errors=True):
