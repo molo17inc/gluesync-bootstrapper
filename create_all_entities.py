@@ -564,10 +564,19 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 logger.warning(f"To use target-only columns, set 'unlockedSchema: true' for table {table_name}")
             elif is_unlocked_schema:
                 logger.info(f"Adding {len(target_only_columns)} target-only columns for table {table_name}")
+
+                # Try to get target columns if the target table exists
+                target_columns = None
+                try:
+                    target_columns = get_table_columns(token, pipeline_id, target_agent_id, yaml_target_schema, target_table_name)
+                    logger.debug(f"Found {len(target_columns.get('columns', []))} existing columns in target table {yaml_target_schema}.{target_table_name}")
+                except Exception as e:
+                    logger.debug(f"Could not get target columns for {yaml_target_schema}.{target_table_name}: {str(e)}")
+
                 for target_col in target_only_columns:
                     # Increment from the maximum target column ID
                     max_target_col_id += 1
-                    
+
                     # Support both string format and object format
                     if isinstance(target_col, str):
                         # Simple string format: just the column name
@@ -578,17 +587,47 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         col_numeric_scale = 0  # Default numeric scale
                         col_is_nullable = False  # Default nullable
                     else:
-                        # Object format with required fields
+                        # Object format with user-defined properties
                         col_name = target_col.get('name')
                         col_type = target_col.get('type', 'varchar')  # Default to varchar if not specified
                         col_data_length = target_col.get('dataLength', 1024)  # Default data length
                         col_numeric_precision = target_col.get('numericPrecision', 0)  # Default numeric precision
                         col_numeric_scale = target_col.get('numericScale', 0)  # Default numeric scale
                         col_is_nullable = target_col.get('isNullable', False)  # Default nullable
-                    
+
+                    # Check if this column already exists in the target table
+                    discovered_column = None
+                    if target_columns and 'columns' in target_columns:
+                        discovered_column = next(
+                            (col for col in target_columns['columns'] if col.get('name') == col_name),
+                            None
+                        )
+
+                    if discovered_column:
+                        # Use discovered column properties (priority over user-defined)
+                        logger.info(f"Using discovered properties for target-only column '{col_name}' from target table")
+                        col_type = discovered_column.get('type', col_type)
+                        col_data_length = discovered_column.get('dataLength', col_data_length)
+                        col_numeric_precision = discovered_column.get('numericPrecision', col_numeric_precision)
+                        col_numeric_scale = discovered_column.get('numericScale', col_numeric_scale)
+                        col_is_nullable = discovered_column.get('isNullable', col_is_nullable)
+                    else:
+                        # Column doesn't exist in target table, use user-defined properties
+                        logger.debug(f"Using user-defined properties for target-only column '{col_name}' (not found in target table)")
+
+                        # Validate that required properties are provided for user-defined target-only columns
+                        if isinstance(target_col, dict):
+                            required_props = ['name', 'type', 'dataLength', 'numericPrecision', 'numericScale', 'isNullable']
+                            missing_props = [prop for prop in required_props if prop not in target_col or target_col.get(prop) is None]
+                            if missing_props:
+                                error_msg = f"Target-only column '{col_name}' is missing required properties: {missing_props}. All properties (name, type, dataLength, numericPrecision, numericScale, isNullable) must be specified when the column doesn't exist in the target table."
+                                logger.error(error_msg)
+                                if not skip_errors:
+                                    raise ValueError(error_msg)
+
                     # Map the column type to target node type
                     mapped_type = map_data_type(col_type, source_node_info, target_node_info)
-                    
+
                     target_columns_def.append({
                         "id": max_target_col_id,  # Continue from last target column ID
                         "name": col_name,
@@ -947,16 +986,87 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     "name": col["name"],
                     "type": map_data_type(col["type"], source_node_info, target_node_info)
                 })
-            
-            # TODO: Add any target-only columns here by incrementing from max_target_col_id
-            # Example: If target has additional columns not in source, add them like:
-            # max_target_col_id += 1
-            # target_table_columns.append({
-            #     "id": max_target_col_id,
-            #     "name": "target_only_column",
-            #     "type": "target_column_type"
-            # })
-            # For now, we only have source columns mapped to target
+
+            # Add target-only columns for this table if specified
+            table_custom_config = table_data.get('customProperties', {}).get('target', {}) if table_data else {}
+            table_target_only_columns = table_custom_config.get('targetOnlyColumns', [])
+
+            if table_target_only_columns:
+                logger.info(f"Adding {len(table_target_only_columns)} target-only columns for table {table_key} in MultiTable entity")
+
+                # Try to get target columns if the target table exists for this specific table
+                table_target_columns = None
+                try:
+                    table_target_columns = get_table_columns(token, pipeline_id, target_agent_id, target_schema, table_key)
+                    logger.debug(f"Found {len(table_target_columns.get('columns', []))} existing columns in target table {target_schema}.{table_key}")
+                except Exception as e:
+                    logger.debug(f"Could not get target columns for {target_schema}.{table_key}: {str(e)}")
+
+                for target_col in table_target_only_columns:
+                    # Increment from the maximum target column ID
+                    max_target_col_id += 1
+
+                    # Support both string format and object format
+                    if isinstance(target_col, str):
+                        # Simple string format: just the column name
+                        col_name = target_col
+                        col_type = 'varchar'  # Default type
+                        col_data_length = 1024  # Default data length
+                        col_numeric_precision = 0  # Default numeric precision
+                        col_numeric_scale = 0  # Default numeric scale
+                        col_is_nullable = False  # Default nullable
+                    else:
+                        # Object format with user-defined properties
+                        col_name = target_col.get('name')
+                        col_type = target_col.get('type', 'varchar')  # Default to varchar if not specified
+                        col_data_length = target_col.get('dataLength', 1024)  # Default data length
+                        col_numeric_precision = target_col.get('numericPrecision', 0)  # Default numeric precision
+                        col_numeric_scale = target_col.get('numericScale', 0)  # Default numeric scale
+                        col_is_nullable = target_col.get('isNullable', False)  # Default nullable
+
+                    # Check if this column already exists in the target table
+                    discovered_column = None
+                    if table_target_columns and 'columns' in table_target_columns:
+                        discovered_column = next(
+                            (col for col in table_target_columns['columns'] if col.get('name') == col_name),
+                            None
+                        )
+
+                    if discovered_column:
+                        # Use discovered column properties (priority over user-defined)
+                        logger.info(f"Using discovered properties for target-only column '{col_name}' from target table")
+                        col_type = discovered_column.get('type', col_type)
+                        col_data_length = discovered_column.get('dataLength', col_data_length)
+                        col_numeric_precision = discovered_column.get('numericPrecision', col_numeric_precision)
+                        col_numeric_scale = discovered_column.get('numericScale', col_numeric_scale)
+                        col_is_nullable = discovered_column.get('isNullable', col_is_nullable)
+                    else:
+                        # Column doesn't exist in target table, use user-defined properties
+                        logger.debug(f"Using user-defined properties for target-only column '{col_name}' (not found in target table)")
+
+                        # Validate that required properties are provided for user-defined target-only columns
+                        if isinstance(target_col, dict):
+                            required_props = ['name', 'type', 'dataLength', 'numericPrecision', 'numericScale', 'isNullable']
+                            missing_props = [prop for prop in required_props if prop not in target_col or target_col.get(prop) is None]
+                            if missing_props:
+                                error_msg = f"Target-only column '{col_name}' in table '{table_key}' is missing required properties: {missing_props}. All properties (name, type, dataLength, numericPrecision, numericScale, isNullable) must be specified when the column doesn't exist in the target table."
+                                logger.error(error_msg)
+                                if not skip_errors:
+                                    raise ValueError(error_msg)
+
+                    # Map the column type to target node type
+                    mapped_type = map_data_type(col_type, source_node_info, target_node_info)
+
+                    target_table_columns.append({
+                        "id": max_target_col_id,  # Continue from last target column ID
+                        "name": col_name,
+                        "type": mapped_type,
+                        "dataLength": col_data_length,
+                        "numericPrecision": col_numeric_precision,
+                        "numericScale": col_numeric_scale,
+                        "isNullable": col_is_nullable
+                    })
+                    logger.debug(f"Added target-only column to MultiTable: {col_name} (type: {mapped_type}, id: {max_target_col_id})")
 
             # Add columns for this table
             target_columns.append({

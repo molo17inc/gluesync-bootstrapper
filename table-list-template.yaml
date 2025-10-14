@@ -195,6 +195,8 @@ dbo:
           # The UDF will handle the mapping between source and target columns
           # Target-only columns: These columns exist only in the target, not in source
           # For object format, you must specify: name, type, dataLength, numericPrecision, numericScale, isNullable
+          # Discovery behavior: If a target-only column matches an existing target table column,
+          # the system will use the discovered column's properties instead of user-defined ones
           targetOnlyColumns:
             - CURRENCY  # Simple string format (uses defaults: varchar, dataLength=1024, nullable=false)
             - name: CREATED_AT

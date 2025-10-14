@@ -731,8 +731,7 @@ Target-only columns can be declared using the `targetOnlyColumns` field in your 
 
 ```yaml
 ARTICLES:
-  keys: [ID]
-  unlockedSchema: true  # Required for targetOnlyColumns
+  unlockedSchema: true
   targetOnlyColumns:
     - CURRENCY
     - CREATED_AT
@@ -740,6 +739,7 @@ ARTICLES:
 ```
 
 #### Object Format (Required for complete column specification)
+
 ```yaml
 ARTICLES:
   unlockedSchema: true
@@ -758,15 +758,34 @@ ARTICLES:
       isNullable: false
 ```
 
+### Column Discovery Behavior
+
+The system implements intelligent column discovery for target-only columns:
+
+1. **Discovered Columns Priority**: If a target-only column matches an existing discovered column from the target table, the system uses the discovered column's properties (type, dataLength, numericPrecision, numericScale, isNullable) instead of the user-defined ones.
+
+2. **User-Defined Fallback**: If a target-only column is not found in the target table, the system uses the user-defined properties.
+
+3. **Validation**: If a target-only column is not found in the target table and no complete user-defined properties are provided, the system throws an error requiring all properties to be specified.
+
+This behavior ensures that:
+- Existing target table structures are respected when possible
+- Users have full control when defining new columns
+- The system maintains data integrity and consistency
+
 ### Example Usage
 
 ```yaml
 ARTICLES:
   unlockedSchema: true
   targetOnlyColumns:
-    - CURRENCY
-    - CREATED_AT
-    - PROCESSING_STATUS
+    - CURRENCY  # Will use discovered properties if column exists, otherwise defaults
+    - name: CREATED_AT  # Must specify all properties since column doesn't exist
+      type: datetime
+      dataLength: 19
+      numericPrecision: 0
+      numericScale: 0
+      isNullable: false
   customProperties:
     target:
       udf:
@@ -778,6 +797,7 @@ ARTICLES:
 
 - **Column IDs**: Target-only columns receive sequential IDs following the mapped source columns
 - **Column Mapping**: In `columnsMappingMatrix`, target-only columns have `sourceColumnId: 0` indicating no source mapping
+- **Discovery Priority**: If a target-only column exists in the target table, discovered properties are used over user-defined ones
 - **Required Fields**: When using object format, you must specify: `name`, `type`, `dataLength`, `numericPrecision`, `numericScale`, `isNullable`
 - **Default Values**: When using simple string format, defaults are: `varchar` type, `dataLength: 1024`, `numericPrecision: 0`, `numericScale: 0`, `isNullable: false`
 - **UDF Integration**: UDFs can populate these columns with calculated values or metadata
@@ -788,7 +808,7 @@ ARTICLES:
 2. **UDF is Mandatory**: Since target-only columns work only with unlocked schema, a UDF is always required
 3. **Target-only columns are added after all source-mapped columns in the target definition**
 4. **Required Fields for Object Format**: When using object format, you must specify: `name`, `type`, `dataLength`, `numericPrecision`, `numericScale`, `isNullable`
-5. **Default Values for String Format**: When using simple string format, defaults are: `varchar` type, `dataLength: 1024`, `numericPrecision: 0`, `numericScale: 0`, `isNullable: false`
+5. **Discovery Priority**: If a target-only column exists in the target table, the system uses discovered column properties over user-defined ones
 6. **These columns can be populated through UDF transformations**
 7. **In `columnsMappingMatrix`, target-only columns have `sourceColumnId: 0` to indicate no source mapping**
 
