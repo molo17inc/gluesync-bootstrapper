@@ -383,10 +383,47 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                         token=token):
         if CREATE_TABLE_IF_NOT_EXISTS:
             logger.info(f"table: {target_table_name} does not exists, creating it")
-            # Create ColumnDto objects using source column properties for matching target columns
+            # Create ColumnDto objects
             column_dtos = []
             
-            if custom_config.get('columns'):
+            # Check if targetOnlyColumns are defined - if so, use them instead of source columns
+            target_only_columns = custom_config.get('targetOnlyColumns', [])
+            if target_only_columns:
+                logger.info(f"Using targetOnlyColumns definition for table {target_table_name}")
+                for idx, target_col in enumerate(target_only_columns, 1):
+                    # Support both string format and object format
+                    if isinstance(target_col, str):
+                        # Simple string format: just the column name
+                        col_name = target_col
+                        col_type = 'varchar'  # Default type
+                        col_data_length = 1024  # Default data length
+                        col_numeric_precision = 0  # Default numeric precision
+                        col_numeric_scale = 0  # Default numeric scale
+                        col_is_nullable = False  # Default nullable
+                    else:
+                        # Object format with user-defined properties
+                        col_name = target_col.get('name')
+                        col_type = target_col.get('type', 'varchar')  # Default to varchar if not specified
+                        col_data_length = target_col.get('dataLength', 1024)  # Default data length
+                        col_numeric_precision = target_col.get('numericPrecision', 0)  # Default numeric precision
+                        col_numeric_scale = target_col.get('numericScale', 0)  # Default numeric scale
+                        col_is_nullable = target_col.get('isNullable', False)  # Default nullable
+                    
+                    # Map the column type to target node type
+                    mapped_type = map_data_type(col_type, source_node_info, target_node_info)
+                    
+                    column_dtos.append(ColumnDto(
+                        name=col_name,
+                        type=format_column_type(mapped_type, col_data_length, col_numeric_precision, col_numeric_scale),
+                        id=idx,  # Use sequential IDs for target-only columns
+                        ordinalPosition=idx,
+                        isPrimaryKey=col_name in [key.get("name", key) for key in keys],
+                        isNullable=col_is_nullable,
+                        dataLength=col_data_length,
+                        numericPrecision=col_numeric_precision,
+                        numericScale=col_numeric_scale
+                    ))
+            elif custom_config.get('columns'):
                 # When columns mapping is specified, use source column properties for each mapped column
                 for source_name, target_name in custom_config.get('columns', []):
                     # Find the source column
