@@ -395,7 +395,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         if not keys:
             logger.warning(f"Warning: No keys specified for {table_name}. Table will have no keys.")
 
-        if not CREATE_TABLE_IF_NOT_EXISTS:
+        if CREATE_TABLE_IF_NOT_EXISTS:
             logger.info(f"CREATE_TABLE_IF_NOT_EXISTS is enabled - creating table {target_table_name}")
             handle_table_creation(pipeline_id, target_table_name, yaml_target_schema, keys, token, columns, custom_config,
                               source_node_info, target_node_info)

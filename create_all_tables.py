@@ -78,6 +78,28 @@ class CreateTableRequest(BaseModel):
     statement: str
 
 
+def format_column_type(col_type: str, data_length: int, numeric_precision: int = 0, numeric_scale: int = 0) -> str:
+    """
+    Format column type to include length/precision information for CREATE TABLE statements.
+    For VARCHAR and similar types, include the length in parentheses.
+    For NUMERIC/DECIMAL types, include precision and scale.
+    """
+    col_type_upper = col_type.upper()
+    
+    # For VARCHAR and similar string types, include length if > 0
+    if col_type_upper in ['VARCHAR', 'NVARCHAR', 'CHAR', 'NCHAR'] and data_length > 0:
+        return f"{col_type_upper}({data_length})"
+    
+    # For NUMERIC/DECIMAL types, include precision and scale if specified
+    elif col_type_upper in ['NUMERIC', 'DECIMAL'] and numeric_precision > 0:
+        if numeric_scale > 0:
+            return f"{col_type_upper}({numeric_precision},{numeric_scale})"
+        else:
+            return f"{col_type_upper}({numeric_precision})"
+    
+    # For other types, return as-is
+    return col_type_upper
+    
 def get_gluesync_data_type(source_type: str, source_node_info) -> str:
     """
     Get the Gluesync data type for a source column type.
@@ -372,7 +394,8 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                     if source_col:
                         column_dtos.append(ColumnDto(
                             name=target_name,
-                            type=source_col["type"],
+                            type=format_column_type(source_col["type"], source_col.get("dataLength", 0), 
+                                                   source_col.get("numericPrecision", 0), source_col.get("numericScale", 0)),
                             id=source_col.get("ordinalPosition", source_col.get("id", 1)),
                             ordinalPosition=source_col.get("ordinalPosition", source_col.get("id", 1)),
                             isPrimaryKey=target_name in [key.get("name", key) for key in keys],
@@ -386,7 +409,8 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                 for col in columns["columns"]:
                     column_dtos.append(ColumnDto(
                         name=col["name"], 
-                        type=col["type"],
+                        type=format_column_type(col["type"], col.get("dataLength", 0), 
+                                               col.get("numericPrecision", 0), col.get("numericScale", 0)),
                         id=col.get("ordinalPosition", col.get("id", 1)),
                         ordinalPosition=col.get("ordinalPosition", col.get("id", 1)),
                         isPrimaryKey=col.get("isPrimaryKey", False),
