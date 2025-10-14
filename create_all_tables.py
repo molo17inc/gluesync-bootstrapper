@@ -84,21 +84,21 @@ def format_column_type(col_type: str, data_length: int, numeric_precision: int =
     For VARCHAR and similar types, include the length in parentheses.
     For NUMERIC/DECIMAL types, include precision and scale.
     """
-    col_type_upper = col_type.upper()
+    col_type_lower = col_type.lower()
     
     # For VARCHAR and similar string types, include length if > 0
-    if col_type_upper in ['VARCHAR', 'NVARCHAR', 'CHAR', 'NCHAR'] and data_length > 0:
-        return f"{col_type_upper}({data_length})"
+    if col_type_lower in ['varchar', 'nvarchar', 'char', 'nchar'] and data_length > 0:
+        return f"{col_type}({data_length})"
     
     # For NUMERIC/DECIMAL types, include precision and scale if specified
-    elif col_type_upper in ['NUMERIC', 'DECIMAL'] and numeric_precision > 0:
+    elif col_type_lower in ['numeric', 'decimal'] and numeric_precision > 0:
         if numeric_scale > 0:
-            return f"{col_type_upper}({numeric_precision},{numeric_scale})"
+            return f"{col_type}({numeric_precision},{numeric_scale})"
         else:
-            return f"{col_type_upper}({numeric_precision})"
+            return f"{col_type}({numeric_precision})"
     
     # For other types, return as-is
-    return col_type_upper
+    return col_type
     
 def get_gluesync_data_type(source_type: str, source_node_info) -> str:
     """
