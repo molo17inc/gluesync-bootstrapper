@@ -21,6 +21,7 @@
 
 import os
 import json
+import urllib.parse
 
 import requests
 import urllib3
@@ -107,8 +108,10 @@ def table_exists(pipeline_id: str, schema_name: str, table_name: str, token: str
     Check if a table exists in the given schema.
     """
     try:
+        # URL-encode the table name to handle special characters
+        encoded_table_name = urllib.parse.quote(table_name, safe='')
         fetch_core_hub(
-            f"/pipelines/{pipeline_id}/config/entities/schemas/{schema_name}/tables/{table_name}",
+            f"/pipelines/{pipeline_id}/config/entities/schemas/{schema_name}/tables/{encoded_table_name}",
             method="GET",
             token=token
         )
@@ -128,16 +131,18 @@ def table_exists(pipeline_id: str, schema_name: str, table_name: str, token: str
             alternate_table_name = table_name.upper()
             logger.info(f"Trying uppercase version: {alternate_table_name}")
         else:
-            # All same case, no alternate to try
+            # No casing change possible, return False
             return False
-        
+            
         try:
+            # URL-encode the alternate table name as well
+            encoded_alternate_table_name = urllib.parse.quote(alternate_table_name, safe='')
             fetch_core_hub(
-                f"/pipelines/{pipeline_id}/config/entities/schemas/{schema_name}/tables/{alternate_table_name}",
+                f"/pipelines/{pipeline_id}/config/entities/schemas/{schema_name}/tables/{encoded_alternate_table_name}",
                 method="GET",
                 token=token
             )
-            logger.info(f"Table found with alternate casing: {alternate_table_name}")
+            logger.info(f"Table {alternate_table_name} exists in schema {schema_name} (using alternate casing)")
             return True
         except requests.exceptions.RequestException as e2:
             error_msg2 = str(e2)
@@ -148,9 +153,11 @@ def table_exists(pipeline_id: str, schema_name: str, table_name: str, token: str
 def generate_create_table_statement(pipeline_id: str, schema_name: str, table_name: str, token: str,
                                     table_data: GenerateCreateTargetTableStatementRequest) -> str:
     try:
+        # URL-encode the table name to handle special characters
+        encoded_table_name = urllib.parse.quote(table_name, safe='')
         logger.info(f"table data: {table_data.model_dump()}")
         response = fetch_core_hub(
-            f"/pipelines/{pipeline_id}/config/entities/schemas/{schema_name}/tables/{table_name}/statements/create-table",
+            f"/pipelines/{pipeline_id}/config/entities/schemas/{schema_name}/tables/{encoded_table_name}/statements/create-table",
             method="PUT",
             token=token,
             body=table_data.model_dump()
