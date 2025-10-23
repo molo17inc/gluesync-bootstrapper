@@ -434,9 +434,14 @@ The agent configuration defines the connection details for source and target dat
 git clone https://gitlab.com/molo17-public/gluesync/gluesync-bootstrapper.git
 ```
 
-2. Configure your schema in `table-list-template.yaml`
-3. Set up your agent configuration in `config.json` (if you want bootstrapper to configure also agents' connection properties)
-4. Start the synchronization process
+2. Install the required Python packages:
+```bash
+pip3 install -r requirements.txt --break-system-packages
+```
+
+3. Configure your schema in `table-list-template.yaml`
+4. Set up your agent configuration in `config.json` (if you want bootstrapper to configure also agents' connection properties)
+5. Start the synchronization process
 
 ### Before you start
 
