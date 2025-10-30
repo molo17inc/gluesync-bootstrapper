@@ -191,8 +191,5 @@ Outputs:
     Value: !Ref ResultsBucket
 
 Conditions:
-  CertificateValidationRequired:
-    !Not [!Equals [!GetAtt ApiGatewayCertificate.ResourceRecord, ""]]
-
   CreateRoute53Records:
     !Not [!Equals [!Ref HostedZoneId, ""]]
