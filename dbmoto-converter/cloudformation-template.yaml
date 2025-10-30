@@ -1,0 +1,165 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'DbMoto XML to GlueSync YAML Converter API'
+
+Parameters:
+  ResultsBucketName:
+    Type: String
+    Default: 'gluesync-conversion-results'
+    Description: 'S3 bucket name for storing conversion results'
+
+Resources:
+  # S3 bucket for results
+  ResultsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref ResultsBucketName
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # S3 bucket policy for Lambda access
+  ResultsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ResultsBucket
+      PolicyDocument:
+        Statement:
+          - Sid: AllowLambdaAccess
+            Effect: Allow
+            Principal:
+              AWS: !GetAtt LambdaExecutionRole.Arn
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+              - s3:DeleteObject
+            Resource: !Sub '${ResultsBucket}/*'
+
+  # Lambda execution role
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource: !Sub '${ResultsBucket}/*'
+
+  # Lambda function
+  ConversionLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: dbmoto-xml-converter
+      Runtime: python3.9
+      Handler: lambda_function.lambda_handler
+      Code:
+        ZipFile: |
+          # Lambda function code will be packaged separately
+          # This is a placeholder - use SAM CLI or manual packaging
+      Environment:
+        Variables:
+          RESULTS_BUCKET: !Ref ResultsBucketName
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 900  # 15 minutes
+      MemorySize: 1024
+      Layers:
+        - !Ref PythonRequirementsLayer
+
+  # Lambda layer for dependencies
+  PythonRequirementsLayer:
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      LayerName: dbmoto-converter-deps
+      Description: Python dependencies for DbMoto XML converter
+      Content:
+        ZipFile: |
+          # Layer content will be created during deployment
+          # Contains PyYAML, boto3, and other dependencies
+      CompatibleRuntimes:
+        - python3.9
+
+  # API Gateway
+  ApiGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: dbmoto-xml-converter-api
+      Description: API for converting DbMoto XML to GlueSync YAML
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  # API Gateway resource
+  ApiResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      PathPart: convert
+
+  # API Gateway method
+  ApiMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref ApiResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ConversionLambda.Arn}/invocations
+
+  # API Gateway deployment
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: ApiMethod
+    Properties:
+      RestApiId: !Ref ApiGateway
+      StageName: prod
+
+  # Lambda permission for API Gateway
+  LambdaApiPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ConversionLambda
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:apigateway:${AWS::Region}::/restapis/${ApiGateway}/stages/prod'
+
+Outputs:
+  ApiEndpoint:
+    Description: API Gateway endpoint URL
+    Value: !Sub 'https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/prod'
+    Export:
+      Name: DbMotoConverterApiEndpoint
+
+  ResultsBucketName:
+    Description: S3 bucket for conversion results
+    Value: !Ref ResultsBucket
+    Export:
+      Name: DbMotoConverterResultsBucket
+
+  LambdaFunctionArn:
+    Description: Lambda function ARN
+    Value: !Ref ConversionLambda
+    Export:
+      Name: DbMotoConverterLambdaArn

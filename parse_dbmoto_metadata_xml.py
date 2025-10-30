@@ -23,6 +23,7 @@ import xml.etree.ElementTree as ET
 import os
 import yaml
 import argparse
+import sys
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Parse DbMoto metadata XML and generate YAML configurations.')
@@ -33,15 +34,41 @@ def parse_arguments():
     parser.add_argument('--template', type=str, 
                       help='Path to template YAML file (optional)',
                       default=template_path)
-    parser.add_argument('--include-targets', action='store_true',
-                    help='Also process schemas from target connections (IsSource=N)')
+    parser.add_argument('--include-targets', action='store_const', const=True, default=True,
+                    help='Also process schemas from target connections (IsSource=N) (default: True)')
+    parser.add_argument('--no-include-targets', action='store_const', dest='include_targets', const=False,
+                    help='Do not process schemas from target connections (sets include-targets to False)')
     parser.add_argument('--force-schemas', type=str,
                     help='Force schema mappings (format: SOURCE:TARGET,SOURCE2:TARGET2)')
     return parser.parse_args()
 
-# Parse command line arguments
-args = parse_arguments()
-XML_PATH = os.path.expanduser(args.xml_path)
+# Parse command line arguments (only if running as CLI script)
+if __name__ == "__main__" and len(sys.argv) > 1:
+    args = parse_arguments()
+else:
+    # Create a mock args object for Lambda/serverless context
+    class MockArgs:
+        def __init__(self):
+            self.xml_path = None
+            self.output_dir = 'schemas_yaml'
+            self.template = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'table-list-template-basic.yaml')
+            self.include_targets = True
+            self.force_schemas = None
+    args = MockArgs()
+
+# Override with environment variables if running in Lambda/serverless environment
+XML_PATH = os.environ.get('XML_PATH') or os.path.expanduser(args.xml_path) if args.xml_path else None
+OUTPUT_DIR = os.environ.get('OUTPUT_DIR') or args.output_dir
+TEMPLATE_PATH = os.environ.get('TEMPLATE_PATH') or args.template
+INCLUDE_TARGETS = os.environ.get('INCLUDE_TARGETS', str(args.include_targets)).lower() == 'true'
+FORCE_SCHEMAS = os.environ.get('FORCE_SCHEMAS') or args.force_schemas
+
+# Update args object for compatibility with existing code
+args.xml_path = XML_PATH
+args.output_dir = OUTPUT_DIR
+args.template = TEMPLATE_PATH
+args.include_targets = INCLUDE_TARGETS
+args.force_schemas = FORCE_SCHEMAS
 
 # Global statistics tracking
 conversion_stats = {
@@ -682,30 +709,45 @@ if __name__ == "__main__":
     # Record start time
     conversion_stats['start_time'] = datetime.now()
     
-    # Ensure output directory exists
-    os.makedirs(args.output_dir, exist_ok=True)
+    # Check if running as CLI script (has arguments) or Lambda (no arguments)
+    is_cli_mode = len(sys.argv) > 1
     
     try:
-        # Parse the XML and get connections, groups, chains, replications, and schema mappings
-        connections, groups, chains, replications, source_to_target_schemas = parse_xml()
-        
-        # Print hierarchy summary
-        print("\n=== Database Structure ===")
-        for conn_id, conn in connections.items():
-            print(f"\nConnection: {conn['name']} (ID: {conn_id})")
-            for schema_id, schema in conn['schemas'].items():
-                print(f"  Schema: {schema['name']} (ID: {schema_id})")
-                print(f"    Tables: {len(schema.get('tables', {}))} tables")
-        
-        # Export as YAML files
-        print("\nExporting to YAML files...")
-        exported = export_as_yaml(connections, groups, chains, replications, source_to_target_schemas)
-        print(f"\nDone! {exported} YAML files created in {os.path.abspath(args.output_dir)}/")
-        print("These files match the structure needed for table-list-template.yaml in gluesync-bootstrapper.")
-        
-        # View reference template structure
-        view_table_list_template()
-        
+        if is_cli_mode:
+            # CLI mode: require XML file path
+            if not args.xml_path:
+                print("ERROR: XML file path is required when running as CLI script")
+                print("Usage: python parse_dbmoto_metadata_xml.py <xml_file_path> [options]")
+                sys.exit(1)
+            
+            # Ensure output directory exists
+            os.makedirs(args.output_dir, exist_ok=True)
+            
+            # Parse the XML and get connections, groups, chains, replications, and schema mappings
+            connections, groups, chains, replications, source_to_target_schemas = parse_xml()
+            
+            # Print hierarchy summary
+            print("\n=== Database Structure ===")
+            for conn_id, conn in connections.items():
+                print(f"\nConnection: {conn['name']} (ID: {conn_id})")
+                for schema_id, schema in conn['schemas'].items():
+                    print(f"  Schema: {schema['name']} (ID: {schema_id})")
+                    print(f"    Tables: {len(schema.get('tables', {}))} tables")
+            
+            # Export as YAML files
+            print("\nExporting to YAML files...")
+            exported = export_as_yaml(connections, groups, chains, replications, source_to_target_schemas)
+            print(f"\nDone! {exported} YAML files created in {os.path.abspath(args.output_dir)}/")
+            print("These files match the structure needed for table-list-template.yaml in gluesync-bootstrapper.")
+            
+            # View reference template structure
+            view_table_list_template()
+            
+        else:
+            # Lambda/serverless mode: just run the functions (called by lambda_function.py)
+            # The lambda handler will call parse_xml() and export_as_yaml() directly
+            pass
+    
     except Exception as e:
         conversion_stats['errors'].append(f"Fatal error during conversion: {str(e)}")
         print(f"\nERROR: {str(e)}")
@@ -713,6 +755,7 @@ if __name__ == "__main__":
         traceback.print_exc()
     
     finally:
+        # Always write conversion report (for both CLI and Lambda modes)
         # Record end time
         conversion_stats['end_time'] = datetime.now()
         

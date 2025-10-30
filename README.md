@@ -840,55 +840,221 @@ The included `parse_dbmoto_metadata_xml.py` script converts DbMoto metadata XML 
 
 ### Usage
 
-#### Basic Conversion
+The DbMoto XML converter supports two usage modes:
+
+### 1. Command Line Interface (CLI)
+
+Run the script directly on your local machine:
+
+#### Basic Usage
 ```bash
 python3 parse_dbmoto_metadata_xml.py /path/to/your/dbmoto_export.xml
 ```
 
-#### Advanced Options
+#### Advanced Usage
 ```bash
 python3 parse_dbmoto_metadata_xml.py /path/to/your/dbmoto_export.xml \
   --output-dir ./output_configs \
-  --template ./custom-template.yaml
-```
-
-#### Processing Target Connections
-```bash
-# Include schemas from target connections (IsSource=N), when perhaps in DBMoto they were used as bi-directional replications
-python3 parse_dbmoto_metadata_xml.py /path/to/your/dbmoto_export.xml \
-  --include-targets
-```
-
-#### Force Schema Mappings
-```bash
-# Force specific source->target schema mappings
-python3 parse_dbmoto_metadata_xml.py /path/to/your/dbmoto_export.xml \
+  --template ./custom-template.yaml \
   --include-targets \
-  --force-schemas "SNDDATOS:ASESP,SCHEMA2:TARGET2"
+  --force-schemas "SOURCE_SCHEMA:TARGET_SCHEMA"
 ```
 
 #### Arguments
 - `xml_path` (required): Path to the DbMoto metadata XML file
 - `--output-dir`: Directory to save generated YAML files (default: `schemas_yaml`)
-- `--template`: Path to a template YAML file (default: `table-list-template-basic.yaml` in script directory)
-- `--include-targets`: Also process schemas from target connections (IsSource=N). By default, only source connections are processed
-- `--force-schemas`: Force specific schema mappings (format: `SOURCE:TARGET,SOURCE2:TARGET2`). Useful for schemas without replication definitions
+- `--template`: Path to template YAML file (optional)
+- `--include-targets`: Process target connections (default: `true`)
+- `--no-include-targets`: Disable target connection processing
+- `--force-schemas`: Override schema mappings
 
-### Output
-The script will:
-1. Parse the DbMoto XML file
-2. Extract connections, schemas, tables, and fields
-3. Generate YAML files in the specified output directory
-4. Preserve the hierarchical structure of your database
+#### Output
+- YAML configuration files in the output directory
+- `conversion_report.txt` with processing details
+- Console output with progress information
+
+### 2. AWS Lambda API
+
+Deploy as a serverless API for programmatic access:
 
 ### Notes
 - The script automatically handles different naming conventions in the XML
 - Missing names will be automatically generated (e.g., `Schema_123`, `Table_456`)
 - Field types are converted to lowercase for consistency
-- A summary of extracted items is printed to the console
 
 ### Troubleshooting
 - Ensure the XML file is a valid DbMoto metadata export
 - Check file permissions for both input and output directories
 - Verify that the template file (if specified) is a valid YAML file
 - Consult the [DbMoto XML Hierarchy Documentation](dbmoto_xml_hierarchy.md) for understanding the XML structure
+
+### Quick Deploy
+
+1. **Prerequisites:**
+   - AWS CLI configured with appropriate permissions
+   - Python 3.9+ installed locally
+
+2. **Deploy to AWS:**
+   ```bash
+   # Navigate to the API directory
+   cd dbmoto-converter
+
+   # Deploy to AWS (requires AWS CLI configured)
+   ./deploy.sh
+   ```
+
+3. **Get the API endpoint:**
+   The deployment script will output the API endpoint URL and S3 bucket name.
+
+### GitLab CI/CD
+
+The Lambda function is automatically deployed via GitLab CI when changes are made to relevant files. The CI pipeline includes:
+
+- **Automatic deployment** on changes to `dbmoto-converter/`, `parse_dbmoto_metadata_xml.py`, or template files
+- **Manual trigger** for safety (requires approval to deploy)
+- **Environment variables** for API endpoint tracking
+- **Cleanup job** for removing deployments
+
+#### Required GitLab CI/CD Variables
+```
+AWS_ACCESS_KEY_ID=your_aws_access_key
+AWS_SECRET_ACCESS_KEY=your_aws_secret_key
+```
+
+#### Convert XML File
+```bash
+curl -X POST 'https://your-api-endpoint.execute-api.region.amazonaws.com/prod/convert' \
+  -H 'Content-Type: multipart/form-data' \
+  -F 'xml_file=@your-metadata.xml' \
+  -F 'include_targets=true'
+```
+
+#### Python Example
+```python
+import requests
+import zipfile
+import io
+
+# Convert XML file
+response = requests.post(
+    'https://your-endpoint.execute-api.region.amazonaws.com/prod/convert',
+    files={'xml_file': open('metadata.xml', 'rb')},
+    data={'include_targets': 'true'}
+)
+
+result = response.json()
+print(f"Generated {result['stats']['yaml_files_generated']} YAML files")
+
+# Download and extract the zip file
+zip_response = requests.get(result['stats']['zip_file_url'])
+zip_file = zipfile.ZipFile(io.BytesIO(zip_response.content))
+zip_file.extractall('conversion_outputs')
+print("Files extracted to: conversion_outputs/")
+```
+
+#### Advanced Usage
+```python
+# With custom template and forced schema mappings
+response = requests.post(
+    'https://your-api-endpoint.execute-api.region.amazonaws.com/prod/convert',
+    files={
+        'xml_file': open('metadata.xml', 'rb'),
+        'template_file': open('custom-template.yaml', 'rb')  # Optional
+    },
+    data={
+        'include_targets': 'true',
+        'force_schemas': 'SOURCE_SCHEMA:TARGET_SCHEMA'  # Optional
+    }
+)
+```
+
+### API Response Format
+
+```json
+{
+  "status": "success",
+  "message": "Successfully processed 3 YAML files",
+  "request_id": "12345678-1234-1234-1234-123456789012",
+  "results": {
+    "zip_file": {
+      "name": "conversion_outputs_12345678-1234-1234-1234-123456789012.zip",
+      "url": "https://s3-url/conversion_outputs_12345678-1234-1234-1234-123456789012.zip",
+      "size": 15360
+    }
+  },
+  "stats": {
+    "yaml_files_generated": 3,
+    "tables_processed": 15,
+    "zip_file_url": "https://s3-url/conversion_outputs_12345678-1234-1234-1234-123456789012.zip",
+    "zip_file_size": 15360
+  }
+}
+```
+
+### Download Results
+
+The API returns a single zip file containing all generated files:
+
+```bash
+# Download the zip file
+curl -o conversion_outputs.zip "$ZIP_FILE_URL"
+
+# Extract contents
+unzip conversion_outputs.zip
+```
+
+### Parameters
+
+- `xml_file` (required): DbMoto XML metadata file
+- `template_file` (optional): Custom YAML template file
+- `include_targets` (optional): Process target connections (default: `true`)
+- `force_schemas` (optional): Override schema mappings (format: `SOURCE:TARGET,SOURCE2:TARGET2`)
+
+### Files and Limits
+
+- **XML file size**: Up to 10MB (API Gateway limit)
+- **Processing timeout**: 15 minutes
+- **Result URLs**: Valid for 1 hour
+- **Output storage**: S3 bucket (automatically created)
+
+### Cost Estimation
+
+- **Lambda**: ~$0.0000002 per request + $0.00001667 per GB-second
+- **API Gateway**: ~$3.50 per million requests
+- **S3**: ~$0.023 per GB stored + $0.0004 per 1,000 requests
+- **Example**: 100 conversions/month ≈ $0.50
+
+### Manual Deployment
+
+If you prefer manual deployment:
+
+```bash
+# 1. Navigate to the API directory
+cd dbmoto-converter
+
+# 2. Package the Lambda function
+pip install -r requirements.txt -t lambda-package/
+cp ../parse_dbmoto_metadata_xml.py lambda-package/
+cp ../table-list-template-basic.yaml lambda-package/
+cd lambda-package && zip -r ../lambda-package.zip .
+
+# 3. Deploy CloudFormation
+aws cloudformation create-stack \
+  --stack-name dbmoto-xml-converter \
+  --template-body file://cloudformation-template.yaml \
+  --capabilities CAPABILITY_IAM
+```
+
+### Cleanup
+
+To remove the deployment:
+```bash
+aws cloudformation delete-stack --stack-name dbmoto-xml-converter
+```
+
+### Security Considerations
+
+- **Authentication**: Add API Gateway authorizers for production use
+- **CORS**: Configure for web applications
+- **File validation**: XML content is validated during processing
+- **Rate limiting**: Configure API Gateway throttling
