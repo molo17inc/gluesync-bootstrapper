@@ -1,0 +1,144 @@
+#dbmoto-converter {
+    max-width: 600px;
+    margin: 20px 0;
+    padding: 20px;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    background: #f9f9f9;
+}
+
+#dbmoto-converter h2 {
+    margin-top: 0;
+    color: #23282d;
+}
+
+.form-group {
+    margin-bottom: 15px;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 5px;
+    font-weight: bold;
+    color: #23282d;
+}
+
+.form-group input[type="file"] {
+    margin-bottom: 5px;
+}
+
+.form-group small {
+    color: #666;
+    font-size: 0.9em;
+}
+
+.button {
+    background: #007cba;
+    color: white;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-block;
+    font-size: 14px;
+    line-height: 1.5;
+    text-align: center;
+}
+
+.button:hover {
+    background: #005a87;
+}
+
+.button:disabled {
+    background: #cccccc;
+    cursor: not-allowed;
+}
+
+.button-secondary {
+    background: #6c757d;
+}
+
+.button-secondary:hover {
+    background: #545b62;
+}
+
+#convert-btn {
+    min-width: 120px;
+}
+
+#btn-loading {
+    display: inline-block;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+.progress-bar {
+    width: 100%;
+    height: 20px;
+    background: #e9ecef;
+    border-radius: 10px;
+    overflow: hidden;
+    margin: 10px 0;
+}
+
+.progress-fill {
+    height: 100%;
+    background: #007cba;
+    width: 0%;
+    transition: width 0.3s ease;
+}
+
+#error-container {
+    margin-top: 15px;
+    padding: 10px;
+    background: #f8d7da;
+    border: 1px solid #f5c6cb;
+    border-radius: 4px;
+    color: #721c24;
+}
+
+#result-container {
+    margin-top: 15px;
+    padding: 15px;
+    background: #d4edda;
+    border: 1px solid #c3e6cb;
+    border-radius: 4px;
+    color: #155724;
+}
+
+#result-container h3 {
+    margin-top: 0;
+    color: #155724;
+}
+
+#result-info {
+    margin-bottom: 10px;
+}
+
+#result-info p {
+    margin: 5px 0;
+}
+
+/* WordPress admin compatibility */
+.wp-admin #dbmoto-converter {
+    background: #fff;
+    border: 1px solid #c3c4c7;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+    #dbmoto-converter {
+        margin: 10px;
+        padding: 15px;
+    }
+
+    .button {
+        width: 100%;
+        margin-bottom: 10px;
+    }
+}

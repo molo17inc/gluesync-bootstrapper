@@ -1,0 +1,264 @@
+<!-- wp:html -->
+<div id="dbmoto-converter">
+    <h2>DbMoto XML to GlueSync YAML Converter</h2>
+    <p>Upload your DbMoto metadata XML file to convert it into GlueSync YAML configuration files.</p>
+
+    <form id="upload-form" enctype="multipart/form-data">
+        <div class="form-group">
+            <label for="xml-file">Select XML File:</label>
+            <input type="file" id="xml-file" name="xml_file" accept=".xml" required>
+            <small>Maximum file size: 10MB</small>
+        </div>
+
+        <div class="form-group">
+            <label>
+                <input type="checkbox" id="include-targets" name="include_targets" checked>
+                Include target schemas
+            </label>
+        </div>
+
+        <button type="submit" id="convert-btn" class="button button-primary">
+            <span id="btn-text">Convert XML</span>
+            <span id="btn-loading" style="display:none;">Converting...</span>
+        </button>
+    </form>
+
+    <div id="progress-container" style="display:none;">
+        <div class="progress-bar">
+            <div class="progress-fill" id="progress-fill"></div>
+        </div>
+        <p id="progress-text">Processing your file...</p>
+    </div>
+
+    <div id="result-container" style="display:none;">
+        <h3>Conversion Complete!</h3>
+        <div id="result-info"></div>
+        <a id="download-btn" href="#" class="button button-secondary" style="display:none;">
+            Download Results (ZIP)
+        </a>
+    </div>
+
+    <div id="error-container" style="display:none;">
+        <div class="error-message"></div>
+    </div>
+</div>
+
+<style>
+#dbmoto-converter {
+    max-width: 600px;
+    margin: 20px 0;
+    padding: 20px;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    background: #f9f9f9;
+}
+
+.form-group {
+    margin-bottom: 15px;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 5px;
+    font-weight: bold;
+}
+
+.form-group input[type="file"] {
+    margin-bottom: 5px;
+}
+
+.form-group small {
+    color: #666;
+    font-size: 0.9em;
+}
+
+.button {
+    background: #007cba;
+    color: white;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-block;
+}
+
+.button:hover {
+    background: #005a87;
+}
+
+.button-secondary {
+    background: #6c757d;
+}
+
+.button-secondary:hover {
+    background: #545b62;
+}
+
+.progress-bar {
+    width: 100%;
+    height: 20px;
+    background: #e9ecef;
+    border-radius: 10px;
+    overflow: hidden;
+    margin: 10px 0;
+}
+
+.progress-fill {
+    height: 100%;
+    background: #007cba;
+    width: 0%;
+    transition: width 0.3s ease;
+}
+
+#error-container {
+    margin-top: 15px;
+    padding: 10px;
+    background: #f8d7da;
+    border: 1px solid #f5c6cb;
+    border-radius: 4px;
+    color: #721c24;
+}
+
+#result-container {
+    margin-top: 15px;
+    padding: 15px;
+    background: #d4edda;
+    border: 1px solid #c3e6cb;
+    border-radius: 4px;
+    color: #155724;
+}
+
+#result-info {
+    margin-bottom: 10px;
+}
+</style>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const form = document.getElementById('upload-form');
+    const convertBtn = document.getElementById('convert-btn');
+    const btnText = document.getElementById('btn-text');
+    const btnLoading = document.getElementById('btn-loading');
+    const progressContainer = document.getElementById('progress-container');
+    const progressFill = document.getElementById('progress-fill');
+    const progressText = document.getElementById('progress-text');
+    const resultContainer = document.getElementById('result-container');
+    const resultInfo = document.getElementById('result-info');
+    const downloadBtn = document.getElementById('download-btn');
+    const errorContainer = document.getElementById('error-container');
+    const errorMessage = errorContainer.querySelector('.error-message');
+
+    // Replace with your actual API endpoint
+    const API_ENDPOINT = 'https://your-api-endpoint.execute-api.region.amazonaws.com/prod/convert';
+
+    form.addEventListener('submit', async function(e) {
+        e.preventDefault();
+
+        const fileInput = document.getElementById('xml-file');
+        const includeTargets = document.getElementById('include-targets').checked;
+
+        if (!fileInput.files[0]) {
+            showError('Please select an XML file');
+            return;
+        }
+
+        const file = fileInput.files[0];
+
+        // Check file size (10MB limit)
+        if (file.size > 10 * 1024 * 1024) {
+            showError('File size must be less than 10MB');
+            return;
+        }
+
+        // Show loading state
+        setLoadingState(true);
+        hideError();
+        hideResult();
+
+        try {
+            // Create FormData
+            const formData = new FormData();
+            formData.append('xml_file', file);
+            formData.append('include_targets', includeTargets.toString());
+
+            // Show progress
+            showProgress('Uploading file...');
+
+            // Make API request
+            const response = await fetch(API_ENDPOINT, {
+                method: 'POST',
+                body: formData
+            });
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+
+            const result = await response.json();
+
+            if (result.status === 'success') {
+                showSuccess(result);
+            } else {
+                throw new Error(result.message || 'Conversion failed');
+            }
+
+        } catch (error) {
+            console.error('Conversion error:', error);
+            showError(error.message || 'An error occurred during conversion');
+        } finally {
+            setLoadingState(false);
+            hideProgress();
+        }
+    });
+
+    function setLoadingState(loading) {
+        convertBtn.disabled = loading;
+        btnText.style.display = loading ? 'none' : 'inline';
+        btnLoading.style.display = loading ? 'inline' : 'none';
+    }
+
+    function showProgress(text) {
+        progressText.textContent = text;
+        progressContainer.style.display = 'block';
+        updateProgress(50);
+    }
+
+    function hideProgress() {
+        progressContainer.style.display = 'none';
+        updateProgress(0);
+    }
+
+    function updateProgress(percent) {
+        progressFill.style.width = percent + '%';
+    }
+
+    function showSuccess(result) {
+        resultInfo.innerHTML = `
+            <p><strong>Files Generated:</strong> ${result.stats.yaml_files_generated}</p>
+            <p><strong>Tables Processed:</strong> ${result.stats.tables_processed}</p>
+            <p><strong>ZIP File Size:</strong> ${(result.stats.zip_file_size / 1024).toFixed(1)} KB</p>
+        `;
+
+        downloadBtn.href = result.stats.zip_file_url;
+        downloadBtn.style.display = 'inline';
+
+        resultContainer.style.display = 'block';
+    }
+
+    function hideResult() {
+        resultContainer.style.display = 'none';
+        downloadBtn.style.display = 'none';
+    }
+
+    function showError(message) {
+        errorMessage.textContent = message;
+        errorContainer.style.display = 'block';
+    }
+
+    function hideError() {
+        errorContainer.style.display = 'none';
+    }
+});
+</script>
+<!-- /wp:html -->

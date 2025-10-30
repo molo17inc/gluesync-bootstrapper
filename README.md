@@ -908,31 +908,44 @@ Deploy as a serverless API for programmatic access:
 
 ### GitLab CI/CD
 
-The Lambda function is automatically deployed via GitLab CI when:
-- **Tag created**: Tags matching `dbmoto-*` (e.g., `dbmoto-1.0.0`, `dbmoto-v2.1.3`) 
-- **File changes**: Manual trigger when relevant files are modified
+The Lambda function and WordPress plugin are automatically deployed via GitLab CI **only** when:
+- **Tag created**: Tags matching `dbmoto-*` (e.g., `dbmoto-1.0.0`, `dbmoto-v2.1.3`)
 
 #### Tag-Based Automatic Deployment
 
 ```bash
-# Create and push a version tag to auto-deploy
+# Create and push a version tag to auto-deploy both Lambda + WordPress plugin
 git tag dbmoto-1.0.0
 git push origin dbmoto-1.0.0
 ```
+
+This triggers a GitLab CI pipeline that:
+1. **Deploys Lambda function** to AWS (manual approval required)
+2. **Deploys WordPress plugin** to your hosting via FTP (automatic, after Lambda success)
 
 #### Required GitLab CI/CD Variables
 ```
 AWS_ACCESS_KEY_ID=your_aws_access_key_id
 AWS_SECRET_ACCESS_KEY=your_aws_secret_access_key
+FTP_USER=your_ftp_username
+FTP_PASSWORD=your_ftp_password
 ```
 
-#### Convert XML File
-```bash
-curl -X POST 'https://your-api-endpoint.execute-api.region.amazonaws.com/prod/convert' \
-  -H 'Content-Type: multipart/form-data' \
-  -F 'xml_file=@your-metadata.xml' \
-  -F 'include_targets=true'
-```
+### WordPress Integration
+
+The API includes WordPress integration options:
+
+#### Option 1: Simple HTML Page
+Use the HTML code in `dbmoto-converter/wordpress-integration.html` for quick integration.
+
+#### Option 2: WordPress Plugin
+Install the plugin from `dbmoto-converter/wordpress-plugin/` for a full-featured solution with shortcode support.
+
+Both options provide:
+- Drag & drop file upload
+- Progress indicators
+- Direct ZIP file download
+- Error handling and validation
 
 #### Python Example
 ```python
