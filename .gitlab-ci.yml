@@ -75,27 +75,17 @@ deploy_lambda:
   script:
     - echo "🚀 Starting Lambda deployment..."
     - cd dbmoto-converter
-
-    # Install AWS CLI
     - apt-get update && apt-get install -y awscli jq curl zip
-
-    # Configure AWS credentials (GitLab CI/CD variables)
     - aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
     - aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY
     - aws configure set region $AWS_REGION
-
-    # Generate unique bucket name
     - export RESULTS_BUCKET="${RESULTS_BUCKET_PREFIX}-${CI_PIPELINE_ID}-${CI_JOB_ID}"
-
-    # Package Lambda function
     - echo "📦 Creating Lambda deployment package..."
     - pip install -r requirements.txt -t lambda-package/ --quiet
     - cp ../parse_dbmoto_metadata_xml.py lambda-package/
     - cp ../table-list-template-basic.yaml lambda-package/ 2>/dev/null || true
     - cp lambda_function.py lambda-package/
     - cd lambda-package && zip -r ../lambda-package.zip . -q && cd ..
-
-    # Check if stack exists and determine operation
     - |
       if aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
         echo "🔄 Updating existing stack..."
@@ -106,8 +96,6 @@ deploy_lambda:
         export OPERATION="create-stack"
         export WAIT_OPERATION="stack-create-complete"
       fi
-
-    # Deploy CloudFormation stack
     - echo "☁️ Deploying CloudFormation stack..."
     - echo "Current directory: $(pwd)"
     - ls -la cloudformation-template.yaml || echo "CloudFormation template not found!"
@@ -119,29 +107,21 @@ deploy_lambda:
         --parameters ParameterKey=ResultsBucketName,ParameterValue="$RESULTS_BUCKET" \
         --capabilities CAPABILITY_IAM \
         --region "$AWS_REGION"
-
-    # Wait for deployment to complete
     - echo "⏳ Waiting for deployment..."
     - aws cloudformation wait "$WAIT_OPERATION" --stack-name "$STACK_NAME" --region "$AWS_REGION"
-
-    # Get deployment outputs
     - |
       API_ENDPOINT=$(aws cloudformation describe-stacks \
         --stack-name "$STACK_NAME" \
         --region "$AWS_REGION" \
         --query 'Stacks[0].Outputs[?OutputKey==`ApiEndpoint`].OutputValue' \
         --output text)
-
       RESULTS_BUCKET_NAME=$(aws cloudformation describe-stacks \
         --stack-name "$STACK_NAME" \
         --region "$AWS_REGION" \
         --query 'Stacks[0].Outputs[?OutputKey==`ResultsBucketName`].OutputValue' \
         --output text)
-
       echo "API_ENDPOINT=$API_ENDPOINT" >> deploy.env
       echo "RESULTS_BUCKET_NAME=$RESULTS_BUCKET_NAME" >> deploy.env
-
-    # Quick smoke test
     - |
       echo "🧪 Testing API endpoint..."
       RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" "$API_ENDPOINT/convert" -X POST 2>/dev/null || echo "000")
@@ -194,7 +174,7 @@ cleanup_lambda:
   image: amazon/aws-cli:latest
   when: manual
   only:
-    - web  # Only available in GitLab web interface
+    - web
   script:
     - echo "🧹 Cleaning up Lambda deployment..."
     - aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
