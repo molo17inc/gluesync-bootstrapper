@@ -133,17 +133,11 @@ Outputs:
   ApiEndpoint:
     Description: API Gateway endpoint URL
     Value: !Sub 'https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/prod'
-    Export:
-      Name: DbMotoConverterApiEndpoint
 
   ResultsBucketName:
     Description: S3 bucket for conversion results
     Value: !Ref ResultsBucket
-    Export:
-      Name: DbMotoConverterResultsBucket
 
   LambdaFunctionArn:
     Description: Lambda function ARN
     Value: !Ref ConversionLambda
-    Export:
-      Name: DbMotoConverterLambdaArn

@@ -127,7 +127,15 @@ deploy_lambda:
           done
           
           if [ "$STACK_STATUS" = "ROLLBACK_COMPLETE" ]; then
-            echo "🗑️  Previous operation failed, deleting stack..."
+            echo "❌ Previous operation failed with ROLLBACK_COMPLETE"
+            echo "📋 Failure details:"
+            aws cloudformation describe-stack-events \
+              --stack-name "$STACK_NAME" \
+              --region "$AWS_REGION" \
+              --max-items 30 \
+              --query 'StackEvents[?ResourceStatus==`CREATE_FAILED` || ResourceStatus==`ROLLBACK_IN_PROGRESS`].[Timestamp,LogicalResourceId,ResourceStatus,ResourceStatusReason]' \
+              --output table
+            echo "🗑️  Deleting failed stack..."
             aws cloudformation delete-stack --stack-name "$STACK_NAME" --region "$AWS_REGION"
             aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" --region "$AWS_REGION"
             export OPERATION="create-stack"
