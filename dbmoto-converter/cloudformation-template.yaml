@@ -36,7 +36,7 @@ Resources:
               - s3:GetObject
               - s3:PutObject
               - s3:DeleteObject
-            Resource: !Sub '${ResultsBucket}/*'
+            Resource: !Sub 'arn:aws:s3:::${ResultsBucket}/*'
 
   # Lambda execution role
   LambdaExecutionRole:
