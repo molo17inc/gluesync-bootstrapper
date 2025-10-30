@@ -12,6 +12,11 @@ Parameters:
     Default: 'dbmoto-converter.labs.molo17.com'
     Description: 'Custom domain name for the API Gateway'
 
+  HostedZoneId:
+    Type: AWS::Route53::HostedZone::Id
+    Default: ''
+    Description: 'Route 53 hosted zone ID for molo17.com domain'
+
 Resources:
   # S3 bucket for results
   ResultsBucket:
@@ -151,6 +156,31 @@ Resources:
       RestApiId: !Ref ApiGateway
       Stage: prod
 
+  # DNS record for SSL certificate validation
+  CertificateValidationRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: CreateRoute53Records
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !GetAtt ApiGatewayCertificate.ResourceRecord.Name
+      Type: !GetAtt ApiGatewayCertificate.ResourceRecord.Type
+      TTL: 300
+      ResourceRecords:
+        - !GetAtt ApiGatewayCertificate.ResourceRecord.Value
+
+  # DNS record for custom domain
+  CustomDomainRecord:
+    Type: AWS::Route53::RecordSet
+    DependsOn: CertificateValidationRecord
+    Condition: CreateRoute53Records
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref CustomDomainName
+      Type: CNAME
+      TTL: 300
+      ResourceRecords:
+        - !GetAtt ApiGatewayCustomDomain.RegionalDomainName
+
   # Lambda permission for API Gateway
   LambdaApiPermission:
     Type: AWS::Lambda::Permission
@@ -198,3 +228,6 @@ Outputs:
 Conditions:
   CertificateValidationRequired:
     !Not [!Equals [!GetAtt ApiGatewayCertificate.ResourceRecord, ""]]
+
+  CreateRoute53Records:
+    !Not [!Equals [!Ref HostedZoneId, ""]]

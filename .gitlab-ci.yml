@@ -31,6 +31,7 @@ variables:
   AWS_REGION: us-east-1
   STACK_NAME: dbmoto-xml-converter
   RESULTS_BUCKET_PREFIX: gluesync-conversion-results
+  HOSTED_ZONE_ID: ""  # Route 53 hosted zone ID for molo17.com - set in GitLab CI/CD variables
 
 deploy:
   stage: deploy
@@ -168,8 +169,11 @@ deploy_lambda:
       TEMPLATE_BODY=$(cat cloudformation-template.yaml)
       aws cloudformation "$OPERATION" \
         --stack-name "$STACK_NAME" \
+        --region "$AWS_REGION" \
         --template-body "$TEMPLATE_BODY" \
         --parameters ParameterKey=ResultsBucketName,ParameterValue="$RESULTS_BUCKET" \
+                    ParameterKey=CustomDomainName,ParameterValue="dbmoto-converter.labs.molo17.com" \
+                    ParameterKey=HostedZoneId,ParameterValue="$HOSTED_ZONE_ID" \
         --capabilities CAPABILITY_IAM \
         --region "$AWS_REGION"
     - echo "⏳ Waiting for Lambda function to be created (max 5 minutes)..."
@@ -309,25 +313,39 @@ deploy_lambda:
         exit 1
       fi
     - |
-      echo "🌐 Custom Domain DNS Configuration:"
+      echo "🌐 Custom Domain Configuration:"
       echo ""
-      echo "📋 To complete the custom domain setup, add these DNS records:"
-      echo ""
-      if [ -n "$CERT_VALIDATION_NAME" ] && [ -n "$CERT_VALIDATION_VALUE" ]; then
-        echo "1. SSL Certificate Validation (Required for HTTPS):"
-        echo "   CNAME: $CERT_VALIDATION_NAME"
-        echo "   Value: $CERT_VALIDATION_VALUE"
+      if [ -n "$HOSTED_ZONE_ID" ] && [ "$HOSTED_ZONE_ID" != "" ]; then
+        echo "✅ Route 53 DNS records will be created automatically!"
+        echo "📋 Records being created:"
+        echo "   - SSL certificate validation CNAME"
+        echo "   - Custom domain CNAME: dbmoto-converter.labs.molo17.com"
         echo ""
+        echo "⏳ DNS propagation may take 5-15 minutes"
+        echo "⏳ SSL certificate validation may take additional time"
+        echo ""
+        echo "🌐 Your API will be available at:"
+        echo "   $CUSTOM_DOMAIN_ENDPOINT/convert"
+      else
+        echo "⚠️  Route 53 hosted zone ID not configured"
+        echo "📋 Manual DNS setup required:"
+        echo ""
+        if [ -n "$CERT_VALIDATION_NAME" ] && [ -n "$CERT_VALIDATION_VALUE" ]; then
+          echo "1. SSL Certificate Validation (Required for HTTPS):"
+          echo "   CNAME: $CERT_VALIDATION_NAME"
+          echo "   Value: $CERT_VALIDATION_VALUE"
+          echo ""
+        fi
+        echo "2. Custom Domain CNAME:"
+        echo "   CNAME: dbmoto-converter.labs.molo17.com"
+        echo "   Value: $REGIONAL_DOMAIN"
+        echo ""
+        echo "3. Once DNS is configured, your API will be available at:"
+        echo "   $CUSTOM_DOMAIN_ENDPOINT/convert"
+        echo ""
+        echo "⚠️  DNS propagation may take 5-15 minutes"
+        echo "⚠️  SSL certificate validation may take additional time"
       fi
-      echo "2. Custom Domain CNAME (After certificate validation):"
-      echo "   CNAME: dbmoto-converter.labs.molo17.com"
-      echo "   Value: $REGIONAL_DOMAIN"
-      echo ""
-      echo "3. Once DNS is configured, your API will be available at:"
-      echo "   $CUSTOM_DOMAIN_ENDPOINT/convert"
-      echo ""
-      echo "⚠️  Note: DNS propagation may take 5-15 minutes"
-      echo "⚠️  SSL certificate validation may take additional time"
 
   artifacts:
     reports:
