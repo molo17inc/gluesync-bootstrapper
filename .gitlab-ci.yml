@@ -189,10 +189,21 @@ deploy_lambda:
         --region "$AWS_REGION"
     - echo "⏳ Waiting for Lambda update to complete..."
     - aws lambda wait function-updated --function-name dbmoto-xml-converter --region "$AWS_REGION"
-    - echo "⏳ Waiting for full stack deployment (this may take several minutes)..."
+    - echo "⏳ Checking stack status before waiting..."
     - |
-      if [ "$OPERATION" = "create-stack" ]; then
-        timeout 600 aws cloudformation wait stack-create-complete --stack-name "$STACK_NAME" --region "$AWS_REGION" || {
+      CURRENT_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].StackStatus' --output text)
+      echo "📊 Current stack status: $CURRENT_STATUS"
+      
+      if [[ "$CURRENT_STATUS" == "CREATE_COMPLETE" ]] || [[ "$CURRENT_STATUS" == "UPDATE_COMPLETE" ]]; then
+        echo "✅ Stack is already complete, skipping wait!"
+      elif [[ "$CURRENT_STATUS" == *"FAILED"* ]] || [[ "$CURRENT_STATUS" == "ROLLBACK_COMPLETE" ]]; then
+        echo "❌ Stack is in failed state: $CURRENT_STATUS"
+        aws cloudformation describe-stack-events --stack-name "$STACK_NAME" --region "$AWS_REGION" --max-items 10 --output table
+        exit 1
+      else
+        echo "⏳ Waiting for stack deployment (status: $CURRENT_STATUS)..."
+        if [ "$OPERATION" = "create-stack" ]; then
+          timeout 600 aws cloudformation wait stack-create-complete --stack-name "$STACK_NAME" --region "$AWS_REGION" || {
           EXIT_CODE=$?
           if [ $EXIT_CODE -eq 124 ]; then
             echo "⚠️  Wait timeout, checking stack status..."
@@ -229,6 +240,7 @@ deploy_lambda:
             exit 1
           fi
         }
+        fi
       fi
     - echo "✅ Stack deployment completed!"
     - |
