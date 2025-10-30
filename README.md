@@ -908,17 +908,22 @@ Deploy as a serverless API for programmatic access:
 
 ### GitLab CI/CD
 
-The Lambda function is automatically deployed via GitLab CI when changes are made to relevant files. The CI pipeline includes:
+The Lambda function is automatically deployed via GitLab CI when:
+- **Tag created**: Tags matching `dbmoto-*` (e.g., `dbmoto-1.0.0`, `dbmoto-v2.1.3`) 
+- **File changes**: Manual trigger when relevant files are modified
 
-- **Automatic deployment** on changes to `dbmoto-converter/`, `parse_dbmoto_metadata_xml.py`, or template files
-- **Manual trigger** for safety (requires approval to deploy)
-- **Environment variables** for API endpoint tracking
-- **Cleanup job** for removing deployments
+#### Tag-Based Automatic Deployment
+
+```bash
+# Create and push a version tag to auto-deploy
+git tag dbmoto-1.0.0
+git push origin dbmoto-1.0.0
+```
 
 #### Required GitLab CI/CD Variables
 ```
-AWS_ACCESS_KEY_ID=your_aws_access_key
-AWS_SECRET_ACCESS_KEY=your_aws_secret_key
+AWS_ACCESS_KEY_ID=your_aws_access_key_id
+AWS_SECRET_ACCESS_KEY=your_aws_secret_access_key
 ```
 
 #### Convert XML File

@@ -191,18 +191,31 @@ aws cloudformation delete-stack --stack-name dbmoto-xml-converter
 ## 🚀 CI/CD
 
 The Lambda function is automatically deployed via GitLab CI when:
-- Files in `dbmoto-converter/` are modified
-- `parse_dbmoto_metadata_xml.py` changes
-- Template files are updated
+- **Tag created**: Tags matching `dbmoto-*` (e.g., `dbmoto-1.0.0`, `dbmoto-v2.1.3`)
+- **File changes**: Manual trigger when `dbmoto-converter/`, `parse_dbmoto_metadata_xml.py`, or template files are modified
+
+### Tag-Based Deployment
+
+Create a tag to automatically deploy the Lambda function:
+
+```bash
+# Create and push a version tag
+git tag dbmoto-1.0.0
+git push origin dbmoto-1.0.0
+```
+
+This will automatically trigger the Lambda deployment pipeline in GitLab CI.
 
 ### Required GitLab CI/CD Variables
+
 ```
-AWS_ACCESS_KEY_ID=your_aws_access_key
-AWS_SECRET_ACCESS_KEY=your_aws_secret_key
+AWS_ACCESS_KEY_ID    = your_aws_access_key_id
+AWS_SECRET_ACCESS_KEY = your_aws_secret_access_key
 ```
 
 ### Manual Deployment
-You can also deploy manually by running the pipeline job from the GitLab web interface.
+
+You can also deploy manually by running the pipeline job from the GitLab web interface or using the local deploy script.
 
 ## 🐛 Troubleshooting
 
