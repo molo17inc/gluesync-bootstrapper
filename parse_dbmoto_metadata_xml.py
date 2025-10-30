@@ -43,6 +43,26 @@ def parse_arguments():
 args = parse_arguments()
 XML_PATH = os.path.expanduser(args.xml_path)
 
+# Global statistics tracking
+conversion_stats = {
+    'xml_path': XML_PATH,
+    'start_time': None,
+    'end_time': None,
+    'connections': {'source': 0, 'target': 0, 'total': 0},
+    'schemas': 0,
+    'tables': {'total': 0, 'with_fields': 0, 'with_primary_keys': 0},
+    'fields': 0,
+    'primary_keys': 0,
+    'groups': 0,
+    'chains': 0,
+    'replications': 0,
+    'schema_mappings': 0,
+    'yaml_files_exported': 0,
+    'tables_exported': 0,
+    'errors': [],
+    'warnings': []
+}
+
 def parse_xml():
     print(f"Parsing XML: {XML_PATH}")
     
@@ -334,6 +354,21 @@ def parse_xml():
     print(f"\nFound {len(groups)} groups and {len(chains)} chains in the DBMoto configuration")
     print(f"Found {len(replications)} replications with group/chain assignments")
     
+    # Update global statistics
+    conversion_stats['connections']['source'] = len(source_connections)
+    conversion_stats['connections']['target'] = len(target_connections)
+    conversion_stats['connections']['total'] = len(connections)
+    conversion_stats['schemas'] = len(schemas)
+    conversion_stats['tables']['total'] = len(tables)
+    conversion_stats['tables']['with_fields'] = tables_with_fields
+    conversion_stats['tables']['with_primary_keys'] = tables_with_primary_keys
+    conversion_stats['fields'] = field_count
+    conversion_stats['primary_keys'] = primary_key_count
+    conversion_stats['groups'] = len(groups)
+    conversion_stats['chains'] = len(chains)
+    conversion_stats['replications'] = len(replications)
+    conversion_stats['schema_mappings'] = len(source_to_target_schemas)
+    
     return connections, groups, chains, replications, source_to_target_schemas
 
 def export_as_yaml(connections, groups, chains, replications, source_to_target_schemas, output_dir=None, template_file=None):
@@ -521,11 +556,114 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                     yaml.dump(yaml_data, f, sort_keys=False, default_flow_style=False, allow_unicode=True)
                 
                 exported_count += 1
+                conversion_stats['tables_exported'] += len(whitelist)
                 print(f"Exported: {filename} ({len(whitelist)} tables)")
             else:
                 print(f"Skipped: {conn_name}.{schema_name} (no tables with fields)")
     
+    conversion_stats['yaml_files_exported'] = exported_count
     return exported_count
+
+def write_conversion_report(output_dir=None):
+    """Write a comprehensive conversion report to conversion_report.txt"""
+    if output_dir is None:
+        output_dir = args.output_dir
+    
+    from datetime import datetime
+    
+    # Calculate duration
+    duration = None
+    if conversion_stats['start_time'] and conversion_stats['end_time']:
+        duration = conversion_stats['end_time'] - conversion_stats['start_time']
+    
+    report_path = os.path.join(output_dir, 'conversion_report.txt')
+    
+    with open(report_path, 'w') as f:
+        f.write("=" * 80 + "\n")
+        f.write("DbMoto to Gluesync YAML Conversion Report\n")
+        f.write("=" * 80 + "\n\n")
+        
+        # Conversion metadata
+        f.write("CONVERSION METADATA\n")
+        f.write("-" * 80 + "\n")
+        f.write(f"Source XML File: {conversion_stats['xml_path']}\n")
+        f.write(f"Output Directory: {os.path.abspath(output_dir)}\n")
+        f.write(f"Template File: {args.template}\n")
+        f.write(f"Start Time: {conversion_stats['start_time'].strftime('%Y-%m-%d %H:%M:%S') if conversion_stats['start_time'] else 'N/A'}\n")
+        f.write(f"End Time: {conversion_stats['end_time'].strftime('%Y-%m-%d %H:%M:%S') if conversion_stats['end_time'] else 'N/A'}\n")
+        f.write(f"Duration: {duration.total_seconds():.2f} seconds\n" if duration else "Duration: N/A\n")
+        f.write(f"Include Targets: {args.include_targets}\n")
+        if args.force_schemas:
+            f.write(f"Forced Schema Mappings: {args.force_schemas}\n")
+        f.write("\n")
+        
+        # Database structure summary
+        f.write("DATABASE STRUCTURE SUMMARY\n")
+        f.write("-" * 80 + "\n")
+        f.write(f"Total Connections: {conversion_stats['connections']['total']}\n")
+        f.write(f"  - Source Connections: {conversion_stats['connections']['source']}\n")
+        f.write(f"  - Target Connections: {conversion_stats['connections']['target']}\n")
+        f.write(f"Total Schemas: {conversion_stats['schemas']}\n")
+        f.write(f"Total Tables: {conversion_stats['tables']['total']}\n")
+        f.write(f"  - Tables with Fields: {conversion_stats['tables']['with_fields']}\n")
+        f.write(f"  - Tables with Primary Keys: {conversion_stats['tables']['with_primary_keys']}\n")
+        f.write(f"Total Fields: {conversion_stats['fields']}\n")
+        f.write(f"Total Primary Keys: {conversion_stats['primary_keys']}\n")
+        f.write("\n")
+        
+        # Replication configuration
+        f.write("REPLICATION CONFIGURATION\n")
+        f.write("-" * 80 + "\n")
+        f.write(f"Groups: {conversion_stats['groups']}\n")
+        f.write(f"Chains: {conversion_stats['chains']}\n")
+        f.write(f"Replications: {conversion_stats['replications']}\n")
+        f.write(f"Schema Mappings (Source -> Target): {conversion_stats['schema_mappings']}\n")
+        f.write("\n")
+        
+        # Export results
+        f.write("EXPORT RESULTS\n")
+        f.write("-" * 80 + "\n")
+        f.write(f"YAML Files Exported: {conversion_stats['yaml_files_exported']}\n")
+        f.write(f"Tables Exported: {conversion_stats['tables_exported']}\n")
+        f.write(f"Export Success Rate: {(conversion_stats['tables_exported'] / conversion_stats['tables']['with_fields'] * 100) if conversion_stats['tables']['with_fields'] > 0 else 0:.2f}%\n")
+        f.write("\n")
+        
+        # Warnings
+        if conversion_stats['warnings']:
+            f.write("WARNINGS\n")
+            f.write("-" * 80 + "\n")
+            for i, warning in enumerate(conversion_stats['warnings'], 1):
+                f.write(f"{i}. {warning}\n")
+            f.write("\n")
+        
+        # Errors
+        if conversion_stats['errors']:
+            f.write("ERRORS\n")
+            f.write("-" * 80 + "\n")
+            for i, error in enumerate(conversion_stats['errors'], 1):
+                f.write(f"{i}. {error}\n")
+            f.write("\n")
+        
+        # Summary
+        f.write("SUMMARY\n")
+        f.write("-" * 80 + "\n")
+        if conversion_stats['errors']:
+            f.write(f"Status: COMPLETED WITH ERRORS ({len(conversion_stats['errors'])} errors)\n")
+        elif conversion_stats['warnings']:
+            f.write(f"Status: COMPLETED WITH WARNINGS ({len(conversion_stats['warnings'])} warnings)\n")
+        else:
+            f.write("Status: COMPLETED SUCCESSFULLY\n")
+        f.write(f"\nGenerated {conversion_stats['yaml_files_exported']} YAML configuration files\n")
+        f.write(f"containing {conversion_stats['tables_exported']} table definitions\n")
+        f.write(f"ready for use with gluesync-bootstrapper.\n")
+        f.write("\n")
+        
+        f.write("=" * 80 + "\n")
+        f.write("End of Report\n")
+        f.write("=" * 80 + "\n")
+    
+    print(f"\nConversion report written to: {os.path.abspath(report_path)}")
+    return report_path
 
 def view_table_list_template(template_path=None):
     """View the structure of the target table-list-template.yaml to ensure compatibility"""
@@ -539,26 +677,45 @@ def view_table_list_template(template_path=None):
             print("\n" + template_content[:300] + "...\n")  # Show first 300 chars
 
 if __name__ == "__main__":
+    from datetime import datetime
+    
+    # Record start time
+    conversion_stats['start_time'] = datetime.now()
+    
     # Ensure output directory exists
     os.makedirs(args.output_dir, exist_ok=True)
     
-    # Parse the XML and get connections, groups, chains, replications, and schema mappings
-    connections, groups, chains, replications, source_to_target_schemas = parse_xml()
+    try:
+        # Parse the XML and get connections, groups, chains, replications, and schema mappings
+        connections, groups, chains, replications, source_to_target_schemas = parse_xml()
+        
+        # Print hierarchy summary
+        print("\n=== Database Structure ===")
+        for conn_id, conn in connections.items():
+            print(f"\nConnection: {conn['name']} (ID: {conn_id})")
+            for schema_id, schema in conn['schemas'].items():
+                print(f"  Schema: {schema['name']} (ID: {schema_id})")
+                print(f"    Tables: {len(schema.get('tables', {}))} tables")
+        
+        # Export as YAML files
+        print("\nExporting to YAML files...")
+        exported = export_as_yaml(connections, groups, chains, replications, source_to_target_schemas)
+        print(f"\nDone! {exported} YAML files created in {os.path.abspath(args.output_dir)}/")
+        print("These files match the structure needed for table-list-template.yaml in gluesync-bootstrapper.")
+        
+        # View reference template structure
+        view_table_list_template()
+        
+    except Exception as e:
+        conversion_stats['errors'].append(f"Fatal error during conversion: {str(e)}")
+        print(f"\nERROR: {str(e)}")
+        import traceback
+        traceback.print_exc()
     
-    # Print hierarchy summary
-    print("\n=== Database Structure ===")
-    for conn_id, conn in connections.items():
-        print(f"\nConnection: {conn['name']} (ID: {conn_id})")
-        for schema_id, schema in conn['schemas'].items():
-            print(f"  Schema: {schema['name']} (ID: {schema_id})")
-            print(f"    Tables: {len(schema.get('tables', {}))} tables")
-    
-    # Export as YAML files
-    print("\nExporting to YAML files...")
-    exported = export_as_yaml(connections, groups, chains, replications, source_to_target_schemas)
-    print(f"\nDone! {exported} YAML files created in {os.path.abspath(args.output_dir)}/")
-    print("These files match the structure needed for table-list-template.yaml in gluesync-bootstrapper.")
-    
-    # View reference template structure
-    view_table_list_template()
+    finally:
+        # Record end time
+        conversion_stats['end_time'] = datetime.now()
+        
+        # Write conversion report
+        write_conversion_report()
 

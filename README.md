@@ -162,7 +162,7 @@ The `snapshotDeleteFilter` configuration controls which records are deleted from
 
 ### How It Works
 
-During a snapshot operation, GlueSync normally deletes all records in the target that don't exist in the source. The `snapshotDeleteFilter` modifies this behavior by excluding records that match the filter criteria from deletion.
+During a snapshot operation, Gluesync normally deletes all records in the target that don't exist in the source. The `snapshotDeleteFilter` modifies this behavior by excluding records that match the filter criteria from deletion.
 
 ### Configuration
 
@@ -319,7 +319,7 @@ ORDERS:
 
 ## User Defined Functions (UDFs)
 
-GlueSync supports User Defined Functions (UDFs) for custom data transformation during synchronization. UDFs can be written in Java or Kotlin and are automatically compiled and deployed when entities are created.
+Gluesync supports User Defined Functions (UDFs) for custom data transformation during synchronization. UDFs can be written in Java or Kotlin and are automatically compiled and deployed when entities are created.
 
 ### UDF Configuration
 
@@ -832,7 +832,7 @@ For support and bug reports, please create an issue in the GitLab repository.
 ## DBMoto Metadata Conversion
 
 ### Overview
-The included `parse_dbmoto_metadata_xml.py` script converts DbMoto metadata XML files into YAML configurations compatible with the GlueSync bootstrapper. It extracts database schemas, tables, and fields from the XML and generates structured YAML files.
+The included `parse_dbmoto_metadata_xml.py` script converts DbMoto metadata XML files into YAML configurations compatible with the Gluesync bootstrapper. It extracts database schemas, tables, and fields from the XML and generates structured YAML files.
 
 ### Prerequisites
 - Python 3.10
