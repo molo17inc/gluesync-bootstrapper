@@ -117,10 +117,35 @@ deploy_lambda:
         --parameters ParameterKey=ResultsBucketName,ParameterValue="$RESULTS_BUCKET" \
         --capabilities CAPABILITY_IAM \
         --region "$AWS_REGION"
-    - echo "⏳ Waiting for deployment (max 10 minutes)..."
+    - echo "⏳ Waiting for Lambda function to be created (max 5 minutes)..."
     - |
       WAIT_START=$(date +%s)
-      TIMEOUT=600
+      TIMEOUT=300
+      while true; do
+        if aws lambda get-function --function-name dbmoto-xml-converter --region "$AWS_REGION" >/dev/null 2>&1; then
+          echo "✅ Lambda function exists, updating code..."
+          break
+        fi
+        ELAPSED=$(($(date +%s) - WAIT_START))
+        if [ $ELAPSED -gt $TIMEOUT ]; then
+          echo "❌ Timeout waiting for Lambda function"
+          exit 1
+        fi
+        echo "⏱️  Waiting for Lambda... (${ELAPSED}s elapsed)"
+        sleep 10
+      done
+    - echo "📦 Updating Lambda function code..."
+    - |
+      aws lambda update-function-code \
+        --function-name dbmoto-xml-converter \
+        --zip-file fileb://lambda-package.zip \
+        --region "$AWS_REGION"
+    - echo "⏳ Waiting for Lambda update to complete..."
+    - aws lambda wait function-updated --function-name dbmoto-xml-converter --region "$AWS_REGION"
+    - echo "⏳ Waiting for full stack deployment (max 5 minutes)..."
+    - |
+      WAIT_START=$(date +%s)
+      TIMEOUT=300
       while true; do
         STACK_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "UNKNOWN")
         ELAPSED=$(($(date +%s) - WAIT_START))
@@ -151,14 +176,6 @@ deploy_lambda:
         fi
         sleep 15
       done
-    - echo "📦 Updating Lambda function code..."
-    - |
-      aws lambda update-function-code \
-        --function-name dbmoto-xml-converter \
-        --zip-file fileb://lambda-package.zip \
-        --region "$AWS_REGION"
-    - echo "⏳ Waiting for Lambda update to complete..."
-    - aws lambda wait function-updated --function-name dbmoto-xml-converter --region "$AWS_REGION"
     - |
       API_ENDPOINT=$(aws cloudformation describe-stacks \
         --stack-name "$STACK_NAME" \

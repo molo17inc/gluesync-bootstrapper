@@ -110,8 +110,7 @@ Resources:
       Integration:
         Type: AWS_PROXY
         IntegrationHttpMethod: POST
-        Uri: !Sub
-          arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ConversionLambda.Arn}/invocations
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ConversionLambda.Arn}/invocations'
 
   # API Gateway deployment
   ApiDeployment:
