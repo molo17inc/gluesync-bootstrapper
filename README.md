@@ -908,20 +908,31 @@ Deploy as a serverless API for programmatic access:
 
 ### GitLab CI/CD
 
-The Lambda function and WordPress plugin are automatically deployed via GitLab CI **only** when:
-- **Tag created**: Tags matching `dbmoto-*` (e.g., `dbmoto-1.0.0`, `dbmoto-v2.1.3`)
+The repository has two separate deployment pipelines:
 
-#### Tag-Based Automatic Deployment
+#### **1. DbMoto Converter (Lambda + WordPress)**
+
+Triggered by tags matching `dbmoto-*` (e.g., `dbmoto-1.0.0`, `dbmoto-v2.1.3`)
 
 ```bash
-# Create and push a version tag to auto-deploy both Lambda + WordPress plugin
+# Deploy Lambda API and WordPress plugin
 git tag dbmoto-1.0.0
 git push origin dbmoto-1.0.0
 ```
 
-This triggers a GitLab CI pipeline that:
-1. **Deploys Lambda function** to AWS (manual approval required)
-2. **Deploys WordPress plugin** to your hosting via FTP (automatic, after Lambda success)
+This triggers:
+1. **Lambda function** deployment to AWS (manual approval required)
+2. **WordPress plugin** deployment to hosting via FTP (automatic, after Lambda success)
+
+#### **2. Bootstrapper Docker Image**
+
+Triggered by tags matching `tag-*` (e.g., `tag-1.0.0`, `tag-v2.1.3`)
+
+```bash
+# Deploy Docker image
+git tag tag-1.0.0
+git push origin tag-1.0.0
+```
 
 #### Required GitLab CI/CD Variables
 ```
@@ -929,6 +940,7 @@ AWS_ACCESS_KEY_ID=your_aws_access_key_id
 AWS_SECRET_ACCESS_KEY=your_aws_secret_access_key
 FTP_USER=your_ftp_username
 FTP_PASSWORD=your_ftp_password
+FTP_SITE=c1107198.sgvps.net
 ```
 
 ### WordPress Integration

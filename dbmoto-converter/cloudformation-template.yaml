@@ -72,29 +72,14 @@ Resources:
       Handler: lambda_function.lambda_handler
       Code:
         ZipFile: |
-          # Lambda function code will be packaged separately
-          # This is a placeholder - use SAM CLI or manual packaging
+          def lambda_handler(event, context):
+              return {'statusCode': 200, 'body': 'Placeholder - will be updated'}
       Environment:
         Variables:
           RESULTS_BUCKET: !Ref ResultsBucketName
       Role: !GetAtt LambdaExecutionRole.Arn
-      Timeout: 900  # 15 minutes
+      Timeout: 900
       MemorySize: 1024
-      Layers:
-        - !Ref PythonRequirementsLayer
-
-  # Lambda layer for dependencies
-  PythonRequirementsLayer:
-    Type: AWS::Lambda::LayerVersion
-    Properties:
-      LayerName: dbmoto-converter-deps
-      Description: Python dependencies for DbMoto XML converter
-      Content:
-        ZipFile: |
-          # Layer content will be created during deployment
-          # Contains PyYAML, boto3, and other dependencies
-      CompatibleRuntimes:
-        - python3.9
 
   # API Gateway
   ApiGateway:

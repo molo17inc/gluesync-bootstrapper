@@ -63,7 +63,7 @@ deploy:
     - docker tag $DEFAULT_NAME:latest "$ADDITIONAL_TAG"
     - docker push "$ADDITIONAL_TAG"
   rules:
-    - if: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_TAG =~ /^tag-/
 
 # Deploy Lambda function on changes to dbmoto-converter or related files
 deploy_lambda:
@@ -107,7 +107,26 @@ deploy_lambda:
         --capabilities CAPABILITY_IAM \
         --region "$AWS_REGION"
     - echo "⏳ Waiting for deployment..."
-    - aws cloudformation wait "$WAIT_OPERATION" --stack-name "$STACK_NAME" --region "$AWS_REGION"
+    - |
+      if ! aws cloudformation wait "$WAIT_OPERATION" --stack-name "$STACK_NAME" --region "$AWS_REGION"; then
+        echo "❌ CloudFormation deployment failed!"
+        echo "📋 Stack events (last 20):"
+        aws cloudformation describe-stack-events \
+          --stack-name "$STACK_NAME" \
+          --region "$AWS_REGION" \
+          --max-items 20 \
+          --query 'StackEvents[?ResourceStatus==`CREATE_FAILED` || ResourceStatus==`ROLLBACK_IN_PROGRESS`].[Timestamp,ResourceType,LogicalResourceId,ResourceStatusReason]' \
+          --output table
+        exit 1
+      fi
+    - echo "📦 Updating Lambda function code..."
+    - |
+      aws lambda update-function-code \
+        --function-name dbmoto-xml-converter \
+        --zip-file fileb://lambda-package.zip \
+        --region "$AWS_REGION"
+    - echo "⏳ Waiting for Lambda update to complete..."
+    - aws lambda wait function-updated --function-name dbmoto-xml-converter --region "$AWS_REGION"
     - |
       API_ENDPOINT=$(aws cloudformation describe-stacks \
         --stack-name "$STACK_NAME" \
