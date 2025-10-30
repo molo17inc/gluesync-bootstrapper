@@ -117,19 +117,40 @@ deploy_lambda:
         --parameters ParameterKey=ResultsBucketName,ParameterValue="$RESULTS_BUCKET" \
         --capabilities CAPABILITY_IAM \
         --region "$AWS_REGION"
-    - echo "⏳ Waiting for deployment..."
+    - echo "⏳ Waiting for deployment (max 10 minutes)..."
     - |
-      if ! aws cloudformation wait "$WAIT_OPERATION" --stack-name "$STACK_NAME" --region "$AWS_REGION"; then
-        echo "❌ CloudFormation deployment failed!"
-        echo "📋 Stack events (last 20):"
-        aws cloudformation describe-stack-events \
-          --stack-name "$STACK_NAME" \
-          --region "$AWS_REGION" \
-          --max-items 20 \
-          --query 'StackEvents[?ResourceStatus==`CREATE_FAILED` || ResourceStatus==`ROLLBACK_IN_PROGRESS`].[Timestamp,ResourceType,LogicalResourceId,ResourceStatusReason]' \
-          --output table
-        exit 1
-      fi
+      WAIT_START=$(date +%s)
+      TIMEOUT=600
+      while true; do
+        STACK_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "UNKNOWN")
+        ELAPSED=$(($(date +%s) - WAIT_START))
+        echo "⏱️  Status: $STACK_STATUS (${ELAPSED}s elapsed)"
+        
+        if [[ "$STACK_STATUS" == *"COMPLETE" ]] && [[ "$STACK_STATUS" != "ROLLBACK_COMPLETE" ]]; then
+          echo "✅ Stack deployment completed successfully!"
+          break
+        elif [[ "$STACK_STATUS" == "ROLLBACK_COMPLETE" ]] || [[ "$STACK_STATUS" == *"FAILED"* ]]; then
+          echo "❌ CloudFormation deployment failed!"
+          echo "📋 Stack events (last 20):"
+          aws cloudformation describe-stack-events \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --max-items 20 \
+            --query 'StackEvents[?ResourceStatus==`CREATE_FAILED` || ResourceStatus==`ROLLBACK_IN_PROGRESS`].[Timestamp,ResourceType,LogicalResourceId,ResourceStatusReason]' \
+            --output table
+          exit 1
+        elif [ $ELAPSED -gt $TIMEOUT ]; then
+          echo "❌ Deployment timeout after ${TIMEOUT}s"
+          echo "📋 Current stack events:"
+          aws cloudformation describe-stack-events \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --max-items 10 \
+            --output table
+          exit 1
+        fi
+        sleep 15
+      done
     - echo "📦 Updating Lambda function code..."
     - |
       aws lambda update-function-code \
