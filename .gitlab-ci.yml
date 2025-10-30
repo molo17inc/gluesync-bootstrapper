@@ -173,7 +173,6 @@ deploy_lambda:
         --template-body "$TEMPLATE_BODY" \
         --parameters ParameterKey=ResultsBucketName,ParameterValue="$RESULTS_BUCKET" \
                     ParameterKey=CustomDomainName,ParameterValue="dbmoto-converter.labs.molo17.com" \
-                    ParameterKey=HostedZoneId,ParameterValue="$HOSTED_ZONE_ID" \
         --capabilities CAPABILITY_IAM \
         --region "$AWS_REGION"
     - echo "⏳ Waiting for Lambda function to be created (max 5 minutes)..."
@@ -315,43 +314,23 @@ deploy_lambda:
     - |
       echo "🌐 Custom Domain Configuration:"
       echo ""
-      if [ -n "$HOSTED_ZONE_ID" ] && [ "$HOSTED_ZONE_ID" != "" ]; then
-        echo "⚠️  Route 53 DNS records creation failed - will require manual setup"
-        echo "📋 Please create these DNS records manually:"
-        echo ""
-        echo "1. SSL Certificate Validation (Required for HTTPS):"
-        echo "   - Go to AWS Certificate Manager console"
-        echo "   - Find certificate for dbmoto-converter.labs.molo17.com"
-        echo "   - Create CNAME record for domain validation"
-        echo ""
-        echo "2. Custom Domain CNAME:"
-        echo "   CNAME: dbmoto-converter.labs.molo17.com"
-        echo "   Value: $REGIONAL_DOMAIN"
-        echo ""
-        echo "3. Once DNS is configured, your API will be available at:"
-        echo "   $CUSTOM_DOMAIN_ENDPOINT/convert"
-        echo ""
-        echo "⚠️  DNS propagation may take 5-15 minutes"
-        echo "⚠️  SSL certificate validation may take additional time"
-      else
-        echo "⚠️  Route 53 hosted zone ID not configured"
-        echo "📋 Manual DNS setup required:"
-        echo ""
-        echo "1. SSL Certificate Validation (Required for HTTPS):"
-        echo "   - Go to AWS Certificate Manager console"
-        echo "   - Find certificate for dbmoto-converter.labs.molo17.com"
-        echo "   - Create CNAME record for domain validation"
-        echo ""
-        echo "2. Custom Domain CNAME:"
-        echo "   CNAME: dbmoto-converter.labs.molo17.com"
-        echo "   Value: $REGIONAL_DOMAIN"
-        echo ""
-        echo "3. Once DNS is configured, your API will be available at:"
-        echo "   $CUSTOM_DOMAIN_ENDPOINT/convert"
-        echo ""
-        echo "⚠️  DNS propagation may take 5-15 minutes"
-        echo "⚠️  SSL certificate validation may take additional time"
-      fi
+      echo "📋 Manual DNS setup required:"
+      echo ""
+      echo "1. SSL Certificate Validation (Required for HTTPS):"
+      echo "   - Go to AWS Certificate Manager console"
+      echo "   - Find certificate for dbmoto-converter.labs.molo17.com"
+      echo "   - Copy the CNAME record name and value"
+      echo "   - Add CNAME record to your DNS (Route 53 or other)"
+      echo ""
+      echo "2. Custom Domain CNAME:"
+      echo "   CNAME: dbmoto-converter.labs.molo17.com"
+      echo "   Value: $REGIONAL_DOMAIN"
+      echo ""
+      echo "3. Once DNS is configured, your API will be available at:"
+      echo "   $CUSTOM_DOMAIN_ENDPOINT/convert"
+      echo ""
+      echo "⚠️  DNS propagation may take 5-15 minutes"
+      echo "⚠️  SSL certificate validation may take additional time"
 
   artifacts:
     reports:

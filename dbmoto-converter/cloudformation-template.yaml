@@ -12,11 +12,6 @@ Parameters:
     Default: 'dbmoto-converter.labs.molo17.com'
     Description: 'Custom domain name for the API Gateway'
 
-  HostedZoneId:
-    Type: AWS::Route53::HostedZone::Id
-    Default: ''
-    Description: 'Route 53 hosted zone ID for molo17.com domain'
-
 Resources:
   # S3 bucket for results
   ResultsBucket:
@@ -189,7 +184,3 @@ Outputs:
   ResultsBucketName:
     Description: S3 bucket for conversion results
     Value: !Ref ResultsBucket
-
-Conditions:
-  CreateRoute53Records:
-    !Not [!Equals [!Ref HostedZoneId, ""]]
