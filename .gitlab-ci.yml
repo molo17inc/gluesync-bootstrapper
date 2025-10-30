@@ -189,40 +189,48 @@ deploy_lambda:
         --region "$AWS_REGION"
     - echo "⏳ Waiting for Lambda update to complete..."
     - aws lambda wait function-updated --function-name dbmoto-xml-converter --region "$AWS_REGION"
-    - echo "⏳ Waiting for full stack deployment (max 5 minutes)..."
+    - echo "⏳ Waiting for full stack deployment (this may take several minutes)..."
     - |
-      WAIT_START=$(date +%s)
-      TIMEOUT=300
-      while true; do
-        STACK_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "UNKNOWN")
-        ELAPSED=$(($(date +%s) - WAIT_START))
-        echo "⏱️  Status: $STACK_STATUS (${ELAPSED}s elapsed)"
-        
-        if [[ "$STACK_STATUS" == *"COMPLETE" ]] && [[ "$STACK_STATUS" != "ROLLBACK_COMPLETE" ]]; then
-          echo "✅ Stack deployment completed successfully!"
-          break
-        elif [[ "$STACK_STATUS" == "ROLLBACK_COMPLETE" ]] || [[ "$STACK_STATUS" == *"FAILED"* ]]; then
-          echo "❌ CloudFormation deployment failed!"
-          echo "📋 Stack events (last 20):"
-          aws cloudformation describe-stack-events \
-            --stack-name "$STACK_NAME" \
-            --region "$AWS_REGION" \
-            --max-items 20 \
-            --query 'StackEvents[?ResourceStatus==`CREATE_FAILED` || ResourceStatus==`ROLLBACK_IN_PROGRESS`].[Timestamp,ResourceType,LogicalResourceId,ResourceStatusReason]' \
-            --output table
-          exit 1
-        elif [ $ELAPSED -gt $TIMEOUT ]; then
-          echo "❌ Deployment timeout after ${TIMEOUT}s"
-          echo "📋 Current stack events:"
-          aws cloudformation describe-stack-events \
-            --stack-name "$STACK_NAME" \
-            --region "$AWS_REGION" \
-            --max-items 10 \
-            --output table
-          exit 1
-        fi
-        sleep 15
-      done
+      if [ "$OPERATION" = "create-stack" ]; then
+        timeout 600 aws cloudformation wait stack-create-complete --stack-name "$STACK_NAME" --region "$AWS_REGION" || {
+          EXIT_CODE=$?
+          if [ $EXIT_CODE -eq 124 ]; then
+            echo "⚠️  Wait timeout, checking stack status..."
+            STACK_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].StackStatus' --output text)
+            if [[ "$STACK_STATUS" == "CREATE_COMPLETE" ]]; then
+              echo "✅ Stack is actually complete!"
+            else
+              echo "❌ Stack status: $STACK_STATUS"
+              aws cloudformation describe-stack-events --stack-name "$STACK_NAME" --region "$AWS_REGION" --max-items 10 --output table
+              exit 1
+            fi
+          else
+            echo "❌ Stack creation failed"
+            aws cloudformation describe-stack-events --stack-name "$STACK_NAME" --region "$AWS_REGION" --max-items 20 --query 'StackEvents[?ResourceStatus==`CREATE_FAILED`]' --output table
+            exit 1
+          fi
+        }
+      else
+        timeout 600 aws cloudformation wait stack-update-complete --stack-name "$STACK_NAME" --region "$AWS_REGION" || {
+          EXIT_CODE=$?
+          if [ $EXIT_CODE -eq 124 ]; then
+            echo "⚠️  Wait timeout, checking stack status..."
+            STACK_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].StackStatus' --output text)
+            if [[ "$STACK_STATUS" == "UPDATE_COMPLETE" ]]; then
+              echo "✅ Stack is actually complete!"
+            else
+              echo "❌ Stack status: $STACK_STATUS"
+              aws cloudformation describe-stack-events --stack-name "$STACK_NAME" --region "$AWS_REGION" --max-items 10 --output table
+              exit 1
+            fi
+          else
+            echo "❌ Stack update failed"
+            aws cloudformation describe-stack-events --stack-name "$STACK_NAME" --region "$AWS_REGION" --max-items 20 --query 'StackEvents[?ResourceStatus==`UPDATE_FAILED`]' --output table
+            exit 1
+          fi
+        }
+      fi
+    - echo "✅ Stack deployment completed!"
     - |
       API_ENDPOINT=$(aws cloudformation describe-stacks \
         --stack-name "$STACK_NAME" \
