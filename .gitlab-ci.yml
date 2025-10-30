@@ -88,9 +88,20 @@ deploy_lambda:
     - cd lambda-package && zip -r ../lambda-package.zip . -q && cd ..
     - |
       if aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
-        echo "🔄 Updating existing stack..."
-        export OPERATION="update-stack"
-        export WAIT_OPERATION="stack-update-complete"
+        STACK_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].StackStatus' --output text)
+        if [ "$STACK_STATUS" = "ROLLBACK_COMPLETE" ]; then
+          echo "🗑️  Stack is in ROLLBACK_COMPLETE state, deleting it first..."
+          aws cloudformation delete-stack --stack-name "$STACK_NAME" --region "$AWS_REGION"
+          echo "⏳ Waiting for stack deletion..."
+          aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" --region "$AWS_REGION"
+          echo "🆕 Creating new stack..."
+          export OPERATION="create-stack"
+          export WAIT_OPERATION="stack-create-complete"
+        else
+          echo "🔄 Updating existing stack..."
+          export OPERATION="update-stack"
+          export WAIT_OPERATION="stack-update-complete"
+        fi
       else
         echo "🆕 Creating new stack..."
         export OPERATION="create-stack"
