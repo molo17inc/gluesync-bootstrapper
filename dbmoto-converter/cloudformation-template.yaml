@@ -7,6 +7,11 @@ Parameters:
     Default: 'gluesync-conversion-results'
     Description: 'S3 bucket name for storing conversion results'
 
+  CustomDomainName:
+    Type: String
+    Default: 'dbmoto-converter.labs.molo17.com'
+    Description: 'Custom domain name for the API Gateway'
+
 Resources:
   # S3 bucket for results
   ResultsBucket:
@@ -120,6 +125,32 @@ Resources:
       RestApiId: !Ref ApiGateway
       StageName: prod
 
+  # SSL Certificate for custom domain
+  ApiGatewayCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref CustomDomainName
+      ValidationMethod: DNS
+
+  # Custom domain for API Gateway
+  ApiGatewayCustomDomain:
+    Type: AWS::ApiGateway::DomainName
+    Properties:
+      DomainName: !Ref CustomDomainName
+      CertificateArn: !Ref ApiGatewayCertificate
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  # Map custom domain to API Gateway stage
+  ApiGatewayBasePathMapping:
+    Type: AWS::ApiGateway::BasePathMapping
+    DependsOn: ApiGatewayCustomDomain
+    Properties:
+      DomainName: !Ref ApiGatewayCustomDomain
+      RestApiId: !Ref ApiGateway
+      Stage: prod
+
   # Lambda permission for API Gateway
   LambdaApiPermission:
     Type: AWS::Lambda::Permission
@@ -134,6 +165,28 @@ Outputs:
     Description: API Gateway endpoint URL
     Value: !Sub 'https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/prod'
 
+  CustomDomainEndpoint:
+    Description: Custom domain endpoint URL
+    Value: !Sub 'https://${CustomDomainName}'
+
+  RegionalDomainName:
+    Description: Regional domain name for DNS CNAME record
+    Value: !GetAtt ApiGatewayCustomDomain.RegionalDomainName
+
+  CertificateArn:
+    Description: SSL certificate ARN
+    Value: !Ref ApiGatewayCertificate
+
+  CertificateValidationRecordName:
+    Description: DNS validation record name for certificate
+    Value: !GetAtt ApiGatewayCertificate.ResourceRecord.Name
+    Condition: CertificateValidationRequired
+
+  CertificateValidationRecordValue:
+    Description: DNS validation record value for certificate
+    Value: !GetAtt ApiGatewayCertificate.ResourceRecord.Value
+    Condition: CertificateValidationRequired
+
   ResultsBucketName:
     Description: S3 bucket for conversion results
     Value: !Ref ResultsBucket
@@ -141,3 +194,7 @@ Outputs:
   LambdaFunctionArn:
     Description: Lambda function ARN
     Value: !Ref ConversionLambda
+
+Conditions:
+  CertificateValidationRequired:
+    !Not [!Equals [!GetAtt ApiGatewayCertificate.ResourceRecord, ""]]

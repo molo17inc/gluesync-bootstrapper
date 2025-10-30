@@ -265,12 +265,36 @@ deploy_lambda:
         --region "$AWS_REGION" \
         --query 'Stacks[0].Outputs[?OutputKey==`ApiEndpoint`].OutputValue' \
         --output text)
+      CUSTOM_DOMAIN_ENDPOINT=$(aws cloudformation describe-stacks \
+        --stack-name "$STACK_NAME" \
+        --region "$AWS_REGION" \
+        --query 'Stacks[0].Outputs[?OutputKey==`CustomDomainEndpoint`].OutputValue' \
+        --output text)
+      REGIONAL_DOMAIN=$(aws cloudformation describe-stacks \
+        --stack-name "$STACK_NAME" \
+        --region "$AWS_REGION" \
+        --query 'Stacks[0].Outputs[?OutputKey==`RegionalDomainName`].OutputValue' \
+        --output text)
+      CERT_VALIDATION_NAME=$(aws cloudformation describe-stacks \
+        --stack-name "$STACK_NAME" \
+        --region "$AWS_REGION" \
+        --query 'Stacks[0].Outputs[?OutputKey==`CertificateValidationRecordName`].OutputValue' \
+        --output text 2>/dev/null || echo "")
+      CERT_VALIDATION_VALUE=$(aws cloudformation describe-stacks \
+        --stack-name "$STACK_NAME" \
+        --region "$AWS_REGION" \
+        --query 'Stacks[0].Outputs[?OutputKey==`CertificateValidationRecordValue`].OutputValue' \
+        --output text 2>/dev/null || echo "")
       RESULTS_BUCKET_NAME=$(aws cloudformation describe-stacks \
         --stack-name "$STACK_NAME" \
         --region "$AWS_REGION" \
         --query 'Stacks[0].Outputs[?OutputKey==`ResultsBucketName`].OutputValue' \
         --output text)
       echo "API_ENDPOINT=$API_ENDPOINT" >> deploy.env
+      echo "CUSTOM_DOMAIN_ENDPOINT=$CUSTOM_DOMAIN_ENDPOINT" >> deploy.env
+      echo "REGIONAL_DOMAIN=$REGIONAL_DOMAIN" >> deploy.env
+      echo "CERT_VALIDATION_NAME=$CERT_VALIDATION_NAME" >> deploy.env
+      echo "CERT_VALIDATION_VALUE=$CERT_VALIDATION_VALUE" >> deploy.env
       echo "RESULTS_BUCKET_NAME=$RESULTS_BUCKET_NAME" >> deploy.env
     - |
       echo "🧪 Testing API endpoint..."
@@ -284,6 +308,26 @@ deploy_lambda:
         echo "❌ API endpoint is not reachable"
         exit 1
       fi
+    - |
+      echo "🌐 Custom Domain DNS Configuration:"
+      echo ""
+      echo "📋 To complete the custom domain setup, add these DNS records:"
+      echo ""
+      if [ -n "$CERT_VALIDATION_NAME" ] && [ -n "$CERT_VALIDATION_VALUE" ]; then
+        echo "1. SSL Certificate Validation (Required for HTTPS):"
+        echo "   CNAME: $CERT_VALIDATION_NAME"
+        echo "   Value: $CERT_VALIDATION_VALUE"
+        echo ""
+      fi
+      echo "2. Custom Domain CNAME (After certificate validation):"
+      echo "   CNAME: dbmoto-converter.labs.molo17.com"
+      echo "   Value: $REGIONAL_DOMAIN"
+      echo ""
+      echo "3. Once DNS is configured, your API will be available at:"
+      echo "   $CUSTOM_DOMAIN_ENDPOINT/convert"
+      echo ""
+      echo "⚠️  Note: DNS propagation may take 5-15 minutes"
+      echo "⚠️  SSL certificate validation may take additional time"
 
   artifacts:
     reports:
