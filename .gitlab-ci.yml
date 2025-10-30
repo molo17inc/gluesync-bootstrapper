@@ -97,7 +97,6 @@ deploy_lambda:
         export WAIT_OPERATION="stack-create-complete"
       fi
     - echo "☁️ Deploying CloudFormation stack..."
-    - echo "Current directory: $(pwd)"
     - ls -la cloudformation-template.yaml || echo "CloudFormation template not found!"
     - |
       TEMPLATE_BODY=$(cat cloudformation-template.yaml)
@@ -151,22 +150,16 @@ deploy_wordpress_plugin:
     - if: $CI_COMMIT_TAG =~ /^dbmoto-/
       when: always
   dependencies:
-    - deploy_lambda  # Run after Lambda deployment succeeds
+    - deploy_lambda
   script:
     - echo "🚀 Deploying WordPress plugin to hosting..."
     - apk add --no-cache lftp
-
-    # Navigate to the plugin directory
     - cd dbmoto-converter/wordpress-plugin/dbmoto-converter
-
-    # Upload WordPress plugin files via FTP
     - echo "📤 Uploading plugin files to WordPress hosting..."
-    - lftp -c "open -u $FTP_USER,$FTP_PASSWORD ftp://c1107198.sgvps.net; mirror -R . /molo17.com/public_html/wp-content/plugins/dbmoto-converter/"
-
+    - lftp -c "open -u $FTP_USER,$FTP_PASSWORD ftp://$FTP_SITE; mirror -R . /molo17.com/public_html/wp-content/plugins/dbmoto-converter/"
     - echo "✅ WordPress plugin deployed successfully!"
-
-  when: manual  # Require manual trigger for safety
-  allow_failure: true  # Don't fail the entire pipeline if FTP upload fails
+  when: manual
+  allow_failure: true
 
 # Manual cleanup job
 cleanup_lambda:
