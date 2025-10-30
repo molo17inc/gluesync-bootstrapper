@@ -156,31 +156,6 @@ Resources:
       RestApiId: !Ref ApiGateway
       Stage: prod
 
-  # DNS record for SSL certificate validation
-  CertificateValidationRecord:
-    Type: AWS::Route53::RecordSet
-    Condition: CreateRoute53Records
-    Properties:
-      HostedZoneId: !Ref HostedZoneId
-      Name: !GetAtt ApiGatewayCertificate.ResourceRecord.Name
-      Type: !GetAtt ApiGatewayCertificate.ResourceRecord.Type
-      TTL: 300
-      ResourceRecords:
-        - !GetAtt ApiGatewayCertificate.ResourceRecord.Value
-
-  # DNS record for custom domain
-  CustomDomainRecord:
-    Type: AWS::Route53::RecordSet
-    DependsOn: CertificateValidationRecord
-    Condition: CreateRoute53Records
-    Properties:
-      HostedZoneId: !Ref HostedZoneId
-      Name: !Ref CustomDomainName
-      Type: CNAME
-      TTL: 300
-      ResourceRecords:
-        - !GetAtt ApiGatewayCustomDomain.RegionalDomainName
-
   # Lambda permission for API Gateway
   LambdaApiPermission:
     Type: AWS::Lambda::Permission
@@ -207,23 +182,13 @@ Outputs:
     Description: SSL certificate ARN
     Value: !Ref ApiGatewayCertificate
 
-  CertificateValidationRecordName:
-    Description: DNS validation record name for certificate
-    Value: !GetAtt ApiGatewayCertificate.ResourceRecord.Name
-    Condition: CertificateValidationRequired
-
-  CertificateValidationRecordValue:
-    Description: DNS validation record value for certificate
-    Value: !GetAtt ApiGatewayCertificate.ResourceRecord.Value
-    Condition: CertificateValidationRequired
+  LambdaFunctionArn:
+    Description: Lambda function ARN
+    Value: !Ref ConversionLambda
 
   ResultsBucketName:
     Description: S3 bucket for conversion results
     Value: !Ref ResultsBucket
-
-  LambdaFunctionArn:
-    Description: Lambda function ARN
-    Value: !Ref ConversionLambda
 
 Conditions:
   CertificateValidationRequired:
