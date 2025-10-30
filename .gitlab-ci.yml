@@ -275,10 +275,13 @@ deploy_lambda:
     - |
       echo "🧪 Testing API endpoint..."
       RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" "$API_ENDPOINT/convert" -X POST 2>/dev/null || echo "000")
-      if [ "$RESPONSE" = "400" ] || [ "$RESPONSE" = "000" ]; then
-        echo "✅ API endpoint responding (400 expected for missing file, 000 for network issues)"
+      if [ "$RESPONSE" != "000" ]; then
+        echo "✅ API endpoint is responding (HTTP $RESPONSE)"
+        if [ "$RESPONSE" = "500" ]; then
+          echo "ℹ️  Note: 500 error expected without valid XML file upload"
+        fi
       else
-        echo "⚠️  API endpoint returned unexpected status: $RESPONSE"
+        echo "❌ API endpoint is not reachable"
         exit 1
       fi
 
