@@ -89,6 +89,8 @@ deploy_lambda:
     - |
       if aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
         STACK_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].StackStatus' --output text)
+        echo "📊 Current stack status: $STACK_STATUS"
+        
         if [ "$STACK_STATUS" = "ROLLBACK_COMPLETE" ]; then
           echo "🗑️  Stack is in ROLLBACK_COMPLETE state, deleting it first..."
           aws cloudformation delete-stack --stack-name "$STACK_NAME" --region "$AWS_REGION"
@@ -97,10 +99,55 @@ deploy_lambda:
           echo "🆕 Creating new stack..."
           export OPERATION="create-stack"
           export WAIT_OPERATION="stack-create-complete"
-        else
+        elif [[ "$STACK_STATUS" == *"IN_PROGRESS"* ]]; then
+          echo "⏳ Stack is currently in progress ($STACK_STATUS), waiting for it to complete or fail..."
+          WAIT_START=$(date +%s)
+          TIMEOUT=600
+          while true; do
+            CURRENT_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].StackStatus' --output text)
+            ELAPSED=$(($(date +%s) - WAIT_START))
+            echo "⏱️  Status: $CURRENT_STATUS (${ELAPSED}s elapsed)"
+            
+            if [[ "$CURRENT_STATUS" != *"IN_PROGRESS"* ]]; then
+              echo "✅ Stack operation completed with status: $CURRENT_STATUS"
+              STACK_STATUS="$CURRENT_STATUS"
+              break
+            fi
+            
+            if [ $ELAPSED -gt $TIMEOUT ]; then
+              echo "❌ Timeout waiting for stack operation to complete"
+              echo "🗑️  Canceling and deleting stack..."
+              aws cloudformation delete-stack --stack-name "$STACK_NAME" --region "$AWS_REGION"
+              aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" --region "$AWS_REGION"
+              export OPERATION="create-stack"
+              export WAIT_OPERATION="stack-create-complete"
+              break
+            fi
+            sleep 15
+          done
+          
+          if [ "$STACK_STATUS" = "ROLLBACK_COMPLETE" ]; then
+            echo "🗑️  Previous operation failed, deleting stack..."
+            aws cloudformation delete-stack --stack-name "$STACK_NAME" --region "$AWS_REGION"
+            aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" --region "$AWS_REGION"
+            export OPERATION="create-stack"
+            export WAIT_OPERATION="stack-create-complete"
+          elif [[ "$STACK_STATUS" == *"COMPLETE"* ]]; then
+            echo "🔄 Stack exists and is stable, will update..."
+            export OPERATION="update-stack"
+            export WAIT_OPERATION="stack-update-complete"
+          fi
+        elif [[ "$STACK_STATUS" == *"COMPLETE"* ]] && [ "$STACK_STATUS" != "ROLLBACK_COMPLETE" ]; then
           echo "🔄 Updating existing stack..."
           export OPERATION="update-stack"
           export WAIT_OPERATION="stack-update-complete"
+        else
+          echo "⚠️  Unexpected stack status: $STACK_STATUS"
+          echo "🗑️  Deleting stack to start fresh..."
+          aws cloudformation delete-stack --stack-name "$STACK_NAME" --region "$AWS_REGION"
+          aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" --region "$AWS_REGION"
+          export OPERATION="create-stack"
+          export WAIT_OPERATION="stack-create-complete"
         fi
       else
         echo "🆕 Creating new stack..."
