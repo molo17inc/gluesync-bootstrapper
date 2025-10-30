@@ -213,40 +213,48 @@ deploy_lambda:
         if [ "$OPERATION" = "create-stack" ]; then
           timeout 600 aws cloudformation wait stack-create-complete --stack-name "$STACK_NAME" --region "$AWS_REGION" || {
           EXIT_CODE=$?
-          if [ $EXIT_CODE -eq 124 ]; then
-            echo "⚠️  Wait timeout, checking stack status..."
-            STACK_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].StackStatus' --output text)
-            if [[ "$STACK_STATUS" == "CREATE_COMPLETE" ]]; then
-              echo "✅ Stack is actually complete!"
-            else
-              echo "❌ Stack status: $STACK_STATUS"
-              aws cloudformation describe-stack-events --stack-name "$STACK_NAME" --region "$AWS_REGION" --max-items 10 --output table
-              exit 1
-            fi
-          else
-            echo "❌ Stack creation failed"
-            aws cloudformation describe-stack-events --stack-name "$STACK_NAME" --region "$AWS_REGION" --max-items 20 --query 'StackEvents[?ResourceStatus==`CREATE_FAILED`]' --output table
-            exit 1
-          fi
+          echo "❌ Stack creation failed or timed out (exit code: $EXIT_CODE)"
+          STACK_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].StackStatus' --output text)
+          echo "📊 Final stack status: $STACK_STATUS"
+          echo ""
+          echo "📋 Failed resources and reasons:"
+          aws cloudformation describe-stack-events \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --max-items 50 \
+            --query 'StackEvents[?ResourceStatus==`CREATE_FAILED` || ResourceStatus==`ROLLBACK_IN_PROGRESS`].[Timestamp,LogicalResourceId,ResourceType,ResourceStatusReason]' \
+            --output table
+          echo ""
+          echo "📋 All recent events:"
+          aws cloudformation describe-stack-events \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --max-items 20 \
+            --output table
+          exit 1
         }
       else
         timeout 600 aws cloudformation wait stack-update-complete --stack-name "$STACK_NAME" --region "$AWS_REGION" || {
           EXIT_CODE=$?
-          if [ $EXIT_CODE -eq 124 ]; then
-            echo "⚠️  Wait timeout, checking stack status..."
-            STACK_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].StackStatus' --output text)
-            if [[ "$STACK_STATUS" == "UPDATE_COMPLETE" ]]; then
-              echo "✅ Stack is actually complete!"
-            else
-              echo "❌ Stack status: $STACK_STATUS"
-              aws cloudformation describe-stack-events --stack-name "$STACK_NAME" --region "$AWS_REGION" --max-items 10 --output table
-              exit 1
-            fi
-          else
-            echo "❌ Stack update failed"
-            aws cloudformation describe-stack-events --stack-name "$STACK_NAME" --region "$AWS_REGION" --max-items 20 --query 'StackEvents[?ResourceStatus==`UPDATE_FAILED`]' --output table
-            exit 1
-          fi
+          echo "❌ Stack update failed or timed out (exit code: $EXIT_CODE)"
+          STACK_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].StackStatus' --output text)
+          echo "📊 Final stack status: $STACK_STATUS"
+          echo ""
+          echo "📋 Failed resources and reasons:"
+          aws cloudformation describe-stack-events \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --max-items 50 \
+            --query 'StackEvents[?ResourceStatus==`UPDATE_FAILED` || ResourceStatus==`UPDATE_ROLLBACK_IN_PROGRESS`].[Timestamp,LogicalResourceId,ResourceType,ResourceStatusReason]' \
+            --output table
+          echo ""
+          echo "📋 All recent events:"
+          aws cloudformation describe-stack-events \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --max-items 20 \
+            --output table
+          exit 1
         }
         fi
       fi
