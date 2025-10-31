@@ -44,6 +44,10 @@ def lambda_handler(event, context):
             body = body_data.encode('utf-8') if isinstance(body_data, str) else body_data
 
         files, params = parse_multipart_data(body, boundary)
+        print(f"DEBUG: multipart body length: {len(body)}")
+        print(f"DEBUG: boundary: {boundary}")
+        print(f"DEBUG: first 200 bytes of body: {body[:200]}")
+        
         print(f"DEBUG: files keys: {list(files.keys())}")
         print(f"DEBUG: params keys: {list(params.keys())}")
 
@@ -172,6 +176,12 @@ def parse_multipart_data(body, boundary):
     # Simple multipart parser (for basic use cases)
     boundary_bytes = b'--' + boundary.encode()
     parts = body.split(boundary_bytes)
+    
+    print(f"DEBUG: Found {len(parts)} parts after splitting on boundary")
+    for i, part in enumerate(parts):
+        print(f"DEBUG: Part {i} length: {len(part)}")
+        if i < 3:  # Show first few parts
+            print(f"DEBUG: Part {i} content: {part[:100]}...")
 
     for part in parts:
         part = part.strip()
@@ -179,6 +189,7 @@ def parse_multipart_data(body, boundary):
             continue
             
         if b'Content-Disposition' in part:
+            print(f"DEBUG: Processing part with Content-Disposition, length: {len(part)}")
             # Split part into headers and content
             header_end = part.find(b'\r\n\r\n')
             if header_end == -1:
@@ -189,6 +200,10 @@ def parse_multipart_data(body, boundary):
                     
             headers = part[:header_end]
             content = part[header_end + 4:]  # Skip \r\n\r\n
+            
+            print(f"DEBUG: Headers: {headers[:100]}")
+            print(f"DEBUG: Content length: {len(content)}")
+            print(f"DEBUG: Content first 20 bytes: {content[:20]}")
             
             # Parse Content-Disposition header
             disposition = headers.decode('utf-8', errors='ignore')
@@ -212,6 +227,7 @@ def parse_multipart_data(body, boundary):
                 
                 if field_name:
                     files[field_name] = content
+                    print(f"DEBUG: Added file {field_name}, content length: {len(content)}")
             else:
                 # Regular parameter
                 field_name = None
@@ -228,6 +244,7 @@ def parse_multipart_data(body, boundary):
                 
                 if field_name:
                     params[field_name] = content.decode('utf-8', errors='ignore').strip()
+                    print(f"DEBUG: Added param {field_name}: {params[field_name]}")
 
     return files, params
 
