@@ -3,6 +3,7 @@ import boto3
 import os
 import tempfile
 import base64
+import gzip
 from urllib.parse import unquote
 from parse_dbmoto_metadata_xml import parse_xml, export_as_yaml, write_conversion_report
 
@@ -50,6 +51,10 @@ def lambda_handler(event, context):
 
         xml_content = files['xml_file']
         template_content = files.get('template_file')
+        
+        # Decompress if gzipped (auto-detect or explicit parameter)
+        if xml_content[:2] == b'\x1f\x8b':  # gzip magic number
+            xml_content = gzip.decompress(xml_content)
 
         # Extract parameters
         include_targets = params.get('include_targets', 'true').lower() == 'true'
