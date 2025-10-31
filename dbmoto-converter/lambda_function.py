@@ -7,7 +7,8 @@ import gzip
 from urllib.parse import unquote
 from parse_dbmoto_metadata_xml import parse_xml, export_as_yaml, write_conversion_report
 
-s3_client = boto3.client('s3')
+# Initialize S3 client with explicit region to avoid signature issues
+s3_client = boto3.client('s3', region_name=os.environ.get('AWS_REGION', 'eu-central-1'))
 
 def lambda_handler(event, context):
     """
