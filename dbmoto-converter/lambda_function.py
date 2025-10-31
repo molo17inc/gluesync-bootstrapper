@@ -30,7 +30,14 @@ def lambda_handler(event, context):
 
         # Extract files and parameters from the multipart data
         boundary = content_type.split('boundary=')[1]
-        body = base64.b64decode(event['body']) if event.get('isBase64Encoded') else event['body']
+        
+        # Handle both base64 encoded and plain body
+        if event.get('isBase64Encoded'):
+            body = base64.b64decode(event['body'])
+        else:
+            # Convert string to bytes if needed
+            body_data = event['body']
+            body = body_data.encode('utf-8') if isinstance(body_data, str) else body_data
 
         files, params = parse_multipart_data(body, boundary)
 
