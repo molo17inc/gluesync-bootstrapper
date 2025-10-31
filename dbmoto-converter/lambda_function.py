@@ -49,13 +49,14 @@ def lambda_handler(event, context):
             else:
                 body = body_data
 
-        files, params = parse_multipart_data(body, boundary)
+        files, params, filenames = parse_multipart_data(body, boundary)
         print(f"DEBUG: multipart body length: {len(body)}")
         print(f"DEBUG: boundary: {boundary}")
         print(f"DEBUG: first 200 bytes of body: {body[:200]}")
         
         print(f"DEBUG: files keys: {list(files.keys())}")
         print(f"DEBUG: params keys: {list(params.keys())}")
+        print(f"DEBUG: filenames: {filenames}")
 
         # Extract required files
         if 'xml_file' not in files:
@@ -65,7 +66,9 @@ def lambda_handler(event, context):
             }
 
         xml_content = files['xml_file']
+        filename = filenames.get('xml_file', 'metadata.xml')
         print(f"DEBUG: xml_content type: {type(xml_content)}, length: {len(xml_content) if xml_content else 'None'}")
+        print(f"DEBUG: filename: {filename}")
         print(f"DEBUG: first 10 bytes: {xml_content[:10] if xml_content and len(xml_content) >= 10 else 'N/A'}")
         
         gzip_magic = b'\x1f\x8b'
@@ -85,6 +88,21 @@ def lambda_handler(event, context):
             xml_content = gzip.decompress(xml_content)
             print(f"DEBUG: After decompression, length: {len(xml_content)}")
             print(f"DEBUG: First 50 chars after decompression: {xml_content[:50].decode('utf-8', errors='ignore')}")
+        elif filename.endswith('.gz'):
+            # File is marked as gzipped but content might be base64 encoded
+            print("DEBUG: Filename ends with .gz, trying base64 decode then gzip decompress")
+            try:
+                # Try to decode as base64 first
+                decoded = base64.b64decode(xml_content)
+                if decoded[:2] == gzip_magic:
+                    xml_content = gzip.decompress(decoded)
+                    print(f"DEBUG: Successfully decompressed base64+gzip content, length: {len(xml_content)}")
+                    print(f"DEBUG: First 50 chars after decompression: {xml_content[:50].decode('utf-8', errors='ignore')}")
+                else:
+                    print("DEBUG: Base64 decoded content is not gzipped, keeping as-is")
+                    xml_content = decoded
+            except Exception as e:
+                print(f"DEBUG: Base64 decode failed: {e}, keeping original content")
         else:
             print("DEBUG: XML content is not gzipped")
             print(f"DEBUG: First 50 chars: {xml_content[:50].decode('utf-8', errors='ignore')}")
@@ -178,6 +196,7 @@ def parse_multipart_data(body, boundary):
     """Parse multipart/form-data content"""
     files = {}
     params = {}
+    filenames = {}
 
     # Simple multipart parser (for basic use cases)
     boundary_bytes = b'--' + boundary.encode()
@@ -233,7 +252,8 @@ def parse_multipart_data(body, boundary):
                 
                 if field_name:
                     files[field_name] = content
-                    print(f"DEBUG: Added file {field_name}, content length: {len(content)}")
+                    filenames[field_name] = filename or 'unknown'
+                    print(f"DEBUG: Added file {field_name}, filename: {filenames[field_name]}, content length: {len(content)}")
             else:
                 # Regular parameter
                 field_name = None
@@ -252,7 +272,7 @@ def parse_multipart_data(body, boundary):
                     params[field_name] = content.decode('utf-8', errors='ignore').strip()
                     print(f"DEBUG: Added param {field_name}: {params[field_name]}")
 
-    return files, params
+    return files, params, filenames
 
 def create_output_zip(output_dir, temp_dir):
     """Create a zip file containing all output files"""

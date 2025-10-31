@@ -166,15 +166,16 @@ class DbMotoConverterPlugin {
             error_log("DEBUG: File size: " . $file['size']);
             
             // Automatically compress files larger than 1MB
+            $is_compressed = false;
             if ($file['size'] > 1 * 1024 * 1024) {
                 $file_content = gzencode($file_content, 9); // Maximum compression
-                $filename = $file['name'] . '.gz';
+                $is_compressed = true;
                 error_log("DEBUG: File compressed, new length: " . strlen($file_content));
             }
 
             // Create multipart data for API call
             $boundary = wp_generate_password(24, false);
-            $body = $this->build_multipart_body($boundary, $file_content, $filename, $include_targets);
+            $body = $this->build_multipart_body($boundary, $file_content, $filename, $include_targets, $is_compressed);
             
             error_log("DEBUG: Multipart body length: " . strlen($body));
             error_log("DEBUG: Boundary: " . $boundary);
@@ -231,24 +232,33 @@ class DbMotoConverterPlugin {
         }
     }
 
-    private function build_multipart_body($boundary, $file_content, $filename, $include_targets) {
-        $body = '';
+    private function build_multipart_body($boundary, $file_content, $filename, $include_targets, $is_compressed) {
+        // Build multipart body, sending compressed data as base64 to avoid binary corruption
+        $body_parts = array();
+
+        // If compressed, encode as base64
+        if ($is_compressed) {
+            $file_content = base64_encode($file_content);
+            $filename = $filename . '.gz';
+        }
 
         // Add file part
-        $body .= '--' . $boundary . "\r\n";
-        $body .= 'Content-Disposition: form-data; name="xml_file"; filename="' . $filename . '"' . "\r\n";
-        $body .= 'Content-Type: text/xml' . "\r\n\r\n";
-        $body .= $file_content . "\r\n";
+        $body_parts[] = '--' . $boundary . "\r\n";
+        $body_parts[] = 'Content-Disposition: form-data; name="xml_file"; filename="' . $filename . '"' . "\r\n";
+        $body_parts[] = 'Content-Type: text/xml' . "\r\n\r\n";
+        $body_parts[] = $file_content;  // Now safe as base64 string or uncompressed text
+        $body_parts[] = "\r\n";
 
         // Add include_targets part
-        $body .= '--' . $boundary . "\r\n";
-        $body .= 'Content-Disposition: form-data; name="include_targets"' . "\r\n\r\n";
-        $body .= ($include_targets ? 'true' : 'false') . "\r\n";
+        $body_parts[] = '--' . $boundary . "\r\n";
+        $body_parts[] = 'Content-Disposition: form-data; name="include_targets"' . "\r\n\r\n";
+        $body_parts[] = ($include_targets ? 'true' : 'false') . "\r\n";
 
         // End boundary
-        $body .= '--' . $boundary . '--' . "\r\n";
+        $body_parts[] = '--' . $boundary . '--' . "\r\n";
 
-        return $body;
+        // Join as string (now safe)
+        return implode('', $body_parts);
     }
 
     /**
