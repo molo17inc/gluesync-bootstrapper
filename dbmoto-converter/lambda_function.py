@@ -94,6 +94,10 @@ def lambda_handler(event, context):
             try:
                 # Try to decode as base64 first
                 decoded = base64.b64decode(xml_content)
+                print(f"DEBUG: Base64 decoded, length: {len(decoded)}")
+                print(f"DEBUG: First 20 bytes of decoded: {decoded[:20]}")
+                print(f"DEBUG: Decoded starts with gzip magic: {decoded[:2] == gzip_magic}")
+                
                 if decoded[:2] == gzip_magic:
                     xml_content = gzip.decompress(decoded)
                     print(f"DEBUG: Successfully decompressed base64+gzip content, length: {len(xml_content)}")
