@@ -188,7 +188,19 @@ class DbMotoConverterPlugin {
             $response_body = wp_remote_retrieve_body($response);
 
             if ($response_code !== 200) {
-                wp_send_json_error('API returned error: ' . $response_code);
+                // Try to get detailed error message from API response
+                $error_data = json_decode($response_body, true);
+                $error_message = 'API returned error ' . $response_code;
+                
+                if ($error_data && isset($error_data['error'])) {
+                    $error_message .= ': ' . $error_data['error'];
+                } elseif ($error_data && isset($error_data['message'])) {
+                    $error_message .= ': ' . $error_data['message'];
+                } elseif (!empty($response_body)) {
+                    $error_message .= ': ' . substr($response_body, 0, 200);
+                }
+                
+                wp_send_json_error($error_message);
                 return;
             }
 

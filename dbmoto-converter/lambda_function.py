@@ -22,7 +22,10 @@ def lambda_handler(event, context):
 
     try:
         # Parse the multipart form data from API Gateway
-        content_type = event.get('headers', {}).get('content-type', '')
+        # Handle both lowercase and capitalized header names
+        headers = event.get('headers', {})
+        content_type = headers.get('content-type') or headers.get('Content-Type', '')
+        
         if not content_type.startswith('multipart/form-data'):
             return {
                 'statusCode': 400,
