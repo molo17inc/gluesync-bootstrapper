@@ -23,8 +23,28 @@
     color: #23282d;
 }
 
-.form-group input[type="file"] {
+.form-group input[type="file"],
+.form-group input[type="text"] {
     margin-bottom: 5px;
+}
+
+.form-group input[type="text"] {
+    width: 100%;
+    padding: 8px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-family: 'Courier New', monospace;
+    font-size: 14px;
+}
+
+.form-group input[type="text"]:focus {
+    outline: none;
+    border-color: #007cba;
+    box-shadow: 0 0 0 1px #007cba;
+}
+
+.form-group input[type="text"]:invalid {
+    border-color: #dc3545;
 }
 
 .form-group small {

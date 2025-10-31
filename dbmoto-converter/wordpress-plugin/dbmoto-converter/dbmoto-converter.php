@@ -46,11 +46,22 @@ class DbMotoConverterPlugin {
         ob_start();
         ?>
         <div id="dbmoto-converter">
-            <h2>DBMoto XML to Gluesync YAML Converter</h2>
-            <p>Upload your DBMoto metadata XML file to convert it into Gluesync YAML configuration files.</p>
+            <h2>Syniti Replicate's metadata XML to Gluesync's YAML Converter</h2>
+            <p>Upload your Syniti Replicate metadata XML file to convert it into Gluesync YAML configuration files.</p>
 
             <form id="upload-form" enctype="multipart/form-data">
                 <?php wp_nonce_field('dbmoto_converter_upload', 'dbmoto_converter_nonce'); ?>
+
+                <div class="form-group">
+                    <label for="trial-kit-id">Trial Kit ID:</label>
+                    <input type="text" 
+                           id="trial-kit-id" 
+                           name="trial_kit_id" 
+                           pattern="[a-f0-9]{32}" 
+                           title="Please enter a valid 32-character trial kit ID (e.g., 4bd49914968fee18bd5e904c5b41aa40)"
+                           required>
+                    <small>Enter your trial kit identifier (32 hexadecimal characters)</small>
+                </div>
 
                 <div class="form-group">
                     <label for="xml-file">Select XML File:</label>
@@ -98,6 +109,27 @@ class DbMotoConverterPlugin {
         // Verify nonce
         if (!wp_verify_nonce($_POST['nonce'], 'dbmoto_converter_nonce')) {
             wp_send_json_error('Security check failed');
+            return;
+        }
+
+        // Validate trial kit ID
+        if (!isset($_POST['trial_kit_id']) || empty($_POST['trial_kit_id'])) {
+            wp_send_json_error('Trial kit ID is required');
+            return;
+        }
+
+        $trial_kit_id = sanitize_text_field($_POST['trial_kit_id']);
+        
+        // Validate trial kit ID format (32 hexadecimal characters)
+        if (!preg_match('/^[a-f0-9]{32}$/', $trial_kit_id)) {
+            wp_send_json_error('Invalid trial kit ID format. Must be 32 hexadecimal characters.');
+            return;
+        }
+
+        // Validate that trial kit exists
+        $trial_kit_validation = $this->validate_trial_kit($trial_kit_id);
+        if (!$trial_kit_validation['valid']) {
+            wp_send_json_error($trial_kit_validation['message']);
             return;
         }
 
@@ -196,6 +228,48 @@ class DbMotoConverterPlugin {
         $body .= '--' . $boundary . '--' . "\r\n";
 
         return $body;
+    }
+
+    /**
+     * Validate trial kit by checking if the file exists on molo17.com
+     * 
+     * @param string $trial_kit_id The trial kit identifier
+     * @return array Array with 'valid' boolean and 'message' string
+     */
+    private function validate_trial_kit($trial_kit_id) {
+        $trial_kit_url = "https://molo17.com/gluesync-trials/{$trial_kit_id}-trial-kit.zip";
+        
+        // Use wp_remote_head to check if file exists (faster than GET)
+        $response = wp_remote_head($trial_kit_url, array(
+            'timeout' => 10,
+            'redirection' => 5,
+        ));
+
+        if (is_wp_error($response)) {
+            return array(
+                'valid' => false,
+                'message' => 'Unable to verify trial kit: ' . $response->get_error_message()
+            );
+        }
+
+        $response_code = wp_remote_retrieve_response_code($response);
+        
+        if ($response_code === 200) {
+            return array(
+                'valid' => true,
+                'message' => 'Trial kit validated successfully'
+            );
+        } elseif ($response_code === 404) {
+            return array(
+                'valid' => false,
+                'message' => 'Trial kit not found. Please check your trial kit ID and try again.'
+            );
+        } else {
+            return array(
+                'valid' => false,
+                'message' => "Unable to validate trial kit (HTTP {$response_code}). Please contact support."
+            );
+        }
     }
 }
 

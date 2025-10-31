@@ -19,7 +19,21 @@
             e.preventDefault();
 
             const fileInput = $('#xml-file');
+            const trialKitIdInput = $('#trial-kit-id');
             const includeTargets = $('#include-targets').is(':checked');
+
+            // Validate trial kit ID
+            const trialKitId = trialKitIdInput.val().trim();
+            if (!trialKitId) {
+                showError('Please enter your trial kit ID');
+                return;
+            }
+
+            // Validate format (32 hex characters)
+            if (!/^[a-f0-9]{32}$/.test(trialKitId)) {
+                showError('Invalid trial kit ID format. Must be 32 hexadecimal characters.');
+                return;
+            }
 
             if (!fileInput[0].files[0]) {
                 showError('Please select an XML file');
@@ -28,9 +42,9 @@
 
             const file = fileInput[0].files[0];
 
-            // Check file size (10MB limit)
-            if (file.size > 10 * 1024 * 1024) {
-                showError('File size must be less than 10MB');
+            // Check file size (50MB limit)
+            if (file.size > 50 * 1024 * 1024) {
+                showError('File size must be less than 50MB');
                 return;
             }
 
@@ -43,6 +57,7 @@
             const formData = new FormData();
             formData.append('action', 'convert_dbmoto_xml');
             formData.append('nonce', dbmoto_ajax.nonce);
+            formData.append('trial_kit_id', trialKitId);
             formData.append('xml_file', file);
             formData.append('include_targets', includeTargets);
 
