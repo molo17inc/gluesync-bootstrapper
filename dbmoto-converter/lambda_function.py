@@ -37,24 +37,17 @@ def lambda_handler(event, context):
         
         # Handle both base64 encoded and plain body
         if event.get('isBase64Encoded'):
+            print("DEBUG: Body is base64 encoded (binary data)")
             body = base64.b64decode(event['body'])
-        elif content_type and 'multipart/form-data' in content_type:
-            # For multipart data, the body should already be bytes, but API Gateway sometimes treats it as string
-            # Don't encode to UTF-8 as it corrupts binary file content
+        else:
+            print("DEBUG: Body is not base64 encoded")
+            # For backward compatibility, handle string bodies
             body_data = event['body']
             if isinstance(body_data, str):
-                # This is the problem - multipart with binary content is treated as string
-                # We need to handle this carefully - the headers are text but file content is binary
-                print(f"DEBUG: Multipart body is string, length: {len(body_data)}")
-                print(f"DEBUG: First 100 chars: {body_data[:100]}")
-                # For now, encode as latin-1 to preserve byte values
-                body = body_data.encode('latin-1')
+                print(f"DEBUG: Treating string body as latin-1 to preserve bytes")
+                body = body_data.encode('latin-1', errors='replace')
             else:
                 body = body_data
-        else:
-            # Convert string to bytes if needed
-            body_data = event['body']
-            body = body_data.encode('utf-8') if isinstance(body_data, str) else body_data
 
         files, params = parse_multipart_data(body, boundary)
         print(f"DEBUG: multipart body length: {len(body)}")

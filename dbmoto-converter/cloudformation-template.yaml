@@ -92,6 +92,8 @@ Resources:
     Properties:
       Name: dbmoto-xml-converter-api
       Description: API for converting DbMoto XML to Gluesync YAML
+      BinaryMediaTypes:
+        - multipart/form-data
       EndpointConfiguration:
         Types:
           - REGIONAL
