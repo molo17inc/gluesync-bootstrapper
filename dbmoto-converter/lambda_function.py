@@ -57,7 +57,9 @@ def lambda_handler(event, context):
         xml_content = files['xml_file']
         print(f"DEBUG: xml_content type: {type(xml_content)}, length: {len(xml_content) if xml_content else 'None'}")
         print(f"DEBUG: first 10 bytes: {xml_content[:10] if xml_content and len(xml_content) >= 10 else 'N/A'}")
-        print(f"DEBUG: starts with gzip magic: {xml_content[:2] == b'\\x1f\\x8b' if xml_content and len(xml_content) >= 2 else False}")
+        
+        gzip_magic = b'\x1f\x8b'
+        print(f"DEBUG: starts with gzip magic: {xml_content[:2] == gzip_magic if xml_content and len(xml_content) >= 2 else False}")
         
         if xml_content is None:
             return {
@@ -68,7 +70,7 @@ def lambda_handler(event, context):
         template_content = files.get('template_file')
         
         # Decompress if gzipped (auto-detect or explicit parameter)
-        if xml_content[:2] == b'\x1f\x8b':  # gzip magic number
+        if xml_content[:2] == gzip_magic:  # gzip magic number
             print("DEBUG: Decompressing gzipped XML content")
             xml_content = gzip.decompress(xml_content)
             print(f"DEBUG: After decompression, length: {len(xml_content)}")
