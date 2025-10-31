@@ -91,6 +91,7 @@ conversion_stats = {
 }
 
 def parse_xml():
+    XML_PATH = os.environ.get('XML_PATH')
     print(f"Parsing XML: {XML_PATH}")
     
     # Parse the XML file
@@ -399,10 +400,16 @@ def parse_xml():
     return connections, groups, chains, replications, source_to_target_schemas
 
 def export_as_yaml(connections, groups, chains, replications, source_to_target_schemas, output_dir=None, template_file=None):
-    # Use command line arguments if parameters are not provided
+    # Use environment variables if parameters are not provided (Lambda mode)
     if output_dir is None:
-        output_dir = args.output_dir
+        output_dir = os.environ.get('OUTPUT_DIR')
     if template_file is None:
+        template_file = os.environ.get('TEMPLATE_PATH')
+    
+    # Fallback to command line arguments if available (CLI mode)
+    if output_dir is None and 'args' in globals():
+        output_dir = args.output_dir
+    if template_file is None and 'args' in globals():
         template_file = args.template
         
     """Generate YAML files for each schema with its tables and fields, matching table-list-template.yaml structure"""
@@ -459,18 +466,35 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
     # Process connections and schemas based on mode
     # Check for manual override schemas
     manual_overrides = {}
-    if args.force_schemas:
+    force_schemas = os.environ.get('FORCE_SCHEMAS')
+    if force_schemas:
         # Parse format: SOURCE_SCHEMA:TARGET_SCHEMA,SOURCE_SCHEMA2:TARGET_SCHEMA2
-        for mapping in args.force_schemas.split(','):
+        for mapping in force_schemas.split(','):
             if ':' in mapping:
                 src, tgt = mapping.split(':', 1)
                 manual_overrides[src.strip()] = tgt.strip()
                 print(f"Manual override: {src.strip()} -> {tgt.strip()}")
     
+    # Get include_targets flag
+    include_targets = os.environ.get('INCLUDE_TARGETS', 'true').lower() == 'true'
+    
+    # Fallback to args if available (CLI mode)
+    if not force_schemas and 'args' in globals() and hasattr(args, 'force_schemas'):
+        force_schemas = args.force_schemas
+        if force_schemas:
+            for mapping in force_schemas.split(','):
+                if ':' in mapping:
+                    src, tgt = mapping.split(':', 1)
+                    manual_overrides[src.strip()] = tgt.strip()
+                    print(f"Manual override: {src.strip()} -> {tgt.strip()}")
+    
+    if 'args' in globals() and hasattr(args, 'include_targets'):
+        include_targets = args.include_targets
+
     # Process each connection and schema
     for conn in connections.values():
         # Skip target connections UNLESS we have manual overrides or --include-targets flag
-        if not conn["is_source"] and not args.include_targets and not manual_overrides:
+        if not conn["is_source"] and not include_targets and not manual_overrides:
             continue
             
         conn_name = conn["name"]
@@ -594,6 +618,10 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
 def write_conversion_report(output_dir=None):
     """Write a comprehensive conversion report to conversion_report.txt"""
     if output_dir is None:
+        output_dir = os.environ.get('OUTPUT_DIR')
+    
+    # Fallback to command line arguments if available (CLI mode)
+    if output_dir is None and 'args' in globals():
         output_dir = args.output_dir
     
     from datetime import datetime
@@ -615,13 +643,26 @@ def write_conversion_report(output_dir=None):
         f.write("-" * 80 + "\n")
         f.write(f"Source XML File: {conversion_stats['xml_path']}\n")
         f.write(f"Output Directory: {os.path.abspath(output_dir)}\n")
-        f.write(f"Template File: {args.template}\n")
+        
+        template_file = os.environ.get('TEMPLATE_PATH')
+        if template_file is None and 'args' in globals() and hasattr(args, 'template'):
+            template_file = args.template
+        f.write(f"Template File: {template_file}\n")
+        
         f.write(f"Start Time: {conversion_stats['start_time'].strftime('%Y-%m-%d %H:%M:%S') if conversion_stats['start_time'] else 'N/A'}\n")
         f.write(f"End Time: {conversion_stats['end_time'].strftime('%Y-%m-%d %H:%M:%S') if conversion_stats['end_time'] else 'N/A'}\n")
         f.write(f"Duration: {duration.total_seconds():.2f} seconds\n" if duration else "Duration: N/A\n")
-        f.write(f"Include Targets: {args.include_targets}\n")
-        if args.force_schemas:
-            f.write(f"Forced Schema Mappings: {args.force_schemas}\n")
+        
+        include_targets = os.environ.get('INCLUDE_TARGETS', 'true').lower() == 'true'
+        if 'args' in globals() and hasattr(args, 'include_targets'):
+            include_targets = args.include_targets
+        f.write(f"Include Targets: {include_targets}\n")
+        
+        force_schemas = os.environ.get('FORCE_SCHEMAS')
+        if force_schemas is None and 'args' in globals() and hasattr(args, 'force_schemas'):
+            force_schemas = args.force_schemas
+        if force_schemas:
+            f.write(f"Forced Schema Mappings: {force_schemas}\n")
         f.write("\n")
         
         # Database structure summary
@@ -695,7 +736,12 @@ def write_conversion_report(output_dir=None):
 def view_table_list_template(template_path=None):
     """View the structure of the target table-list-template.yaml to ensure compatibility"""
     if template_path is None:
+        template_path = os.environ.get('TEMPLATE_PATH')
+    
+    # Fallback to args if available (CLI mode)
+    if template_path is None and 'args' in globals() and hasattr(args, 'template'):
         template_path = args.template
+    
     print(f"Viewing template: {template_path}")
     if os.path.exists(template_path):
         with open(template_path, 'r') as f:
