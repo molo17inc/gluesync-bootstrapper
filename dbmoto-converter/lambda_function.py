@@ -11,7 +11,7 @@ s3_client = boto3.client('s3')
 
 def lambda_handler(event, context):
     """
-    AWS Lambda handler for DbMoto XML to GlueSync YAML conversion API
+    AWS Lambda handler for DbMoto XML to Gluesync YAML conversion API
 
     Expected input: API Gateway event with multipart/form-data containing:
     - xml_file: XML metadata file

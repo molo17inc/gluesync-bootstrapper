@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'DbMoto XML to GlueSync YAML Converter API'
+Description: 'DbMoto XML to Gluesync YAML Converter API'
 
 Parameters:
   ResultsBucketName:
@@ -91,7 +91,7 @@ Resources:
     Type: AWS::ApiGateway::RestApi
     Properties:
       Name: dbmoto-xml-converter-api
-      Description: API for converting DbMoto XML to GlueSync YAML
+      Description: API for converting DbMoto XML to Gluesync YAML
       EndpointConfiguration:
         Types:
           - REGIONAL

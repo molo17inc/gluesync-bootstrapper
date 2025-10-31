@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Example script for using the DbMoto XML to GlueSync YAML Converter API
+Example script for using the DbMoto XML to Gluesync YAML Converter API
 """
 
 import requests
@@ -9,7 +9,7 @@ import sys
 
 def convert_xml_to_yaml(api_endpoint, xml_file_path, template_file_path=None, include_targets=True, force_schemas=None):
     """
-    Convert DbMoto XML file to GlueSync YAML using the AWS API
+    Convert DbMoto XML file to Gluesync YAML using the AWS API
 
     Args:
         api_endpoint (str): The API Gateway endpoint URL

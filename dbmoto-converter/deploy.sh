@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# DbMoto XML to GlueSync YAML Converter - AWS Deployment Script
+# DbMoto XML to Gluesync YAML Converter - AWS Deployment Script
 # This script packages and deploys the Lambda function to AWS
 
 set -e
@@ -99,5 +99,5 @@ rm -rf "$TEMP_DIR"
 rm lambda-package.zip
 
 echo ""
-echo "🎉 Ready to convert DbMoto XML files to GlueSync YAML!"
+echo "🎉 Ready to convert DbMoto XML files to Gluesync YAML!"
 echo "📄 Check the generated conversion_report.txt for detailed processing information."

@@ -2,7 +2,7 @@
 /**
  * Plugin Name: DbMoto XML Converter
  * Plugin URI: https://dbmoto-converter.labs.molo17.com
- * Description: Convert DbMoto XML metadata files to GlueSync YAML configurations via AWS Lambda API. Supports files up to 50MB with automatic compression.
+ * Description: Convert DbMoto XML metadata files to Gluesync YAML configurations via AWS Lambda API. Supports files up to 50MB with automatic compression.
  * Version: 1.1.0
  * Author: Molo17
  * License: MIT
@@ -46,8 +46,8 @@ class DbMotoConverterPlugin {
         ob_start();
         ?>
         <div id="dbmoto-converter">
-            <h2>DbMoto XML to GlueSync YAML Converter</h2>
-            <p>Upload your DbMoto metadata XML file to convert it into GlueSync YAML configuration files.</p>
+            <h2>DBMoto XML to Gluesync YAML Converter</h2>
+            <p>Upload your DBMoto metadata XML file to convert it into Gluesync YAML configuration files.</p>
 
             <form id="upload-form" enctype="multipart/form-data">
                 <?php wp_nonce_field('dbmoto_converter_upload', 'dbmoto_converter_nonce'); ?>
@@ -58,12 +58,12 @@ class DbMotoConverterPlugin {
                     <small>Maximum file size: 50MB (files will be automatically compressed)</small>
                 </div>
 
-                <div class="form-group">
+                <!-- <div class="form-group">
                     <label>
                         <input type="checkbox" id="include-targets" name="include_targets" checked>
                         Include target schemas
                     </label>
-                </div>
+                </div> -->
 
                 <button type="submit" id="convert-btn" class="button button-primary">
                     <span id="btn-text">Convert XML</span>

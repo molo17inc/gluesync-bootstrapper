@@ -1,6 +1,6 @@
-# DbMoto XML to GlueSync YAML Converter
+# DbMoto XML to Gluesync YAML Converter
 
-A serverless AWS Lambda function that converts DbMoto XML metadata exports into GlueSync YAML configuration files.
+A serverless AWS Lambda function that converts DbMoto XML metadata exports into Gluesync YAML configuration files.
 
 ## 🚀 Quick Deploy
 
@@ -145,7 +145,7 @@ curl -o conversion_outputs.zip "$ZIP_FILE_URL"
 unzip conversion_outputs.zip
 
 # Contents will include:
-# - *.yaml (GlueSync configuration files)
+# - *.yaml (Gluesync configuration files)
 # - conversion_report.txt (processing summary)
 ```
 
