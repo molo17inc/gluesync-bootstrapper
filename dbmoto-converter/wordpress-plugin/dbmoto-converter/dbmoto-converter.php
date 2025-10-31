@@ -1,10 +1,10 @@
 <?php
 /**
  * Plugin Name: DbMoto XML Converter
- * Plugin URI: https://your-website.com/dbmoto-converter
- * Description: Convert DbMoto XML metadata files to GlueSync YAML configurations via AWS Lambda API
- * Version: 1.0.0
- * Author: Your Name
+ * Plugin URI: https://dbmoto-converter.labs.molo17.com
+ * Description: Convert DbMoto XML metadata files to GlueSync YAML configurations via AWS Lambda API. Supports files up to 50MB with automatic compression.
+ * Version: 1.1.0
+ * Author: Molo17
  * License: MIT
  */
 
@@ -15,7 +15,7 @@ if (!defined('ABSPATH')) {
 
 class DbMotoConverterPlugin {
 
-    private $api_endpoint = 'https://your-api-endpoint.execute-api.region.amazonaws.com/prod/convert';
+    private $api_endpoint = 'https://dbmoto-converter.labs.molo17.com/convert';
 
     public function __construct() {
         add_action('init', array($this, 'init'));
@@ -26,9 +26,9 @@ class DbMotoConverterPlugin {
     }
 
     public function init() {
-        // Allow larger file uploads for XML files
+        // Allow larger file uploads for XML files (up to 50MB, will be compressed)
         add_filter('upload_size_limit', function($size) {
-            return 10 * 1024 * 1024; // 10MB
+            return 50 * 1024 * 1024; // 50MB
         });
     }
 
@@ -55,7 +55,7 @@ class DbMotoConverterPlugin {
                 <div class="form-group">
                     <label for="xml-file">Select XML File:</label>
                     <input type="file" id="xml-file" name="xml_file" accept=".xml" required>
-                    <small>Maximum file size: 10MB</small>
+                    <small>Maximum file size: 50MB (files will be automatically compressed)</small>
                 </div>
 
                 <div class="form-group">
@@ -117,19 +117,26 @@ class DbMotoConverterPlugin {
             return;
         }
 
-        // Check file size (10MB limit)
-        if ($file['size'] > 10 * 1024 * 1024) {
-            wp_send_json_error('File size must be less than 10MB');
+        // Check file size (50MB limit)
+        if ($file['size'] > 50 * 1024 * 1024) {
+            wp_send_json_error('File size must be less than 50MB');
             return;
         }
 
         try {
             // Prepare file for API call
             $file_content = file_get_contents($file['tmp_name']);
+            $filename = $file['name'];
+            
+            // Automatically compress files larger than 1MB
+            if ($file['size'] > 1 * 1024 * 1024) {
+                $file_content = gzencode($file_content, 9); // Maximum compression
+                $filename = $file['name'] . '.gz';
+            }
 
             // Create multipart data for API call
             $boundary = wp_generate_password(24, false);
-            $body = $this->build_multipart_body($boundary, $file_content, $file['name'], $include_targets);
+            $body = $this->build_multipart_body($boundary, $file_content, $filename, $include_targets);
 
             // Make API call
             $response = wp_remote_post($this->api_endpoint, array(
