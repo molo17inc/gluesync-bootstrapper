@@ -81,7 +81,7 @@ Resources:
               return {'statusCode': 200, 'body': 'Placeholder - will be updated'}
       Environment:
         Variables:
-          RESULTS_BUCKET: !Ref ResultsBucketName
+          RESULTS_BUCKET: !Ref ResultsBucket
       Role: !GetAtt LambdaExecutionRole.Arn
       Timeout: 900
       MemorySize: 1024
