@@ -56,6 +56,13 @@ def lambda_handler(event, context):
 
         xml_content = files['xml_file']
         print(f"DEBUG: xml_content type: {type(xml_content)}, length: {len(xml_content) if xml_content else 'None'}")
+        
+        if xml_content is None:
+            return {
+                'statusCode': 400,
+                'body': json.dumps({'error': 'XML file content is empty or malformed'})
+            }
+        
         template_content = files.get('template_file')
         
         # Decompress if gzipped (auto-detect or explicit parameter)

@@ -160,15 +160,24 @@ class DbMotoConverterPlugin {
             $file_content = file_get_contents($file['tmp_name']);
             $filename = $file['name'];
             
+            // Debug: Check file content
+            error_log("DEBUG: File content length: " . strlen($file_content));
+            error_log("DEBUG: File tmp_name: " . $file['tmp_name']);
+            error_log("DEBUG: File size: " . $file['size']);
+            
             // Automatically compress files larger than 1MB
             if ($file['size'] > 1 * 1024 * 1024) {
                 $file_content = gzencode($file_content, 9); // Maximum compression
                 $filename = $file['name'] . '.gz';
+                error_log("DEBUG: File compressed, new length: " . strlen($file_content));
             }
 
             // Create multipart data for API call
             $boundary = wp_generate_password(24, false);
             $body = $this->build_multipart_body($boundary, $file_content, $filename, $include_targets);
+            
+            error_log("DEBUG: Multipart body length: " . strlen($body));
+            error_log("DEBUG: Boundary: " . $boundary);
 
             // Make API call
             $response = wp_remote_post($this->api_endpoint, array(
