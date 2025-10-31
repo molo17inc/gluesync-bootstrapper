@@ -2,8 +2,8 @@
 /**
  * Plugin Name: DbMoto XML Converter
  * Plugin URI: https://dbmoto-converter.labs.molo17.com
- * Description: Convert DbMoto XML metadata files to Gluesync YAML configurations via AWS Lambda API. Supports files up to 50MB with automatic compression.
- * Version: 1.1.0
+ * Description: Convert Syniti Replicate metadata XML files to Gluesync YAML configurations via AWS Lambda API. Supports files up to 50MB with automatic compression and trial kit validation.
+ * Version: 1.2.0
  * Author: Molo17
  * License: MIT
  */
@@ -33,8 +33,8 @@ class DbMotoConverterPlugin {
     }
 
     public function enqueue_scripts() {
-        wp_enqueue_script('dbmoto-converter-js', plugin_dir_url(__FILE__) . 'js/converter.js', array('jquery'), '1.0.0', true);
-        wp_enqueue_style('dbmoto-converter-css', plugin_dir_url(__FILE__) . 'css/converter.css', array(), '1.0.0');
+        wp_enqueue_script('dbmoto-converter-js', plugin_dir_url(__FILE__) . 'js/converter.js', array('jquery'), '1.2.0', true);
+        wp_enqueue_style('dbmoto-converter-css', plugin_dir_url(__FILE__) . 'css/converter.css', array(), '1.2.0');
 
         wp_localize_script('dbmoto-converter-js', 'dbmoto_ajax', array(
             'ajax_url' => admin_url('admin-ajax.php'),
