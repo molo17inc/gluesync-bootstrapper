@@ -44,6 +44,8 @@ def lambda_handler(event, context):
             body = body_data.encode('utf-8') if isinstance(body_data, str) else body_data
 
         files, params = parse_multipart_data(body, boundary)
+        print(f"DEBUG: files keys: {list(files.keys())}")
+        print(f"DEBUG: params keys: {list(params.keys())}")
 
         # Extract required files
         if 'xml_file' not in files:
@@ -53,6 +55,7 @@ def lambda_handler(event, context):
             }
 
         xml_content = files['xml_file']
+        print(f"DEBUG: xml_content type: {type(xml_content)}, length: {len(xml_content) if xml_content else 'None'}")
         template_content = files.get('template_file')
         
         # Decompress if gzipped (auto-detect or explicit parameter)
@@ -150,39 +153,64 @@ def parse_multipart_data(body, boundary):
     params = {}
 
     # Simple multipart parser (for basic use cases)
-    parts = body.split(b'--' + boundary.encode())
+    boundary_bytes = b'--' + boundary.encode()
+    parts = body.split(boundary_bytes)
 
     for part in parts:
+        part = part.strip()
+        if not part or part == b'--':
+            continue
+            
         if b'Content-Disposition' in part:
-            # Extract field name and filename
-            disposition_line = None
-            for line in part.split(b'\n'):
-                line = line.strip()
-                if line.startswith(b'Content-Disposition'):
-                    disposition_line = line.decode()
-                    break
-
-            if disposition_line:
-                # Parse Content-Disposition
-                if 'filename=' in disposition_line:
-                    # File upload
-                    field_name = disposition_line.split('name="')[1].split('"')[0]
-                    filename = disposition_line.split('filename="')[1].split('"')[0]
-
-                    # Find content start
-                    content_start = part.find(b'\n\n') + 2
-                    if content_start > 1:
-                        content = part[content_start:].strip()
-                        files[field_name] = content
-                else:
-                    # Regular parameter
-                    field_name = disposition_line.split('name="')[1].split('"')[0]
-
-                    # Find content
-                    content_start = part.find(b'\n\n') + 2
-                    if content_start > 1:
-                        content = part[content_start:].strip().decode()
-                        params[field_name] = content
+            # Split part into headers and content
+            header_end = part.find(b'\r\n\r\n')
+            if header_end == -1:
+                # Try with just \n\n for compatibility
+                header_end = part.find(b'\n\n')
+                if header_end == -1:
+                    continue
+                    
+            headers = part[:header_end]
+            content = part[header_end + 4:]  # Skip \r\n\r\n
+            
+            # Parse Content-Disposition header
+            disposition = headers.decode('utf-8', errors='ignore')
+            if 'filename=' in disposition:
+                # File upload
+                field_name = None
+                filename = None
+                
+                # Extract name and filename
+                for line in disposition.split('\n'):
+                    line = line.strip()
+                    if line.startswith('Content-Disposition'):
+                        # Parse the disposition line
+                        parts_disp = line.split(';')
+                        for part_disp in parts_disp:
+                            part_disp = part_disp.strip()
+                            if part_disp.startswith('name="'):
+                                field_name = part_disp[6:-1]  # Remove name="
+                            elif part_disp.startswith('filename="'):
+                                filename = part_disp[10:-1]  # Remove filename="
+                
+                if field_name:
+                    files[field_name] = content
+            else:
+                # Regular parameter
+                field_name = None
+                
+                for line in disposition.split('\n'):
+                    line = line.strip()
+                    if line.startswith('Content-Disposition'):
+                        parts_disp = line.split(';')
+                        for part_disp in parts_disp:
+                            part_disp = part_disp.strip()
+                            if part_disp.startswith('name="'):
+                                field_name = part_disp[6:-1]  # Remove name="
+                                break
+                
+                if field_name:
+                    params[field_name] = content.decode('utf-8', errors='ignore').strip()
 
     return files, params
 
