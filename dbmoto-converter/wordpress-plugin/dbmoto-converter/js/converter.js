@@ -15,26 +15,23 @@
         const errorContainer = $('#error-container');
         const errorMessage = errorContainer.find('.error-message');
 
-        form.on('submit', function(e) {
+        form.on('submit', async function(e) {
             e.preventDefault();
+            hideError();
+            hideResult();
 
             const fileInput = $('#xml-file');
             const trialKitIdInput = $('#trial-kit-id');
             const includeTargets = $('#include-targets').is(':checked');
 
-            // Validate trial kit ID
+            // Get and validate trial kit ID
             const trialKitId = trialKitIdInput.val().trim();
             if (!trialKitId) {
-                showError('Please enter your trial kit ID');
+                showError('Please enter your kit ID');
                 return;
             }
 
-            // Validate format (32 hex characters)
-            if (!/^[a-f0-9]{32}$/.test(trialKitId)) {
-                showError('Invalid trial kit ID format. Must be 32 hexadecimal characters.');
-                return;
-            }
-
+            // Check if file is selected
             if (!fileInput[0].files[0]) {
                 showError('Please select an XML file');
                 return;
@@ -48,18 +45,65 @@
                 return;
             }
 
-            // Show loading state
-            setLoadingState(true);
-            hideError();
-            hideResult();
+            // Show loading state for validation
+            setLoadingState(true, 'Validating kit ID...');
 
-            // Create FormData for AJAX
+            try {
+                // First validate the kit ID
+                const validationResponse = await validateKitId(trialKitId);
+                
+                if (validationResponse.valid) {
+                    // Kit ID is valid, proceed with file upload
+                    uploadFile(file, trialKitId, includeTargets);
+                } else {
+                    // Invalid kit ID
+                    showError(validationResponse.message || 'Invalid kit ID. Please check and try again.');
+                    setLoadingState(false);
+                }
+            } catch (error) {
+                console.error('Validation error:', error);
+                showError('Error validating kit ID. Please try again or contact support if the problem persists.');
+                setLoadingState(false);
+            }
+        });
+
+        // Function to validate kit ID via AJAX
+        function validateKitId(kitId) {
+            return new Promise((resolve, reject) => {
+                $.ajax({
+                    url: dbmoto_ajax.ajax_url,
+                    type: 'POST',
+                    data: {
+                        action: 'validate_kit_id',
+                        kit_id: kitId,
+                        nonce: dbmoto_ajax.nonce
+                    },
+                    dataType: 'json',
+                    success: function(response) {
+                        if (response.success) {
+                            resolve(response.data);
+                        } else {
+                            reject(new Error(response.data || 'Validation failed'));
+                        }
+                    },
+                    error: function(xhr, status, error) {
+                        console.error('AJAX Error:', xhr.responseText);
+                        reject(new Error(`AJAX error: ${status} - ${error}`));
+                    }
+                });
+            });
+        }
+
+        // Function to handle file upload
+        function uploadFile(file, trialKitId, includeTargets) {
+            setLoadingState(true, 'Preparing upload...');
+
             const formData = new FormData();
             formData.append('action', 'convert_dbmoto_xml');
-            formData.append('nonce', dbmoto_ajax.nonce);
             formData.append('trial_kit_id', trialKitId);
+            formData.append('include_targets', includeTargets ? '1' : '0');
             formData.append('xml_file', file);
-            formData.append('include_targets', includeTargets);
+            formData.append('nonce', dbmoto_ajax.nonce);
 
             // Show progress
             showProgress('Uploading file...');
@@ -86,7 +130,7 @@
                     if (response.success) {
                         updateProgress(75);
                         progressText.text('Processing...');
-
+                        
                         // Simulate some processing time
                         setTimeout(function() {
                             showSuccess(response.data);
@@ -96,28 +140,48 @@
                     }
                 },
                 error: function(xhr, status, error) {
-                    console.error('AJAX Error:', xhr.responseText);
-                    showError('Network error occurred. Please try again.');
+                    console.error('Upload error:', error);
+                    let errorMessage = 'Error uploading file. ';
+                    
+                    try {
+                        const response = JSON.parse(xhr.responseText);
+                        if (response.data && response.data.message) {
+                            errorMessage += response.data.message;
+                        } else {
+                            errorMessage += 'Please try again.';
+                        }
+                    } catch (e) {
+                        errorMessage += 'Please try again.';
+                    }
+                    
+                    showError(errorMessage);
                 },
                 complete: function() {
                     setLoadingState(false);
-                    if (!resultContainer.is(':visible')) {
-                        hideProgress();
-                    }
+                    hideProgress();
                 }
             });
-        });
+        }
 
-        function setLoadingState(loading) {
-            convertBtn.prop('disabled', loading);
-            btnText.toggle(!loading);
-            btnLoading.toggle(loading);
+        function setLoadingState(loading, message = '') {
+            if (loading) {
+                convertBtn.prop('disabled', true);
+                btnText.hide();
+                btnLoading.show();
+                if (message) {
+                    progressText.text(message);
+                }
+            } else {
+                convertBtn.prop('disabled', false);
+                btnText.show();
+                btnLoading.hide();
+            }
         }
 
         function showProgress(text) {
-            progressText.text(text);
             progressContainer.show();
-            updateProgress(25);
+            progressText.text(text);
+            updateProgress(0);
         }
 
         function hideProgress() {
@@ -130,21 +194,18 @@
         }
 
         function showSuccess(result) {
-            updateProgress(100);
-            progressText.text('Complete!');
-
-            resultInfo.html(`
-                <p><strong>Files Generated:</strong> ${result.stats.yaml_files_generated}</p>
-                <p><strong>Tables Processed:</strong> ${result.stats.tables_processed}</p>
-                <p><strong>ZIP File Size:</strong> ${(result.stats.zip_file_size / 1024).toFixed(1)} KB</p>
-            `);
-
-            downloadBtn.attr('href', result.stats.zip_file_url);
-            downloadBtn.show();
-
-            setTimeout(function() {
-                hideProgress();
-                resultContainer.show();
+            resultContainer.show();
+            resultInfo.html('<p>Conversion successful! Your files are ready for download.</p>');
+            
+            if (result.download_url) {
+                downloadBtn.attr('href', result.download_url).show();
+            } else {
+                downloadBtn.hide();
+            }
+            
+            // Scroll to result
+            $('html, body').animate({
+                scrollTop: resultContainer.offset().top - 100
             }, 500);
         }
 
@@ -154,8 +215,13 @@
         }
 
         function showError(message) {
-            errorMessage.text(message);
             errorContainer.show();
+            errorMessage.text(message);
+            
+            // Scroll to error
+            $('html, body').animate({
+                scrollTop: errorContainer.offset().top - 100
+            }, 500);
         }
 
         function hideError() {

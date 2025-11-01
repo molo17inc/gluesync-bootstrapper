@@ -92,92 +92,68 @@ deploy_lambda:
         STACK_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].StackStatus' --output text)
         echo "📊 Current stack status: $STACK_STATUS"
         
-        if [ "$STACK_STATUS" = "ROLLBACK_COMPLETE" ]; then
-          echo "🗑️  Stack is in ROLLBACK_COMPLETE state, deleting it first..."
-          aws cloudformation delete-stack --stack-name "$STACK_NAME" --region "$AWS_REGION"
-          echo "⏳ Waiting for stack deletion..."
-          aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" --region "$AWS_REGION"
-          echo "🆕 Creating new stack..."
-          export OPERATION="create-stack"
-          export WAIT_OPERATION="stack-create-complete"
-        elif [[ "$STACK_STATUS" == *"IN_PROGRESS"* ]]; then
-          echo "⏳ Stack is currently in progress ($STACK_STATUS), waiting for it to complete or fail..."
-          WAIT_START=$(date +%s)
-          TIMEOUT=600
-          while true; do
-            CURRENT_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].StackStatus' --output text)
-            ELAPSED=$(($(date +%s) - WAIT_START))
-            echo "⏱️  Status: $CURRENT_STATUS (${ELAPSED}s elapsed)"
-            
-            if [[ "$CURRENT_STATUS" != *"IN_PROGRESS"* ]]; then
-              echo "✅ Stack operation completed with status: $CURRENT_STATUS"
-              STACK_STATUS="$CURRENT_STATUS"
-              break
-            fi
-            
-            if [ $ELAPSED -gt $TIMEOUT ]; then
-              echo "❌ Timeout waiting for stack operation to complete"
-              echo "🗑️  Canceling and deleting stack..."
-              aws cloudformation delete-stack --stack-name "$STACK_NAME" --region "$AWS_REGION"
-              aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" --region "$AWS_REGION"
-              export OPERATION="create-stack"
-              export WAIT_OPERATION="stack-create-complete"
-              break
-            fi
-            sleep 15
-          done
-          
-          if [ "$STACK_STATUS" = "ROLLBACK_COMPLETE" ]; then
-            echo "❌ Previous operation failed with ROLLBACK_COMPLETE"
-            echo "📋 Failure details:"
-            aws cloudformation describe-stack-events \
-              --stack-name "$STACK_NAME" \
-              --region "$AWS_REGION" \
-              --max-items 30 \
-              --query 'StackEvents[?ResourceStatus==`CREATE_FAILED` || ResourceStatus==`ROLLBACK_IN_PROGRESS`].[Timestamp,LogicalResourceId,ResourceStatus,ResourceStatusReason]' \
-              --output table
-            echo "🗑️  Deleting failed stack..."
-            aws cloudformation delete-stack --stack-name "$STACK_NAME" --region "$AWS_REGION"
-            aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" --region "$AWS_REGION"
-            export OPERATION="create-stack"
-            export WAIT_OPERATION="stack-create-complete"
-          elif [[ "$STACK_STATUS" == *"COMPLETE"* ]]; then
-            echo "🔄 Stack exists and is stable, will update..."
-            export OPERATION="update-stack"
-            export WAIT_OPERATION="stack-update-complete"
-          fi
-        elif [[ "$STACK_STATUS" == *"COMPLETE"* ]] && [ "$STACK_STATUS" != "ROLLBACK_COMPLETE" ]; then
-          echo "🔄 Updating existing stack..."
-          export OPERATION="update-stack"
-          export WAIT_OPERATION="stack-update-complete"
-        else
-          echo "⚠️  Unexpected stack status: $STACK_STATUS"
-          echo "🗑️  Deleting stack to start fresh..."
+        if [[ "$STACK_STATUS" == "ROLLBACK_COMPLETE" ]]; then
+          echo "🔄 Deleting stack in ROLLBACK_COMPLETE state..."
           aws cloudformation delete-stack --stack-name "$STACK_NAME" --region "$AWS_REGION"
           aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" --region "$AWS_REGION"
-          export OPERATION="create-stack"
-          export WAIT_OPERATION="stack-create-complete"
+          echo "✅ Stack deletion complete"
         fi
-      else
-        echo "🆕 Creating new stack..."
-        export OPERATION="create-stack"
-        export WAIT_OPERATION="stack-create-complete"
       fi
+      export OPERATION="create-stack"
+      export WAIT_OPERATION="stack-create-complete"
     - echo "☁️ Deploying CloudFormation stack..."
     - ls -la cloudformation-template.yaml || echo "CloudFormation template not found!"
     - |
+      echo "☁️ Deploying CloudFormation stack..."
       TEMPLATE_BODY=$(cat cloudformation-template.yaml)
-      aws cloudformation update-stack \
-        --stack-name "$STACK_NAME" \
-        --region "$AWS_REGION" \
-        --template-body "$TEMPLATE_BODY" \
-        --parameters ParameterKey=FtpHost,ParameterValue="c1107198.sgvps.net" \
-                    ParameterKey=FtpUser,ParameterValue="$FTP_USER" \
-                    ParameterKey=FtpPassword,ParameterValue="$FTP_PASSWORD" \
-                    ParameterKey=FtpBasePath,ParameterValue="/molo17.com/public_html/gs-content/dbmoto-conversion/" \
-                    ParameterKey=CustomDomainName,ParameterValue="dbmoto-converter.labs.molo17.com" \
-        --capabilities CAPABILITY_IAM \
-        --region "$AWS_REGION"
+      set +e  # Don't fail the job if update has no changes
+      
+      if aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
+        echo "🔄 Updating existing stack..."
+        aws cloudformation update-stack \
+          --stack-name "$STACK_NAME" \
+          --region "$AWS_REGION" \
+          --template-body "$TEMPLATE_BODY" \
+          --parameters \
+              ParameterKey=FtpHost,ParameterValue="c1107198.sgvps.net" \
+              ParameterKey=FtpUser,ParameterValue="$FTP_USER" \
+              ParameterKey=FtpPassword,ParameterValue="$FTP_PASSWORD" \
+              ParameterKey=FtpBasePath,ParameterValue="/molo17.com/public_html/gs-content/dbmoto-conversion/" \
+              ParameterKey=CustomDomainName,ParameterValue="dbmoto-converter.labs.molo17.com" \
+          --capabilities CAPABILITY_IAM
+          
+        # Check if the error is about no updates
+        if [ $? -ne 0 ]; then
+          ERROR_MSG=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query 'Stacks[0].StackStatusReason' --output text --region "$AWS_REGION" 2>&1 || true)
+          if [[ "$ERROR_MSG" == *"No updates are to be performed"* ]]; then
+            echo "ℹ️ No updates to perform - stack is already up to date"
+            # Continue with the rest of the pipeline
+          else
+            echo "❌ Failed to update stack: $ERROR_MSG"
+            exit 1
+          fi
+        else
+          # If update was initiated, wait for it to complete
+          echo "🔄 Stack update in progress..."
+          aws cloudformation wait stack-update-complete --stack-name "$STACK_NAME" --region "$AWS_REGION"
+        fi
+      else
+        echo "🆕 Creating new stack..."
+        aws cloudformation create-stack \
+          --stack-name "$STACK_NAME" \
+          --region "$AWS_REGION" \
+          --template-body "$TEMPLATE_BODY" \
+          --parameters \
+              ParameterKey=FtpHost,ParameterValue="c1107198.sgvps.net" \
+              ParameterKey=FtpUser,ParameterValue="$FTP_USER" \
+              ParameterKey=FtpPassword,ParameterValue="$FTP_PASSWORD" \
+              ParameterKey=FtpBasePath,ParameterValue="/molo17.com/public_html/gs-content/dbmoto-conversion/" \
+              ParameterKey=CustomDomainName,ParameterValue="dbmoto-converter.labs.molo17.com" \
+          --capabilities CAPABILITY_IAM
+          
+        echo "🔄 Stack creation in progress..."
+        aws cloudformation wait stack-create-complete --stack-name "$STACK_NAME" --region "$AWS_REGION"
+      fi
     - echo "⏳ Waiting for Lambda function to be created (max 5 minutes)..."
     - |
       WAIT_START=$(date +%s)

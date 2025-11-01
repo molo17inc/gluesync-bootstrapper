@@ -265,6 +265,40 @@ class DbMotoConverterPlugin {
         return implode('', $body_parts);
     }
 
+    /**
+     * Handle kit ID validation via AJAX
+     */
+    public function handle_validate_kit_id() {
+        // Verify nonce
+        if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'dbmoto_converter_nonce')) {
+            wp_send_json_error('Security check failed');
+            return;
+        }
+
+        // Get and validate kit ID
+        $kit_id = isset($_POST['kit_id']) ? sanitize_text_field($_POST['kit_id']) : '';
+        
+        if (empty($kit_id)) {
+            wp_send_json_error('Kit ID is required');
+            return;
+        }
+
+        // Validate kit ID format (32 hex characters)
+        if (!preg_match('/^[a-f0-9]{32}$/i', $kit_id)) {
+            wp_send_json_error('Invalid kit ID format. Must be 32 hexadecimal characters (0-9, a-f).');
+            return;
+        }
+
+        // Here you can add additional validation logic, e.g., checking against a database
+        // For now, we'll assume all valid format kit IDs are valid
+        
+        wp_send_json_success(array(
+            'valid' => true,
+            'message' => 'Kit ID is valid',
+            'kit_id' => $kit_id
+        ));
+    }
+
 }
 
 // Initialize plugin
