@@ -57,14 +57,14 @@ class DbMotoConverterPlugin {
                 <?php wp_nonce_field('dbmoto_converter_upload', 'dbmoto_converter_nonce'); ?>
 
                 <div class="form-group">
-                    <label for="trial-kit-id">Trial Kit ID:</label>
+                    <label for="trial-kit-id">Gluesync Kit ID:</label>
                     <input type="text" 
                            id="trial-kit-id" 
                            name="trial_kit_id" 
                            pattern="[a-f0-9]{32}" 
                            title="Please enter a valid 32-character Gluesync kit ID (e.g., abcdef1234567890abcdef1234567890)"
                            required>
-                    <small>Enter your Gluesync kit identifier (32 hexadecimal characters)</small>
+                    <small>Enter your Gluesync kit identifier (32 hexadecimal characters) received from Gluesync kit download's page</small>
                 </div>
 
                 <div class="form-group">
