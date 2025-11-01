@@ -62,9 +62,9 @@ class DbMotoConverterPlugin {
                            id="trial-kit-id" 
                            name="trial_kit_id" 
                            pattern="[a-f0-9]{32}" 
-                           title="Please enter a valid 32-character trial kit ID (e.g., abcdef1234567890abcdef1234567890)"
+                           title="Please enter a valid 32-character Gluesync kit ID (e.g., abcdef1234567890abcdef1234567890)"
                            required>
-                    <small>Enter your trial kit identifier (32 hexadecimal characters)</small>
+                    <small>Enter your Gluesync kit identifier (32 hexadecimal characters)</small>
                 </div>
 
                 <div class="form-group">
