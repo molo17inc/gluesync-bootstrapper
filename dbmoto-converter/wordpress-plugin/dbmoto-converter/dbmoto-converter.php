@@ -4,7 +4,7 @@
  * Plugin URI: https://dbmoto-converter.labs.molo17.com
  * Description: Convert Syniti Replicate metadata XML files to Gluesync YAML configurations via AWS Lambda API. Supports files up to 50MB with automatic compression and trial kit validation.
  * Version: 1.2.0
- * Author: Molo17
+ * Author: MOLO17
  * License: MIT
  */
 
@@ -17,11 +17,10 @@ class DbMotoConverterPlugin {
 
     private $api_base_url = 'https://dbmoto-converter.labs.molo17.com';
     private $api_convert_endpoint;
-    private $api_kit_validation_endpoint;
+    private $trial_kits_base_url = 'https://molo17.com/gluesync-trials/';
 
     public function __construct() {
         $this->api_convert_endpoint = rtrim($this->api_base_url, '/') . '/convert';
-        $this->api_kit_validation_endpoint = rtrim($this->api_base_url, '/') . '/validate-kit';
 
         add_action('init', array($this, 'init'));
         add_shortcode('dbmoto_converter', array($this, 'render_converter'));
@@ -126,9 +125,9 @@ class DbMotoConverterPlugin {
             return $format_validation;
         }
 
-        $remote_validation = $this->validate_trial_kit_remote($kit_id);
-        if (!$remote_validation['valid']) {
-            return $remote_validation;
+        $file_validation = $this->validate_trial_kit_file_exists($kit_id);
+        if (!$file_validation['valid']) {
+            return $file_validation;
         }
 
         return array('valid' => true);
@@ -149,49 +148,45 @@ class DbMotoConverterPlugin {
         return array('valid' => true);
     }
 
-    private function validate_trial_kit_remote($kit_id) {
-        if (empty($this->api_kit_validation_endpoint)) {
-            return array('valid' => false, 'message' => 'Kit validation service is not configured.');
-        }
+    private function validate_trial_kit_file_exists($kit_id) {
+        $kit_id = strtolower($kit_id);
+        $kit_url = $this->build_trial_kit_url($kit_id);
 
-        $response = wp_remote_post($this->api_kit_validation_endpoint, array(
-            'headers' => array('Content-Type' => 'application/json'),
-            'body' => wp_json_encode(array('kit_id' => $kit_id)),
-            'timeout' => 15,
-        ));
+        $response = wp_remote_head($kit_url, array('timeout' => 15));
 
         if (is_wp_error($response)) {
+            error_log('[DbMotoConverter] Kit validation HEAD request failed: ' . $response->get_error_message());
             return array(
                 'valid' => false,
-                'message' => 'Unable to reach kit validation service. Please try again later.'
+                'message' => 'Unable to validate kit ID right now. Please try again later.'
             );
         }
 
         $status_code = wp_remote_retrieve_response_code($response);
-        $body = wp_remote_retrieve_body($response);
 
-        $decoded = json_decode($body, true);
-        if (json_last_error() !== JSON_ERROR_NONE) {
-            $decoded = null;
+        if ($status_code === 200) {
+            return array('valid' => true);
         }
 
-        if ($status_code === 200 && is_array($decoded)) {
-            if (!empty($decoded['valid'])) {
-                return array('valid' => true);
-            }
-
-            $message = isset($decoded['message']) ? $decoded['message'] : 'Kit ID is not recognized.';
-            return array('valid' => false, 'message' => $message);
+        if ($status_code === 404) {
+            return array(
+                'valid' => false,
+                'message' => 'Kit ID not found. Please check your kit identifier.'
+            );
         }
 
-        $message = 'Kit ID validation failed.';
-        if (is_array($decoded) && isset($decoded['message'])) {
-            $message = $decoded['message'];
-        } elseif (!empty($body)) {
-            $message = sprintf('Kit ID validation failed (%d).', $status_code);
-        }
+        error_log(sprintf('[DbMotoConverter] Unexpected status (%d) when validating kit %s', $status_code, $kit_id));
+        return array(
+            'valid' => false,
+            'message' => 'Unable to validate kit ID right now. Please try again later.'
+        );
+    }
 
-        return array('valid' => false, 'message' => $message);
+    private function build_trial_kit_url($kit_id) {
+        $kit_id = strtolower($kit_id);
+        $filename = sprintf('%s-trial-kit.zip', $kit_id);
+
+        return trailingslashit($this->trial_kits_base_url) . $filename;
     }
 
     public function handle_ajax_conversion() {
@@ -372,7 +367,8 @@ class DbMotoConverterPlugin {
         wp_send_json_success(array(
             'valid' => true,
             'message' => 'Kit ID is valid',
-            'kit_id' => $kit_id
+            'kit_id' => $kit_id,
+            'download_url' => $this->build_trial_kit_url($kit_id)
         ));
     }
 

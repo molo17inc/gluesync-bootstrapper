@@ -63,7 +63,12 @@
                 });
 
                 if (response.success) {
-                    return { valid: true };
+                    const data = response.data || {};
+                    return {
+                        valid: true,
+                        message: data.message || 'Kit ID validated successfully.',
+                        downloadUrl: data.download_url || null
+                    };
                 }
 
                 return {
