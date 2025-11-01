@@ -15,9 +15,14 @@ if (!defined('ABSPATH')) {
 
 class DbMotoConverterPlugin {
 
-    private $api_endpoint = 'https://dbmoto-converter.labs.molo17.com/convert';
+    private $api_base_url = 'https://dbmoto-converter.labs.molo17.com';
+    private $api_convert_endpoint;
+    private $api_kit_validation_endpoint;
 
     public function __construct() {
+        $this->api_convert_endpoint = rtrim($this->api_base_url, '/') . '/convert';
+        $this->api_kit_validation_endpoint = rtrim($this->api_base_url, '/') . '/validate-kit';
+
         add_action('init', array($this, 'init'));
         add_shortcode('dbmoto_converter', array($this, 'render_converter'));
         add_action('wp_enqueue_scripts', array($this, 'enqueue_scripts'));
@@ -116,21 +121,77 @@ class DbMotoConverterPlugin {
      * @return array Array with 'valid' key and optional 'message' key
      */
     private function validate_trial_kit($kit_id) {
-        // Check if kit ID is empty
+        $format_validation = $this->validate_trial_kit_format($kit_id);
+        if (!$format_validation['valid']) {
+            return $format_validation;
+        }
+
+        $remote_validation = $this->validate_trial_kit_remote($kit_id);
+        if (!$remote_validation['valid']) {
+            return $remote_validation;
+        }
+
+        return array('valid' => true);
+    }
+
+    private function validate_trial_kit_format($kit_id) {
         if (empty($kit_id)) {
             return array('valid' => false, 'message' => 'Kit ID cannot be empty');
         }
-        
-        // Validate kit ID format (32 hex characters)
+
         if (!preg_match('/^[a-f0-9]{32}$/i', $kit_id)) {
             return array(
-                'valid' => false, 
+                'valid' => false,
                 'message' => 'Invalid kit ID format. Must be 32 hexadecimal characters (0-9, a-f).'
             );
         }
-        
-        // If we get here, the kit ID is valid
+
         return array('valid' => true);
+    }
+
+    private function validate_trial_kit_remote($kit_id) {
+        if (empty($this->api_kit_validation_endpoint)) {
+            return array('valid' => false, 'message' => 'Kit validation service is not configured.');
+        }
+
+        $response = wp_remote_post($this->api_kit_validation_endpoint, array(
+            'headers' => array('Content-Type' => 'application/json'),
+            'body' => wp_json_encode(array('kit_id' => $kit_id)),
+            'timeout' => 15,
+        ));
+
+        if (is_wp_error($response)) {
+            return array(
+                'valid' => false,
+                'message' => 'Unable to reach kit validation service. Please try again later.'
+            );
+        }
+
+        $status_code = wp_remote_retrieve_response_code($response);
+        $body = wp_remote_retrieve_body($response);
+
+        $decoded = json_decode($body, true);
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            $decoded = null;
+        }
+
+        if ($status_code === 200 && is_array($decoded)) {
+            if (!empty($decoded['valid'])) {
+                return array('valid' => true);
+            }
+
+            $message = isset($decoded['message']) ? $decoded['message'] : 'Kit ID is not recognized.';
+            return array('valid' => false, 'message' => $message);
+        }
+
+        $message = 'Kit ID validation failed.';
+        if (is_array($decoded) && isset($decoded['message'])) {
+            $message = $decoded['message'];
+        } elseif (!empty($body)) {
+            $message = sprintf('Kit ID validation failed (%d).', $status_code);
+        }
+
+        return array('valid' => false, 'message' => $message);
     }
 
     public function handle_ajax_conversion() {
@@ -198,7 +259,7 @@ class DbMotoConverterPlugin {
             error_log("DEBUG: Boundary: " . $boundary);
 
             // Make API call
-            $response = wp_remote_post($this->api_endpoint, array(
+            $response = wp_remote_post($this->api_convert_endpoint, array(
                 'headers' => array(
                     'Content-Type' => 'multipart/form-data; boundary=' . $boundary,
                 ),
@@ -302,9 +363,12 @@ class DbMotoConverterPlugin {
             return;
         }
 
-        // Here you can add additional validation logic, e.g., checking against a database
-        // For now, we'll assume all valid format kit IDs are valid
-        
+        $validation = $this->validate_trial_kit($kit_id);
+        if (!$validation['valid']) {
+            wp_send_json_error($validation['message']);
+            return;
+        }
+
         wp_send_json_success(array(
             'valid' => true,
             'message' => 'Kit ID is valid',
