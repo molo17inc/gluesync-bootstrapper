@@ -21,8 +21,12 @@ class DbMotoConverterPlugin {
         add_action('init', array($this, 'init'));
         add_shortcode('dbmoto_converter', array($this, 'render_converter'));
         add_action('wp_enqueue_scripts', array($this, 'enqueue_scripts'));
+        
+        // AJAX handlers
         add_action('wp_ajax_convert_dbmoto_xml', array($this, 'handle_ajax_conversion'));
         add_action('wp_ajax_nopriv_convert_dbmoto_xml', array($this, 'handle_ajax_conversion'));
+        add_action('wp_ajax_validate_kit_id', array($this, 'handle_validate_kit_id'));
+        add_action('wp_ajax_nopriv_validate_kit_id', array($this, 'handle_validate_kit_id'));
     }
 
     public function init() {
@@ -58,7 +62,7 @@ class DbMotoConverterPlugin {
                            id="trial-kit-id" 
                            name="trial_kit_id" 
                            pattern="[a-f0-9]{32}" 
-                           title="Please enter a valid 32-character trial kit ID (e.g., 4bd49914968fee18bd5e904c5b41aa40)"
+                           title="Please enter a valid 32-character trial kit ID (e.g., abcdef1234567890abcdef1234567890)"
                            required>
                     <small>Enter your trial kit identifier (32 hexadecimal characters)</small>
                 </div>
@@ -90,10 +94,10 @@ class DbMotoConverterPlugin {
             </div>
 
             <div id="result-container" style="display:none;">
-                <h3>Conversion Complete!</h3>
+                <h3>Conversion completed</h3>
                 <div id="result-info"></div>
                 <a id="download-btn" href="#" class="button button-secondary" style="display:none;" target="_blank">
-                    Download Results (ZIP)
+                    Download results (ZIP)
                 </a>
             </div>
 
@@ -261,47 +265,6 @@ class DbMotoConverterPlugin {
         return implode('', $body_parts);
     }
 
-    /**
-     * Validate trial kit by checking if the file exists on molo17.com
-     * 
-     * @param string $trial_kit_id The trial kit identifier
-     * @return array Array with 'valid' boolean and 'message' string
-     */
-    private function validate_trial_kit($trial_kit_id) {
-        $trial_kit_url = "https://molo17.com/gluesync-trials/{$trial_kit_id}-trial-kit.zip";
-        
-        // Use wp_remote_head to check if file exists (faster than GET)
-        $response = wp_remote_head($trial_kit_url, array(
-            'timeout' => 10,
-            'redirection' => 5,
-        ));
-
-        if (is_wp_error($response)) {
-            return array(
-                'valid' => false,
-                'message' => 'Unable to verify trial kit: ' . $response->get_error_message()
-            );
-        }
-
-        $response_code = wp_remote_retrieve_response_code($response);
-        
-        if ($response_code === 200) {
-            return array(
-                'valid' => true,
-                'message' => 'Trial kit validated successfully'
-            );
-        } elseif ($response_code === 404) {
-            return array(
-                'valid' => false,
-                'message' => 'Trial kit not found. Please check your trial kit ID and try again.'
-            );
-        } else {
-            return array(
-                'valid' => false,
-                'message' => "Unable to validate trial kit (HTTP {$response_code}). Please contact support."
-            );
-        }
-    }
 }
 
 // Initialize plugin
