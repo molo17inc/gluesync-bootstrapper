@@ -15,15 +15,28 @@
         const errorContainer = $('#error-container');
         const errorMessage = errorContainer.find('.error-message');
 
+        // Helper functions for UI state
+        function setLoading(isLoading, message = '') {
+            if (isLoading) {
+                convertBtn.prop('disabled', true);
+                btnText.text(message || 'Processing...');
+                btnLoading.show();
+            } else {
+                convertBtn.prop('disabled', false);
+                btnText.text('Convert');
+                btnLoading.hide();
+            }
+        }
+
         // Function to validate kit ID via AJAX
         async function validateKitId(kitId) {
             try {
                 const response = await $.ajax({
-                    url: ajaxurl,
+                    url: dbmoto_ajax.ajaxurl,
                     type: 'POST',
                     data: {
                         action: 'validate_kit_id',
-                        nonce: dbmoto_converter.nonce,
+                        nonce: dbmoto_ajax.nonce,
                         kit_id: kitId
                     },
                     dataType: 'json'
@@ -34,7 +47,7 @@
                 } else {
                     return { 
                         valid: false, 
-                        message: response.data || 'Invalid kit ID'
+                        message: response.data || 'Invalid kit ID. Please check and try again.'
                     };
                 }
             } catch (error) {
@@ -46,7 +59,7 @@
             }
         }
 
-        form.on('submit', async function(e) {
+        async function handleFormSubmission(e) {
             e.preventDefault();
             hideError();
             hideResult();
@@ -56,34 +69,98 @@
             const includeTargets = $('#include-targets').is(':checked');
             const trialKitId = trialKitIdInput.val().trim();
 
+            // Basic validation
+            if (!trialKitId) {
+                showError('Please enter your kit ID');
+                return;
+            }
+
             // Validate kit ID before proceeding
-            setLoading(true);
-            const validation = await validateKitId(trialKitId);
+            setLoading(true, 'Validating kit ID...');
             
-            if (!validation.valid) {
+            try {
+                const validation = await validateKitId(trialKitId);
+                
+                if (!validation.valid) {
+                    setLoading(false);
+                    showError(validation.message);
+                    return;
+                }
+
+                // If we get here, kit ID is valid - proceed with file upload
+                const file = fileInput[0].files[0];
+                
+                // Check if file is selected
+                if (!file) {
+                    setLoading(false);
+                    showError('Please select an XML file');
+                    return;
+                }
+
+
+                // Check file size (50MB limit)
+                if (file.size > 50 * 1024 * 1024) {
+                    setLoading(false);
+                    showError('File size must be less than 50MB');
+                    return;
+                }
+
+                // Show loading state for upload
+                setLoading(true, 'Uploading file...');
+                
+                // Proceed with file upload
+                const formData = new FormData();
+                formData.append('action', 'convert_dbmoto_xml');
+                formData.append('nonce', dbmoto_ajax.nonce);
+                formData.append('trial_kit_id', trialKitId);
+                formData.append('include_targets', includeTargets ? 'true' : 'false');
+                formData.append('xml_file', file);
+                
+                try {
+                    const response = await $.ajax({
+                        url: dbmoto_ajax.ajaxurl,
+                        type: 'POST',
+                        data: formData,
+                        processData: false,
+                        contentType: false,
+                        xhr: function() {
+                            const xhr = new window.XMLHttpRequest();
+                            xhr.upload.addEventListener('progress', function(e) {
+                                if (e.lengthComputable) {
+                                    const percent = Math.round((e.loaded / e.total) * 100);
+                                    progressFill.css('width', percent + '%');
+                                    progressText.text('Uploading: ' + percent + '%');
+                                }
+                            }, false);
+                            return xhr;
+                        }
+                    });
+                    
+                    if (response.success) {
+                        // Handle successful upload
+                        showResult('File processed successfully!');
+                        if (response.data && response.data.download_url) {
+                            downloadBtn.attr('href', response.data.download_url).show();
+                        }
+                    } else {
+                        showError(response.data || 'Error processing file');
+                    }
+                } catch (error) {
+                    console.error('Upload error:', error);
+                    showError('Error uploading file. Please try again.');
+                } finally {
+                    setLoading(false);
+                }
+                
+            } catch (error) {
+                console.error('Error in form submission:', error);
+                showError('An error occurred. Please try again.');
                 setLoading(false);
-                showError(validation.message);
-                return;
             }
-
-            // If we get here, kit ID is valid - proceed with file upload
-            const file = fileInput[0].files[0];
-            
-            // Check if file is selected
-            if (!file) {
-                setLoading(false);
-                showError('Please select an XML file');
-                return;
-            }
-
-            // Check file size (50MB limit)
-            if (file.size > 50 * 1024 * 1024) {
-                showError('File size must be less than 50MB');
-                return;
-            }
-
-            // Show loading state for validation
-            setLoadingState(true, 'Validating kit ID...');
+        }
+        
+        // Attach form submission handler
+        form.on('submit', handleFormSubmission);
 
             try {
                 // First validate the kit ID
