@@ -2,10 +2,25 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: 'DbMoto XML to Gluesync YAML Converter API'
 
 Parameters:
-  ResultsBucketName:
+  FtpHost:
     Type: String
-    Default: 'gluesync-conversion-results'
-    Description: 'S3 bucket name for storing conversion results'
+    Description: 'FTP hostname (e.g., c1107198.sgvps.net)'
+    NoEcho: true
+
+  FtpUser:
+    Type: String
+    Description: 'FTP username'
+    NoEcho: true
+
+  FtpPassword:
+    Type: String
+    NoEcho: true
+    Description: 'FTP password'
+
+  FtpBasePath:
+    Type: String
+    Default: '/molo17.com/public_html/gs-content/dbmoto-conversion/'
+    Description: 'Base path on FTP server for uploads'
 
   CustomDomainName:
     Type: String
@@ -13,35 +28,7 @@ Parameters:
     Description: 'Custom domain name for the API Gateway'
 
 Resources:
-  # S3 bucket for results
-  ResultsBucket:
-    Type: AWS::S3::Bucket
-    Properties:
-      BucketName: !Ref ResultsBucketName
-      VersioningConfiguration:
-        Status: Enabled
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
-
-  # S3 bucket policy for Lambda access
-  ResultsBucketPolicy:
-    Type: AWS::S3::BucketPolicy
-    Properties:
-      Bucket: !Ref ResultsBucket
-      PolicyDocument:
-        Statement:
-          - Sid: AllowLambdaAccess
-            Effect: Allow
-            Principal:
-              AWS: !GetAtt LambdaExecutionRole.Arn
-            Action:
-              - s3:GetObject
-              - s3:PutObject
-              - s3:DeleteObject
-            Resource: !Sub 'arn:aws:s3:::${ResultsBucket}/*'
+  # FTP configuration will be passed via environment variables
 
   # Lambda execution role
   LambdaExecutionRole:
@@ -56,17 +43,6 @@ Resources:
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-      Policies:
-        - PolicyName: S3Access
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - s3:GetObject
-                  - s3:PutObject
-                  - s3:DeleteObject
-                Resource: !Sub 'arn:aws:s3:::${ResultsBucket}/*'
 
   # Lambda function
   ConversionLambda:
@@ -81,7 +57,10 @@ Resources:
               return {'statusCode': 200, 'body': 'Placeholder - will be updated'}
       Environment:
         Variables:
-          RESULTS_BUCKET: !Ref ResultsBucket
+          FTP_HOST: !Ref FtpHost
+          FTP_USER: !Ref FtpUser
+          FTP_PASSWORD: !Ref FtpPassword
+          FTP_BASE_PATH: !Ref FtpBasePath
       Role: !GetAtt LambdaExecutionRole.Arn
       Timeout: 900
       MemorySize: 1024
@@ -183,6 +162,6 @@ Outputs:
     Description: Lambda function ARN
     Value: !Ref ConversionLambda
 
-  ResultsBucketName:
-    Description: S3 bucket for conversion results
-    Value: !Ref ResultsBucket
+  FtpBasePath:
+    Description: Base path for FTP uploads
+    Value: !Ref FtpBasePath

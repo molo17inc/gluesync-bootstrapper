@@ -167,11 +167,14 @@ deploy_lambda:
     - ls -la cloudformation-template.yaml || echo "CloudFormation template not found!"
     - |
       TEMPLATE_BODY=$(cat cloudformation-template.yaml)
-      aws cloudformation "$OPERATION" \
+      aws cloudformation update-stack \
         --stack-name "$STACK_NAME" \
         --region "$AWS_REGION" \
         --template-body "$TEMPLATE_BODY" \
-        --parameters ParameterKey=ResultsBucketName,ParameterValue="$RESULTS_BUCKET" \
+        --parameters ParameterKey=FtpHost,ParameterValue="c1107198.sgvps.net" \
+                    ParameterKey=FtpUser,ParameterValue="$FTP_USER" \
+                    ParameterKey=FtpPassword,ParameterValue="$FTP_PASSWORD" \
+                    ParameterKey=FtpBasePath,ParameterValue="/molo17.com/public_html/gs-content/dbmoto-conversion/" \
                     ParameterKey=CustomDomainName,ParameterValue="dbmoto-converter.labs.molo17.com" \
         --capabilities CAPABILITY_IAM \
         --region "$AWS_REGION"

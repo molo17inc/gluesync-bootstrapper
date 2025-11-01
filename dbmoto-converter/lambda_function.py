@@ -1,14 +1,13 @@
 import json
-import boto3
 import os
 import tempfile
 import base64
 import gzip
-from urllib.parse import unquote
+import ftplib
+import os.path
+from urllib.parse import unquote, urljoin
+from datetime import datetime
 from parse_dbmoto_metadata_xml import parse_xml, export_as_yaml, write_conversion_report
-
-# Initialize S3 client with explicit region to avoid signature issues
-s3_client = boto3.client('s3', region_name=os.environ.get('AWS_REGION', 'eu-central-1'))
 
 def lambda_handler(event, context):
     """
@@ -153,12 +152,17 @@ def lambda_handler(event, context):
             # Create a zip file containing all outputs
             zip_path = create_output_zip(output_dir, temp_dir)
 
-            # Upload results to S3
-            bucket_name = os.environ.get('RESULTS_BUCKET', 'gluesync-conversion-results')
+            # Upload results to FTP
             request_id = context.aws_request_id
-
-            result_urls = upload_zip_to_s3(zip_path, bucket_name, request_id)
-
+            base_url = 'https://molo17.com/gs-content/dbmoto-conversion/'
+            
+            # Upload the zip file to FTP
+            zip_filename = f"conversion_{request_id}.zip"
+            ftp_url = upload_to_ftp(zip_path, zip_filename)
+            
+            # Generate public URL
+            public_url = urljoin(base_url, zip_filename)
+            
             return {
                 'statusCode': 200,
                 'headers': {
@@ -169,12 +173,15 @@ def lambda_handler(event, context):
                     'status': 'success',
                     'message': f'Successfully processed {exported_count} YAML files',
                     'request_id': request_id,
-                    'results': result_urls,
+                    'download_url': public_url,
+                    'ftp_path': ftp_url,
                     'stats': {
                         'yaml_files_generated': exported_count,
-                        'tables_processed': sum(len(schema.get('tables', {})) for conn in connections.values() for schema in conn.get('schemas', {}).values()),
-                        'zip_file_url': result_urls['zip_file']['url'],
-                        'zip_file_size': result_urls['zip_file']['size']
+                        'tables_processed': sum(len(schema.get('tables', {})) 
+                            for conn in connections.values() 
+                            for schema in conn.get('schemas', {}).values()),
+                        'zip_file_url': public_url,
+                        'zip_file_size': os.path.getsize(zip_path)
                     }
                 })
             }
@@ -294,25 +301,49 @@ def create_output_zip(output_dir, temp_dir):
 
     return zip_path
 
-def upload_zip_to_s3(zip_path, bucket_name, request_id):
-    """Upload the zip file to S3 and return presigned URL"""
-    zip_filename = f"conversion_outputs_{request_id}.zip"
-    s3_key = f"{request_id}/{zip_filename}"
-
-    # Upload zip file to S3
-    s3_client.upload_file(zip_path, bucket_name, s3_key)
-
-    # Generate presigned URL (valid for 1 hour)
-    url = s3_client.generate_presigned_url(
-        'get_object',
-        Params={'Bucket': bucket_name, 'Key': s3_key},
-        ExpiresIn=3600
-    )
-
-    return {
-        'zip_file': {
-            'name': zip_filename,
-            'url': url,
-            'size': os.path.getsize(zip_path)
-        }
-    }
+def upload_to_ftp(local_path, remote_filename):
+    """ Upload a file to the FTP server """
+    ftp_host = os.environ.get('FTP_HOST')
+    ftp_user = os.environ.get('FTP_USER')
+    ftp_password = os.environ.get('FTP_PASSWORD')
+    ftp_base_path = os.environ.get('FTP_BASE_PATH', '/molo17.com/public_html/gs-content/dbmoto-conversion/')
+    
+    if not all([ftp_host, ftp_user, ftp_password]):
+        raise ValueError("FTP credentials not configured. Please set FTP_HOST, FTP_USER, and FTP_PASSWORD environment variables.")
+    
+    try:
+        # Connect to FTP server
+        ftp = ftplib.FTP(ftp_host, ftp_user, ftp_password)
+        
+        # Ensure binary mode for the transfer
+        ftp.voidcmd('TYPE I')
+        
+        # Change to the target directory, create it if it doesn't exist
+        try:
+            ftp.cwd(ftp_base_path)
+        except ftplib.error_perm as e:
+            # Directory doesn't exist, try to create it
+            parts = ftp_base_path.strip('/').split('/')
+            current_path = ''
+            for part in parts:
+                current_path += '/' + part
+                try:
+                    ftp.cwd(current_path)
+                except ftplib.error_perm:
+                    ftp.mkd(current_path)
+                    ftp.cwd(current_path)
+        
+        # Upload the file
+        with open(local_path, 'rb') as f:
+            ftp.storbinary(f'STOR {remote_filename}', f)
+        
+        # Close the connection
+        ftp.quit()
+        
+        # Return the full FTP path
+        return f"ftp://{ftp_host}{ftp_base_path}{remote_filename}"
+        
+    except Exception as e:
+        error_msg = f"FTP upload failed: {str(e)}"
+        print(error_msg)
+        raise Exception(error_msg)
