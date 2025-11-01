@@ -109,32 +109,45 @@ class DbMotoConverterPlugin {
         return ob_get_clean();
     }
 
+    /**
+     * Validate a trial kit ID
+     * 
+     * @param string $kit_id The kit ID to validate
+     * @return array Array with 'valid' key and optional 'message' key
+     */
+    private function validate_trial_kit($kit_id) {
+        // Check if kit ID is empty
+        if (empty($kit_id)) {
+            return array('valid' => false, 'message' => 'Kit ID cannot be empty');
+        }
+        
+        // Validate kit ID format (32 hex characters)
+        if (!preg_match('/^[a-f0-9]{32}$/i', $kit_id)) {
+            return array(
+                'valid' => false, 
+                'message' => 'Invalid kit ID format. Must be 32 hexadecimal characters (0-9, a-f).'
+            );
+        }
+        
+        // If we get here, the kit ID is valid
+        return array('valid' => true);
+    }
+
     public function handle_ajax_conversion() {
         // Verify nonce
-        if (!wp_verify_nonce($_POST['nonce'], 'dbmoto_converter_nonce')) {
+        if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'dbmoto_converter_nonce')) {
             wp_send_json_error('Security check failed');
-            return;
+            wp_die();
         }
 
-        // Validate trial kit ID
-        if (!isset($_POST['trial_kit_id']) || empty($_POST['trial_kit_id'])) {
-            wp_send_json_error('Trial kit ID is required');
-            return;
-        }
-
-        $trial_kit_id = sanitize_text_field($_POST['trial_kit_id']);
+        // Get and validate kit ID
+        $trial_kit_id = isset($_POST['trial_kit_id']) ? sanitize_text_field($_POST['trial_kit_id']) : '';
         
-        // Validate trial kit ID format (32 hexadecimal characters)
-        if (!preg_match('/^[a-f0-9]{32}$/', $trial_kit_id)) {
-            wp_send_json_error('Invalid trial kit ID format. Must be 32 hexadecimal characters.');
-            return;
-        }
-
-        // Validate that trial kit exists
-        $trial_kit_validation = $this->validate_trial_kit($trial_kit_id);
-        if (!$trial_kit_validation['valid']) {
-            wp_send_json_error($trial_kit_validation['message']);
-            return;
+        // Use our validation method
+        $validation = $this->validate_trial_kit($trial_kit_id);
+        if (!$validation['valid']) {
+            wp_send_json_error($validation['message']);
+            wp_die();
         }
 
         // Check if file was uploaded

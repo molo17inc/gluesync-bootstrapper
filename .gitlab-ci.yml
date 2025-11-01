@@ -88,10 +88,12 @@ deploy_lambda:
     - cp lambda_function.py lambda-package/
     - cd lambda-package && zip -r ../lambda-package.zip . -q && cd ..
     - |
+      # Check if stack exists and get its status
       if aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
         STACK_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].StackStatus' --output text)
         echo "📊 Current stack status: $STACK_STATUS"
         
+        # Handle stack in ROLLBACK_COMPLETE state
         if [[ "$STACK_STATUS" == "ROLLBACK_COMPLETE" ]]; then
           echo "🔄 Deleting stack in ROLLBACK_COMPLETE state..."
           aws cloudformation delete-stack --stack-name "$STACK_NAME" --region "$AWS_REGION"
@@ -99,20 +101,26 @@ deploy_lambda:
           echo "✅ Stack deletion complete"
         fi
       fi
+
+      # Set operation type for later use
       export OPERATION="create-stack"
       export WAIT_OPERATION="stack-create-complete"
-    - echo "☁️ Deploying CloudFormation stack..."
-    - ls -la cloudformation-template.yaml || echo "CloudFormation template not found!"
-    - |
-      echo "☁️ Deploying CloudFormation stack..."
-      TEMPLATE_BODY=$(cat cloudformation-template.yaml)
-      set +e  # Don't fail the job if update has no changes
       
+      # Load template body once
+      TEMPLATE_BODY=$(cat cloudformation-template.yaml)
+      
+      # Check if we need to update or create the stack
       if aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
-        echo "🔄 Updating existing stack..."
-        aws cloudformation update-stack \
+        echo "🔍 Checking for stack updates..."
+        
+        # Use change sets to check for updates without making changes
+        CHANGE_SET_NAME="changeset-${CI_PIPELINE_ID}-${CI_JOB_ID}"
+        
+        # Create a change set to check for updates
+        aws cloudformation create-change-set \
           --stack-name "$STACK_NAME" \
           --region "$AWS_REGION" \
+          --change-set-name "$CHANGE_SET_NAME" \
           --template-body "$TEMPLATE_BODY" \
           --parameters \
               ParameterKey=FtpHost,ParameterValue="c1107198.sgvps.net" \
@@ -121,23 +129,66 @@ deploy_lambda:
               ParameterKey=FtpBasePath,ParameterValue="/molo17.com/public_html/gs-content/dbmoto-conversion/" \
               ParameterKey=CustomDomainName,ParameterValue="dbmoto-converter.labs.molo17.com" \
           --capabilities CAPABILITY_IAM
+        
+        # Wait for change set to complete
+        echo "⏳ Waiting for change set creation to complete..."
+        aws cloudformation wait change-set-create-complete \
+          --stack-name "$STACK_NAME" \
+          --region "$AWS_REGION" \
+          --change-set-name "$CHANGE_SET_NAME" \
+          || true  # Continue even if there are no changes
+        
+        # Check if there are changes to apply
+        CHANGE_SET_STATUS=$(aws cloudformation describe-change-set \
+          --stack-name "$STACK_NAME" \
+          --region "$AWS_REGION" \
+          --change-set-name "$CHANGE_SET_NAME" \
+          --query 'Status' \
+          --output text 2>/dev/null || echo "FAILED")
+        
+        if [[ "$CHANGE_SET_STATUS" == "FAILED" ]]; then
+          # Check if the failure is due to no changes
+          CHANGE_SET_REASON=$(aws cloudformation describe-change-set \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --change-set-name "$CHANGE_SET_NAME" \
+            --query 'StatusReason' \
+            --output text 2>/dev/null || echo "Unknown error")
           
-        # Check if the error is about no updates
-        if [ $? -ne 0 ]; then
-          ERROR_MSG=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query 'Stacks[0].StackStatusReason' --output text --region "$AWS_REGION" 2>&1 || true)
-          if [[ "$ERROR_MSG" == *"No updates are to be performed"* ]]; then
-            echo "ℹ️ No updates to perform - stack is already up to date"
-            # Continue with the rest of the pipeline
+          if [[ "$CHANGE_SET_REASON" == *"No updates are to be performed"* ]]; then
+            echo "✅ No changes detected in the stack. Stack is already up to date."
+            # Delete the change set as it's no longer needed
+            aws cloudformation delete-change-set \
+              --stack-name "$STACK_NAME" \
+              --region "$AWS_REGION" \
+              --change-set-name "$CHANGE_SET_NAME"
+            # Set a flag to skip the update
+            export NO_UPDATES_NEEDED=true
           else
-            echo "❌ Failed to update stack: $ERROR_MSG"
+            echo "❌ Failed to create change set: $CHANGE_SET_REASON"
+            # Delete the failed change set
+            aws cloudformation delete-change-set \
+              --stack-name "$STACK_NAME" \
+              --region "$AWS_REGION" \
+              --change-set-name "$CHANGE_SET_NAME"
             exit 1
           fi
         else
-          # If update was initiated, wait for it to complete
-          echo "🔄 Stack update in progress..."
-          aws cloudformation wait stack-update-complete --stack-name "$STACK_NAME" --region "$AWS_REGION"
+          echo "🔄 Changes detected, applying update..."
+          # Execute the change set
+          aws cloudformation execute-change-set \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --change-set-name "$CHANGE_SET_NAME"
+          
+          echo "⏳ Waiting for stack update to complete..."
+          aws cloudformation wait stack-update-complete \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION"
+          echo "✅ Stack update completed successfully"
         fi
       else
+        # Stack doesn't exist, create it
         echo "🆕 Creating new stack..."
         aws cloudformation create-stack \
           --stack-name "$STACK_NAME" \
@@ -151,34 +202,46 @@ deploy_lambda:
               ParameterKey=CustomDomainName,ParameterValue="dbmoto-converter.labs.molo17.com" \
           --capabilities CAPABILITY_IAM
           
-        echo "🔄 Stack creation in progress..."
-        aws cloudformation wait stack-create-complete --stack-name "$STACK_NAME" --region "$AWS_REGION"
+        echo "⏳ Waiting for stack creation to complete..."
+        aws cloudformation wait stack-create-complete \
+          --stack-name "$STACK_NAME" \
+          --region "$AWS_REGION"
+        echo "✅ Stack creation completed successfully"
       fi
-    - echo "⏳ Waiting for Lambda function to be created (max 5 minutes)..."
+    # Only update Lambda if we're not in a 'no updates needed' scenario
     - |
-      WAIT_START=$(date +%s)
-      TIMEOUT=300
-      while true; do
-        if aws lambda get-function --function-name dbmoto-xml-converter --region "$AWS_REGION" >/dev/null 2>&1; then
-          echo "✅ Lambda function exists, updating code..."
-          break
-        fi
-        ELAPSED=$(($(date +%s) - WAIT_START))
-        if [ $ELAPSED -gt $TIMEOUT ]; then
-          echo "❌ Timeout waiting for Lambda function"
+      if [[ "${NO_UPDATES_NEEDED:-false}" != "true" ]]; then
+        echo "⏳ Waiting for Lambda function to be ready (max 5 minutes)..."
+        WAIT_START=$(date +%s)
+        TIMEOUT=300
+        LAMBDA_READY=false
+        
+        while [ $(( $(date +%s) - WAIT_START )) -lt $TIMEOUT ]; do
+          if aws lambda get-function --function-name dbmoto-xml-converter --region "$AWS_REGION" >/dev/null 2>&1; then
+            LAMBDA_READY=true
+            break
+          fi
+          echo "⏱️  Waiting for Lambda function to be available... ($(( $(date +%s) - WAIT_START ))s elapsed)"
+          sleep 10
+        done
+        
+        if [[ "$LAMBDA_READY" == "false" ]]; then
+          echo "❌ Timeout waiting for Lambda function to be available"
           exit 1
         fi
-        echo "⏱️  Waiting for Lambda... (${ELAPSED}s elapsed)"
-        sleep 10
-      done
-    - echo "📦 Updating Lambda function code..."
-    - |
-      aws lambda update-function-code \
-        --function-name dbmoto-xml-converter \
-        --zip-file fileb://lambda-package.zip \
-        --region "$AWS_REGION"
-    - echo "⏳ Waiting for Lambda update to complete..."
-    - aws lambda wait function-updated --function-name dbmoto-xml-converter --region "$AWS_REGION"
+        
+        echo "📦 Updating Lambda function code..."
+        aws lambda update-function-code \
+          --function-name dbmoto-xml-converter \
+          --zip-file fileb://lambda-package.zip \
+          --region "$AWS_REGION"
+          
+        echo "⏳ Waiting for Lambda update to complete..."
+        aws lambda wait function-updated --function-name dbmoto-xml-converter --region "$AWS_REGION"
+        echo "✅ Lambda function update completed successfully"
+      else
+        echo "ℹ️ Skipping Lambda update as no stack changes were detected"
+      fi
     - echo "⏳ Checking stack status before waiting..."
     - |
       CURRENT_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].StackStatus' --output text)
