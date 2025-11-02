@@ -62,7 +62,8 @@ automator_build:
 
 automator_build_windows:
   stage: build
-  image: python:3.11
+  tags:
+    - hq-windows-shell-2022
   rules:
     - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
       when: always
@@ -71,49 +72,48 @@ automator_build_windows:
     PIP_DISABLE_PIP_VERSION_CHECK: "1"
     PYTHONDONTWRITEBYTECODE: "1"
   before_script:
-    - python3 --version
-    - apt-get update && apt-get install -y wine
-    - pip3 install --break-system-packages --upgrade pip
-    - pip3 install --break-system-packages -r requirements.txt pyinstaller
+    - python --version
+    - python -m pip install --upgrade pip
+    - python -m pip install -r requirements.txt pyinstaller
   script:
     - |
-      export AUTOMATOR_VERSION="${CI_COMMIT_TAG#automator-}"
-      echo "Building Gluesync Automator version $AUTOMATOR_VERSION for Windows"
-      pyinstaller automator.spec --clean --distpath .automator-build/dist --workpath .automator-build/build --target win64
-    - ls -la .automator-build/dist
-    - mv .automator-build/dist/gluesync-automator.exe .automator-build/dist/gluesync-automator-windows.exe
+      $version = $env:CI_COMMIT_TAG -replace '^automator-', ''
+      Write-Host "Building Gluesync Automator version $version for Windows"
+      pyinstaller automator.spec --clean --distpath .automator-build/dist --workpath .automator-build/build
+    - Get-ChildItem .automator-build/dist
+    - Rename-Item -Path ".automator-build/dist/gluesync-automator.exe" -NewName "gluesync-automator-windows.exe"
   artifacts:
     name: "gluesync-automator-windows-${CI_COMMIT_TAG}"
     paths:
       - .automator-build/dist/gluesync-automator-windows.exe
     expire_in: 2 weeks
 
-automator_build_macos:
-  stage: build
-  image: python:3.11
-  rules:
-    - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
-      when: always
-    - when: never
-  variables:
-    PIP_DISABLE_PIP_VERSION_CHECK: "1"
-    PYTHONDONTWRITEBYTECODE: "1"
-  before_script:
-    - python3 --version
-    - pip3 install --break-system-packages --upgrade pip
-    - pip3 install --break-system-packages -r requirements.txt pyinstaller
-  script:
-    - |
-      export AUTOMATOR_VERSION="${CI_COMMIT_TAG#automator-}"
-      echo "Building Gluesync Automator version $AUTOMATOR_VERSION for macOS"
-      pyinstaller automator.spec --clean --distpath .automator-build/dist --workpath .automator-build/build --target macosx-10.9-universal2
-    - ls -la .automator-build/dist
-    - mv .automator-build/dist/gluesync-automator .automator-build/dist/gluesync-automator-macos
-  artifacts:
-    name: "gluesync-automator-macos-${CI_COMMIT_TAG}"
-    paths:
-      - .automator-build/dist/gluesync-automator-macos
-    expire_in: 2 weeks
+# automator_build_macos:
+#   stage: build
+#   image: python:3.11
+#   rules:
+#     - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
+#       when: always
+#     - when: never
+#   variables:
+#     PIP_DISABLE_PIP_VERSION_CHECK: "1"
+#     PYTHONDONTWRITEBYTECODE: "1"
+#   before_script:
+#     - python3 --version
+#     - pip3 install --break-system-packages --upgrade pip
+#     - pip3 install --break-system-packages -r requirements.txt pyinstaller
+#   script:
+#     - |
+#       export AUTOMATOR_VERSION="${CI_COMMIT_TAG#automator-}"
+#       echo "Building Gluesync Automator version $AUTOMATOR_VERSION for macOS"
+#       pyinstaller automator.spec --clean --distpath .automator-build/dist --workpath .automator-build/build --target macosx-10.9-universal2
+#     - ls -la .automator-build/dist
+#     - mv .automator-build/dist/gluesync-automator .automator-build/dist/gluesync-automator-macos
+#   artifacts:
+#     name: "gluesync-automator-macos-${CI_COMMIT_TAG}"
+#     paths:
+#       - .automator-build/dist/gluesync-automator-macos
+#     expire_in: 2 weeks
 
 automator_publish:
   stage: deploy
@@ -122,8 +122,6 @@ automator_publish:
     - job: automator_build
       artifacts: true
     - job: automator_build_windows
-      artifacts: true
-    - job: automator_build_macos
       artifacts: true
   rules:
     - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
