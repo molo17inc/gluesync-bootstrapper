@@ -146,27 +146,32 @@ automator_publish:
     - apk add --no-cache lftp
   script:
     - |
-      lftp -u "$FTP_USER","$FTP_PASSWORD" "${FTP_HOST:-$FTP_SITE}" <<'EOF'
+      lftp -u "$FTP_USER","$FTP_PASSWORD" "${FTP_HOST:-$FTP_SITE}" <<EOF
       set ssl:verify-certificate no
       # Remove existing dist folder and gluesync-automator folder
       rm -rf /molo17.com/public_html/gs-content/gluesync-automator/dist
       rm -rf /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator
-      # Upload single-file executables for all platforms (only if they exist)
+      # List files to verify what's available
       ls -la .automator-build/dist/
-      if [ -f .automator-build/dist/gluesync-automator-linux ]; then
-        put .automator-build/dist/gluesync-automator-linux /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-linux
-        echo "Uploaded Linux executable"
-      fi
-      if [ -f .automator-build/dist/gluesync-automator-windows.exe ]; then
-        put .automator-build/dist/gluesync-automator-windows.exe /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-windows.exe
-        echo "Uploaded Windows executable"
-      fi
-      if [ -f .automator-build/dist/gluesync-automator-macos ]; then
-        put .automator-build/dist/gluesync-automator-macos /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-macos
-        echo "Uploaded macOS executable"
-      fi
       bye
       EOF
+    - |
+      # Build LFTP command string based on available files
+      LFTP_COMMANDS="set ssl:verify-certificate no\n"
+      if [ -f .automator-build/dist/gluesync-automator-linux ]; then
+        LFTP_COMMANDS="${LFTP_COMMANDS}put .automator-build/dist/gluesync-automator-linux /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-linux\n"
+        echo "Will upload Linux executable"
+      fi
+      if [ -f .automator-build/dist/gluesync-automator-windows.exe ]; then
+        LFTP_COMMANDS="${LFTP_COMMANDS}put .automator-build/dist/gluesync-automator-windows.exe /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-windows.exe\n"
+        echo "Will upload Windows executable"
+      fi
+      if [ -f .automator-build/dist/gluesync-automator-macos ]; then
+        LFTP_COMMANDS="${LFTP_COMMANDS}put .automator-build/dist/gluesync-automator-macos /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-macos\n"
+        echo "Will upload macOS executable"
+      fi
+      LFTP_COMMANDS="${LFTP_COMMANDS}bye"
+      echo -e "$LFTP_COMMANDS" | lftp -u "$FTP_USER","$FTP_PASSWORD" "${FTP_HOST:-$FTP_SITE}"
 
 deploy:
   stage: deploy
