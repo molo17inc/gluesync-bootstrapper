@@ -5,7 +5,7 @@ a = Analysis(
     ['run_automator.py'],
     pathex=[],
     binaries=[],
-    datas=[('automator_app/static', 'automator_app/static')],
+    datas=[('automator_app/static', 'static')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
