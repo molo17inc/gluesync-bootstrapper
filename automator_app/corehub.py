@@ -9,7 +9,11 @@ from contextlib import redirect_stdout
 from typing import Any, Callable, Dict, Optional
 
 from commons import configure_core_hub, set_scheduling_enabled, fetch_core_hub
-from create_all_entities import main as create_entities_main
+from create_all_entities import (
+    CREATE_TABLE_IF_NOT_EXISTS,
+    main as create_entities_main,
+    set_create_table_if_not_exists,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +68,9 @@ def run_create_entities(
     set_scheduling_enabled(enable_scheduling)
     configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
 
-    prev_create_tables = os.environ.get('CREATE_TABLE_IF_NOT_EXISTS')
+    prev_env_create_tables = os.environ.get('CREATE_TABLE_IF_NOT_EXISTS')
+    prev_flag_create_tables = CREATE_TABLE_IF_NOT_EXISTS
+    set_create_table_if_not_exists(create_tables)
     os.environ['CREATE_TABLE_IF_NOT_EXISTS'] = 'true' if create_tables else 'false'
 
     handler = None
@@ -97,10 +103,6 @@ def run_create_entities(
         logger.exception("create_all_entities execution failed")
         if handler:
             root_logger.removeHandler(handler)
-        if prev_create_tables is not None:
-            os.environ['CREATE_TABLE_IF_NOT_EXISTS'] = prev_create_tables
-        else:
-            os.environ.pop('CREATE_TABLE_IF_NOT_EXISTS', None)
         return {
             "success": False,
             "logs": buffer.getvalue().splitlines(),
@@ -109,10 +111,11 @@ def run_create_entities(
     finally:
         if handler:
             root_logger.removeHandler(handler)
-        if prev_create_tables is not None:
-            os.environ['CREATE_TABLE_IF_NOT_EXISTS'] = prev_create_tables
+        if prev_env_create_tables is not None:
+            os.environ['CREATE_TABLE_IF_NOT_EXISTS'] = prev_env_create_tables
         else:
             os.environ.pop('CREATE_TABLE_IF_NOT_EXISTS', None)
+        set_create_table_if_not_exists(prev_flag_create_tables)
 
     if log_callback is not None:
         for line in buffer.getvalue().splitlines():

@@ -42,6 +42,14 @@ CORE_HUB_URL = os.getenv('CORE_HUB_URL', 'https://localhost:1717')
 ENTITY_START_TIMEOUT = int(os.getenv('ENTITY_START_TIMEOUT', '1'))
 CREATE_TABLE_IF_NOT_EXISTS = os.getenv('CREATE_TABLE_IF_NOT_EXISTS', 'true').lower() == 'true'
 
+
+def set_create_table_if_not_exists(enabled: bool) -> None:
+    """Allow callers to toggle automatic table creation at runtime."""
+
+    global CREATE_TABLE_IF_NOT_EXISTS
+    CREATE_TABLE_IF_NOT_EXISTS = bool(enabled)
+
+
 # ProtocolAwareAdapter and CoreHubClient have been moved to utils/core_hub_client.py
 
 # Initialize the CoreHub client
