@@ -1,23 +1,22 @@
-# Copyright (c) 2024 MOLO17
-# Author: Daniele Angeli
+# This program is part of Gluesync.
 #
-# Permission is hereby granted, free of charge, to any person obtaining a copy
-# of this software and associated documentation files (the "Software"), to deal
-# in the Software without restriction, including without limitation the rights
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-# copies of the Software, and to permit persons to whom the Software is
-# furnished to do so, subject to the following conditions:
+# Bootstrapper is dual-licensed under the following licenses:
 #
-# The above copyright notice and this permission notice shall be included in all
-# copies or substantial portions of the Software.
+# 1. GNU General Public License (GPL) Version 3
+#    You may use, modify, and distribute this software under the terms of the GPL v3.
+#    See the LICENSE-GPL file or <http://www.gnu.org/licenses/gpl-3.0.html> for details.
+#    This option is available at no cost, but any derivative works must also be licensed under GPL v3.
 #
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-# SOFTWARE.
+# 2. MOLO17 Commercial License
+#    Alternatively, you may use this software under the MOLO17 Commercial License,
+#    which includes a warranty and permits proprietary use. Contact MOLO17 at info@molo17.com
+#    for licensing terms and conditions.
+#
+# You must choose one of these licenses to use this software. Using this software implies
+# acceptance of one of these licenses. See the accompanying LICENSE files or contact
+# MOLO17 for more information.
+#
+# Copyright (C) 2025 MOLO17. All rights reserved.
 
 import os
 import requests

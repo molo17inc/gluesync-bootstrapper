@@ -1,6 +1,7 @@
 # DbMoto XML Metadata Hierarchy and Dependencies
 
 ## Overview
+
 This document describes the hierarchical structure and relationships between nodes in the DbMoto metadata XML file.
 
 ## Node Hierarchy and Relationships

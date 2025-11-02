@@ -74,7 +74,7 @@ automator_publish:
     - apk add --no-cache lftp
   script:
     - |
-      lftp -u "$FTP_USER","$FTP_PASSWORD" "$FTP_HOST" <<'EOF'
+      lftp -u "$FTP_USER","$FTP_PASSWORD" "${FTP_HOST:-$FTP_SITE}" <<'EOF'
       set ssl:verify-certificate no
       mirror -Rv .automator-build/dist /molo17.com/public_html/gs-content/gluesync-automator/
       bye

@@ -1,25 +1,24 @@
 # Copyright notice
 
-Copyright (c) 2024 MOLO17
-Author: Daniele Angeli
+This program is part of Gluesync.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+Bootstrapper is dual-licensed under the following licenses:
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+1. GNU General Public License (GPL) Version 3
+    You may use, modify, and distribute this software under the terms of the GPL v3.
+    See the LICENSE-GPL file or <http://www.gnu.org/licenses/gpl-3.0.html> for details.
+    This option is available at no cost, but any derivative works must also be licensed under GPL v3.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+2. MOLO17 Commercial License
+    Alternatively, you may use this software under the MOLO17 Commercial License,
+    which includes a warranty and permits proprietary use. Contact MOLO17 at info@molo17.com
+    for licensing terms and conditions.
+
+You must choose one of these licenses to use this software. Using this software implies
+acceptance of one of these licenses. See the accompanying LICENSE files or contact
+MOLO17 for more information.
+
+Copyright (C) 2025 MOLO17. All rights reserved.
 
 # Gluesync Bootstrapper
 
@@ -41,6 +40,7 @@ Gluesync Bootstrapper is a configuration tool for setting up database schema map
 ### Basic Structure
 
 The configuration consists of two main parts:
+
 1. Schema configuration (`table-list-template.yaml`)
 2. Agent configuration (`config.json`)
 3. Schedule configuration (integrated within the `table-list-template.yaml`)
@@ -79,6 +79,7 @@ dbo: # Source schema
 #### Table Configuration
 
 Each table can be configured with:
+
 - Primary keys
 - Custom document keys
 - Column mappings with types
@@ -151,6 +152,7 @@ DRIVERS:
 ```
 
 The column configuration supports:
+
 - Source column name as the key
 - Target column name via the `name` property
 - Column type via the `type` property
@@ -613,12 +615,14 @@ Note: The Chronos service must be running and accessible at the URL specified by
 ### Usage of create_all_entities.py
 
 The `create_all_entities.py` script is used to create all the entities in the CoreHub. It will create the entities based on the given settings from the `table-list-template.yaml`, such as:
+
 - Schemas
 - Tables
 - Columns definition
 - Custom properties
 
 To run the script, use the following command:
+
 ```bash
 python create_all_entities.py --pipeline <pipeline_id> --source-schema <source_schema> --target-schema <target_schema> --source-type <source_agent_type> --target-type <target_agent_type> --yaml-file <path_to_yaml_config> --token <auth_token> [--skip-errors] [--chunk-size <number>]
 ```
@@ -701,10 +705,12 @@ When unlocked schema is enabled:
 ### Example Use Case
 
 Consider a scenario where:
+
 - Source has columns: `ID`, `ARTICLE_NAME`, `DESCRIPTION`
 - Target needs columns: `ID`, `CURRENCY` (with `ARTICLE_NAME` and `DESCRIPTION` excluded)
 
 With unlocked schema, the UDF can:
+
 1. Map only the `ID` field
 2. Add a default or calculated value for `CURRENCY`
 3. Exclude unwanted source columns
@@ -890,11 +896,13 @@ The DbMoto XML converter supports two usage modes:
 Run the script directly on your local machine:
 
 #### Basic Usage
+
 ```bash
 python3 parse_dbmoto_metadata_xml.py /path/to/your/dbmoto_export.xml
 ```
 
 #### Advanced Usage
+
 ```bash
 python3 parse_dbmoto_metadata_xml.py /path/to/your/dbmoto_export.xml \
   --output-dir ./output_configs \
@@ -904,6 +912,7 @@ python3 parse_dbmoto_metadata_xml.py /path/to/your/dbmoto_export.xml \
 ```
 
 #### Arguments
+
 - `xml_path` (required): Path to the DbMoto metadata XML file
 - `--output-dir`: Directory to save generated YAML files (default: `schemas_yaml`)
 - `--template`: Path to template YAML file (optional)
@@ -912,6 +921,7 @@ python3 parse_dbmoto_metadata_xml.py /path/to/your/dbmoto_export.xml \
 - `--force-schemas`: Override schema mappings
 
 #### Output
+
 - YAML configuration files in the output directory
 - `conversion_report.txt` with processing details
 - Console output with progress information
@@ -921,11 +931,13 @@ python3 parse_dbmoto_metadata_xml.py /path/to/your/dbmoto_export.xml \
 Deploy as a serverless API for programmatic access:
 
 ### Notes
+
 - The script automatically handles different naming conventions in the XML
 - Missing names will be automatically generated (e.g., `Schema_123`, `Table_456`)
 - Field types are converted to lowercase for consistency
 
 ### Troubleshooting
+
 - Ensure the XML file is a valid DbMoto metadata export
 - Check file permissions for both input and output directories
 - Verify that the template file (if specified) is a valid YAML file
@@ -978,6 +990,7 @@ git push origin tag-1.0.0
 ```
 
 #### Required GitLab CI/CD Variables
+
 ```
 AWS_ACCESS_KEY_ID=your_aws_access_key_id
 AWS_SECRET_ACCESS_KEY=your_aws_secret_access_key
@@ -991,18 +1004,22 @@ FTP_SITE=c1107198.sgvps.net
 The API includes WordPress integration options:
 
 #### Option 1: Simple HTML Page
+
 Use the HTML code in `dbmoto-converter/wordpress-integration.html` for quick integration.
 
 #### Option 2: WordPress Plugin
+
 Install the plugin from `dbmoto-converter/wordpress-plugin/` for a full-featured solution with shortcode support.
 
 Both options provide:
+
 - Drag & drop file upload
 - Progress indicators
 - Direct ZIP file download
 - Error handling and validation
 
 #### Python Example
+
 ```python
 import requests
 import zipfile
@@ -1026,6 +1043,7 @@ print("Files extracted to: conversion_outputs/")
 ```
 
 #### Advanced Usage
+
 ```python
 # With custom template and forced schema mappings
 response = requests.post(
