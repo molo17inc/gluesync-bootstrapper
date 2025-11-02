@@ -72,16 +72,29 @@ automator_build_windows:
     PIP_DISABLE_PIP_VERSION_CHECK: "1"
     PYTHONDONTWRITEBYTECODE: "1"
   before_script:
-    - choco upgrade python --version=3.11.9 -y --no-progress
-    - '& "$env:ChocolateyInstall\bin\refreshenv.cmd"'
-    - python --version
-    - python -m pip install --upgrade pip
-    - python -m pip install -r requirements.txt pyinstaller
+    - |
+      $ErrorActionPreference = 'Stop'
+      $pythonDir = Join-Path $env:CI_PROJECT_DIR 'python'
+      New-Item -ItemType Directory -Force -Path $pythonDir | Out-Null
+      $pythonZip = Join-Path $pythonDir 'python.zip'
+      Invoke-WebRequest -Uri 'https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip' -OutFile $pythonZip
+      Expand-Archive -Path $pythonZip -DestinationPath $pythonDir -Force
+      Remove-Item $pythonZip
+      $pthFile = Join-Path $pythonDir 'python311._pth'
+      (Get-Content $pthFile) -replace '#import site', 'import site' | Set-Content $pthFile
+      $getPip = Join-Path $pythonDir 'get-pip.py'
+      Invoke-WebRequest -Uri 'https://bootstrap.pypa.io/get-pip.py' -OutFile $getPip
+      & (Join-Path $pythonDir 'python.exe') $getPip
+      & (Join-Path $pythonDir 'python.exe') -m pip install --upgrade pip
+      & (Join-Path $pythonDir 'python.exe') -m pip install pyinstaller
+      & (Join-Path $pythonDir 'python.exe') -m pip install -r (Join-Path $env:CI_PROJECT_DIR 'requirements.txt')
+      $env:Path = "$pythonDir;$env:Path"
   script:
     - |
+      $python = Join-Path $env:CI_PROJECT_DIR 'python\python.exe'
       $version = $env:CI_COMMIT_TAG -replace '^automator-', ''
       Write-Host "Building Gluesync Automator version $version for Windows"
-      python -m PyInstaller automator.spec --clean --distpath .automator-build/dist --workpath .automator-build/build
+      & $python -m PyInstaller automator.spec --clean --distpath .automator-build/dist --workpath .automator-build/build
     - Get-ChildItem .automator-build/dist
     - Rename-Item -Path ".automator-build/dist/gluesync-automator.exe" -NewName "gluesync-automator-windows.exe"
   artifacts:
