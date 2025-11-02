@@ -153,8 +153,8 @@ automator_publish:
       # Remove existing dist folder and gluesync-automator folder
       rm -rf /molo17.com/public_html/gs-content/gluesync-automator/
       # Upload executables
-      put .automator-build/dist/gluesync-automator-linux /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-linux
-      put .automator-build/dist/gluesync-automator-windows.exe /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-windows.exe
+      put ./automator-build/dist/gluesync-automator-linux /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-linux
+      put ./automator-build/dist/gluesync-automator-windows.exe /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-windows.exe
       bye
       EOF
 
