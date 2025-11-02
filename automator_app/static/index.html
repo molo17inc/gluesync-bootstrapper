@@ -5,12 +5,22 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Gluesync Automator</title>
     <link rel="stylesheet" href="/static/styles.css" />
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%23113f67'/><path d='M4 4h8v8H4z' fill='%23fff'/></svg>">
+    <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png" />
+    <link rel="icon" href="/static/favicon.ico" />
   </head>
   <body>
     <header class="topbar">
-      <div class="brand">Gluesync Automator</div>
-      <div id="status-indicator" class="status status-idle">Idle</div>
+      <div class="brand">
+        <img src="/static/gluesync-bootstrapper.svg" alt="Gluesync Automator" class="brand-logo" />
+        <span>Gluesync Automator</span>
+      </div>
+      <div class="topbar-links">
+        <a href="https://docs.molo17.com" target="_blank" rel="noopener" class="topbar-link">Documentation</a>
+        <a href="https://support.molo17.com" target="_blank" rel="noopener" class="topbar-link">Support</a>
+        <div id="status-indicator" class="status status-idle">Idle</div>
+      </div>
     </header>
 
     <main class="layout">
