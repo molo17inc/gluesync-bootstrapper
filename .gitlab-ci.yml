@@ -151,10 +151,20 @@ automator_publish:
       # Remove existing dist folder and gluesync-automator folder
       rm -rf /molo17.com/public_html/gs-content/gluesync-automator/dist
       rm -rf /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator
-      # Upload single-file executables for all platforms
-      put .automator-build/dist/gluesync-automator-linux /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-linux
-      put .automator-build/dist/gluesync-automator-windows.exe /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-windows.exe
-      put .automator-build/dist/gluesync-automator-macos /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-macos
+      # Upload single-file executables for all platforms (only if they exist)
+      ls -la .automator-build/dist/
+      if [ -f .automator-build/dist/gluesync-automator-linux ]; then
+        put .automator-build/dist/gluesync-automator-linux /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-linux
+        echo "Uploaded Linux executable"
+      fi
+      if [ -f .automator-build/dist/gluesync-automator-windows.exe ]; then
+        put .automator-build/dist/gluesync-automator-windows.exe /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-windows.exe
+        echo "Uploaded Windows executable"
+      fi
+      if [ -f .automator-build/dist/gluesync-automator-macos ]; then
+        put .automator-build/dist/gluesync-automator-macos /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-macos
+        echo "Uploaded macOS executable"
+      fi
       bye
       EOF
 
