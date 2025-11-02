@@ -145,14 +145,14 @@ automator_publish:
   before_script:
     - apk add --no-cache lftp
   script:
+    - echo "Checking available build artifacts..."
+    - ls -la .automator-build/dist/ || echo "No .automator-build/dist directory found"
     - |
       lftp -u "$FTP_USER","$FTP_PASSWORD" "${FTP_HOST:-$FTP_SITE}" <<EOF
       set ssl:verify-certificate no
       # Remove existing dist folder and gluesync-automator folder
       rm -rf /molo17.com/public_html/gs-content/gluesync-automator/dist
       rm -rf /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator
-      # List files to verify what's available
-      ls -la .automator-build/dist/
       bye
       EOF
     - |
@@ -161,14 +161,20 @@ automator_publish:
       if [ -f .automator-build/dist/gluesync-automator-linux ]; then
         LFTP_COMMANDS="${LFTP_COMMANDS}put .automator-build/dist/gluesync-automator-linux /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-linux\n"
         echo "Will upload Linux executable"
+      else
+        echo "Linux executable not found at .automator-build/dist/gluesync-automator-linux"
       fi
       if [ -f .automator-build/dist/gluesync-automator-windows.exe ]; then
         LFTP_COMMANDS="${LFTP_COMMANDS}put .automator-build/dist/gluesync-automator-windows.exe /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-windows.exe\n"
         echo "Will upload Windows executable"
+      else
+        echo "Windows executable not found at .automator-build/dist/gluesync-automator-windows.exe"
       fi
       if [ -f .automator-build/dist/gluesync-automator-macos ]; then
         LFTP_COMMANDS="${LFTP_COMMANDS}put .automator-build/dist/gluesync-automator-macos /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-macos\n"
         echo "Will upload macOS executable"
+      else
+        echo "macOS executable not found at .automator-build/dist/gluesync-automator-macos"
       fi
       LFTP_COMMANDS="${LFTP_COMMANDS}bye"
       echo -e "$LFTP_COMMANDS" | lftp -u "$FTP_USER","$FTP_PASSWORD" "${FTP_HOST:-$FTP_SITE}"
