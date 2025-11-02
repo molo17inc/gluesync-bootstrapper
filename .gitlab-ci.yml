@@ -72,14 +72,14 @@ automator_build_windows:
     PIP_DISABLE_PIP_VERSION_CHECK: "1"
     PYTHONDONTWRITEBYTECODE: "1"
   before_script:
-    - python --version
-    - python -m pip install --upgrade pip
-    - python -m pip install -r requirements.txt pyinstaller
+    - py -3 --version
+    - py -3 -m pip install --upgrade pip
+    - py -3 -m pip install -r requirements.txt pyinstaller
   script:
     - |
       $version = $env:CI_COMMIT_TAG -replace '^automator-', ''
       Write-Host "Building Gluesync Automator version $version for Windows"
-      pyinstaller automator.spec --clean --distpath .automator-build/dist --workpath .automator-build/build
+      py -3 -m PyInstaller automator.spec --clean --distpath .automator-build/dist --workpath .automator-build/build
     - Get-ChildItem .automator-build/dist
     - Rename-Item -Path ".automator-build/dist/gluesync-automator.exe" -NewName "gluesync-automator-windows.exe"
   artifacts:
