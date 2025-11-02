@@ -834,9 +834,52 @@ For support and bug reports, please create an issue in the GitLab repository.
 ### Overview
 The included `parse_dbmoto_metadata_xml.py` script converts DbMoto metadata XML files into YAML configurations compatible with the Gluesync bootstrapper. It extracts database schemas, tables, and fields from the XML and generates structured YAML files.
 
-### Prerequisites
-- Python 3.10
-- PyYAML package (`pip3 install pyyaml --break-system-packages`)
+### Requirements
+
+- Python 3.9+
+- pip3 package manager
+
+## Gluesync Automator (desktop executable)
+
+Gluesync Automator is a lightweight web-based wrapper that simplifies running `create_all_entities.py` without needing to install Python dependencies manually.
+
+### Features
+
+- Cross-platform desktop executable generated via PyInstaller
+- Embedded FastAPI server served on `http://localhost:8080`
+- Minimal UI to:
+  - Authenticate to CoreHub (username/password, TLS toggle, skip verification)
+  - Upload YAML configuration files
+  - Toggle script options (skip errors, create tables, scheduling)
+  - Stream execution logs in real time
+
+### Local development
+
+```bash
+pip3 install --break-system-packages -r requirements.txt
+python3 run_automator.py --open-browser
+```
+
+This launches the UI and opens the browser automatically. The default port is 8080.
+
+### Building executables manually
+
+```bash
+pip3 install --break-system-packages pyinstaller
+pyinstaller automator.spec --clean --distpath .automator-build/dist --workpath .automator-build/build
+```
+
+Outputs will be located under `.automator-build/dist/gluesync-automator/`.
+
+### GitLab CI automation
+
+Pushing a tag named `automator-<version>` (for example, `automator-1.0.0`) triggers the `automator_build` job in `.gitlab-ci.yml`. The job:
+
+1. Installs dependencies and PyInstaller
+2. Builds the executable using `automator.spec`
+3. Publishes the artifact under `.automator-build/dist/`
+
+Artifacts are named `gluesync-automator-<tag>` and retained for two weeks.
 
 ### Usage
 

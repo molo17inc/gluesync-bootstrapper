@@ -5,6 +5,7 @@ logs/
 # Python
 __pycache__/
 *.py[cod]
+.automator-build/
 *$py.class
 *.so
 .Python

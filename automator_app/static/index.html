@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Gluesync Automator</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%23113f67'/><path d='M4 4h8v8H4z' fill='%23fff'/></svg>">
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">Gluesync Automator</div>
+      <div id="status-indicator" class="status status-idle">Idle</div>
+    </header>
+
+    <main class="layout">
+      <section class="card" id="auth-card">
+        <h2>Authentication</h2>
+        <form id="login-form" class="form-grid">
+          <label>
+            CoreHub URL
+            <input type="text" id="corehub-url" name="corehubUrl" placeholder="https://corehub.example.com" required />
+          </label>
+          <label>
+            Username
+            <input type="text" id="username" name="username" required />
+          </label>
+          <label>
+            Password
+            <input type="password" id="password" name="password" required />
+          </label>
+          <fieldset class="fieldset">
+            <legend>Security</legend>
+            <label class="checkbox">
+              <input type="checkbox" id="use-ssl" />
+              Enable TLS
+            </label>
+            <label class="checkbox">
+              <input type="checkbox" id="skip-verify" />
+              Skip certificate verification
+            </label>
+          </fieldset>
+          <fieldset class="fieldset">
+            <legend>Preferences</legend>
+            <label class="checkbox">
+              <input type="checkbox" id="enable-scheduling" checked />
+              Enable scheduling
+            </label>
+            <label class="checkbox">
+              <input type="checkbox" id="create-tables" checked />
+              Create missing tables
+            </label>
+          </fieldset>
+          <button type="submit" class="primary">Sign in</button>
+          <button type="button" id="logout-btn" class="secondary" disabled>Sign out</button>
+        </form>
+        <div id="auth-message" class="message"></div>
+      </section>
+
+      <section class="card" id="config-card">
+        <h2>Configuration</h2>
+        <form id="config-form" class="form-grid">
+          <label>
+            Pipeline ID
+            <input type="text" id="pipeline-id" name="pipelineId" required />
+          </label>
+          <label>
+            Source schema
+            <input type="text" id="source-schema" name="sourceSchema" required />
+          </label>
+          <label>
+            Target schema
+            <input type="text" id="target-schema" name="targetSchema" required />
+          </label>
+          <label>
+            Source type
+            <input type="text" id="source-type" name="sourceType" placeholder="SQL" required />
+          </label>
+          <label>
+            Target type
+            <input type="text" id="target-type" name="targetType" placeholder="NoSQL" required />
+          </label>
+          <label>
+            Chunk size
+            <input type="number" id="chunk-size" name="chunkSize" value="50" min="1" max="500" />
+          </label>
+          <label>
+            YAML configuration
+            <input type="file" id="yaml-file" accept=".yaml,.yml" />
+          </label>
+          <label class="checkbox">
+            <input type="checkbox" id="skip-errors" />
+            Skip errors
+          </label>
+          <button type="submit" class="primary" disabled id="run-btn">Start entity creation</button>
+        </form>
+        <div id="config-message" class="message"></div>
+      </section>
+
+      <section class="card log-card">
+        <h2>Execution log</h2>
+        <div id="log-output" class="log-output"></div>
+      </section>
+    </main>
+
+    <footer class="footer">&copy; <span id="footer-year"></span> MOLO17. All rights reserved.</footer>
+
+    <template id="log-line-template">
+      <div class="log-line"></div>
+    </template>
+
+    <script src="/static/app.js" type="module"></script>
+  </body>
+</html>

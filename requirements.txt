@@ -4,4 +4,7 @@ faker
 PyYAML
 colorama
 pydantic
+fastapi
+uvicorn[standard]
+python-multipart
 # The gluesync_sdk dependency is installed directly in the Dockerfile

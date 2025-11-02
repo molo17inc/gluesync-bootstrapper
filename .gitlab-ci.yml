@@ -20,6 +20,7 @@
 # SOFTWARE.
 
 stages:
+  - build
   - deploy
 
 default:
@@ -32,6 +33,32 @@ variables:
   STACK_NAME: dbmoto-xml-converter
   RESULTS_BUCKET_PREFIX: gluesync-conversion-results
   HOSTED_ZONE_ID: ""  # Route 53 hosted zone ID for molo17.com - set in GitLab CI/CD variables
+
+automator_build:
+  stage: build
+  image: python:3.11
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
+      when: always
+    - when: never
+  variables:
+    PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    PYTHONDONTWRITEBYTECODE: "1"
+  before_script:
+    - python3 --version
+    - pip3 install --break-system-packages --upgrade pip
+    - pip3 install --break-system-packages -r requirements.txt pyinstaller
+  script:
+    - |
+      export AUTOMATOR_VERSION="${CI_COMMIT_TAG#automator-}"
+      echo "Building Gluesync Automator version $AUTOMATOR_VERSION"
+      pyinstaller automator.spec --clean --distpath .automator-build/dist --workpath .automator-build/build
+    - ls -R .automator-build/dist
+  artifacts:
+    name: "gluesync-automator-${CI_COMMIT_TAG}"
+    paths:
+      - .automator-build/dist/
+    expire_in: 2 weeks
 
 deploy:
   stage: deploy

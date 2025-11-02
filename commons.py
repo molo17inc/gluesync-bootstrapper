@@ -41,6 +41,45 @@ CHRONOS_URL = os.getenv('CHRONOS_URL', 'http://gluesync-chronos:8000')
 # Initialize the CoreHub client
 core_hub_client = CoreHubClient(CORE_HUB_URL)
 
+
+def set_core_hub_client(client: CoreHubClient):
+    """Replace the global CoreHub client instance."""
+    global core_hub_client
+    core_hub_client = client
+
+
+def configure_core_hub(base_url: str, *, use_ssl: Optional[bool] = None, skip_verify: Optional[bool] = None) -> CoreHubClient:
+    """
+    Configure the CoreHub client with runtime options.
+
+    Args:
+        base_url: CoreHub base URL, with or without scheme.
+        use_ssl: Force SSL enable/disable. Uses environment default when None.
+        skip_verify: Force TLS verification skip flag. Uses environment default when None.
+
+    Returns:
+        CoreHubClient: The configured client instance.
+    """
+
+    logger.info("Reconfiguring CoreHub client: base_url=%s, use_ssl=%s, skip_verify=%s", base_url, use_ssl, skip_verify)
+    os.environ['CORE_HUB_URL'] = base_url
+    if use_ssl is not None:
+        os.environ['SSL_ENABLED'] = 'true' if use_ssl else 'false'
+    if skip_verify is not None:
+        os.environ['SSL_SKIP_VERIFY'] = 'true' if skip_verify else 'false'
+
+    client = CoreHubClient(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+    set_core_hub_client(client)
+    return client
+
+
+def set_scheduling_enabled(enabled: bool):
+    """Toggle scheduling feature at runtime."""
+    global ENABLE_SCHEDULING
+    ENABLE_SCHEDULING = enabled
+    os.environ['ENABLE_SCHEDULING'] = 'true' if enabled else 'false'
+    logger.info("Scheduling feature set to %s", ENABLE_SCHEDULING)
+
 logger = get_logger()
 
 

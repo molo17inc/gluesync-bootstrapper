@@ -11,26 +11,48 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 class CoreHubClient:
     """Client for handling CoreHub API requests."""
-    def __init__(self, base_url):
-        # Check SSL configuration
-        use_ssl = os.getenv('SSL_ENABLED', 'False').lower() == 'true'
-        ssl_skip_verify = os.getenv('SSL_SKIP_VERIFY', 'False').lower() == 'true'
-        
-        # Update URL scheme if SSL is enabled
-        if use_ssl:
+
+    def __init__(self, base_url, *, use_ssl=None, skip_verify=None):
+        """
+        Initialize the CoreHub client.
+
+        Args:
+            base_url (str): Base URL for CoreHub. If no scheme is provided, http is assumed.
+            use_ssl (bool, optional): Force SSL usage. Defaults to environment variable ``SSL_ENABLED``.
+            skip_verify (bool, optional): Skip certificate verification. Defaults to ``SSL_SKIP_VERIFY`` env.
+        """
+
+        # Normalize URL to ensure a scheme is always present
+        parsed_url = urlparse(base_url if '://' in base_url else f"http://{base_url}")
+        if not parsed_url.scheme:
+            parsed_url = parsed_url._replace(scheme='http')
+
+        # Resolve SSL configuration
+        if use_ssl is None:
+            use_ssl = os.getenv('SSL_ENABLED', 'False').lower() == 'true'
+        if skip_verify is None:
+            skip_verify = os.getenv('SSL_SKIP_VERIFY', 'False').lower() == 'true'
+
+        # Update URL scheme when SSL is enabled and scheme is explicitly http
+        if use_ssl and parsed_url.scheme == 'http':
+            updated_url = urlunparse(('https',) + parsed_url[1:])
+            logger.info(f"SSL enabled: Changed CoreHub URL from {base_url} to {updated_url}")
+            base_url = updated_url
             parsed_url = urlparse(base_url)
-            # If the URL is using http, update it to https
-            if parsed_url.scheme == 'http':
-                updated_url = urlunparse(('https',) + parsed_url[1:])
-                logger.info(f"SSL enabled: Changed CoreHub URL from {base_url} to {updated_url}")
-                base_url = updated_url
-        
+        else:
+            base_url = urlunparse(parsed_url)
+
         self.base_url = base_url
         self.use_ssl = use_ssl
-        self.verify_ssl = not ssl_skip_verify
-        
-        logger.info(f"Initializing CoreHubClient with: URL={base_url}, SSL={use_ssl}, verify={not ssl_skip_verify}")
-        
+        self.verify_ssl = not skip_verify
+
+        logger.info(
+            "Initializing CoreHubClient with: URL=%s, SSL=%s, verify=%s",
+            self.base_url,
+            self.use_ssl,
+            self.verify_ssl,
+        )
+
         self.session = requests.Session()
 
     def request(self, path, method='GET', token=None, body=None, params=None):

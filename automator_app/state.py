@@ -1,0 +1,175 @@
+"""Application state management for the Gluesync Automator UI."""
+
+from __future__ import annotations
+
+import os
+import uuid
+from dataclasses import dataclass, field
+from pathlib import Path
+from threading import Lock
+from typing import Dict, List, Optional, Any
+
+
+@dataclass
+class UploadedFile:
+    file_id: str
+    name: str
+    path: Path
+
+
+@dataclass
+class RunStatus:
+    run_id: str
+    status: str = "idle"  # idle | running | completed | failed
+    logs: List[str] = field(default_factory=list)
+    error: Optional[str] = None
+
+
+class AutomatorState:
+    """In-memory state shared across API handlers."""
+
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._token: Optional[str] = None
+        self._base_url: Optional[str] = os.getenv("CORE_HUB_URL", "https://localhost:1717")
+        self._use_ssl: Optional[bool] = None
+        self._skip_verify: Optional[bool] = None
+        self._enable_scheduling: bool = True
+        self._create_tables: bool = True
+        self.uploads: Dict[str, UploadedFile] = {}
+        self.current_run: Optional[RunStatus] = None
+
+    # Authentication -----------------------------------------------------
+    def set_auth(
+        self,
+        token: str,
+        base_url: str,
+        *,
+        use_ssl: Optional[bool] = None,
+        skip_verify: Optional[bool] = None,
+    ) -> None:
+        with self._lock:
+            self._token = token
+            self._base_url = base_url
+            self._use_ssl = use_ssl
+            self._skip_verify = skip_verify
+
+    def clear_auth(self) -> None:
+        with self._lock:
+            self._token = None
+
+    # Upload management --------------------------------------------------
+    def register_upload(self, file_path: Path, name: str) -> str:
+        file_id = uuid.uuid4().hex
+        self.uploads[file_id] = UploadedFile(file_id=file_id, name=name, path=file_path)
+        return file_id
+
+    def get_upload_path(self, file_id: str) -> Optional[Path]:
+        uploaded = self.uploads.get(file_id)
+        return uploaded.path if uploaded else None
+
+    # Run lifecycle ------------------------------------------------------
+    def start_run(self) -> RunStatus:
+        with self._lock:
+            if self.current_run and self.current_run.status == "running":
+                raise RuntimeError("A run is already in progress")
+            run = RunStatus(run_id=uuid.uuid4().hex, status="running")
+            self.current_run = run
+            return run
+
+    def append_log(self, run_id: str, message: str) -> None:
+        with self._lock:
+            if not self.current_run or self.current_run.run_id != run_id:
+                return
+            self.current_run.logs.append(message)
+
+    def finalize_run(self, run_id: str, status: str, error: Optional[str] = None) -> None:
+        with self._lock:
+            if not self.current_run or self.current_run.run_id != run_id:
+                return
+            self.current_run.status = status
+            self.current_run.error = error
+
+    def run_snapshot(self, run_id: str) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            if not self.current_run or self.current_run.run_id != run_id:
+                return None
+            return {
+                "id": self.current_run.run_id,
+                "status": self.current_run.status,
+                "logs": list(self.current_run.logs),
+                "error": self.current_run.error,
+            }
+
+    def current_run_snapshot(self) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            if not self.current_run:
+                return None
+            return {
+                "id": self.current_run.run_id,
+                "status": self.current_run.status,
+                "logCount": len(self.current_run.logs),
+                "error": self.current_run.error,
+            }
+
+    def get_logs(self, run_id: str) -> Optional[List[str]]:
+        with self._lock:
+            if not self.current_run or self.current_run.run_id != run_id:
+                return None
+            return list(self.current_run.logs)
+
+    def set_preferences(self, *, enable_scheduling: bool, create_tables: bool) -> None:
+        with self._lock:
+            self._enable_scheduling = enable_scheduling
+            self._create_tables = create_tables
+
+    def preferences(self) -> Dict[str, bool]:
+        with self._lock:
+            return {
+                "enableScheduling": self._enable_scheduling,
+                "createTables": self._create_tables,
+            }
+
+    # Accessors ----------------------------------------------------------
+    @property
+    def token(self) -> Optional[str]:
+        with self._lock:
+            return self._token
+
+    @property
+    def base_url(self) -> Optional[str]:
+        with self._lock:
+            return self._base_url
+
+    @property
+    def use_ssl(self) -> Optional[bool]:
+        with self._lock:
+            return self._use_ssl
+
+    @property
+    def skip_verify(self) -> Optional[bool]:
+        with self._lock:
+            return self._skip_verify
+
+    def snapshot(self) -> Dict[str, Optional[str]]:
+        with self._lock:
+            return {
+                "tokenPresent": self._token is not None,
+                "baseUrl": self._base_url,
+                "useSsl": self._use_ssl,
+                "skipVerify": self._skip_verify,
+                "enableScheduling": self._enable_scheduling,
+                "createTables": self._create_tables,
+                "run": None
+                if not self.current_run
+                else {
+                    "id": self.current_run.run_id,
+                    "status": self.current_run.status,
+                    "logCount": len(self.current_run.logs),
+                    "error": self.current_run.error,
+                },
+            }
+
+
+state = AutomatorState()
+"""Module-level singleton state."""
