@@ -148,37 +148,15 @@ automator_publish:
     - echo "Checking available build artifacts..."
     - ls -la .automator-build/dist/ || echo "No .automator-build/dist directory found"
     - |
-      # Create LFTP command file
-      echo "set ssl:verify-certificate no" > lftp_commands.txt
-      echo "# Remove existing dist folder and gluesync-automator folder" >> lftp_commands.txt
-      echo "rm -rf /molo17.com/public_html/gs-content/gluesync-automator/dist" >> lftp_commands.txt
-      echo "rm -rf /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator" >> lftp_commands.txt
-      
-      if [ -f .automator-build/dist/gluesync-automator-linux ]; then
-        echo "put .automator-build/dist/gluesync-automator-linux /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-linux" >> lftp_commands.txt
-        echo "Will upload Linux executable"
-      else
-        echo "Linux executable not found at .automator-build/dist/gluesync-automator-linux"
-      fi
-      
-      if [ -f .automator-build/dist/gluesync-automator-windows.exe ]; then
-        echo "put .automator-build/dist/gluesync-automator-windows.exe /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-windows.exe" >> lftp_commands.txt
-        echo "Will upload Windows executable"
-      else
-        echo "Windows executable not found at .automator-build/dist/gluesync-automator-windows.exe"
-      fi
-      
-      if [ -f .automator-build/dist/gluesync-automator-macos ]; then
-        echo "put .automator-build/dist/gluesync-automator-macos /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-macos" >> lftp_commands.txt
-        echo "Will upload macOS executable"
-      else
-        echo "macOS executable not found at .automator-build/dist/gluesync-automator-macos"
-      fi
-      
-      echo "bye" >> lftp_commands.txt
-      
-      # Execute LFTP commands
-      lftp -u "$FTP_USER","$FTP_PASSWORD" "${FTP_HOST:-$FTP_SITE}" < lftp_commands.txt
+      lftp -u "$FTP_USER","$FTP_PASSWORD" "${FTP_HOST:-$FTP_SITE}" <<EOF
+      set ssl:verify-certificate no
+      # Remove existing dist folder and gluesync-automator folder
+      rm -rf /molo17.com/public_html/gs-content/gluesync-automator/
+      # Upload executables
+      put .automator-build/dist/gluesync-automator-linux /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-linux
+      put .automator-build/dist/gluesync-automator-windows.exe /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-windows.exe
+      bye
+      EOF
 
 deploy:
   stage: deploy
