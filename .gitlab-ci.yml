@@ -146,17 +146,18 @@ automator_publish:
     - apk add --no-cache lftp
   script:
     - echo "Checking available build artifacts..."
-    - ls -la .automator-build/dist/ || echo "No .automator-build/dist directory found"
+    - cd .automator-build/dist/
+    - ls -la || echo "No .automator-build/dist directory found"
     - |
-      lftp -u "$FTP_USER","$FTP_PASSWORD" "${FTP_HOST:-$FTP_SITE}" <<EOF
+      lftp -u "$FTP_USER","$FTP_PASSWORD" "$FTP_SITE" <<EOF
       set ssl:verify-certificate no
       # Remove existing dist folder and gluesync-automator folder
       rm -rf /molo17.com/public_html/gs-content/gluesync-automator/
-      # Upload executables
-      put ./automator-build/dist/gluesync-automator-linux /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-linux
-      put ./automator-build/dist/gluesync-automator-windows.exe /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-windows.exe
       bye
       EOF
+
+      lftp -c "open -u $FTP_USER,$FTP_PASSWORD $FTP_SITE; put ./gluesync-automator-linux -o /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-linux" 
+      lftp -c "open -u $FTP_USER,$FTP_PASSWORD $FTP_SITE; put ./gluesync-automator-windows.exe -o /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-windows.exe" 
 
 deploy:
   stage: deploy
