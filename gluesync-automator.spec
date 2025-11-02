@@ -1,11 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-block_cipher = None
-
 
 a = Analysis(
     ['run_automator.py'],
-    pathex=['.'],
+    pathex=[],
     binaries=[],
     datas=[('automator_app/static', 'automator_app/static')],
     hiddenimports=[],
@@ -13,26 +11,27 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
-    cipher=block_cipher,
-    noarchive=False,
+    noarchive=True,
+    optimize=0,
 )
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+pyz = PYZ(a.pure)
+
 exe = EXE(
     pyz,
     a.scripts,
-    [],
-    exclude_binaries=True,
+    a.binaries,
+    a.datas,
+    [('v', None, 'OPTION')],
     name='gluesync-automator',
-    debug=False,
+    debug=True,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=False,
+    upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,
+    console=True,
     disable_windowed_traceback=False,
+    argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,

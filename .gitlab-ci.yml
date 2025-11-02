@@ -146,12 +146,18 @@ automator_publish:
     - apk add --no-cache lftp
   script:
     - echo "Checking available build artifacts..."
-    - cd .automator-build/dist/
-    - ls -la || echo "No .automator-build/dist directory found"
+    - ls -la .automator-build/dist/ || echo "No .automator-build/dist directory found"
     - 
       |
-      lftp -c "open -u $FTP_USER,$FTP_PASSWORD $FTP_SITE; put ./gluesync-automator-windows.exe -o /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-windows.exe" 
-      lftp -c "open -u $FTP_USER,$FTP_PASSWORD $FTP_SITE; put ./gluesync-automator-linux -o /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-linux.bin" 
+      cd .automator-build/dist
+      lftp -c "open -u $FTP_USER,$FTP_PASSWORD $FTP_SITE; put .gluesync-automator-windows.exe -o /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-windows.exe" 
+      lftp -c "open -u $FTP_USER,$FTP_PASSWORD $FTP_SITE; put .gluesync-automator-linux.bin -o /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-linux.bin" 
+      # if [ -f "./gluesync-automator-macos" ]; then
+      #   lftp -c "open -u $FTP_USER,$FTP_PASSWORD $FTP_SITE; put ./gluesync-automator-macos -o /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-macos"
+      #   echo "Uploaded macOS executable"
+      # else
+      #   echo "macOS executable not found locally"
+      # fi 
 
 deploy:
   stage: deploy
