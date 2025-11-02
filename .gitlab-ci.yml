@@ -1,23 +1,22 @@
-# Copyright (c) 2024 MOLO17
-# Author: Daniele Angeli
+# This program is part of Gluesync.
 #
-# Permission is hereby granted, free of charge, to any person obtaining a copy
-# of this software and associated documentation files (the "Software"), to deal
-# in the Software without restriction, including without limitation the rights
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-# copies of the Software, and to permit persons to whom the Software is
-# furnished to do so, subject to the following conditions:
+# Gluesync Bootstrapper is dual-licensed under the following licenses:
 #
-# The above copyright notice and this permission notice shall be included in all
-# copies or substantial portions of the Software.
+# 1. GNU General Public License (GPL) Version 3
+#    You may use, modify, and distribute this software under the terms of the GPL v3.
+#    See the LICENSE-GPL file or <http://www.gnu.org/licenses/gpl-3.0.html> for details.
+#    This option is available at no cost, but any derivative works must also be licensed under GPL v3.
 #
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-# SOFTWARE.
+# 2. MOLO17 Commercial License
+#    Alternatively, you may use this software under the MOLO17 Commercial License,
+#    which includes a warranty and permits proprietary use. Contact MOLO17 at info@molo17.com
+#    for licensing terms and conditions.
+#
+# You must choose one of these licenses to use this software. Using this software implies
+# acceptance of one of these licenses. See the accompanying LICENSE files or contact
+# MOLO17 for more information.
+#
+# Copyright (C) 2025 MOLO17. All rights reserved.
 
 stages:
   - build
@@ -51,13 +50,69 @@ automator_build:
   script:
     - |
       export AUTOMATOR_VERSION="${CI_COMMIT_TAG#automator-}"
-      echo "Building Gluesync Automator version $AUTOMATOR_VERSION"
+      echo "Building Gluesync Automator version $AUTOMATOR_VERSION for Linux"
       pyinstaller automator.spec --clean --distpath .automator-build/dist --workpath .automator-build/build
-    - ls -R .automator-build/dist
+    - ls -la .automator-build/dist
+    - mv .automator-build/dist/gluesync-automator .automator-build/dist/gluesync-automator-linux
   artifacts:
-    name: "gluesync-automator-${CI_COMMIT_TAG}"
+    name: "gluesync-automator-linux-${CI_COMMIT_TAG}"
     paths:
-      - .automator-build/dist/
+      - .automator-build/dist/gluesync-automator-linux
+    expire_in: 2 weeks
+
+automator_build_windows:
+  stage: build
+  image: python:3.11
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
+      when: always
+    - when: never
+  variables:
+    PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    PYTHONDONTWRITEBYTECODE: "1"
+  before_script:
+    - python3 --version
+    - apt-get update && apt-get install -y wine
+    - pip3 install --break-system-packages --upgrade pip
+    - pip3 install --break-system-packages -r requirements.txt pyinstaller
+  script:
+    - |
+      export AUTOMATOR_VERSION="${CI_COMMIT_TAG#automator-}"
+      echo "Building Gluesync Automator version $AUTOMATOR_VERSION for Windows"
+      pyinstaller automator.spec --clean --distpath .automator-build/dist --workpath .automator-build/build --target win64
+    - ls -la .automator-build/dist
+    - mv .automator-build/dist/gluesync-automator.exe .automator-build/dist/gluesync-automator-windows.exe
+  artifacts:
+    name: "gluesync-automator-windows-${CI_COMMIT_TAG}"
+    paths:
+      - .automator-build/dist/gluesync-automator-windows.exe
+    expire_in: 2 weeks
+
+automator_build_macos:
+  stage: build
+  image: python:3.11
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
+      when: always
+    - when: never
+  variables:
+    PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    PYTHONDONTWRITEBYTECODE: "1"
+  before_script:
+    - python3 --version
+    - pip3 install --break-system-packages --upgrade pip
+    - pip3 install --break-system-packages -r requirements.txt pyinstaller
+  script:
+    - |
+      export AUTOMATOR_VERSION="${CI_COMMIT_TAG#automator-}"
+      echo "Building Gluesync Automator version $AUTOMATOR_VERSION for macOS"
+      pyinstaller automator.spec --clean --distpath .automator-build/dist --workpath .automator-build/build --target macosx-10.9-universal2
+    - ls -la .automator-build/dist
+    - mv .automator-build/dist/gluesync-automator .automator-build/dist/gluesync-automator-macos
+  artifacts:
+    name: "gluesync-automator-macos-${CI_COMMIT_TAG}"
+    paths:
+      - .automator-build/dist/gluesync-automator-macos
     expire_in: 2 weeks
 
 automator_publish:
@@ -65,6 +120,10 @@ automator_publish:
   image: alpine:3.20
   needs:
     - job: automator_build
+      artifacts: true
+    - job: automator_build_windows
+      artifacts: true
+    - job: automator_build_macos
       artifacts: true
   rules:
     - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
@@ -76,7 +135,13 @@ automator_publish:
     - |
       lftp -u "$FTP_USER","$FTP_PASSWORD" "${FTP_HOST:-$FTP_SITE}" <<'EOF'
       set ssl:verify-certificate no
-      mirror -Rv .automator-build/dist /molo17.com/public_html/gs-content/gluesync-automator/
+      # Remove existing dist folder and gluesync-automator folder
+      rm -rf /molo17.com/public_html/gs-content/gluesync-automator/dist
+      rm -rf /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator
+      # Upload single-file executables for all platforms
+      put .automator-build/dist/gluesync-automator-linux /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-linux
+      put .automator-build/dist/gluesync-automator-windows.exe /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-windows.exe
+      put .automator-build/dist/gluesync-automator-macos /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-macos
       bye
       EOF
 
