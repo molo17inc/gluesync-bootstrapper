@@ -150,8 +150,8 @@ automator_publish:
     - ls -la || echo "No .automator-build/dist directory found"
     - 
       |
-      lftp -c "open -u $FTP_USER,$FTP_PASSWORD $FTP_SITE; put ./gluesync-automator-linux -o /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-linux.bin" 
       lftp -c "open -u $FTP_USER,$FTP_PASSWORD $FTP_SITE; put ./gluesync-automator-windows.exe -o /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-windows.exe" 
+      lftp -c "open -u $FTP_USER,$FTP_PASSWORD $FTP_SITE; put ./gluesync-automator-linux -o /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-linux.bin" 
 
 deploy:
   stage: deploy
