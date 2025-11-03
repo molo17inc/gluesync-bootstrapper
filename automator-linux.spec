@@ -31,14 +31,22 @@ hiddenimports = [
 
 
 a = Analysis(
-    ['run_automator.py'],
+    [
+        'run_automator.py',
+        'create_user_defined_functions.py',
+        'create_all_tables.py', 
+        'create_all_entities.py',
+        'commons.py',
+        'main.py',
+        'parse_dbmoto_metadata_xml.py',
+    ],
     pathex=['.'],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=['pyi_rth_linux_root_modules.py'],
     excludes=[],
     noarchive=False,
     optimize=0,
@@ -63,4 +71,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='automator_app/static/favicon.ico',
 )
