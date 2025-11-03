@@ -51,11 +51,7 @@ automator_build:
     - |
       export AUTOMATOR_VERSION="${CI_COMMIT_TAG#automator-}"
       echo "Building Gluesync Automator version $AUTOMATOR_VERSION for Linux"
-      export PYI_EXE_NAME="gluesync-automator-linux"
-      export PYI_RUNTIME_TMPDIR="/tmp"
-      pyinstaller gluesync-automator-macos.spec --clean --distpath .automator-build/dist --workpath .automator-build/build
-      # Rename the output to the expected Linux name
-      mv .automator-build/dist/gluesync-automator-macos .automator-build/dist/gluesync-automator-linux
+      pyinstaller automator-linux.spec --clean --distpath .automator-build/dist --workpath .automator-build/build
     - ls -la .automator-build/dist
   artifacts:
     name: "gluesync-automator-linux-${CI_COMMIT_TAG}"
@@ -97,11 +93,7 @@ automator_build_windows:
       $python = Join-Path $env:CI_PROJECT_DIR 'python\python.exe'
       $version = $env:CI_COMMIT_TAG -replace '^automator-', ''
       Write-Host "Building Gluesync Automator version $version for Windows"
-      $env:PYI_EXE_NAME = 'gluesync-automator-windows'
-      $env:PYI_RUNTIME_TMPDIR = 'C:\\Windows\\Temp'
-      & $python -m PyInstaller gluesync-automator-macos.spec --clean --distpath .automator-build/dist --workpath .automator-build/build
-      # Rename the output to the expected Windows name
-      Rename-Item -Path '.automator-build/dist/gluesync-automator-macos.exe' -NewName 'gluesync-automator-windows.exe'
+      & $python -m PyInstaller automator-windows.spec --clean --distpath .automator-build/dist --workpath .automator-build/build
     - Get-ChildItem .automator-build/dist
   artifacts:
     name: "gluesync-automator-windows-${CI_COMMIT_TAG}"
@@ -111,7 +103,7 @@ automator_build_windows:
 
 # automator_build_macos:
 #   stage: build
-#   image: python:3.11
+#   image: python:3.9-bullseye
 #   rules:
 #     - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
 #       when: always
@@ -127,8 +119,7 @@ automator_build_windows:
 #     - |
 #       export AUTOMATOR_VERSION="${CI_COMMIT_TAG#automator-}"
 #       echo "Building Gluesync Automator version $AUTOMATOR_VERSION for macOS"
-#       pyinstaller gluesync-automator-macos.spec --clean --distpath .automator-build/dist --workpath .automator-build/build
-#       find .automator-build -name "gluesync-automator-macos*" -type f -exec cp {} .automator-build/dist/gluesync-automator-macos \;
+#       pyinstaller automator-macos.spec --clean --distpath .automator-build/dist --workpath .automator-build/build
 #     - ls -la .automator-build/dist
 #   artifacts:
 #     name: "gluesync-automator-macos-${CI_COMMIT_TAG}"
@@ -144,6 +135,9 @@ automator_publish:
       artifacts: true
     - job: automator_build_windows
       artifacts: true
+    - job: automator_build_macos  # Uncomment when macOS CI is enabled
+      artifacts: true
+      optional: true  # Make it optional since macOS build might be disabled
   rules:
     - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
       when: always
@@ -158,12 +152,12 @@ automator_publish:
       cd .automator-build/dist
       lftp -c "open -u $FTP_USER,$FTP_PASSWORD $FTP_SITE; put gluesync-automator-windows.exe -o /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-windows.exe" 
       lftp -c "open -u $FTP_USER,$FTP_PASSWORD $FTP_SITE; put gluesync-automator-linux -o /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-linux" 
-      # if [ -f "./gluesync-automator-macos" ]; then
-      #   lftp -c "open -u $FTP_USER,$FTP_PASSWORD $FTP_SITE; put gluesync-automator-macos -o /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-macos"
-      #   echo "Uploaded macOS executable"
-      # else
-      #   echo "macOS executable not found locally"
-      # fi 
+      if [ -f "gluesync-automator-macos" ]; then
+        lftp -c "open -u $FTP_USER,$FTP_PASSWORD $FTP_SITE; put gluesync-automator-macos -o /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-macos"
+        echo "Uploaded macOS executable"
+      else
+        echo "macOS executable not available (built locally)"
+      fi 
 
 deploy:
   stage: deploy

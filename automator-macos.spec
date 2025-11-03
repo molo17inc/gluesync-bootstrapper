@@ -1,17 +1,25 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_all
 import os
 
-exe_name = os.getenv('PYI_EXE_NAME', 'gluesync-automator-macos')
-runtime_tmpdir = os.getenv('PYI_RUNTIME_TMPDIR', '/tmp')
+exe_name = 'gluesync-automator-macos'
+runtime_tmpdir = '/tmp'
 
 datas = [('automator_app/static', 'static')]
 binaries = []
-hiddenimports = []
-tmp_ret = collect_all('utils')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-tmp_ret = collect_all('automator_app')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+hiddenimports = [
+    'create_user_defined_functions',
+    'create_all_tables',
+    'commons',
+    'utils.log',
+    'utils.core_hub_client',
+    'utils.chronos_client',
+    'utils.gluesync_sdk_client',
+    'automator_app.app',
+    'automator_app.cli',
+    'automator_app.corehub',
+    'automator_app.state',
+    'automator_app.version',
+]
 
 
 a = Analysis(
