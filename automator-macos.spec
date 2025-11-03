@@ -1,5 +1,11 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os
+import sys
+
+# Add current directory to sys.path to ensure root modules are found
+current_dir = os.path.dirname(os.path.abspath(SPEC))
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
 
 exe_name = 'gluesync-automator-macos'
 runtime_tmpdir = '/tmp'
