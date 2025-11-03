@@ -53,14 +53,9 @@ automator_build:
       echo "Building Gluesync Automator version $AUTOMATOR_VERSION for Linux"
       export PYI_EXE_NAME="gluesync-automator-linux"
       export PYI_RUNTIME_TMPDIR="/tmp"
-      pyinstaller automator.spec --clean --distpath .automator-build/dist --workpath .automator-build/build
-      # Find and copy the executable to the expected location
-      find .automator-build -name "gluesync-automator-linux*" -type f -exec cp {} .automator-build/dist/gluesync-automator-linux \;
-      if [ ! -f ".automator-build/dist/gluesync-automator-linux" ]; then
-        echo "Failed to locate and copy gluesync-automator-linux"
-        find .automator-build -name "*automator*" -type f
-        exit 1
-      fi
+      pyinstaller gluesync-automator-macos.spec --clean --distpath .automator-build/dist --workpath .automator-build/build
+      # Rename the output to the expected Linux name
+      mv .automator-build/dist/gluesync-automator-macos .automator-build/dist/gluesync-automator-linux
     - ls -la .automator-build/dist
   artifacts:
     name: "gluesync-automator-linux-${CI_COMMIT_TAG}"
@@ -104,16 +99,9 @@ automator_build_windows:
       Write-Host "Building Gluesync Automator version $version for Windows"
       $env:PYI_EXE_NAME = 'gluesync-automator-windows'
       $env:PYI_RUNTIME_TMPDIR = 'C:\\Windows\\Temp'
-      & $python -m PyInstaller automator.spec --clean --distpath .automator-build/dist --workpath .automator-build/build
-      # Find and copy the executable to the expected location
-      $source = Get-ChildItem -Path .automator-build -Filter 'gluesync-automator-windows*' -Recurse | Select-Object -First 1
-      if ($source) {
-        Copy-Item -Path $source.FullName -Destination (Join-Path .automator-build/dist 'gluesync-automator-windows.exe') -Force
-      } else {
-        Write-Host "Failed to locate gluesync-automator-windows executable"
-        Get-ChildItem -Path .automator-build -Filter '*automator*' -Recurse
-        throw 'gluesync-automator-windows.exe not found'
-      }
+      & $python -m PyInstaller gluesync-automator-macos.spec --clean --distpath .automator-build/dist --workpath .automator-build/build
+      # Rename the output to the expected Windows name
+      Rename-Item -Path '.automator-build/dist/gluesync-automator-macos.exe' -NewName 'gluesync-automator-windows.exe'
     - Get-ChildItem .automator-build/dist
   artifacts:
     name: "gluesync-automator-windows-${CI_COMMIT_TAG}"
@@ -139,9 +127,9 @@ automator_build_windows:
 #     - |
 #       export AUTOMATOR_VERSION="${CI_COMMIT_TAG#automator-}"
 #       echo "Building Gluesync Automator version $AUTOMATOR_VERSION for macOS"
-#       pyinstaller automator.spec --clean --distpath .automator-build/dist --workpath .automator-build/build --target macosx-10.9-universal2
+#       pyinstaller gluesync-automator-macos.spec --clean --distpath .automator-build/dist --workpath .automator-build/build
+#       find .automator-build -name "gluesync-automator-macos*" -type f -exec cp {} .automator-build/dist/gluesync-automator-macos \;
 #     - ls -la .automator-build/dist
-#     - mv .automator-build/dist/gluesync-automator .automator-build/dist/gluesync-automator-macos
 #   artifacts:
 #     name: "gluesync-automator-macos-${CI_COMMIT_TAG}"
 #     paths:

@@ -1,5 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
+import os
+
+exe_name = os.getenv('PYI_EXE_NAME', 'gluesync-automator-macos')
+runtime_tmpdir = os.getenv('PYI_RUNTIME_TMPDIR', '/tmp')
 
 datas = [('automator_app/static', 'static')]
 binaries = []
@@ -31,13 +35,13 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='gluesync-automator-macos',
+    name=exe_name,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
     upx_exclude=[],
-    runtime_tmpdir=None,
+    runtime_tmpdir=runtime_tmpdir,
     console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
