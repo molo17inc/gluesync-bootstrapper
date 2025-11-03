@@ -54,10 +54,11 @@ automator_build:
       export PYI_EXE_NAME="gluesync-automator-linux"
       export PYI_RUNTIME_TMPDIR="/tmp"
       pyinstaller automator.spec --clean --distpath .automator-build/dist --workpath .automator-build/build
-      DIST_DIR=".automator-build/dist"
-      if [ ! -f "$DIST_DIR/gluesync-automator-linux" ]; then
-        echo "PyInstaller did not produce expected gluesync-automator-linux in $DIST_DIR"
-        find "$DIST_DIR" -maxdepth 3 -type f -print
+      # Find and copy the executable to the expected location
+      find .automator-build -name "gluesync-automator-linux*" -type f -exec cp {} .automator-build/dist/gluesync-automator-linux \;
+      if [ ! -f ".automator-build/dist/gluesync-automator-linux" ]; then
+        echo "Failed to locate and copy gluesync-automator-linux"
+        find .automator-build -name "*automator*" -type f
         exit 1
       fi
     - ls -la .automator-build/dist
@@ -104,11 +105,13 @@ automator_build_windows:
       $env:PYI_EXE_NAME = 'gluesync-automator-windows'
       $env:PYI_RUNTIME_TMPDIR = 'C:\\Windows\\Temp'
       & $python -m PyInstaller automator.spec --clean --distpath .automator-build/dist --workpath .automator-build/build
-      $distDir = Join-Path $env:CI_PROJECT_DIR '.automator-build/dist'
-      $targetPath = Join-Path $distDir 'gluesync-automator-windows.exe'
-      if (-not (Test-Path $targetPath)) {
-        Write-Host "PyInstaller did not produce expected gluesync-automator-windows.exe in $distDir"
-        Get-ChildItem $distDir -Recurse
+      # Find and copy the executable to the expected location
+      $source = Get-ChildItem -Path .automator-build -Filter 'gluesync-automator-windows*' -Recurse | Select-Object -First 1
+      if ($source) {
+        Copy-Item -Path $source.FullName -Destination (Join-Path .automator-build/dist 'gluesync-automator-windows.exe') -Force
+      } else {
+        Write-Host "Failed to locate gluesync-automator-windows executable"
+        Get-ChildItem -Path .automator-build -Filter '*automator*' -Recurse
         throw 'gluesync-automator-windows.exe not found'
       }
     - Get-ChildItem .automator-build/dist
