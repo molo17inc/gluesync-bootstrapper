@@ -10,6 +10,7 @@ binaries = []
 hiddenimports = [
     'create_user_defined_functions',
     'create_all_tables',
+    'create_all_entities',
     'commons',
     'utils.log',
     'utils.core_hub_client',
@@ -25,7 +26,7 @@ hiddenimports = [
 
 a = Analysis(
     ['run_automator.py'],
-    pathex=[],
+    pathex=['.'],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
