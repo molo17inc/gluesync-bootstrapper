@@ -35,7 +35,7 @@ variables:
 
 automator_build:
   stage: build
-  image: python:3.11
+  image: python:3.9-bullseye
   rules:
     - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
       when: always
@@ -51,7 +51,7 @@ automator_build:
     - |
       export AUTOMATOR_VERSION="${CI_COMMIT_TAG#automator-}"
       echo "Building Gluesync Automator version $AUTOMATOR_VERSION for Linux"
-      pyinstaller -F run_automator.py --add-data 'automator_app/static:static' --name gluesync-automator-linux --distpath .automator-build/dist --workpath .automator-build/build
+      pyinstaller -F run_automator.py --add-data 'automator_app/static:static' --name gluesync-automator-linux --distpath .automator-build/dist --workpath .automator-build/build --runtime-tmpdir /tmp
     - ls -la .automator-build/dist
   artifacts:
     name: "gluesync-automator-linux-${CI_COMMIT_TAG}"
