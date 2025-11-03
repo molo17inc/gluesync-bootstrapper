@@ -1,6 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import os
+
 block_cipher = None
+
+
+exe_name = os.getenv('PYI_EXE_NAME', 'gluesync-automator')
+runtime_tmpdir = os.getenv('PYI_RUNTIME_TMPDIR', '/tmp')
 
 
 a = Analysis(
@@ -32,13 +38,13 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='gluesync-automator',
+    name=exe_name,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
     upx_exclude=[],
-    runtime_tmpdir='/tmp',
+    runtime_tmpdir=runtime_tmpdir,
     console=False,
     disable_windowed_traceback=False,
     target_arch=None,
