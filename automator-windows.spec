@@ -63,6 +63,6 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='automator_app\\static\\gluesync-icon.ico',
+    icon='automator_app\\static\\favicon.ico',
     version='windows-version-info.py',
 )
