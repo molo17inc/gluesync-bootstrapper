@@ -51,7 +51,7 @@ automator_build:
     - |
       export AUTOMATOR_VERSION="${CI_COMMIT_TAG#automator-}"
       echo "Building Gluesync Automator version $AUTOMATOR_VERSION for Linux"
-      pyinstaller -F run_automator.py --add-data 'automator_app/static:static' --hidden-import create_user_defined_functions --hidden-import utils.log --hidden-import utils.core_hub_client --hidden-import commons --hidden-import create_all_tables --name gluesync-automator-linux --distpath .automator-build/dist --workpath .automator-build/build --runtime-tmpdir /tmp
+      pyinstaller -F run_automator.py --add-data 'automator_app/static:static' --collect-all utils --collect-all automator_app --name gluesync-automator-linux --distpath .automator-build/dist --workpath .automator-build/build --runtime-tmpdir /tmp
     - ls -la .automator-build/dist
   artifacts:
     name: "gluesync-automator-linux-${CI_COMMIT_TAG}"
@@ -93,7 +93,7 @@ automator_build_windows:
       $python = Join-Path $env:CI_PROJECT_DIR 'python\python.exe'
       $version = $env:CI_COMMIT_TAG -replace '^automator-', ''
       Write-Host "Building Gluesync Automator version $version for Windows"
-      & $python -m PyInstaller -F run_automator.py --add-data 'automator_app/static;static' --hidden-import create_user_defined_functions --hidden-import utils.log --hidden-import utils.core_hub_client --hidden-import commons --hidden-import create_all_tables --name gluesync-automator-windows.exe --distpath .automator-build/dist --workpath .automator-build/build
+      & $python -m PyInstaller -F run_automator.py --add-data 'automator_app/static;static' --collect-all utils --collect-all automator_app --name gluesync-automator-windows.exe --distpath .automator-build/dist --workpath .automator-build/build
     - Get-ChildItem .automator-build/dist
   artifacts:
     name: "gluesync-automator-windows-${CI_COMMIT_TAG}"

@@ -1,12 +1,21 @@
 # -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_all
+
+datas = [('automator_app/static', 'static')]
+binaries = []
+hiddenimports = []
+tmp_ret = collect_all('utils')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('automator_app')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 a = Analysis(
     ['run_automator.py'],
     pathex=[],
-    binaries=[],
-    datas=[('automator_app/static', 'static')],
-    hiddenimports=['create_user_defined_functions', 'utils.log', 'utils.core_hub_client', 'commons', 'create_all_tables'],
+    binaries=binaries,
+    datas=datas,
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
