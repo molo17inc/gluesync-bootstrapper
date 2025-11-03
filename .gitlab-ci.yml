@@ -52,7 +52,21 @@ automator_build:
       export AUTOMATOR_VERSION="${CI_COMMIT_TAG#automator-}"
       echo "Building Gluesync Automator version $AUTOMATOR_VERSION for Linux"
       pyinstaller automator.spec --clean --distpath .automator-build/dist --workpath .automator-build/build
-      mv .automator-build/dist/gluesync-automator .automator-build/dist/gluesync-automator-linux
+      DIST_DIR=".automator-build/dist"
+      BASE_NAME="gluesync-automator"
+      TARGET_NAME="gluesync-automator-linux"
+      if [ -f "$DIST_DIR/$BASE_NAME" ]; then
+        mv "$DIST_DIR/$BASE_NAME" "$DIST_DIR/$TARGET_NAME"
+      elif [ -f "$DIST_DIR/$BASE_NAME.bin" ]; then
+        mv "$DIST_DIR/$BASE_NAME.bin" "$DIST_DIR/$TARGET_NAME"
+      elif [ -f "$DIST_DIR/$BASE_NAME/$BASE_NAME" ]; then
+        mv "$DIST_DIR/$BASE_NAME/$BASE_NAME" "$DIST_DIR/$TARGET_NAME"
+        rm -rf "$DIST_DIR/$BASE_NAME"
+      else
+        echo "Unable to locate PyInstaller output in $DIST_DIR"
+        find "$DIST_DIR" -maxdepth 2 -type f -print
+        exit 1
+      fi
     - ls -la .automator-build/dist
   artifacts:
     name: "gluesync-automator-linux-${CI_COMMIT_TAG}"
@@ -95,7 +109,22 @@ automator_build_windows:
       $version = $env:CI_COMMIT_TAG -replace '^automator-', ''
       Write-Host "Building Gluesync Automator version $version for Windows"
       & $python -m PyInstaller automator.spec --clean --distpath .automator-build/dist --workpath .automator-build/build
-      Rename-Item -Path '.automator-build/dist/gluesync-automator.exe' -NewName 'gluesync-automator-windows.exe'
+      $distDir = Join-Path $env:CI_PROJECT_DIR '.automator-build/dist'
+      $baseName = 'gluesync-automator'
+      $targetName = 'gluesync-automator-windows.exe'
+      $directPath = Join-Path $distDir "$baseName.exe"
+      $nestedPath = Join-Path (Join-Path $distDir $baseName) "$baseName.exe"
+      if (Test-Path $directPath) {
+        Rename-Item -Path $directPath -NewName $targetName
+      } elseif (Test-Path $nestedPath) {
+        $finalPath = Join-Path $distDir $targetName
+        Move-Item -Path $nestedPath -Destination $finalPath -Force
+        Remove-Item -Path (Join-Path $distDir $baseName) -Recurse -Force
+      } else {
+        Write-Host "Unable to locate PyInstaller output in $distDir"
+        Get-ChildItem $distDir -Recurse
+        throw 'gluesync-automator.exe not found'
+      }
     - Get-ChildItem .automator-build/dist
   artifacts:
     name: "gluesync-automator-windows-${CI_COMMIT_TAG}"
