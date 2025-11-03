@@ -63,27 +63,26 @@ class UdfFunctionType(str, Enum):
     # ruby = 'ruby'
 
     def extension(self):
-        match self:
-            case UdfFunctionType.java:
-                return ".java"
-            case UdfFunctionType.kotlin:
-                return ".kt"
-            # case UdfFunctionType.python:
-            #     return ".py"
-            # case UdfFunctionType.javascript:s
-            #     return ".js"
-            # case UdfFunctionType.rust:
-            #     return ".rs"
-            # case UdfFunctionType.go:
-            #     return ".go"
-            # case UdfFunctionType.r:
-            #     return ".r"
-            # case UdfFunctionType.ruby:
-            #     return ".rb"
-            # case UdfFunctionType.scala:
-            #     return ".scala"
-            case _:
-                raise NotImplementedError("not implemented")
+        if self == UdfFunctionType.java:
+            return ".java"
+        elif self == UdfFunctionType.kotlin:
+            return ".kt"
+        # elif self == UdfFunctionType.python:
+        #     return ".py"
+        # elif self == UdfFunctionType.javascript:
+        #     return ".js"
+        # elif self == UdfFunctionType.rust:
+        #     return ".rs"
+        # elif self == UdfFunctionType.go:
+        #     return ".go"
+        # elif self == UdfFunctionType.r:
+        #     return ".r"
+        # elif self == UdfFunctionType.ruby:
+        #     return ".rb"
+        # elif self == UdfFunctionType.scala:
+        #     return ".scala"
+        else:
+            raise NotImplementedError("not implemented")
 
 class UdfFunctionCompileRequest(BaseModel):
     model_config = ConfigDict(use_enum_values=True)
