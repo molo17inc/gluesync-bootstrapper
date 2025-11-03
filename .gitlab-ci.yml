@@ -148,10 +148,10 @@ automator_publish:
     - 
       |
       cd .automator-build/dist
-      lftp -c "open -u $FTP_USER,$FTP_PASSWORD $FTP_SITE; put .gluesync-automator-windows.exe -o /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-windows.exe" 
-      lftp -c "open -u $FTP_USER,$FTP_PASSWORD $FTP_SITE; put .gluesync-automator-linux -o /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-linux" 
+      lftp -c "open -u $FTP_USER,$FTP_PASSWORD $FTP_SITE; put gluesync-automator-windows.exe -o /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-windows.exe" 
+      lftp -c "open -u $FTP_USER,$FTP_PASSWORD $FTP_SITE; put gluesync-automator-linux -o /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-linux" 
       # if [ -f "./gluesync-automator-macos" ]; then
-      #   lftp -c "open -u $FTP_USER,$FTP_PASSWORD $FTP_SITE; put .gluesync-automator-macos -o /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-macos"
+      #   lftp -c "open -u $FTP_USER,$FTP_PASSWORD $FTP_SITE; put gluesync-automator-macos -o /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-macos"
       #   echo "Uploaded macOS executable"
       # else
       #   echo "macOS executable not found locally"
