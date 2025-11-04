@@ -91,11 +91,15 @@ conversion_stats = {
 }
 
 def parse_xml():
-    XML_PATH = os.environ.get('XML_PATH')
-    print(f"Parsing XML: {XML_PATH}")
+    xml_path = os.environ.get('XML_PATH') or args.xml_path
+    if not xml_path:
+        raise ValueError("XML path is required. Provide it via CLI argument or XML_PATH environment variable.")
+    print(f"Parsing XML: {xml_path}")
+    if not os.path.isfile(xml_path):
+        raise FileNotFoundError(f"XML file not found: {xml_path}")
     
     # Parse the XML file
-    tree = ET.parse(XML_PATH)
+    tree = ET.parse(xml_path)
     root = tree.getroot()
     
     # First, extract groups information
@@ -491,6 +495,25 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
     if 'args' in globals() and hasattr(args, 'include_targets'):
         include_targets = args.include_targets
 
+    # Build lookup for tables by ID and map source tables to their target counterparts
+    table_lookup = {}
+    for conn in connections.values():
+        for schema in conn["schemas"].values():
+            for table_id, table in schema["tables"].items():
+                table_lookup[table_id] = {
+                    "table": table,
+                    "schema_name": schema["name"],
+                    "connection_name": conn["name"],
+                    "is_source": conn["is_source"],
+                }
+    
+    source_to_target_tables = {}
+    for repl in replications.values():
+        src_id = repl.get("src_table_id")
+        trg_id = repl.get("trg_table_id")
+        if src_id and trg_id:
+            source_to_target_tables.setdefault(src_id, []).append(trg_id)
+    
     # Process each connection and schema
     for conn in connections.values():
         # Skip target connections UNLESS we have manual overrides or --include-targets flag
@@ -509,8 +532,8 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
             
             # Only export if there are tables with fields
             if tables_with_fields:
-                # Create whitelist of all table names
-                whitelist = list(tables_with_fields.keys())
+                # Create whitelist of all table names (prefer target names when available)
+                whitelist = []
                 
                 # Create custom table definitions with column details
                 custom_tables = {}
@@ -524,11 +547,32 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                         }
                         columns.append(column_entry)
                     
+                    # Determine the mapped target table name if available
+                    export_table_name = table_name
+                    target_schema_name = None
+                    target_conn_name = None
+                    target_ids = source_to_target_tables.get(table["id"], [])
+                    for target_id in target_ids:
+                        target_info = table_lookup.get(target_id)
+                        if target_info and not target_info["is_source"]:
+                            export_table_name = target_info["table"]["name"]
+                            target_schema_name = target_info["schema_name"]
+                            target_conn_name = target_info["connection_name"]
+                            break
+                    else:
+                        if target_ids:
+                            print(f"      Warning: Could not resolve target table IDs {target_ids} for source table {table_name}")
+                    
+                    if export_table_name not in whitelist:
+                        whitelist.append(export_table_name)
+                    
                     # Create the table entry with column definitions
                     table_config = {
-                        "name": table_name,  # Preserve original case
+                        "name": export_table_name,
                         "columns": columns
                     }
+                    if export_table_name != table_name:
+                        print(f"      Mapped source table '{table_name}' -> target table '{export_table_name}' (schema: {target_schema_name}, connection: {target_conn_name})")
                     
                     # Add primary keys if found, otherwise let engine autodiscover
                     if table.get("primary_keys"):
