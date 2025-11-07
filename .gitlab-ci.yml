@@ -334,40 +334,36 @@ deploy_lambda:
           --region "$AWS_REGION"
         echo "✅ Stack creation completed successfully"
       fi
-    # Only update Lambda if we're not in a 'no updates needed' scenario
+    # Always update Lambda function code for dbmoto deployments
     - |
-      if [[ "${NO_UPDATES_NEEDED:-false}" != "true" ]]; then
-        echo "⏳ Waiting for Lambda function to be ready (max 5 minutes)..."
-        WAIT_START=$(date +%s)
-        TIMEOUT=300
-        LAMBDA_READY=false
-        
-        while [ $(( $(date +%s) - WAIT_START )) -lt $TIMEOUT ]; do
-          if aws lambda get-function --function-name dbmoto-xml-converter --region "$AWS_REGION" >/dev/null 2>&1; then
-            LAMBDA_READY=true
-            break
-          fi
-          echo "⏱️  Waiting for Lambda function to be available... ($(( $(date +%s) - WAIT_START ))s elapsed)"
-          sleep 10
-        done
-        
-        if [[ "$LAMBDA_READY" == "false" ]]; then
-          echo "❌ Timeout waiting for Lambda function to be available"
-          exit 1
+      echo "⏳ Waiting for Lambda function to be ready (max 5 minutes)..."
+      WAIT_START=$(date +%s)
+      TIMEOUT=300
+      LAMBDA_READY=false
+      
+      while [ $(( $(date +%s) - WAIT_START )) -lt $TIMEOUT ]; do
+        if aws lambda get-function --function-name dbmoto-xml-converter --region "$AWS_REGION" >/dev/null 2>&1; then
+          LAMBDA_READY=true
+          break
         fi
-        
-        echo "📦 Updating Lambda function code..."
-        aws lambda update-function-code \
-          --function-name dbmoto-xml-converter \
-          --zip-file fileb://lambda-package.zip \
-          --region "$AWS_REGION"
-          
-        echo "⏳ Waiting for Lambda update to complete..."
-        aws lambda wait function-updated --function-name dbmoto-xml-converter --region "$AWS_REGION"
-        echo "✅ Lambda function update completed successfully"
-      else
-        echo "ℹ️ Skipping Lambda update as no stack changes were detected"
+        echo "⏱️  Waiting for Lambda function to be available... ($(( $(date +%s) - WAIT_START ))s elapsed)"
+        sleep 10
+      done
+      
+      if [[ "$LAMBDA_READY" == "false" ]]; then
+        echo "❌ Timeout waiting for Lambda function to be available"
+        exit 1
       fi
+      
+      echo "📦 Updating Lambda function code..."
+      aws lambda update-function-code \
+        --function-name dbmoto-xml-converter \
+        --zip-file fileb://lambda-package.zip \
+        --region "$AWS_REGION"
+        
+      echo "⏳ Waiting for Lambda update to complete..."
+      aws lambda wait function-updated --function-name dbmoto-xml-converter --region "$AWS_REGION"
+      echo "✅ Lambda function update completed successfully"
     - echo "⏳ Checking stack status before waiting..."
     - |
       CURRENT_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].StackStatus' --output text)
