@@ -281,14 +281,14 @@ deploy_lambda:
             --query 'StatusReason' \
             --output text 2>/dev/null || echo "Unknown error")
           
-          if [[ "$CHANGE_SET_REASON" == *"No updates are to be performed"* ]]; then
+          if [[ "$CHANGE_SET_REASON" == *"No updates are to be performed"* ]] || [[ "$CHANGE_SET_REASON" == *"didn't contain changes"* ]]; then
             echo "✅ No changes detected in the stack. Stack is already up to date."
             # Delete the change set as it's no longer needed
             aws cloudformation delete-change-set \
               --stack-name "$STACK_NAME" \
               --region "$AWS_REGION" \
               --change-set-name "$CHANGE_SET_NAME"
-            # Set a flag to skip the update
+            # Set a flag to skip the update (but we will still update Lambda)
             export NO_UPDATES_NEEDED=true
           else
             echo "❌ Failed to create change set: $CHANGE_SET_REASON"
