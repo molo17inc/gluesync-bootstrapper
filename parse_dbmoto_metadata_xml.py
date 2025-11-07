@@ -283,9 +283,10 @@ def parse_xml():
         
         # Extract type information
         field_type = field_elem.findtext("Type") or "VARCHAR"
-        field_size = field_elem.findtext("Size") or "255"
+        field_size = field_elem.findtext("Size") or "0"
         field_precision = field_elem.findtext("Precision") or "0"
         field_scale = field_elem.findtext("Scale") or "0"
+        allow_null = (field_elem.findtext("AllowNull", "Y").strip().upper() == "Y")
         
         # Extract primary key position
         primary_key_pos = field_elem.findtext("PrimaryKeyPos")
@@ -300,9 +301,28 @@ def parse_xml():
             if "primary_keys" not in tables[table_id]:
                 tables[table_id]["primary_keys"] = []
             
+            try:
+                data_length = int(field_size)
+            except (TypeError, ValueError):
+                data_length = 0
+
+            try:
+                numeric_precision = int(field_precision)
+            except (TypeError, ValueError):
+                numeric_precision = 0
+
+            try:
+                numeric_scale = int(field_scale)
+            except (TypeError, ValueError):
+                numeric_scale = 0
+
             field_data = {
                 "name": field_name,
-                "type": sql_type
+                "type": sql_type,
+                "data_length": data_length,
+                "numeric_precision": numeric_precision,
+                "numeric_scale": numeric_scale,
+                "allow_null": allow_null
             }
             tables[table_id]["fields"].append(field_data)
             
@@ -541,11 +561,14 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                     # Convert field list to column definitions matching template format
                     columns = []
                     for field in table["fields"]:
-                        # Each column is a simple key-value pair: source_name -> target_name
-                        column_entry = {
-                            field["name"]: field["name"]  # Simple mapping: source -> target
-                        }
-                        columns.append(column_entry)
+                        columns.append({
+                            "name": field["name"],
+                            "type": field.get("type", "varchar"),
+                            "dataLength": field.get("data_length", 0),
+                            "numericPrecision": field.get("numeric_precision", 0),
+                            "numericScale": field.get("numeric_scale", 0),
+                            "isNullable": field.get("allow_null", True)
+                        })
                     
                     # Determine the mapped target table name if available
                     export_table_name = table_name

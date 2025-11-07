@@ -360,15 +360,43 @@ def create_tables(token, pipeline_id, source_schema, target_schema, tables, sour
 
 def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_schema: str, keys: list, token: str,
                           columns: list, custom_config, source_node_info, target_node_info):
+    custom_config = custom_config or {}
+
     if not table_exists(pipeline_id=pipeline_id, schema_name=yaml_target_schema, table_name=target_table_name,
                         token=token):
         if CREATE_TABLE_IF_NOT_EXISTS:
             logger.info(f"table: {target_table_name} does not exists, creating it")
             # Create ColumnDto objects
             column_dtos = []
-            
-            # Check if targetOnlyColumns are defined - if so, use them instead of source columns
+            column_entries = custom_config.get('columns') or []
             target_only_columns = custom_config.get('targetOnlyColumns', [])
+
+            key_names = set()
+            for key in keys:
+                if isinstance(key, dict):
+                    if key.get("name"):
+                        key_names.add(key["name"])
+                    if key.get("alias"):
+                        key_names.add(key["alias"])
+                else:
+                    key_names.add(key)
+
+            def _to_int(value, default=0):
+                try:
+                    return int(value)
+                except (TypeError, ValueError):
+                    return default
+
+            def _to_bool(value, default=True):
+                if isinstance(value, bool):
+                    return value
+                if isinstance(value, str):
+                    return value.strip().lower() in {"1", "true", "yes", "y"}
+                if value is None:
+                    return default
+                return bool(value)
+
+            # Check if targetOnlyColumns are defined - if so, use them instead of source columns
             if target_only_columns:
                 logger.info(f"Using targetOnlyColumns definition for table {target_table_name}")
                 for idx, target_col in enumerate(target_only_columns, 1):
@@ -398,45 +426,71 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                         type=format_column_type(mapped_type, col_data_length, col_numeric_precision, col_numeric_scale),
                         id=idx,  # Use sequential IDs for target-only columns
                         ordinalPosition=idx,
-                        isPrimaryKey=col_name in [key.get("name", key) for key in keys],
+                        isPrimaryKey=col_name in key_names,
                         isNullable=col_is_nullable,
                         dataLength=col_data_length,
                         numericPrecision=col_numeric_precision,
                         numericScale=col_numeric_scale
                     ))
-            elif custom_config.get('columns'):
-                # When columns mapping is specified, use source column properties for each mapped column
-                for source_name, target_name in custom_config.get('columns', []):
-                    # Find the source column
-                    source_col = next((col for col in columns["columns"] if col["name"] == source_name), None)
-                    if source_col:
-                        column_dtos.append(ColumnDto(
-                            name=target_name,
-                            type=format_column_type(source_col["type"], source_col.get("dataLength", 0), 
-                                                   source_col.get("numericPrecision", 0), source_col.get("numericScale", 0)),
-                            id=source_col.get("ordinalPosition", source_col.get("id", 1)),
-                            ordinalPosition=source_col.get("ordinalPosition", source_col.get("id", 1)),
-                            isPrimaryKey=target_name in [key.get("name", key) for key in keys],
-                            isNullable=source_col.get("isNullable", False),
-                            dataLength=source_col.get("dataLength", 0),
-                            numericPrecision=source_col.get("numericPrecision", 0),
-                            numericScale=source_col.get("numericScale", 0)
-                        ))
             else:
-                # When no columns mapping is specified, use source column properties directly
-                for col in columns["columns"]:
-                    column_dtos.append(ColumnDto(
-                        name=col["name"], 
-                        type=format_column_type(col["type"], col.get("dataLength", 0), 
-                                               col.get("numericPrecision", 0), col.get("numericScale", 0)),
-                        id=col.get("ordinalPosition", col.get("id", 1)),
-                        ordinalPosition=col.get("ordinalPosition", col.get("id", 1)),
-                        isPrimaryKey=col.get("isPrimaryKey", False),
-                        isNullable=col.get("isNullable", False),
-                        dataLength=col.get("dataLength", 0),
-                        numericPrecision=col.get("numericPrecision", 0),
-                        numericScale=col.get("numericScale", 0)
-                    ))
+                metadata_columns = []
+                simple_mappings = []
+                for entry in column_entries:
+                    if isinstance(entry, dict) and 'name' in entry:
+                        metadata_columns.append(entry)
+                    elif entry is None:
+                        continue
+                    else:
+                        simple_mappings.append(entry)
+
+                if simple_mappings:
+                    logger.info(
+                        f"Skipping table creation for {target_table_name}: column mappings use source→target format, which is not supported for CREATE_TABLE_IF_NOT_EXISTS.")
+                    return
+
+                if metadata_columns:
+                    logger.info(f"Using YAML column metadata for table {target_table_name}")
+                    for idx, col_meta in enumerate(metadata_columns, 1):
+                        col_name = col_meta.get('name')
+                        if not col_name:
+                            logger.info(
+                                f"Warning: Column metadata entry missing 'name' for table {target_table_name}. Skipping entry: {col_meta}")
+                            continue
+
+                        col_type = col_meta.get('type', 'varchar')
+                        col_data_length = _to_int(col_meta.get('dataLength', col_meta.get('data_length')))
+                        col_numeric_precision = _to_int(col_meta.get('numericPrecision', col_meta.get('numeric_precision')))
+                        col_numeric_scale = _to_int(col_meta.get('numericScale', col_meta.get('numeric_scale')))
+                        col_is_nullable = _to_bool(col_meta.get('isNullable', col_meta.get('is_nullable')))
+                        column_id = _to_int(col_meta.get('id', col_meta.get('ordinalPosition')), idx)
+
+                        column_dtos.append(ColumnDto(
+                            name=col_name,
+                            type=format_column_type(col_type, col_data_length, col_numeric_precision, col_numeric_scale),
+                            id=column_id,
+                            ordinalPosition=column_id,
+                            isPrimaryKey=col_name in key_names,
+                            isNullable=col_is_nullable,
+                            dataLength=col_data_length,
+                            numericPrecision=col_numeric_precision,
+                            numericScale=col_numeric_scale
+                        ))
+
+                if not column_dtos:
+                    # When no metadata is provided, fall back to source column properties directly
+                    for col in columns["columns"]:
+                        column_dtos.append(ColumnDto(
+                            name=col["name"], 
+                            type=format_column_type(col["type"], col.get("dataLength", 0), 
+                                                   col.get("numericPrecision", 0), col.get("numericScale", 0)),
+                            id=col.get("ordinalPosition", col.get("id", 1)),
+                            ordinalPosition=col.get("ordinalPosition", col.get("id", 1)),
+                            isPrimaryKey=col.get("isPrimaryKey", False),
+                            isNullable=col.get("isNullable", False),
+                            dataLength=col.get("dataLength", 0),
+                            numericPrecision=col.get("numericPrecision", 0),
+                            numericScale=col.get("numericScale", 0)
+                        ))
             
             table_data = GenerateCreateTargetTableStatementRequest(columns=column_dtos)
             statement = generate_create_table_statement(pipeline_id=pipeline_id, schema_name=yaml_target_schema,
