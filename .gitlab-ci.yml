@@ -209,8 +209,8 @@ deploy_lambda:
     - export RESULTS_BUCKET="${RESULTS_BUCKET_PREFIX}-${CI_PIPELINE_ID}-${CI_JOB_ID}"
     - echo "📦 Creating Lambda deployment package..."
     - pip install -r requirements.txt -t lambda-package/ --quiet
-    - cp ../parse_dbmoto_metadata_xml.py lambda-package/
-    - cp ../table-list-template-basic.yaml lambda-package/ 2>/dev/null || true
+    - cp parse_dbmoto_metadata_xml.py lambda-package/
+    - cp table-list-template-basic.yaml lambda-package/ 2>/dev/null || true
     - cp lambda_function.py lambda-package/
     - cd lambda-package && zip -r ../lambda-package.zip . -q && cd ..
     - |
