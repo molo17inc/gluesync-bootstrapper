@@ -90,6 +90,11 @@ conversion_stats = {
     'warnings': []
 }
 
+# Known type aliases that should be normalized to canonical names
+TYPE_ALIASES = {
+    "TIMESTMP": "TIMESTAMP",
+}
+
 def parse_xml():
     xml_path = os.environ.get('XML_PATH') or args.xml_path
     if not xml_path:
@@ -282,7 +287,9 @@ def parse_xml():
             field_name = f"Field_{field_id}"
         
         # Extract type information
-        field_type = field_elem.findtext("Type") or "VARCHAR"
+        field_type_raw = field_elem.findtext("Type")
+        field_type = field_type_raw.strip() if field_type_raw else "VARCHAR"
+        field_type = TYPE_ALIASES.get(field_type.upper(), field_type)
         field_size = field_elem.findtext("Size") or "0"
         field_precision = field_elem.findtext("Precision") or "0"
         field_scale = field_elem.findtext("Scale") or "0"
@@ -290,9 +297,6 @@ def parse_xml():
         
         # Extract primary key position
         primary_key_pos = field_elem.findtext("PrimaryKeyPos")
-        
-        # Format the type string based on the data type - strip out size/precision specifications
-        sql_type = field_type.lower()
         
         # Add the field to its table
         if table_id in tables:
@@ -318,7 +322,7 @@ def parse_xml():
 
             field_data = {
                 "name": field_name,
-                "type": sql_type,
+                "type": field_type,
                 "data_length": data_length,
                 "numeric_precision": numeric_precision,
                 "numeric_scale": numeric_scale,
@@ -471,17 +475,18 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
     # Extract schemas from template if available
     template_schemas = {}
     if template_structure and 'schemas' in template_structure:
-        template_schemas = {name.lower(): schema for name, schema in template_structure['schemas'].items()}
+        template_schemas = {name.lower(): (name, schema) for name, schema in template_structure['schemas'].items()}
     
     # Function to find best matching template schema
     def find_matching_template_schema(schema_name):
         # First try exact match
         if schema_name.lower() in template_schemas:
-            return template_schemas[schema_name.lower()]
+            _, schema = template_schemas[schema_name.lower()]
+            return schema
         
         # Try partial match (case insensitive)
-        for template_name, schema in template_schemas.items():
-            if schema_name.lower() in template_name.lower() or template_name.lower() in schema_name.lower():
+        for template_lower, (template_name, schema) in template_schemas.items():
+            if schema_name.lower() in template_lower or template_lower in schema_name.lower():
                 return schema
         
         # No match found, return None
@@ -563,7 +568,7 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                     for field in table["fields"]:
                         columns.append({
                             "name": field["name"],
-                            "type": field.get("type", "varchar"),
+                            "type": field.get("type") or "VARCHAR",
                             "dataLength": field.get("data_length", 0),
                             "numericPrecision": field.get("numeric_precision", 0),
                             "numericScale": field.get("numeric_scale", 0),
@@ -586,8 +591,9 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                         if target_ids:
                             print(f"      Warning: Could not resolve target table IDs {target_ids} for source table {table_name}")
                     
-                    if export_table_name not in whitelist:
-                        whitelist.append(export_table_name)
+                    whitelist_name = table["name"]
+                    if whitelist_name not in whitelist:
+                        whitelist.append(whitelist_name)
                     
                     # Create the table entry with column definitions
                     table_config = {
