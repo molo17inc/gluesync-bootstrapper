@@ -941,7 +941,7 @@ Deploy as a serverless API for programmatic access:
 - Ensure the XML file is a valid DbMoto metadata export
 - Check file permissions for both input and output directories
 - Verify that the template file (if specified) is a valid YAML file
-- Consult the [DbMoto XML Hierarchy Documentation](dbmoto_xml_hierarchy.md) for understanding the XML structure
+- Consult the [DbMoto XML Hierarchy Documentation](dbmoto-converter/dbmoto_xml_hierarchy.md) for understanding the XML structure
 
 ### Quick Deploy
 
