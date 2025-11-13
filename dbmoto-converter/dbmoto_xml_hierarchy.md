@@ -35,7 +35,7 @@ metadata (root)
     │   ├── TableID (Foreign Key -> DBMMTables.TableID)
     │   ├── Name (Field name)
     │   ├── PrimaryKeyPos (0=regular field, >=1=primary key position)
-    │   ├── DataType
+    │   ├── DataType (preserved exactly as in metadata; known aliases like `TIMESTMP` are normalized to `TIMESTAMP`)
     │   ├── Size
     │   └── Properties
     │
@@ -138,23 +138,35 @@ To determine source-to-target schema mappings:
 7. Get target schema name via `DBMMSchemas.Name`
 8. Result: Source Schema -> Target Schema mapping
 
+### Output Normalization Rules
+
+- **Table names**: Whitelist entries keep the exact casing from the source schema, even when the table is mapped to a differently cased target table.
+- **Field types**: The parser preserves the original case-sensitive data type string from the metadata. Specific source aliases are converted to their canonical form (e.g., IBM i `TIMESTMP` → `TIMESTAMP`).
+
 ## Special Cases
 
 ### Orphaned Schemas
+
 Some schemas may exist in the metadata but have no associated replications:
+
 - These schemas won't be processed by default unless using `--include-targets` flag
 
 ### Multiple Target Mappings
+
 A source schema may map to multiple target schemas:
+
 - The script keeps the first mapping found
 
 ### Missing Mappings
+
 Schemas without replication mappings fall back to using source schema name as target:
+
 - Can be overridden using `--force-schemas` parameter
 
 ## Properties Field Structure
 
 The Properties field in replications contains semicolon-separated key-value pairs:
+
 - ModifiedAt: Modification timestamp
 - CreatedBy: User who created the replication
 - GroupPriority: Priority within a chain (for Type=1 groups)
