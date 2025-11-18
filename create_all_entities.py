@@ -192,6 +192,41 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
     logger.debug(f"Global source custom properties: {global_source_custom_properties}")
     logger.debug(f"Global target custom properties: {global_target_custom_properties}")
 
+    def build_table_lookup(table_list, default_schema_name):
+        lookup = {}
+        for tbl in table_list or []:
+            if isinstance(tbl, dict):
+                name = tbl.get("name")
+                schema_name = tbl.get("schema") or default_schema_name
+                table_info = tbl
+            elif isinstance(tbl, str):
+                name = tbl
+                schema_name = default_schema_name
+                table_info = {"name": name, "schema": schema_name}
+            else:
+                continue
+
+            if not name or not schema_name:
+                continue
+
+            lookup[(schema_name.lower(), name.lower())] = table_info
+        return lookup
+
+    def find_discovered_table(lookup, schema_name, table_name):
+        if not lookup or not schema_name or not table_name:
+            return None
+        return lookup.get((schema_name.lower(), table_name.lower()))
+
+    source_tables_lookup = build_table_lookup(tables, source_schema)
+
+    target_tables_lookup = {}
+    try:
+        target_discovered_tables = get_agent_tables(token, pipeline_id, target_agent_id, yaml_target_schema)
+        target_tables_lookup = build_table_lookup(target_discovered_tables, yaml_target_schema)
+        logger.info(f"Discovered {len(target_tables_lookup)} tables in target schema {yaml_target_schema}")
+    except Exception as e:
+        logger.warning(f"Could not retrieve target tables for schema {yaml_target_schema}: {str(e)}")
+
     for table in tables:
         if isinstance(table, str):
             table_name = table
@@ -407,9 +442,31 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             handle_table_creation(pipeline_id, target_table_name, yaml_target_schema, keys, token, columns, custom_config,
                               source_node_info, target_node_info)
 
-        # Generate table IDs for use in entities
-        source_table_id = get_table_id(source_schema, table_name)
-        target_table_id = get_table_id(yaml_target_schema, target_table_name)
+        # Generate table IDs for use in entities (prefer discovered IDs)
+        source_table_id = None
+        if isinstance(table, dict):
+            source_table_id = table.get('id')
+        if source_table_id is None:
+            discovered_source_table = find_discovered_table(source_tables_lookup, source_schema, table_name)
+            if discovered_source_table:
+                source_table_id = discovered_source_table.get('id')
+
+        if source_table_id is None:
+            source_table_id = get_table_id(source_schema, table_name)
+            logger.debug(f"Using generated source table ID for {source_schema}.{table_name}: {source_table_id}")
+        else:
+            logger.debug(f"Using discovered source table ID for {source_schema}.{table_name}: {source_table_id}")
+
+        target_table_id = None
+        discovered_target_table = find_discovered_table(target_tables_lookup, yaml_target_schema, target_table_name)
+        if discovered_target_table:
+            target_table_id = discovered_target_table.get('id')
+
+        if target_table_id is None:
+            target_table_id = get_table_id(yaml_target_schema, target_table_name)
+            logger.debug(f"Using generated target table ID for {yaml_target_schema}.{target_table_name}: {target_table_id}")
+        else:
+            logger.debug(f"Using discovered target table ID for {yaml_target_schema}.{target_table_name}: {target_table_id}")
 
         # Create source and target table property keys
         source_table_key = f"{source_schema}.{table_name}"
