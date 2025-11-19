@@ -865,6 +865,10 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         else:
             logger.debug(f"No UDFs defined for table {table_name}")
 
+    # Track discovered table IDs for chain processing
+    chain_source_ids = {}
+    chain_target_ids = {}
+
     # Process MultiTable entities first
     multi_table_entities = []
     # For each chainId, create a MultiTable entity
