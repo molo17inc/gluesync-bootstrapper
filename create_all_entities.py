@@ -217,6 +217,23 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             return None
         return lookup.get((schema_name.lower(), table_name.lower()))
 
+    def resolve_table_id(schema_name, table_name, lookup, table_role):
+        """Try to reuse discovery IDs before falling back to generated IDs."""
+        discovered_table = find_discovered_table(lookup, schema_name, table_name)
+        if discovered_table:
+            discovered_id = discovered_table.get('id')
+            if discovered_id is not None:
+                logger.debug(
+                    f"Using discovered {table_role} table ID for {schema_name}.{table_name}: {discovered_id}"
+                )
+                return discovered_id
+
+        generated_id = get_table_id(schema_name, table_name)
+        logger.debug(
+            f"Using generated {table_role} table ID for {schema_name}.{table_name}: {generated_id}"
+        )
+        return generated_id
+
     source_tables_lookup = build_table_lookup(tables, source_schema)
 
     target_tables_lookup = {}
@@ -874,16 +891,18 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
         # Process each table in the chain (in YAML order)
         for table_key, table_data in tables_list:
+            source_table_id = resolve_table_id(source_schema, table_key, source_tables_lookup, "source")
             # Get columns for this table
             columns = get_table_columns(token, pipeline_id, source_agent_id, source_schema, table_key)
 
             # Add table to the list
             table_obj = {
-                "id": str(get_table_id(source_schema, table_key)),
+                "id": str(source_table_id),
                 "name": table_key,
                 "schema": source_schema
             }
             multi_tables.append(table_obj)
+            chain_source_ids[table_key] = source_table_id
 
             # Add table to tables_properties
             tables_properties[f"{source_schema}.{table_key}"] = {}
@@ -891,27 +910,27 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             # Process columns
             table_columns = []
             for col in columns["columns"]:
-                # Use ordinalPosition from API if available, otherwise fallback to index
+                # Use ordinalPosition from API if available
                 col_id = col.get('ordinalPosition', col.get('id'))
                 if col_id is None:
                     # Fallback to finding position if not provided
                     col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
-                    
+
                 table_columns.append({
-                    "id": col_id,  # Use actual ordinal position from database
+                    "id": col_id,
                     "name": col["name"],
                     "alias": col["name"],
                     "table": {
-                        "id": str(get_table_id(source_schema, table_key)),
+                        "id": str(source_table_id),
                         "name": table_key,
                         "schema": source_schema
                     },
                     "type": col["type"]
                 })
 
-            # Add columns for this table
+            # Add table header metadata followed by the columns for this table
             multi_columns.append({
-                "id": str(get_table_id(source_schema, table_key)),
+                "id": str(source_table_id),
                 "name": table_key,
                 "schema": source_schema
             })
@@ -949,7 +968,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                 "name": key_name,
                                 "alias": key_alias,
                                 "table": {
-                                    "id": str(get_table_id(source_schema, table_key)),
+                                    "id": str(source_table_id),
                                     "name": table_key,
                                     "schema": source_schema
                                 },
@@ -973,7 +992,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             "name": col["name"],
                             "alias": col["name"],
                             "table": {
-                                "id": str(get_table_id(source_schema, table_key)),
+                                "id": str(source_table_id),
                                 "name": table_key,
                                 "schema": source_schema
                             },
@@ -982,7 +1001,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
             # Add keys for this table
             multi_keys.append({
-                "id": str(get_table_id(source_schema, table_key)),
+                "id": str(source_table_id),
                 "name": table_key,
                 "schema": source_schema
             })
@@ -1018,13 +1037,15 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
         # Process each table for the target (in YAML order)
         for table_key, table_data in tables_list:
+            target_table_id = resolve_table_id(yaml_target_schema, table_key, target_tables_lookup, "target")
             # Add table to the list
             target_table_obj = {
-                "id": str(get_table_id(target_schema, table_key)),
+                "id": str(target_table_id),
                 "name": table_key,
                 "schema": target_schema
             }
             target_tables.append(target_table_obj)
+            chain_target_ids[table_key] = target_table_id
 
             # Add table to tables_properties
             target_tables_properties[f"{target_schema}.{table_key}"] = {}
@@ -1134,7 +1155,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
             # Add columns for this table
             target_columns.append({
-                "id": str(get_table_id(target_schema, table_key)),
+                "id": str(target_table_id),
                 "name": table_key,
                 "schema": target_schema
             })
@@ -1185,7 +1206,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
             # Add keys for this table
             target_keys.append({
-                "id": str(get_table_id(target_schema, table_key)),
+                "id": str(target_table_id),
                 "name": table_key,
                 "schema": target_schema
             })
@@ -1197,8 +1218,12 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         # Create table mapping matrix for MultiTable entities
         columns_mapping_matrix = []
         for table_key, _ in tables_list:
-            source_table_id = get_table_id(source_schema, table_key)  # Integer, not string!
-            target_table_id = get_table_id(target_schema, table_key)  # Integer, not string!
+            source_table_id = chain_source_ids.get(table_key) or resolve_table_id(
+                source_schema, table_key, source_tables_lookup, "source"
+            )
+            target_table_id = chain_target_ids.get(table_key) or resolve_table_id(
+                yaml_target_schema, table_key, target_tables_lookup, "target"
+            )
             logger.info(f"Table mapping for {table_key}: source_id={source_table_id}, target_id={target_table_id}")
 
             # Get columns for this table to create mappings for each column
