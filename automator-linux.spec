@@ -38,7 +38,7 @@ a = Analysis(
         'create_all_entities.py',
         'commons.py',
         'main.py',
-        'parse_dbmoto_metadata_xml.py',
+        'dbmoto-converter/parse_dbmoto_metadata_xml.py',
     ],
     pathex=['.'],
     binaries=binaries,
