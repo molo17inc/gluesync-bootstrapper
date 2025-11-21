@@ -298,5 +298,6 @@ dbo:
             source:
               maxItemsCountPerIteration: 1000
               pollingIntervalMilliseconds: 100
+              partitions: "ORDER_ID"  # Logical partition column (optional)
             target:
               ttlValue: 0

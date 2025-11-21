@@ -96,6 +96,8 @@ schemas:
             target:
               ttlValue: 20000000
               allowedOperations: ["INSERT", "UPDATE", "TRUNCATE"]
+            source:
+              partitions: "ID"  # Logical partition column (optional)
         
         VEHICLES:
           keys:

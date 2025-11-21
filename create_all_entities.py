@@ -234,6 +234,46 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         )
         return generated_id
 
+    def build_partition_settings(column_name, table_columns, schema_name, table_name, table_id):
+        """Create PartitionSettings payload for the specified column."""
+
+        if not column_name:
+            return None
+
+        if not table_columns:
+            logger.warning(f"Partition column '{column_name}' requested for {schema_name}.{table_name} but no columns were discovered")
+            return None
+
+        normalized_column = str(column_name).strip()
+        if not normalized_column:
+            return None
+
+        matched_column = next((col for col in table_columns if col.get('name') == normalized_column), None)
+        if not matched_column:
+            logger.warning(f"Partition column '{normalized_column}' not found in discovery for {schema_name}.{table_name}. Skipping partitionSettings.")
+            return None
+
+        column_id = matched_column.get('ordinalPosition', matched_column.get('id'))
+        if column_id is None:
+            column_id = next((idx for idx, col in enumerate(table_columns, 1) if col == matched_column), 1)
+
+        partition_settings = {
+            "column": {
+                "id": column_id,
+                "name": normalized_column,
+                "table": {
+                    "id": str(table_id),
+                    "schema": schema_name,
+                    "name": table_name
+                },
+                "type": matched_column.get('type')
+            },
+            "partitions": []
+        }
+
+        logger.info(f"Configured partitionSettings for {schema_name}.{table_name} on column '{normalized_column}'")
+        return partition_settings
+
     source_tables_lookup = build_table_lookup(tables, source_schema)
 
     target_tables_lookup = {}
@@ -278,6 +318,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         table_custom_properties = custom_config.get('customProperties', {})
         source_custom_properties = {**global_source_custom_properties, **table_custom_properties.get('source', {})}
         target_custom_properties = {**global_target_custom_properties, **table_custom_properties.get('target', {})}
+
+        partition_column_name = source_custom_properties.pop('partitions', None)
         
         # Store UDF configuration separately (will be added to entityType, not customProperties)
         udf_config = target_custom_properties.pop('udf', None)
@@ -489,9 +531,23 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         source_table_key = f"{source_schema}.{table_name}"
         target_table_key = f"{yaml_target_schema}.{target_table_name}"
 
+        partition_settings = None
+        if partition_column_name:
+            partition_settings = build_partition_settings(
+                partition_column_name,
+                columns.get("columns"),
+                source_schema,
+                table_name,
+                source_table_id
+            )
+
+        source_entity_type = {**source_custom_properties, "type": "Source"}
+        if partition_settings:
+            source_entity_type["partitionSettings"] = partition_settings
+
         source_entity = {
             "type": "NoSqlEntity" if source_type.lower() == "nosql" else "SingleTable",
-            "entityType": {**source_custom_properties, "type": "Source"},
+            "entityType": source_entity_type,
             "agentId": source_agent_id,
             "entityObject": {
                 "id": str(source_table_id),
