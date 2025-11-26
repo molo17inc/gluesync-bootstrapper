@@ -40,6 +40,7 @@ logger = get_logger(log_file)
 CORE_HUB_URL = os.getenv('CORE_HUB_URL', 'https://localhost:1717')
 ENTITY_START_TIMEOUT = int(os.getenv('ENTITY_START_TIMEOUT', '1'))
 CREATE_TABLE_IF_NOT_EXISTS = os.getenv('CREATE_TABLE_IF_NOT_EXISTS', 'true').lower() == 'true'
+DEFAULT_MAX_LOGICAL_PARTITIONS = int(os.getenv('MAX_LOGICAL_PARTITIONS', '10'))
 
 
 def set_create_table_if_not_exists(enabled: bool) -> None:
@@ -234,6 +235,206 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         )
         return generated_id
 
+    def parse_partition_config(partition_value):
+        """Return (column_name, max_partitions) from YAML configuration."""
+
+        column_name = None
+        max_partitions = DEFAULT_MAX_LOGICAL_PARTITIONS
+
+        if isinstance(partition_value, dict):
+            column_name = partition_value.get('column') or partition_value.get('name')
+            raw_max = partition_value.get('maxPartitionsNumber') or partition_value.get('maxPartitions')
+            if raw_max is not None:
+                try:
+                    max_partitions = max(1, int(raw_max))
+                except (TypeError, ValueError):
+                    logger.warning(f"Invalid maxPartitionsNumber '{raw_max}'. Falling back to {DEFAULT_MAX_LOGICAL_PARTITIONS}.")
+        elif isinstance(partition_value, str):
+            column_name = partition_value
+        elif partition_value is not None:
+            logger.warning(f"Unsupported partitions configuration type: {type(partition_value)}. Expected string or dict.")
+
+        return column_name, max_partitions
+
+    def _format_partition_object(partition_obj):
+        if not isinstance(partition_obj, dict):
+            return None
+
+        partition_id = partition_obj.get('id')
+        try:
+            partition_id = int(partition_id)
+        except (TypeError, ValueError):
+            pass
+
+        if 'startValue' not in partition_obj or 'endValue' not in partition_obj:
+            return None
+
+        return {
+            "id": partition_id,
+            "startValue": str(partition_obj.get('startValue')),
+            "endValue": str(partition_obj.get('endValue'))
+        }
+
+    def extract_computed_partitions(response):
+        """Normalize compute-logical-partitions API responses into GlueSync partition lists."""
+
+        partitions = []
+        if not isinstance(response, dict):
+            return partitions
+
+        raw_partitions = response.get('partitions')
+        if isinstance(raw_partitions, list):
+            for entry in raw_partitions:
+                partition_obj = None
+                if isinstance(entry, dict):
+                    if {'id', 'startValue', 'endValue'}.issubset(entry.keys()):
+                        partition_obj = entry
+                    elif 'partition' in entry and isinstance(entry['partition'], dict):
+                        partition_obj = entry['partition']
+
+                formatted = _format_partition_object(partition_obj)
+                if formatted:
+                    partitions.append(formatted)
+        elif isinstance(raw_partitions, dict):
+            for key in raw_partitions.keys():
+                partition_obj = None
+                if isinstance(key, dict):
+                    partition_obj = key
+                elif isinstance(key, str):
+                    try:
+                        partition_obj = json.loads(key)
+                    except json.JSONDecodeError:
+                        logger.debug(f"Unable to decode partition key: {key}")
+
+                formatted = _format_partition_object(partition_obj)
+                if formatted:
+                    partitions.append(formatted)
+
+        partitions.sort(key=lambda part: part.get('id') if isinstance(part.get('id'), int) else 0)
+        return partitions
+
+    def compute_logical_partitions(token, pipeline_id, entity_id, column_payload, max_partitions_number):
+        """Invoke CoreHub to compute logical partitions for a given column."""
+
+        endpoint = f"/pipelines/{pipeline_id}/config/entities/{entity_id}/computed-logical-partitions"
+        safe_column_payload = json.loads(json.dumps(column_payload))
+        body = {
+            "maxPartitionsNumber": max(1, max_partitions_number),
+            "column": safe_column_payload
+        }
+
+        logger.info(
+            "Computing logical partitions for entity %s (column=%s, max=%s)",
+            entity_id,
+            safe_column_payload.get('name'),
+            body["maxPartitionsNumber"]
+        )
+
+        response = fetch_core_hub(endpoint, method='POST', token=token, body=body)
+        partitions = extract_computed_partitions(response)
+
+        if not partitions:
+            logger.warning(
+                "Logical partition computation returned no partitions for entity %s (column=%s)",
+                entity_id,
+                safe_column_payload.get('name')
+            )
+
+        return partitions
+
+    def apply_logical_partitions(token, pipeline_id, partition_requests, skip_errors):
+        if not partition_requests:
+            return
+
+        try:
+            pipeline_entities = fetch_core_hub(f"/pipelines/{pipeline_id}/entities", token=token)
+        except Exception as exc:
+            logger.error(f"Failed to fetch entities for logical partitions: {exc}")
+            if not skip_errors:
+                raise
+            return
+
+        entity_id_map = {}
+        if isinstance(pipeline_entities, list):
+            for item in pipeline_entities:
+                entity_data = item.get('entity') if isinstance(item, dict) else None
+                if not entity_data:
+                    continue
+                entity_name = entity_data.get('entityName')
+                entity_id = entity_data.get('entityId')
+                if entity_name and entity_id:
+                    entity_id_map[entity_name] = entity_id
+        else:
+            logger.warning("Unexpected response while fetching entities for logical partitions: %s", pipeline_entities)
+
+        for request in partition_requests:
+            entity_name = request["entity_name"]
+            entity_payload = request["entity"]
+            column_info = request["column"]
+            max_partitions = request["max_partitions"]
+            source_agent_id = request["source_agent_id"]
+
+            entity_id = entity_id_map.get(entity_name)
+            if not entity_id:
+                logger.warning(f"Cannot compute logical partitions: entity '{entity_name}' not found in pipeline")
+                if not skip_errors:
+                    raise RuntimeError(f"Entity '{entity_name}' not found for logical partition computation")
+                continue
+
+            try:
+                partitions = compute_logical_partitions(token, pipeline_id, entity_id, column_info, max_partitions)
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.error(f"Failed to compute logical partitions for {entity_name}: {exc}")
+                if not skip_errors:
+                    raise
+                continue
+
+            if not partitions:
+                logger.warning(f"No partitions returned for {entity_name}. Skipping partitionSettings update.")
+                if not skip_errors:
+                    raise RuntimeError(f"Logical partitions computation returned empty result for {entity_name}")
+                continue
+
+            partition_settings = {
+                "column": column_info,
+                "partitions": partitions
+            }
+
+            source_entity = next(
+                (agent for agent in entity_payload.get('agentEntities', [])
+                 if agent.get('agentId') == source_agent_id or agent.get('entityType', {}).get('type') == 'Source'),
+                None
+            )
+
+            if not source_entity:
+                logger.warning(f"Source agent entity not found in payload for {entity_name}")
+                if not skip_errors:
+                    raise RuntimeError(f"Source agent entity missing for {entity_name}")
+                continue
+
+            source_entity_type = source_entity.setdefault('entityType', {})
+            source_entity_type['partitionSettings'] = partition_settings
+
+            entity_payload['entityId'] = entity_id
+            for agent_entity in entity_payload.get('agentEntities', []):
+                agent_entity['entityId'] = entity_id
+                agent_entity['entityName'] = entity_payload.get('entityName')
+
+            update_body = {"entities": [entity_payload]}
+
+            try:
+                fetch_core_hub(
+                    f"/pipelines/{pipeline_id}/config/entities",
+                    method='PUT',
+                    token=token,
+                    body=update_body
+                )
+                logger.info(f"Applied logical partitions for entity {entity_name} (ID: {entity_id})")
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.error(f"Failed to update entity {entity_name} with logical partitions: {exc}")
+                if not skip_errors:
+                    raise
+
     def build_partition_settings(column_name, table_columns, schema_name, table_name, table_id):
         """Create PartitionSettings payload for the specified column."""
 
@@ -284,6 +485,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
     except Exception as e:
         logger.warning(f"Could not retrieve target tables for schema {yaml_target_schema}: {str(e)}")
 
+    pending_partition_requests = []
+
     for table in tables:
         if isinstance(table, str):
             table_name = table
@@ -319,7 +522,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         source_custom_properties = {**global_source_custom_properties, **table_custom_properties.get('source', {})}
         target_custom_properties = {**global_target_custom_properties, **table_custom_properties.get('target', {})}
 
-        partition_column_name = source_custom_properties.pop('partitions', None)
+        partition_config = source_custom_properties.pop('partitions', None)
+        partition_column_name, partition_max_partitions = parse_partition_config(partition_config)
         
         # Store UDF configuration separately (will be added to entityType, not customProperties)
         udf_config = target_custom_properties.pop('udf', None)
@@ -542,8 +746,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             )
 
         source_entity_type = {**source_custom_properties, "type": "Source"}
-        if partition_settings:
-            source_entity_type["partitionSettings"] = partition_settings
 
         source_entity = {
             "type": "NoSqlEntity" if source_type.lower() == "nosql" else "SingleTable",
@@ -903,6 +1105,15 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             entity["groupId"] = group_id
         
         entities.append(entity)
+
+        if partition_settings:
+            pending_partition_requests.append({
+                "entity": json.loads(json.dumps(entity)),  # deep copy for later updates
+                "entity_name": entity["entityName"],
+                "column": partition_settings["column"],
+                "max_partitions": partition_max_partitions,
+                "source_agent_id": source_agent_id
+            })
         
         # Process UDFs if defined for this table
         table_custom_properties = custom_config.get('customProperties', {})
@@ -1447,6 +1658,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 if not skip_errors:
                     raise
                 logger.warning("Skipping chunk due to skip_errors=True")
+
+    apply_logical_partitions(token, pipeline_id, pending_partition_requests, skip_errors)
 
     print(f"\nProcessing complete:")
     print(f"- Total regular entities: {total_entities}")

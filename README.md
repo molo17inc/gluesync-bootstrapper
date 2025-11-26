@@ -823,6 +823,73 @@ ARTICLES:
 6. **These columns can be populated through UDF transformations**
 7. **In `columnsMappingMatrix`, target-only columns have `sourceColumnId: 0` to indicate no source mapping**
 
+## Logical Partitions
+
+### Overview
+
+Logical partitions allow GlueSync to break very large tables into deterministic ranges during snapshot operations. When enabled, the bootstrapper automatically asks CoreHub to compute optimal ranges for the specified column and patches the entity configuration with those ranges so that snapshots can execute in parallel.
+
+### Configuration
+
+Declare the partition column under `customProperties.source.partitions`. Two formats are supported:
+
+#### Simple format (defaults to 10 partitions)
+
+```yaml
+ORDERS:
+  customProperties:
+    source:
+      partitions: "ORDER_ID"
+```
+
+#### Extended format (custom partition count)
+
+```yaml
+ORDERS:
+  customProperties:
+    source:
+      partitions:
+        column: "ORDER_ID"
+        maxPartitionsNumber: 20
+```
+
+### Execution Flow
+
+1. The bootstrapper creates the entity without `partitionSettings`.
+2. After creation, it retrieves the definitive `entityId` from CoreHub.
+3. For each table that declared `partitions`, it calls:
+   - `POST /pipelines/{pipelineId}/config/entities/{entityId}/computed-logical-partitions`
+   - Body: `{"maxPartitionsNumber": <value>, "column": { id, name, table, type }}`
+4. Using the returned `partitions` array (`id`, `startValue`, `endValue`), it issues a second `PUT /config/entities` containing the full `partitionSettings` only for that entity.
+
+If the computation fails or returns an empty list, the bootstrapper logs a warning and, unless `--skip-errors` is set, aborts the run to avoid creating an entity with an invalid configuration.
+
+### Default Maximum
+
+The number of partitions defaults to **10** and can be overridden globally with the `MAX_LOGICAL_PARTITIONS` environment variable:
+
+```bash
+export MAX_LOGICAL_PARTITIONS=15
+```
+
+Per-table overrides take precedence via the extended YAML format.
+
+### Example Request Sequence
+
+```text
+POST /pipelines/{pipelineId}/config/entities/{entityId}/computed-logical-partitions
+{ "maxPartitionsNumber": 10, "column": { ... } }
+
+PUT /pipelines/{pipelineId}/config/entities
+{ "entities": [ { "entityId": "...", "agentEntities": [... partitionSettings ...] } ] }
+```
+
+### Notes
+
+- Only single-table entities support logical partitions at the moment.
+- The partition column must exist in the discovery metadata; otherwise the bootstrapper logs a warning and skips the feature for that table.
+- Computed ranges are stored in GlueSync so that subsequent snapshots reuse the same configuration without recomputation.
+
 ## Support
 
 For support and bug reports, please create an issue in the GitLab repository.
