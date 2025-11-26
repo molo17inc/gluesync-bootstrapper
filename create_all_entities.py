@@ -354,31 +354,36 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 raise
             return
 
-        entity_id_map = {}
+        entity_map = {}
         if isinstance(pipeline_entities, list):
             for item in pipeline_entities:
                 entity_data = item.get('entity') if isinstance(item, dict) else None
                 if not entity_data:
                     continue
                 entity_name = entity_data.get('entityName')
-                entity_id = entity_data.get('entityId')
-                if entity_name and entity_id:
-                    entity_id_map[entity_name] = entity_id
+                if entity_name:
+                    entity_map[entity_name] = entity_data
         else:
             logger.warning("Unexpected response while fetching entities for logical partitions: %s", pipeline_entities)
 
         for request in partition_requests:
             entity_name = request["entity_name"]
-            entity_payload = request["entity"]
             column_info = request["column"]
             max_partitions = request["max_partitions"]
             source_agent_id = request["source_agent_id"]
 
-            entity_id = entity_id_map.get(entity_name)
-            if not entity_id:
+            entity_from_core = entity_map.get(entity_name)
+            if not entity_from_core:
                 logger.warning(f"Cannot compute logical partitions: entity '{entity_name}' not found in pipeline")
                 if not skip_errors:
                     raise RuntimeError(f"Entity '{entity_name}' not found for logical partition computation")
+                continue
+
+            entity_id = entity_from_core.get('entityId')
+            if not entity_id:
+                logger.warning(f"Entity '{entity_name}' from pipeline listing has no entityId")
+                if not skip_errors:
+                    raise RuntimeError(f"Entity '{entity_name}' missing ID in pipeline response")
                 continue
 
             try:
@@ -400,6 +405,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 "partitions": partitions
             }
 
+            entity_payload = json.loads(json.dumps(entity_from_core))
             source_entity = next(
                 (agent for agent in entity_payload.get('agentEntities', [])
                  if agent.get('agentId') == source_agent_id or agent.get('entityType', {}).get('type') == 'Source'),
@@ -414,11 +420,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
             source_entity_type = source_entity.setdefault('entityType', {})
             source_entity_type['partitionSettings'] = partition_settings
-
-            entity_payload['entityId'] = entity_id
-            for agent_entity in entity_payload.get('agentEntities', []):
-                agent_entity['entityId'] = entity_id
-                agent_entity['entityName'] = entity_payload.get('entityName')
 
             update_body = {"entities": [entity_payload]}
 
@@ -1108,7 +1109,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
         if partition_settings:
             pending_partition_requests.append({
-                "entity": json.loads(json.dumps(entity)),  # deep copy for later updates
                 "entity_name": entity["entityName"],
                 "column": partition_settings["column"],
                 "max_partitions": partition_max_partitions,
