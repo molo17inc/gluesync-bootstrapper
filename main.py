@@ -245,7 +245,7 @@ if not handle_with_conductor:
                 try:
                     # Change password and get new token
                     token = change_password(token, user_defined_password, new_password)
-                    log_success(logger, f"Successfully changed password to: {new_password}")
+                    log_success(logger, f"[NEW PASSWORD] Successfully changed password to: {new_password}")
                 except Exception as e:
                     log_failure(logger, f"Password change failed, attempting to continue with default password: {str(e)}")
                     # Try to get a fresh token with the user-defined password
@@ -634,7 +634,7 @@ def main():
                 try:
                     # Change password and get new token
                     token = change_password(token, user_defined_password, new_password)
-                    log_success(logger, f"Successfully changed password to: {new_password}")
+                    log_success(logger, f"[NEW PASSWORD] Successfully changed password to: {new_password}")
                 except Exception as e:
                     log_failure(logger, f"Password change failed, attempting to continue with default password: {str(e)}")
                     # Try to get a fresh token with the user-defined password
