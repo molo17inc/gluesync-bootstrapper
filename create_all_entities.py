@@ -316,7 +316,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
     def compute_logical_partitions(token, pipeline_id, entity_id, column_payload, max_partitions_number):
         """Invoke CoreHub to compute logical partitions for a given column."""
 
-        endpoint = f"/pipelines/{pipeline_id}/config/entities/{entity_id}/computed-logical-partitions"
+        endpoint = f"/pipelines/{pipeline_id}/config/entities/{entity_id}/compute-logical-partitions"
         safe_column_payload = json.loads(json.dumps(column_payload))
         body = {
             "maxPartitionsNumber": max(1, max_partitions_number),
