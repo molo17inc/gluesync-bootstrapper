@@ -44,7 +44,7 @@ logger = get_logger(log_file)
 # Environment variables with default values
 CORE_HUB_URL = os.getenv('CORE_HUB_URL', 'https://localhost:1717')
 CHRONOS_URL = os.getenv('CHRONOS_URL', 'http://gluesync-chronos:8000')
-ENTITY_START_TIMEOUT = int(os.getenv('ENTITY_START_TIMEOUT', '1'))
+ENTITY_START_TIMEOUT = float(os.getenv('ENTITY_START_TIMEOUT', '1'))
 ENABLE_SCHEDULING = os.getenv('ENABLE_SCHEDULING', 'true').lower() == 'true'
 UDF_PATH = os.getenv('UDF_PATH','')
 

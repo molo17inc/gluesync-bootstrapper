@@ -120,7 +120,8 @@ TABLE_LIST_YAML = os.getenv('TABLE_LIST_YAML', '/opt/config/tables-list.yaml')
 # Schema extraction will be done after logger initialization
 AUTH_TOKEN_PATH = os.path.join('/opt/config', 'auth_token.json')
 
-ENTITY_START_TIMEOUT = 1
+# Allow sub-second pauses when starting entities
+ENTITY_START_TIMEOUT = float(os.getenv('ENTITY_START_TIMEOUT', '1'))
 
 # CoreHubClient and ProtocolAwareAdapter have been moved to utils/core_hub_client.py
 
