@@ -132,12 +132,26 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             # We'll resolve schedule keys to IDs later, during schedule creation.
 
     # Create groups before creating entities
+    groups_config = {}
+    if yaml_config:
+        raw_groups = yaml_config.get('groups')
+        if isinstance(raw_groups, dict):
+            groups_config = raw_groups
+
     groupId_map = {}
     logger.debug(f"Groups to create: {group_names}")
     
     for group_name in group_names:
         logger.debug(f"Processing group: '{group_name}' (type: {type(group_name)})")
-        group_id = create_group(token, pipeline_id, group_name)
+
+        group_meta = groups_config.get(group_name) if isinstance(groups_config, dict) else None
+        description = None
+        color = None
+        if isinstance(group_meta, dict):
+            description = group_meta.get('description')
+            color = group_meta.get('color')
+
+        group_id = create_group(token, pipeline_id, group_name, description=description, color=color)
         logger.debug(f"Group '{group_name}' creation result: {group_id}")
         
         if group_id and group_id != '_default':
