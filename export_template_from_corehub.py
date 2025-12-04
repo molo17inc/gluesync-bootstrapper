@@ -608,15 +608,15 @@ def main() -> None:
     parser.add_argument("--token", required=True, help="Authentication token for CoreHub")
     parser.add_argument(
         "--output",
-        required=True,
-        help="Path to output YAML file (one file per pipeline)",
+        help="Path to output YAML file (one file per pipeline). "
+        "Defaults to ./backup_<PIPELINE_ID>.yaml when not provided.",
     )
 
     args = parser.parse_args()
 
     pipeline_id = args.pipeline
     token = args.token
-    output_path = args.output
+    output_path = args.output or f"./backup_{pipeline_id}.yaml"
 
     logger.info(f"Starting export for pipeline {pipeline_id} -> {output_path}")
 
