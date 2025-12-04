@@ -20,6 +20,17 @@
 # SOFTWARE.
 
 # Direct schema configuration (no 'schemas' wrapper)
+groups:
+  default:
+    id: "_default"
+    description: "Default group"
+    color: "#00000000"
+  finance:
+    description: "Finance entities group"
+    color: "#ff1792cd"
+  sales:
+    description: "Sales entities group"
+    color: "#ffabc058"
 dbo:
   target: dbo
   customProperties:

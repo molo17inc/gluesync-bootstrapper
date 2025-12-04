@@ -59,18 +59,24 @@ def fetch_pipeline_entities(token: str, pipeline_id: str) -> List[Dict[str, Any]
     return entities
 
 
-def fetch_groups_map(token: str, pipeline_id: str) -> Tuple[Dict[str, str], Dict[str, str]]:
-    """Return two maps: group_id->name and name->group_id for the pipeline."""
+def fetch_groups_map(token: str, pipeline_id: str) -> Tuple[Dict[str, str], Dict[str, str], Dict[str, Dict[str, Any]]]:
+    """Return three maps for groups in the pipeline.
+
+    - id_to_name: group_id -> name
+    - name_to_id: name -> group_id
+    - groups_by_name: name -> full metadata (id, description, color)
+    """
     try:
         response = fetch_core_hub(
             f"/pipelines/{pipeline_id}/config/groups", token=token
         )
     except Exception as exc:  # pylint: disable=broad-except
         logger.warning(f"Failed to fetch groups for pipeline {pipeline_id}: {exc}")
-        return {}, {}
+        return {}, {}, {}
 
     id_to_name: Dict[str, str] = {}
     name_to_id: Dict[str, str] = {}
+    groups_by_name: Dict[str, Dict[str, Any]] = {}
 
     if isinstance(response, list):
         for grp in response:
@@ -79,13 +85,19 @@ def fetch_groups_map(token: str, pipeline_id: str) -> Tuple[Dict[str, str], Dict
             gid = str(grp.get("groupId")) if grp.get("groupId") is not None else None
             name = grp.get("name")
             if gid and name:
-                id_to_name[gid] = str(name)
-                name_to_id[str(name)] = gid
+                name_str = str(name)
+                id_to_name[gid] = name_str
+                name_to_id[name_str] = gid
+                groups_by_name[name_str] = {
+                    "id": gid,
+                    "description": grp.get("description", ""),
+                    "color": grp.get("color"),
+                }
 
     logger.info(
         f"Discovered {len(id_to_name)} groups for pipeline {pipeline_id}: {json.dumps(id_to_name)}"
     )
-    return id_to_name, name_to_id
+    return id_to_name, name_to_id, groups_by_name
 
 
 def fetch_pipeline_jobs(pipeline_id: str) -> List[Dict[str, Any]]:
@@ -552,8 +564,11 @@ def attach_schedules_from_jobs(
             continue
 
 
-def build_yaml_structure(schemas: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
-    """Convert internal schema representation to final YAML structure."""
+def build_yaml_structure(
+    schemas: Dict[str, Dict[str, Any]],
+    groups_by_name: Dict[str, Dict[str, Any]] | None = None,
+) -> Dict[str, Any]:
+    """Convert internal schema representation and group metadata to final YAML structure."""
     if not schemas:
         return {}
 
@@ -589,12 +604,32 @@ def build_yaml_structure(schemas: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
 
         normalized[schema_name] = schema_out
 
-    # Single-schema vs multi-schema format
+    # Base structure: single-schema vs multi-schema format
     if len(normalized) == 1:
         schema_name, cfg = next(iter(normalized.items()))
-        return {schema_name: cfg}
+        root: Dict[str, Any] = {schema_name: cfg}
+    else:
+        root = {"schemas": normalized}
 
-    return {"schemas": normalized}
+    # Attach group metadata at top-level when available
+    if groups_by_name:
+        groups_yaml: Dict[str, Dict[str, Any]] = {}
+        for name, meta in groups_by_name.items():
+            if not isinstance(meta, dict):
+                continue
+            g: Dict[str, Any] = {}
+            if meta.get("id") is not None:
+                g["id"] = meta["id"]
+            if meta.get("description"):
+                g["description"] = meta["description"]
+            if meta.get("color"):
+                g["color"] = meta["color"]
+            groups_yaml[name] = g
+
+        if groups_yaml:
+            root["groups"] = groups_yaml
+
+    return root
 
 
 def main() -> None:
@@ -623,13 +658,13 @@ def main() -> None:
     try:
         entities = fetch_pipeline_entities(token, pipeline_id)
         entities_by_id = build_entities_maps(entities)
-        group_id_to_name, _ = fetch_groups_map(token, pipeline_id)
+        group_id_to_name, _, groups_by_name = fetch_groups_map(token, pipeline_id)
         schemas = build_schemas_from_entities(entities, group_id_to_name)
 
         jobs = fetch_pipeline_jobs(pipeline_id)
         attach_schedules_from_jobs(jobs, entities_by_id, schemas, group_id_to_name)
 
-        yaml_data = build_yaml_structure(schemas)
+        yaml_data = build_yaml_structure(schemas, groups_by_name)
 
         # Ensure destination directory exists
         out_dir = os.path.dirname(output_path)
