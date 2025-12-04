@@ -20,6 +20,8 @@
 # SOFTWARE.
 
 # Direct schema configuration (no 'schemas' wrapper)
+# Optional: top-level group definitions used when creating groups from YAML.
+# Keys are group names; values may contain id, description and color.
 groups:
   default:
     id: "_default"
@@ -116,6 +118,9 @@ dbo:
       - DRIVERS
       - VEHICLES
     custom:
+        # Each key under 'custom' defines a table and implicitly a single-table entity.
+        # The resulting entityName in CoreHub will be "<source_schema>.<tableKey>",
+        # for example "dbo.DRIVERS" for the DRIVERS table below.
         DRIVERS:
           keys: [ID]
           documentKey:
@@ -125,7 +130,7 @@ dbo:
             keys: 
               - ID
               - LAST_NAME
-          name: drivers
+          name: drivers  # Target table/collection name; entityName remains "dbo.DRIVERS"
           groupId: "_default"
           columns:
             - FIRST_NAME: "firstName"
@@ -230,7 +235,7 @@ dbo:
                   type: java
           
         VEHICLES:
-          groupId: "finance"
+          groupId: "finance"  # Connects this entity to the 'finance' group defined at top-level under groups:
           keys:
             - VEHICLE_ID
           name: vehicles

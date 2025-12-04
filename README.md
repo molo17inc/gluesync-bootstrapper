@@ -158,6 +158,53 @@ The column configuration supports:
 - Column type via the `type` property
 - Automatic type mapping between different database systems
 
+### Entity Naming
+
+Entities created in CoreHub from this YAML are named automatically:
+
+- Single-table entities: `entityName = "<source_schema>.<tableKey>"`
+- MultiTable (chained) entities: `entityName = "<source_schema>.<firstTableKeyInChain>"`
+
+You do *not* declare `entityName` explicitly in the YAML.
+
+- The mapping key under `tables.custom` (for example `DRIVERS:` or `VEHICLES:`) is the **source table name** and becomes the tail of the entity name.
+- The optional `name:` field inside the table config controls the **target** table/collection name, not the entity name itself.
+
+Example:
+
+```yaml
+dbo:
+  target: dbo
+  tables:
+    custom:
+      DRIVERS:
+        name: drivers
+```
+
+Produces:
+
+- Source table: `dbo.DRIVERS`
+- Target table/collection: `dbo.drivers`
+- CoreHub entity name: `dbo.DRIVERS`
+
+### Groups and group metadata
+
+At the top level you can define a `groups` section that documents group metadata:
+
+```yaml
+groups:
+  sales:
+    description: "Sales entities group"
+    color: "#ffabc058"
+```
+
+- Keys under `groups` (for example `sales`) are **group names**.
+- Table-level `groupId` fields (for example `groupId: "sales"`) tell the bootstrapper which group each entity belongs to.
+- When creating **new** groups in CoreHub, `create_all_entities.py` uses the `groups` section (if present) to set the group `description` and `color`.
+- If a group with the same name already exists in CoreHub, it is reused and its existing metadata is not overwritten.
+
+The exporter scripts (`export_template_from_corehub.py`, `export_all_pipelines.py`) populate this section from CoreHub when generating backup YAML files.
+
 ## Snapshot Delete Filter
 
 The `snapshotDeleteFilter` configuration controls which records are deleted from the target during snapshot synchronization operations. This is particularly useful when you want to preserve certain records in the target system that meet specific criteria, even if they're no longer present in the source.
