@@ -6,9 +6,8 @@
     <title>Gluesync Automator</title>
     <link rel="stylesheet" href="/static/styles.css" />
     <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png" />
-    <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png" />
-    <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png" />
-    <link rel="icon" href="/static/favicon.ico" />
+    <link rel="icon" type="image/x-icon" href="/static/favicon.ico" />
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   </head>
   <body>
     <header class="topbar">
@@ -29,7 +28,7 @@
         <form id="login-form" class="form-grid">
           <label>
             CoreHub URL
-            <input type="text" id="corehub-url" name="corehubUrl" placeholder="https://corehub.example.com" required />
+            <input type="text" id="corehub-url" name="corehubUrl" placeholder="https://localhost" required />
           </label>
           <label>
             Username
@@ -42,11 +41,11 @@
           <fieldset class="fieldset">
             <legend>Security</legend>
             <label class="checkbox">
-              <input type="checkbox" id="use-ssl" />
+              <input type="checkbox" id="use-ssl" checked />
               Enable TLS
             </label>
             <label class="checkbox">
-              <input type="checkbox" id="skip-verify" />
+              <input type="checkbox" id="skip-verify" checked />
               Skip certificate verification
             </label>
           </fieldset>
@@ -68,7 +67,7 @@
       </section>
 
       <section class="card" id="config-card">
-        <h2>Configuration</h2>
+        <h2>Import (create entities from YAML)</h2>
         <form id="config-form" class="form-grid">
           <label>
             Pipeline ID
@@ -105,6 +104,23 @@
           <button type="submit" class="primary" disabled id="run-btn">Start entity creation</button>
         </form>
         <div id="config-message" class="message"></div>
+      </section>
+
+      <section class="card" id="export-card">
+        <h2>Export (backup pipeline configuration)</h2>
+        <form id="export-form" class="form-grid">
+          <label>
+            Pipeline
+            <select id="export-pipeline-id" name="pipelineId">
+              <option value="">Select a pipeline…</option>
+            </select>
+          </label>
+          <div class="button-group">
+            <button type="submit" class="secondary" id="export-btn" disabled>Download YAML</button>
+            <button type="button" class="secondary" id="export-all-btn" disabled>Export All</button>
+          </div>
+        </form>
+        <div id="export-message" class="message"></div>
       </section>
 
       <section class="card log-card">

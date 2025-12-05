@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import io
 import logging
-import os
+import zipfile
 from contextlib import redirect_stdout
 from typing import Any, Callable, Dict, Optional
 
@@ -34,6 +34,16 @@ from create_all_entities import (
     main as create_entities_main,
     set_create_table_if_not_exists,
 )
+from export_template_from_corehub import (
+    fetch_pipeline_entities,
+    build_entities_maps,
+    fetch_groups_map,
+    fetch_pipeline_jobs,
+    build_schemas_from_entities,
+    attach_schedules_from_jobs,
+    build_yaml_structure,
+)
+import yaml
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +154,127 @@ def run_create_entities(
         "success": True,
         "logs": buffer.getvalue().splitlines(),
     }
+
+
+def list_pipelines(
+    *,
+    token: str,
+    base_url: str,
+    use_ssl: Optional[bool],
+    skip_verify: Optional[bool],
+) -> list[Dict[str, Any]]:
+    """Return a normalized list of pipelines for the export UI."""
+
+    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+
+    response = fetch_core_hub("/pipelines", token=token)
+    pipelines: list[Dict[str, Any]] = []
+
+    if isinstance(response, list):
+        for item in response:
+            if not isinstance(item, dict):
+                continue
+            raw_id = item.get("pipelineId") or item.get("id") or item.get("pipeline_id")
+            if raw_id is None:
+                continue
+            pid = str(raw_id)
+            name = item.get("name")
+            description = item.get("description")
+            pipelines.append(
+                {
+                    "id": pid,
+                    "name": str(name) if name is not None else None,
+                    "description": str(description) if description is not None else None,
+                }
+            )
+
+    return pipelines
+
+
+def export_pipeline_yaml(
+    *,
+    token: str,
+    base_url: str,
+    pipeline_id: str,
+    use_ssl: Optional[bool],
+    skip_verify: Optional[bool],
+) -> str:
+    """Export a single pipeline configuration to YAML text for download."""
+
+    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+
+    entities = fetch_pipeline_entities(token, pipeline_id)
+    entities_by_id = build_entities_maps(entities)
+    group_id_to_name, _, groups_by_name = fetch_groups_map(token, pipeline_id)
+    schemas = build_schemas_from_entities(entities, group_id_to_name)
+
+    jobs = fetch_pipeline_jobs(pipeline_id)
+    attach_schedules_from_jobs(jobs, entities_by_id, schemas, group_id_to_name)
+
+    yaml_data = build_yaml_structure(schemas, groups_by_name)
+
+    buffer = io.StringIO()
+    yaml.safe_dump(
+        yaml_data or {},
+        buffer,
+        sort_keys=False,
+        allow_unicode=True,
+    )
+    return buffer.getvalue()
+
+
+def export_all_pipelines_yaml(
+    *,
+    token: str,
+    base_url: str,
+    use_ssl: Optional[bool],
+    skip_verify: Optional[bool],
+) -> bytes:
+    """Export all pipelines to a ZIP file containing individual YAML files."""
+
+    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+
+    # Get all pipelines
+    pipelines = list_pipelines(
+        token=token,
+        base_url=base_url,
+        use_ssl=use_ssl,
+        skip_verify=skip_verify,
+    )
+
+    # Create ZIP file in memory
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        for pipeline in pipelines:
+            pipeline_id = pipeline['id']
+            pipeline_name = pipeline.get('name', pipeline_id)
+
+            try:
+                # Export individual pipeline
+                yaml_content = export_pipeline_yaml(
+                    token=token,
+                    base_url=base_url,
+                    pipeline_id=pipeline_id,
+                    use_ssl=use_ssl,
+                    skip_verify=skip_verify,
+                )
+
+                # Create filename with pipeline name if available
+                safe_name = "".join(c for c in pipeline_name if c.isalnum() or c in (' ', '-', '_')).rstrip()
+                if not safe_name:
+                    safe_name = pipeline_id
+                filename = f"backup_{safe_name}_{pipeline_id}.yaml"
+
+                # Add to ZIP
+                zip_file.writestr(filename, yaml_content)
+                logger.info("Exported pipeline %s (%s)", pipeline_name, pipeline_id)
+
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.exception("Failed to export pipeline %s: %s", pipeline_id, exc)
+                # Continue with other pipelines
+
+    zip_buffer.seek(0)
+    return zip_buffer.read()
 
 
 def validate_token(token: str) -> bool:

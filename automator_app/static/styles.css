@@ -145,6 +145,12 @@ body {
   gap: 1rem;
 }
 
+.button-group {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-end;
+}
+
 label {
   display: flex;
   flex-direction: column;
@@ -223,9 +229,12 @@ button {
 }
 
 button:disabled {
-  opacity: 0.6;
+  opacity: 1;
   cursor: not-allowed;
   box-shadow: none;
+  background: var(--surface-alt);
+  color: var(--muted);
+  border: 1px solid var(--border);
 }
 
 .primary {
@@ -239,12 +248,12 @@ button:disabled {
 }
 
 .secondary {
-  background: #e4ebf5;
+  background: var(--accent);
   color: var(--heading);
 }
 
 .secondary:not(:disabled):hover {
-  background: #d2dce8;
+  background: var(--accent-dark);
 }
 
 .message {

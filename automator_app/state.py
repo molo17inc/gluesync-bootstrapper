@@ -51,9 +51,9 @@ class AutomatorState:
     def __init__(self) -> None:
         self._lock = Lock()
         self._token: Optional[str] = None
-        self._base_url: Optional[str] = os.getenv("CORE_HUB_URL", "https://localhost:1717")
-        self._use_ssl: Optional[bool] = None
-        self._skip_verify: Optional[bool] = None
+        self._base_url: Optional[str] = os.getenv("CORE_HUB_URL", "https://localhost")
+        self._use_ssl: Optional[bool] = True
+        self._skip_verify: Optional[bool] = True
         self._enable_scheduling: bool = True
         self._create_tables: bool = True
         self.uploads: Dict[str, UploadedFile] = {}

@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import sys
 import tempfile
@@ -31,7 +32,7 @@ from typing import Optional
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, validator
 
@@ -116,6 +117,16 @@ class RunSnapshot(BaseModel):
 class ApiMessage(BaseModel):
     success: bool = True
     message: Optional[str] = None
+
+
+class PipelineInfo(BaseModel):
+    id: str
+    name: Optional[str] = None
+    description: Optional[str] = None
+
+
+class PipelinesResponse(BaseModel):
+    pipelines: list[PipelineInfo]
 
 
 def _ensure_static_assets() -> None:
@@ -212,6 +223,75 @@ def create_app() -> FastAPI:
             logs = state.get_logs(response.id)
             response.logs = logs or []
         return response
+
+    @app.get("/api/pipelines", response_model=PipelinesResponse)
+    async def list_pipelines() -> PipelinesResponse:
+        if not state.token or not state.base_url:
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+        try:
+            pipelines = corehub.list_pipelines(
+                token=state.token,
+                base_url=state.base_url,
+                use_ssl=state.use_ssl,
+                skip_verify=state.skip_verify,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Failed to list pipelines")
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        return PipelinesResponse(pipelines=[PipelineInfo(**p) for p in pipelines])
+
+    @app.get("/api/export/pipeline/{pipeline_id}")
+    async def export_pipeline(pipeline_id: str):
+        if not state.token or not state.base_url:
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+        try:
+            yaml_text = corehub.export_pipeline_yaml(
+                token=state.token,
+                base_url=state.base_url,
+                pipeline_id=pipeline_id,
+                use_ssl=state.use_ssl,
+                skip_verify=state.skip_verify,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Failed to export pipeline %s", pipeline_id)
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        filename = f"backup_{pipeline_id}.yaml"
+        return StreamingResponse(
+            io.BytesIO(yaml_text.encode("utf-8")),
+            media_type="application/x-yaml",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+            },
+        )
+
+    @app.get("/api/export/all-pipelines")
+    async def export_all_pipelines():
+        if not state.token or not state.base_url:
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+        try:
+            zip_data = corehub.export_all_pipelines_yaml(
+                token=state.token,
+                base_url=state.base_url,
+                use_ssl=state.use_ssl,
+                skip_verify=state.skip_verify,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Failed to export all pipelines")
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        filename = "pipeline_backups.zip"
+        return StreamingResponse(
+            io.BytesIO(zip_data),
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+            },
+        )
 
     async def _execute_run(run_id: str, request: RunRequest) -> None:
         token = state.token

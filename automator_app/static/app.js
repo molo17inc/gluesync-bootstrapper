@@ -51,14 +51,40 @@ const api = {
     if (!res.ok) throw new Error('Failed to fetch run status');
     return res.json();
   },
+  async listPipelines() {
+    const res = await fetch('/api/pipelines');
+    if (!res.ok) throw new Error('Failed to list pipelines');
+    return res.json();
+  },
+  async exportPipeline(pipelineId) {
+    const response = await fetch(`/api/export/pipeline/${encodeURIComponent(pipelineId)}`);
+    if (!response.ok) {
+      throw new Error(`Export failed: ${response.status} ${response.statusText}`);
+    }
+    const blob = await response.blob();
+    const filename = response.headers.get('Content-Disposition')?.split('filename=')[1]?.replace(/"/g, '') || 'backup.yaml';
+    return { blob, filename };
+  },
+  async exportAllPipelines() {
+    const response = await fetch('/api/export/all-pipelines');
+    if (!response.ok) {
+      throw new Error(`Export all failed: ${response.status} ${response.statusText}`);
+    }
+    const blob = await response.blob();
+    const filename = response.headers.get('Content-Disposition')?.split('filename=')[1]?.replace(/"/g, '') || 'pipeline_backups.zip';
+    return { blob, filename };
+  },
 };
 
 const ui = (() => {
   const statusEl = document.getElementById('status-indicator');
   const authMessageEl = document.getElementById('auth-message');
   const configMessageEl = document.getElementById('config-message');
+  const exportMessageEl = document.getElementById('export-message');
   const logoutBtn = document.getElementById('logout-btn');
   const runBtn = document.getElementById('run-btn');
+  const exportBtn = document.getElementById('export-btn');
+  const exportAllBtn = document.getElementById('export-all-btn');
   const logOutput = document.getElementById('log-output');
   const logTemplate = document.getElementById('log-line-template');
   const footerYear = document.getElementById('footer-year');
@@ -80,10 +106,22 @@ const ui = (() => {
     configMessageEl.className = `message ${type}`;
   }
 
+  function setExportMessage(message, type = '') {
+    if (!exportMessageEl) return;
+    exportMessageEl.textContent = message;
+    exportMessageEl.className = `message ${type}`;
+  }
+
   function setAuthEnabled(enabled) {
     logoutBtn.disabled = !enabled;
     document.querySelector('#login-form button[type="submit"]').disabled = enabled;
     runBtn.disabled = !enabled;
+    if (exportBtn) {
+      exportBtn.disabled = !enabled;
+    }
+    if (exportAllBtn) {
+      exportAllBtn.disabled = !enabled;
+    }
   }
 
   function renderLogs(logs = []) {
@@ -100,6 +138,7 @@ const ui = (() => {
     setStatus,
     setAuthMessage,
     setConfigMessage,
+    setExportMessage,
     setAuthEnabled,
     renderLogs,
     runBtn,
@@ -176,6 +215,9 @@ async function initialize() {
   try {
     const snapshot = await api.getState();
     stateManager.updateFromState(snapshot);
+    if (snapshot.tokenPresent) {
+      await loadPipelines();
+    }
   } catch (err) {
     console.error(err);
     ui.setStatus('failed', 'API unavailable');
@@ -186,6 +228,8 @@ function bindEvents() {
   const loginForm = document.getElementById('login-form');
   const configForm = document.getElementById('config-form');
   const yamlInput = document.getElementById('yaml-file');
+  const exportForm = document.getElementById('export-form');
+  const exportPipelineSelect = document.getElementById('export-pipeline-id');
 
   loginForm.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -206,6 +250,7 @@ function bindEvents() {
       ui.setAuthMessage('Authentication successful', 'success');
       const snapshot = await api.getState();
       stateManager.updateFromState(snapshot);
+      await loadPipelines();
     } catch (err) {
       ui.setAuthMessage(err.message, 'error');
       ui.setAuthEnabled(false);
@@ -220,6 +265,9 @@ function bindEvents() {
       ui.setStatus('idle', 'Not authenticated');
       stateManager.stopPolling();
       ui.renderLogs();
+      if (exportPipelineSelect) {
+        exportPipelineSelect.innerHTML = '<option value="">Select a pipeline…</option>';
+      }
     } catch (err) {
       ui.setAuthMessage(err.message, 'error');
     }
@@ -276,6 +324,91 @@ function bindEvents() {
       ui.setStatus('failed', 'Failed to start');
     }
   });
+
+  if (exportForm && exportPipelineSelect) {
+    exportForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const pipelineId = exportPipelineSelect.value;
+      if (!pipelineId) {
+        ui.setExportMessage('Please select a pipeline to export', 'error');
+        return;
+      }
+
+      ui.setExportMessage('Exporting…');
+      try {
+        const { blob, filename } = await api.exportPipeline(pipelineId);
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(url);
+        ui.setExportMessage(`Exported ${filename}`, 'success');
+      } catch (err) {
+        ui.setExportMessage(err.message, 'error');
+      }
+    });
+  }
+
+  if (exportAllBtn) {
+    console.log('Export All button found, adding event listener');
+    exportAllBtn.addEventListener('click', async () => {
+      console.log('Export All button clicked');
+      ui.setExportMessage('Exporting all pipelines…');
+      try {
+        const { blob, filename } = await api.exportAllPipelines();
+        console.log('Export All API call successful, filename:', filename);
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(url);
+        ui.setExportMessage(`Exported ${filename}`, 'success');
+      } catch (err) {
+        console.error('Export All failed:', err);
+        ui.setExportMessage(err.message, 'error');
+      }
+    });
+  } else {
+    console.error('Export All button not found!');
+  }
+}
+
+async function loadPipelines() {
+  const select = document.getElementById('export-pipeline-id');
+  if (!select) return;
+
+  try {
+    const data = await api.listPipelines();
+    const pipelines = data.pipelines || [];
+
+    // Sort pipelines by name, then by ID if names are the same
+    pipelines.sort((a, b) => {
+      const nameA = (a.name || '').toLowerCase();
+      const nameB = (b.name || '').toLowerCase();
+      if (nameA !== nameB) {
+        return nameA.localeCompare(nameB);
+      }
+      return a.id.localeCompare(b.id);
+    });
+
+    select.innerHTML = '<option value="">Select a pipeline…</option>';
+    pipelines.forEach((p) => {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      const label = p.name ? `${p.name} (${p.id})` : p.id;
+      opt.textContent = label;
+      select.appendChild(opt);
+    });
+  } catch (err) {
+    console.error(err);
+    ui.setExportMessage(err.message, 'error');
+  }
 }
 
 bindEvents();
