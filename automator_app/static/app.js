@@ -143,6 +143,7 @@ const ui = (() => {
     renderLogs,
     runBtn,
     logoutBtn,
+    exportAllBtn,
   };
 })();
 
@@ -352,9 +353,9 @@ function bindEvents() {
     });
   }
 
-  if (exportAllBtn) {
+  if (ui.exportAllBtn) {
     console.log('Export All button found, adding event listener');
-    exportAllBtn.addEventListener('click', async () => {
+    ui.exportAllBtn.addEventListener('click', async () => {
       console.log('Export All button clicked');
       ui.setExportMessage('Exporting all pipelines…');
       try {
