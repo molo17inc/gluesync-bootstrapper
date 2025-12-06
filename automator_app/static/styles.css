@@ -83,23 +83,30 @@ body {
 .version-label--update {
   background: rgba(51, 109, 184, 0.12);
   border-color: var(--accent);
-  color: var(--accent);
+  color: white;
   cursor: pointer;
 }
 
 .version-label--update:hover,
 .version-label--update:focus {
   background: rgba(51, 109, 184, 0.2);
-  color: var(--accent-dark);
+  text-decoration: underline;
 }
 
 .version-changelog {
-  max-width: 1180px;
-  margin: 0 auto;
-  padding: 0.5rem clamp(1.25rem, 4vw, 3rem) 0;
+  position: fixed;
+  right: clamp(1.25rem, 4vw, 3rem);
+  top: 3.5rem;
+  width: min(360px, 90vw);
+  padding: 0.75rem 0.9rem;
   font-size: 0.85rem;
   color: var(--muted);
+  background: var(--surface);
+  border-radius: 0.75rem;
+  border: 1px solid var(--border);
+  box-shadow: 0 12px 24px rgba(20, 30, 47, 0.25);
   display: none;
+  z-index: 20;
 }
 
 .version-changelog.is-visible {
@@ -354,6 +361,28 @@ button:disabled {
 
 #auth-card {
   grid-column: 1 / -1;
+}
+
+/* Import/export panels are only visible once authenticated */
+#config-card,
+#export-card {
+  display: none;
+}
+
+body.is-authenticated #config-card,
+body.is-authenticated #export-card {
+  display: block;
+}
+
+/* After authentication, collapse auth card to header + sign out button */
+#auth-card.auth-card--collapsed #login-form > label,
+#auth-card.auth-card--collapsed #login-form > fieldset,
+#auth-card.auth-card--collapsed #login-form > button.primary {
+  display: none;
+}
+
+#auth-card.auth-card--collapsed #login-form {
+  justify-content: flex-start;
 }
 
 .log-output {

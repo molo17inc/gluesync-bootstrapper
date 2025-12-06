@@ -170,6 +170,13 @@ const stateManager = {
   lastStatus: 'idle',
 
   updateFromState(data) {
+    // Toggle global authenticated state for layout/visibility
+    document.body.classList.toggle('is-authenticated', !!data.tokenPresent);
+    const authCard = document.getElementById('auth-card');
+    if (authCard) {
+      authCard.classList.toggle('auth-card--collapsed', !!data.tokenPresent);
+    }
+
     document.getElementById('corehub-url').value = data.baseUrl || '';
     document.getElementById('use-ssl').checked = !!data.useSsl;
     document.getElementById('skip-verify').checked = !!data.skipVerify;
@@ -302,7 +309,7 @@ async function checkAutomatorVersion() {
     }
 
     // Highlight the version label and make it clickable when an update is available
-    ui.setVersion(`v${latestGa} available`);
+    ui.setVersion(`v${latestGa} is available`);
 
     const versionLabelEl = document.getElementById('version-label');
     const changelogContainer = document.getElementById('version-changelog');
@@ -314,14 +321,31 @@ async function checkAutomatorVersion() {
       versionLabelEl.title = `New version v${latestGa} available. Click to view changelog and download.`;
     }
 
+    const downloadUrl = 'https://molo17.com/gluesync-automator/';
+    const attachDownloadHandlers = () => {
+      if (!versionLabelEl) return;
+      const openDownload = () => {
+        window.open(downloadUrl, '_blank', 'noopener');
+      };
+      versionLabelEl.addEventListener('click', openDownload);
+      versionLabelEl.addEventListener('keypress', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          openDownload();
+        }
+      });
+    };
+
     try {
       const clRes = await fetch(
         `/api/changelog/automator/${encodeURIComponent(latestGa)}`,
       );
       if (clRes.status === 404) {
+        attachDownloadHandlers();
         return;
       }
       if (!clRes.ok) {
+        attachDownloadHandlers();
         throw new Error(`Changelog fetch failed: ${clRes.status}`);
       }
 
@@ -343,7 +367,7 @@ async function checkAutomatorVersion() {
           bodyEl.textContent = changelog;
 
           const linkEl = document.createElement('a');
-          linkEl.href = 'https://molo17.com/gluesync-automator/';
+          linkEl.href = downloadUrl;
           linkEl.target = '_blank';
           linkEl.rel = 'noopener';
           linkEl.className = 'version-download-link';
@@ -358,10 +382,45 @@ async function checkAutomatorVersion() {
           container.classList.remove('is-visible');
 
           if (versionLabelEl) {
+            let outsideClickHandler = null;
+
+            const positionChangelog = () => {
+              const rect = versionLabelEl.getBoundingClientRect();
+              // For a fixed-position popover, use viewport coordinates only
+              const top = rect.bottom + 8;
+              const left = rect.left;
+              container.style.top = `${top}px`;
+              container.style.left = `${left}px`;
+              container.style.right = 'auto';
+            };
+
             const toggleChangelog = () => {
+              const willShow = !container.classList.contains('is-visible');
               container.classList.toggle('is-visible');
-              if (container.classList.contains('is-visible')) {
-                container.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+              if (willShow) {
+                positionChangelog();
+
+                outsideClickHandler = (event) => {
+                  if (
+                    !container.contains(event.target) &&
+                    !versionLabelEl.contains(event.target)
+                  ) {
+                    container.classList.remove('is-visible');
+                    document.removeEventListener('click', outsideClickHandler);
+                    outsideClickHandler = null;
+                  }
+                };
+
+                // Delay registering to avoid immediately catching the opening click
+                setTimeout(() => {
+                  if (outsideClickHandler) {
+                    document.addEventListener('click', outsideClickHandler);
+                  }
+                }, 0);
+              } else if (outsideClickHandler) {
+                document.removeEventListener('click', outsideClickHandler);
+                outsideClickHandler = null;
               }
             };
 
@@ -374,9 +433,13 @@ async function checkAutomatorVersion() {
             });
           }
         }
+      } else {
+        // No changelog content returned, go straight to download URL on click
+        attachDownloadHandlers();
       }
     } catch (err) {
       console.error('Failed to fetch Automator changelog', err);
+      attachDownloadHandlers();
     }
   } catch (err) {
     console.error('Failed to check for latest Automator version', err);
@@ -450,6 +513,11 @@ function bindEvents() {
       ui.setAuthEnabled(false);
       ui.setStatus('idle', 'Not authenticated');
       ui.lockAuthFields(false);
+      document.body.classList.remove('is-authenticated');
+      const authCard = document.getElementById('auth-card');
+      if (authCard) {
+        authCard.classList.remove('auth-card--collapsed');
+      }
       stateManager.stopPolling();
       ui.renderLogs();
       if (exportPipelineSelect) {
