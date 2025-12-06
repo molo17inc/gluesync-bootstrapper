@@ -550,3 +550,106 @@ cleanup_lambda:
     - echo "⏳ Waiting for stack deletion..."
     - aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" --region "$AWS_REGION"
     - echo "✅ Lambda deployment cleaned up successfully"
+
+update_budibase_version:
+  stage: deploy
+  image: alpine:latest
+  needs:
+    - job: automator_publish
+      optional: true
+    - job: deploy
+      optional: true
+  script:
+    - apk add --no-cache bash curl jq
+    - |
+      set -euo pipefail
+      
+      if [ -z "${CI_COMMIT_TAG:-}" ]; then
+        echo "[ERROR] Not a tracked tag"
+        exit 1
+      fi
+
+      MODULE_VERSION=$(echo "$CI_COMMIT_TAG" | grep -oE '[0-9]+\.[0-9]+\.[0-9](.*)' || true)
+
+      if [ -z "$MODULE_VERSION" ]; then
+        echo "[ERROR] Unable to extract version from tag: $CI_COMMIT_TAG"
+        exit 1
+      fi
+
+      case "$CI_COMMIT_TAG" in
+        automator-*)
+          BUILD_TAG="automator"
+          ;;
+        *)
+          BUILD_TAG="bootstrapper"
+          ;;
+      esac
+
+      echo "[INFO] Updating Budibase version: BUILD_TAG=$BUILD_TAG, MODULE_VERSION=$MODULE_VERSION"
+      
+      SEARCH_PAYLOAD="{
+        \"query\": {
+          \"equal\": {
+            \"internalName\": \"$BUILD_TAG\"
+          }
+        },
+        \"paginate\": false,
+        \"limit\": 1000
+      }"
+
+      SEARCH_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+        -H "x-budibase-app-id: $BUDIBASE_APP_ID" \
+        -H "Content-Type: application/json" \
+        -H "Accept: application/json" \
+        -H "x-budibase-api-key: $BUDIBASE_API_KEY" \
+        -d "$SEARCH_PAYLOAD" \
+        "$BUDIBASE_BASE_URL/tables/datasource_plus_3dbc0976d090472f82658f287ec8ad6d__AvailableAgents/rows/search")
+
+      SEARCH_BODY=$(printf "%s" "$SEARCH_RESPONSE" | sed -e '$d')
+      SEARCH_STATUS=$(printf "%s" "$SEARCH_RESPONSE" | tail -n 1)
+
+      if [ "$SEARCH_STATUS" -ne 200 ]; then
+        echo "Failed to search for row. HTTP Status: $SEARCH_STATUS"
+        echo "Response: $SEARCH_BODY"
+        echo "Search Payload: $SEARCH_PAYLOAD"
+        exit 1
+      fi
+
+      ROW_ID=$(echo "$SEARCH_BODY" | jq -r '.data[0]._id // empty')
+
+      if [ -z "$ROW_ID" ]; then
+        echo "No matching row found for internalName: $BUILD_TAG"
+        exit 1
+      fi
+
+      UPDATE_PAYLOAD="{
+        \"latestVersionAlpha\": \"$MODULE_VERSION\",
+        \"latestVersionBeta\": \"$MODULE_VERSION\",
+        \"latestVersionGA\": \"$MODULE_VERSION\"
+      }"
+
+      UPDATE_RESPONSE=$(curl -s -w "\n%{http_code}" -X PUT \
+        -H "x-budibase-app-id: $BUDIBASE_APP_ID" \
+        -H "Content-Type: application/json" \
+        -H "Accept: application/json" \
+        -H "x-budibase-api-key: $BUDIBASE_API_KEY" \
+        -d "$UPDATE_PAYLOAD" \
+        "$BUDIBASE_BASE_URL/tables/datasource_plus_3dbc0976d090472f82658f287ec8ad6d__AvailableAgents/rows/$ROW_ID")
+
+      UPDATE_BODY=$(printf "%s" "$UPDATE_RESPONSE" | sed -e '$d')
+      UPDATE_STATUS=$(printf "%s" "$UPDATE_RESPONSE" | tail -n 1)
+
+      echo "Budibase API update response code: $UPDATE_STATUS"
+      echo "Budibase API update response: $UPDATE_BODY"
+
+      if [ "$UPDATE_STATUS" -ge 200 ] && [ "$UPDATE_STATUS" -lt 300 ]; then
+          echo "Successfully updated version on budibase"
+      else
+          echo "Failed to update version on budibase. HTTP Status: $UPDATE_STATUS"
+          exit 1
+      fi
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/'
+    - if: '$CI_COMMIT_TAG =~ /^release-/'
+    - if: '$CI_COMMIT_TAG =~ /^beta-/'
+    - if: '$CI_COMMIT_TAG =~ /^tag-/'
