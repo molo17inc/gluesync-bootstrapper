@@ -189,7 +189,7 @@ const stateManager = {
       this.lastStatus = run.status;
       ui.setStatus(run.status, run.status.toUpperCase());
     } else {
-      ui.setStatus('idle', 'Ready');
+      ui.setStatus('ready', 'Ready');
     }
   },
 
@@ -279,7 +279,7 @@ async function checkAutomatorVersion() {
     }
     const data = await res.json();
     currentVersion = data.version || currentVersion;
-    ui.setVersion(`Automator v${currentVersion}`);
+    ui.setVersion(`v${currentVersion}`);
   } catch (err) {
     console.error('Failed to determine local Automator version', err);
     ui.setVersion('Automator version: unknown');
@@ -301,7 +301,18 @@ async function checkAutomatorVersion() {
       return;
     }
 
-    ui.setVersion(`Automator v${currentVersion} – New version available: v${latestGa}`);
+    // Highlight the version label and make it clickable when an update is available
+    ui.setVersion(`v${latestGa} available`);
+
+    const versionLabelEl = document.getElementById('version-label');
+    const changelogContainer = document.getElementById('version-changelog');
+
+    if (versionLabelEl) {
+      versionLabelEl.classList.add('version-label--update');
+      versionLabelEl.setAttribute('role', 'button');
+      versionLabelEl.setAttribute('tabindex', '0');
+      versionLabelEl.title = `New version v${latestGa} available. Click to view changelog and download.`;
+    }
 
     try {
       const clRes = await fetch(
@@ -318,8 +329,7 @@ async function checkAutomatorVersion() {
 
       if (changelog) {
         console.info(`Automator ${latestGa} changelog:\n${changelog}`);
-
-        const container = document.getElementById('version-changelog');
+        const container = changelogContainer || document.getElementById('version-changelog');
         if (container) {
           const titleEl = document.createElement('div');
           titleEl.className = 'version-changelog-title';
@@ -340,6 +350,26 @@ async function checkAutomatorVersion() {
           container.appendChild(titleEl);
           container.appendChild(bodyEl);
           container.appendChild(linkEl);
+
+          // Initially keep it hidden; clicking the version label will toggle visibility
+          container.classList.remove('is-visible');
+
+          if (versionLabelEl) {
+            const toggleChangelog = () => {
+              container.classList.toggle('is-visible');
+              if (container.classList.contains('is-visible')) {
+                container.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }
+            };
+
+            versionLabelEl.addEventListener('click', toggleChangelog);
+            versionLabelEl.addEventListener('keypress', (event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                toggleChangelog();
+              }
+            });
+          }
         }
       }
     } catch (err) {

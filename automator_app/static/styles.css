@@ -80,12 +80,30 @@ body {
   color: var(--muted);
 }
 
+.version-label--update {
+  background: rgba(51, 109, 184, 0.12);
+  border-color: var(--accent);
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.version-label--update:hover,
+.version-label--update:focus {
+  background: rgba(51, 109, 184, 0.2);
+  color: var(--accent-dark);
+}
+
 .version-changelog {
   max-width: 1180px;
   margin: 0 auto;
   padding: 0.5rem clamp(1.25rem, 4vw, 3rem) 0;
   font-size: 0.85rem;
   color: var(--muted);
+  display: none;
+}
+
+.version-changelog.is-visible {
+  display: block;
 }
 
 .version-changelog-title {
@@ -136,6 +154,16 @@ body {
   text-transform: uppercase;
   background: var(--surface-alt);
   color: var(--muted);
+}
+
+.status-idle {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.status-ready {
+  color: var(--success);
+  font-weight: 600;
 }
 
 .status-running {

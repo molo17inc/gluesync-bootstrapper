@@ -161,8 +161,8 @@ automator_publish:
         echo "macOS executable not available (built locally)"
       fi
       if [ -f "$CI_PROJECT_DIR/table-list-template.yaml" ]; then
-        lftp -c "open -u $FTP_USER,$FTP_PASSWORD $FTP_SITE; put $CI_PROJECT_DIR/table-list-template.yaml -o /molo17.com/public_html/gs-content/gluesync-automator/table-list-template.yaml"
-        echo "Uploaded table-list-template.yaml"
+        lftp -c "open -u $FTP_USER,$FTP_PASSWORD $FTP_SITE; put $CI_PROJECT_DIR/table-list-template.yaml -o /molo17.com/public_html/gs-content/gluesync-automator/table-list-template.yaml.txt"
+        echo "Uploaded table-list-template.yaml.txt"
       else
         echo "table-list-template.yaml not found in project root"
       fi
