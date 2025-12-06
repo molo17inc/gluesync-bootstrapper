@@ -542,7 +542,7 @@ Available environment variables:
 - `FILE_CONF_PATH`: Path to the configuration file (default: `./config.json`)
 - `CORE_HUB_URL`: URL of the CoreHub service (default: `https://localhost:1717`)
 - `DEFAULT_PASSWORD`: Password for authentication (default: `admin`)
-- `SOURCE_TYPE`: Source agent type (default: `SQL`)
+- `SOURCE_TYPE`: Source agent type (default: `RDBMS`)
 - `TARGET_TYPE`: Target agent type (default: `NoSQL`)
 
 **Note**: Source and target schema information is now automatically read from the `table-list-template.yaml` file in the `schemas` section, eliminating the need for `CREATE_ENTITIES_FROM_SCHEMA` and `TARGET_SCHEMA` environment variables.
@@ -679,15 +679,15 @@ Parameters:
 - `--pipeline`: Required. The ID of the pipeline to create entities for
 - `--source-schema`: Required. Source schema name
 - `--target-schema`: Required. Target schema name
-- `--source-type`: Required. Source agent type (e.g., `SQL` for RDBMSs, `NoSQL` for NoSQL databases)
-- `--target-type`: Required. Target agent type (e.g., `NoSQL` for NoSQL databases, `SQL` for RDBMSs)
+- `--source-type`: Required. Source agent type (e.g., `RDBMS` for RDBMSs, `NoSQL` for NoSQL databases)
+- `--target-type`: Required. Target agent type (e.g., `NoSQL` for NoSQL databases, `RDBMS` for RDBMSs)
 - `--yaml-file`: Required. Path to the YAML configuration file
 - `--token`: Required. Authentication token for API access
 - `--skip-errors`: Optional. Continue execution even if errors occur
 - `--chunk-size`: Optional. Number of entities to process in each chunk (default: 50)
 
 Accepted values for `source-type` and `target-type`:
-- `SQL` (for any RDBMS)
+- `RDBMS` (for any RDBMS)
 - `NoSQL` (for NoSQL databases, Kafka, AWSS3, etc.)
 
 Available environment variables:
