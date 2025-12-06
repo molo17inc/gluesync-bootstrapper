@@ -23,14 +23,31 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 _DEFAULT_VERSION = "0.0.0"
 
 
-def get_version() -> str:
-    """Return the application version, falling back to a default."""
+def _read_version_file() -> str:
+    """Read version from the bundled VERSION file if available."""
 
-    return os.getenv("AUTOMATOR_VERSION", _DEFAULT_VERSION)
+    try:
+      version_path = Path(__file__).with_name("VERSION")
+      if version_path.exists():
+          text = version_path.read_text(encoding="utf-8").strip()
+          if text:
+              return text
+    except Exception:
+        # Best-effort only; fall back to env/default
+        pass
+    return _DEFAULT_VERSION
+
+
+def get_version() -> str:
+    """Return the application version, preferring VERSION file, then env, then default."""
+
+    file_version = _read_version_file()
+    return os.getenv("AUTOMATOR_VERSION", file_version)
 
 
 __all__ = ["get_version"]

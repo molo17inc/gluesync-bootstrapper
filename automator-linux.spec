@@ -11,7 +11,10 @@ if current_dir not in sys.path:
 exe_name = 'gluesync-automator-linux'
 runtime_tmpdir = '/tmp'
 
-datas = [('automator_app/static', 'static')]
+datas = [
+    ('automator_app/static', 'static'),
+    ('automator_app/VERSION', 'automator_app'),
+]
 binaries = []
 hiddenimports = [
     'create_user_defined_functions',

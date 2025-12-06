@@ -88,6 +88,10 @@ const ui = (() => {
   const logOutput = document.getElementById('log-output');
   const logTemplate = document.getElementById('log-line-template');
   const footerYear = document.getElementById('footer-year');
+  const versionLabel = document.getElementById('version-label');
+  const corehubUrlInput = document.getElementById('corehub-url');
+  const usernameInput = document.getElementById('username');
+  const passwordInput = document.getElementById('password');
 
   footerYear.textContent = new Date().getFullYear();
 
@@ -110,6 +114,17 @@ const ui = (() => {
     if (!exportMessageEl) return;
     exportMessageEl.textContent = message;
     exportMessageEl.className = `message ${type}`;
+  }
+
+  function setVersionLabel(message) {
+    if (!versionLabel) return;
+    versionLabel.textContent = message;
+  }
+
+  function setAuthFieldsLocked(locked) {
+    if (corehubUrlInput) corehubUrlInput.disabled = locked;
+    if (usernameInput) usernameInput.disabled = locked;
+    if (passwordInput) passwordInput.disabled = locked;
   }
 
   function setAuthEnabled(enabled) {
@@ -141,6 +156,8 @@ const ui = (() => {
     setExportMessage,
     setAuthEnabled,
     renderLogs,
+    lockAuthFields: setAuthFieldsLocked,
+    setVersion: setVersionLabel,
     runBtn,
     logoutBtn,
     exportAllBtn,
@@ -217,11 +234,119 @@ async function initialize() {
     const snapshot = await api.getState();
     stateManager.updateFromState(snapshot);
     if (snapshot.tokenPresent) {
+      ui.lockAuthFields(true);
       await loadPipelines();
+    } else {
+      ui.lockAuthFields(false);
     }
+    await checkAutomatorVersion();
   } catch (err) {
     console.error(err);
     ui.setStatus('failed', 'API unavailable');
+  }
+}
+
+function parseVersion(value) {
+  if (!value) return [0, 0, 0];
+  const match = String(value).match(/\d+(?:\.\d+)*/);
+  const core = match ? match[0] : '0.0.0';
+  return core.split('.').map((part) => {
+    const n = parseInt(part, 10);
+    return Number.isNaN(n) ? 0 : n;
+  });
+}
+
+function isNewerVersion(remote, local) {
+  const r = parseVersion(remote);
+  const l = parseVersion(local);
+  const length = Math.max(r.length, l.length);
+  for (let i = 0; i < length; i += 1) {
+    const rv = r[i] ?? 0;
+    const lv = l[i] ?? 0;
+    if (rv > lv) return true;
+    if (rv < lv) return false;
+  }
+  return false;
+}
+
+async function checkAutomatorVersion() {
+  let currentVersion = '0.0.0';
+
+  try {
+    const res = await fetch('/api/version');
+    if (!res.ok) {
+      throw new Error(`Failed to get local version: ${res.status}`);
+    }
+    const data = await res.json();
+    currentVersion = data.version || currentVersion;
+    ui.setVersion(`Automator v${currentVersion}`);
+  } catch (err) {
+    console.error('Failed to determine local Automator version', err);
+    ui.setVersion('Automator version: unknown');
+    return;
+  }
+
+  try {
+    const res = await fetch('https://api.backoffice.molo17.com/agent/automator/version');
+    if (!res.ok) {
+      throw new Error(`Version check failed: ${res.status}`);
+    }
+    const data = await res.json();
+    const latestGa = data.latestVersionGA || data.latestVersionGa || data.latestversionGA;
+    if (!latestGa) {
+      return;
+    }
+
+    if (!isNewerVersion(latestGa, currentVersion)) {
+      return;
+    }
+
+    ui.setVersion(`Automator v${currentVersion} – New version available: v${latestGa}`);
+
+    try {
+      const clRes = await fetch(
+        `https://api.backoffice.molo17.com/changelog/automator/${encodeURIComponent(latestGa)}`,
+      );
+      if (!clRes.ok) {
+        throw new Error(`Changelog fetch failed: ${clRes.status}`);
+      }
+
+      // Endpoint returns JSON like:
+      // { id, versionNumber, releaseDate, changelog, changelogSummary, module }
+      const clJson = await clRes.json().catch(() => null);
+      const changelog = clJson && typeof clJson.changelog === 'string' ? clJson.changelog : '';
+
+      if (changelog) {
+        console.info(`Automator ${latestGa} changelog:\n${changelog}`);
+
+        const container = document.getElementById('version-changelog');
+        if (container) {
+          const titleEl = document.createElement('div');
+          titleEl.className = 'version-changelog-title';
+          titleEl.textContent = `What's new in v${latestGa}`;
+
+          const bodyEl = document.createElement('div');
+          bodyEl.className = 'version-changelog-body';
+          bodyEl.textContent = changelog;
+
+          const linkEl = document.createElement('a');
+          linkEl.href = 'https://molo17.com/gluesync-automator/';
+          linkEl.target = '_blank';
+          linkEl.rel = 'noopener';
+          linkEl.className = 'version-download-link';
+          linkEl.textContent = 'Download latest Automator';
+
+          container.innerHTML = '';
+          container.appendChild(titleEl);
+          container.appendChild(bodyEl);
+          container.appendChild(linkEl);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to fetch Automator changelog', err);
+    }
+  } catch (err) {
+    console.error('Failed to check for latest Automator version', err);
   }
 }
 
@@ -231,6 +356,32 @@ function bindEvents() {
   const yamlInput = document.getElementById('yaml-file');
   const exportForm = document.getElementById('export-form');
   const exportPipelineSelect = document.getElementById('export-pipeline-id');
+  const customSchemasCheckbox = document.getElementById('custom-schemas');
+  const schemaFields = document.getElementById('schema-fields');
+  const typeFields = document.getElementById('type-fields');
+  const sourceTypeSelect = document.getElementById('source-type');
+  const targetTypeSelect = document.getElementById('target-type');
+
+  function updateSchemaVisibility() {
+    if (!customSchemasCheckbox) return;
+    const enabled = customSchemasCheckbox.checked;
+
+    if (schemaFields) {
+      schemaFields.style.display = enabled ? '' : 'none';
+    }
+    if (typeFields) {
+      typeFields.style.display = enabled ? '' : 'none';
+    }
+
+    // When schemas are driven by YAML (default), keep type dropdowns read-only/hidden
+    if (sourceTypeSelect) sourceTypeSelect.disabled = !enabled;
+    if (targetTypeSelect) targetTypeSelect.disabled = !enabled;
+  }
+
+  if (customSchemasCheckbox && schemaFields) {
+    updateSchemaVisibility();
+    customSchemasCheckbox.addEventListener('change', updateSchemaVisibility);
+  }
 
   loginForm.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -251,6 +402,7 @@ function bindEvents() {
       ui.setAuthMessage('Authentication successful', 'success');
       const snapshot = await api.getState();
       stateManager.updateFromState(snapshot);
+      ui.lockAuthFields(true);
       await loadPipelines();
     } catch (err) {
       ui.setAuthMessage(err.message, 'error');
@@ -264,10 +416,15 @@ function bindEvents() {
       ui.setAuthMessage('Logged out', 'success');
       ui.setAuthEnabled(false);
       ui.setStatus('idle', 'Not authenticated');
+      ui.lockAuthFields(false);
       stateManager.stopPolling();
       ui.renderLogs();
       if (exportPipelineSelect) {
         exportPipelineSelect.innerHTML = '<option value="">Select a pipeline…</option>';
+      }
+      const configPipelineSelect = document.getElementById('pipeline-id');
+      if (configPipelineSelect && configPipelineSelect.tagName === 'SELECT') {
+        configPipelineSelect.innerHTML = '<option value="">Select a pipeline…</option>';
       }
     } catch (err) {
       ui.setAuthMessage(err.message, 'error');
@@ -295,10 +452,15 @@ function bindEvents() {
       return;
     }
 
+    const customSchemasEnabled = customSchemasCheckbox ? customSchemasCheckbox.checked : false;
+    const sourceSchemaValue = document.getElementById('source-schema').value;
+    const targetSchemaValue = document.getElementById('target-schema').value;
+
     const payload = {
       pipelineId: document.getElementById('pipeline-id').value,
-      sourceSchema: document.getElementById('source-schema').value,
-      targetSchema: document.getElementById('target-schema').value,
+      sourceSchema: customSchemasEnabled ? sourceSchemaValue : '',
+      targetSchema: customSchemasEnabled ? targetSchemaValue : '',
+      autoSchemas: !customSchemasEnabled,
       sourceType: document.getElementById('source-type').value,
       targetType: document.getElementById('target-type').value,
       chunkSize: Number(document.getElementById('chunk-size').value || 50),
@@ -381,8 +543,9 @@ function bindEvents() {
 }
 
 async function loadPipelines() {
-  const select = document.getElementById('export-pipeline-id');
-  if (!select) return;
+  const exportSelect = document.getElementById('export-pipeline-id');
+  const configSelect = document.getElementById('pipeline-id');
+  if (!exportSelect && !configSelect) return;
 
   try {
     const data = await api.listPipelines();
@@ -398,14 +561,20 @@ async function loadPipelines() {
       return a.id.localeCompare(b.id);
     });
 
-    select.innerHTML = '<option value="">Select a pipeline…</option>';
-    pipelines.forEach((p) => {
-      const opt = document.createElement('option');
-      opt.value = p.id;
-      const label = p.name ? `${p.name} (${p.id})` : p.id;
-      opt.textContent = label;
-      select.appendChild(opt);
-    });
+    const populateSelect = (selectEl) => {
+      if (!selectEl) return;
+      selectEl.innerHTML = '<option value="">Select a pipeline…</option>';
+      pipelines.forEach((p) => {
+        const opt = document.createElement('option');
+        opt.value = p.id;
+        const label = p.name ? `${p.name} (${p.id})` : p.id;
+        opt.textContent = label;
+        selectEl.appendChild(opt);
+      });
+    };
+
+    populateSelect(exportSelect);
+    populateSelect(configSelect);
   } catch (err) {
     console.error(err);
     ui.setExportMessage(err.message, 'error');

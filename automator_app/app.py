@@ -36,8 +36,10 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, validator
 
+from commons import extract_all_schemas_from_yaml
 from . import corehub
 from .state import state
+from .version import get_version
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +88,7 @@ class RunRequest(BaseModel):
     create_tables: Optional[bool] = Field(None, alias="createTables")
     use_ssl: Optional[bool] = Field(None, alias="useSsl")
     skip_verify: Optional[bool] = Field(None, alias="skipVerify")
+    auto_schemas: bool = Field(True, alias="autoSchemas")
 
     class Config:
         allow_population_by_field_name = True
@@ -129,6 +132,10 @@ class PipelinesResponse(BaseModel):
     pipelines: list[PipelineInfo]
 
 
+class VersionResponse(BaseModel):
+    version: str
+
+
 def _ensure_static_assets() -> None:
     static_directory = _static_dir()
     if not static_directory.exists():
@@ -160,6 +167,10 @@ def create_app() -> FastAPI:
     @app.get("/api/healthz")
     async def healthcheck() -> dict:
         return {"status": "ok"}
+
+    @app.get("/api/version", response_model=VersionResponse)
+    async def version() -> VersionResponse:
+        return VersionResponse(version=get_version())
 
     @app.get("/api/state", response_model=StateResponse)
     async def get_state() -> StateResponse:
@@ -317,6 +328,56 @@ def create_app() -> FastAPI:
         loop = asyncio.get_running_loop()
 
         def _run_sync() -> dict:
+            yaml_file_path = str(yaml_path)
+
+            if request.auto_schemas:
+                schema_pairs = extract_all_schemas_from_yaml(yaml_file_path)
+                if not schema_pairs:
+                    return {
+                        "success": False,
+                        "logs": [],
+                        "error": f"No schemas found in YAML file: {yaml_file_path}",
+                    }
+
+                overall_success = True
+                errors: list[str] = []
+
+                for idx, (src_schema, tgt_schema) in enumerate(schema_pairs, start=1):
+                    if _log_callback is not None:
+                        _log_callback(
+                            f"[Schema {idx}/{len(schema_pairs)}] Creating entities for {src_schema} -> {tgt_schema}"
+                        )
+
+                    result = corehub.run_create_entities(
+                        token=token,
+                        base_url=base_url,
+                        pipeline_id=request.pipeline_id,
+                        source_schema=src_schema,
+                        target_schema=tgt_schema,
+                        source_type=request.source_type,
+                        target_type=request.target_type,
+                        yaml_file=yaml_file_path,
+                        skip_errors=request.skip_errors,
+                        chunk_size=request.chunk_size,
+                        enable_scheduling=enable_scheduling,
+                        create_tables=create_tables,
+                        use_ssl=use_ssl,
+                        skip_verify=skip_verify,
+                        log_callback=_log_callback,
+                    )
+
+                    if not result.get("success"):
+                        overall_success = False
+                        if result.get("error"):
+                            errors.append(str(result["error"]))
+
+                return {
+                    "success": overall_success,
+                    "logs": [],
+                    "error": "; ".join(errors) if errors else None,
+                }
+
+            # Custom schemas provided by user
             return corehub.run_create_entities(
                 token=token,
                 base_url=base_url,
@@ -325,7 +386,7 @@ def create_app() -> FastAPI:
                 target_schema=request.target_schema,
                 source_type=request.source_type,
                 target_type=request.target_type,
-                yaml_file=str(yaml_path),
+                yaml_file=yaml_file_path,
                 skip_errors=request.skip_errors,
                 chunk_size=request.chunk_size,
                 enable_scheduling=enable_scheduling,

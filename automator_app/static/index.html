@@ -17,10 +17,13 @@
       </div>
       <div class="topbar-links">
         <a href="https://docs.molo17.com" target="_blank" rel="noopener" class="topbar-link">Documentation</a>
-        <a href="https://support.molo17.com" target="_blank" rel="noopener" class="topbar-link">Support</a>
+        <a href="https://molo17.atlassian.net/servicedesk/customer/portal/30" target="_blank" rel="noopener" class="topbar-link">Support</a>
+        <span id="version-label" class="version-label">Automator version: loading…</span>
         <div id="status-indicator" class="status status-idle">Idle</div>
       </div>
     </header>
+
+    <div id="version-changelog" class="version-changelog"></div>
 
     <main class="layout">
       <section class="card" id="auth-card">
@@ -47,6 +50,8 @@
             <label class="checkbox">
               <input type="checkbox" id="skip-verify" checked />
               Skip certificate verification
+              <br />
+              <span class="hint-text">For self-signed TLS certificates, leave checked if unsure</span>
             </label>
           </fieldset>
           <fieldset class="fieldset">
@@ -70,25 +75,43 @@
         <h2>Import (create entities from YAML)</h2>
         <form id="config-form" class="form-grid">
           <label>
-            Pipeline ID
-            <input type="text" id="pipeline-id" name="pipelineId" required />
+            Pipeline
+            <select id="pipeline-id" name="pipelineId" required>
+              <option value="">Select a pipeline…</option>
+            </select>
           </label>
-          <label>
-            Source schema
-            <input type="text" id="source-schema" name="sourceSchema" required />
+          <label class="checkbox">
+            <input type="checkbox" id="custom-schemas" />
+            Customize source/target schemas (override YAML)
           </label>
-          <label>
-            Target schema
-            <input type="text" id="target-schema" name="targetSchema" required />
-          </label>
-          <label>
-            Source type
-            <input type="text" id="source-type" name="sourceType" placeholder="RDBMS" required />
-          </label>
-          <label>
-            Target type
-            <input type="text" id="target-type" name="targetType" placeholder="NoSQL" required />
-          </label>
+          <div id="schema-fields">
+            <label>
+              Source schema
+              <input type="text" id="source-schema" name="sourceSchema" />
+            </label>
+            <label>
+              Target schema
+              <input type="text" id="target-schema" name="targetSchema" />
+            </label>
+          </div>
+          <div id="type-fields">
+            <label>
+              Source type
+              <select id="source-type" name="sourceType" required>
+                <option value="">Select source type…</option>
+                <option value="SQL">RDBMS (SQL)</option>
+                <option value="NoSQL">Anything else</option>
+              </select>
+            </label>
+            <label>
+              Target type
+              <select id="target-type" name="targetType" required>
+                <option value="">Select target type…</option>
+                <option value="SQL">RDBMS (SQL)</option>
+                <option value="NoSQL">Anything else</option>
+              </select>
+            </label>
+          </div>
           <label>
             Chunk size
             <input type="number" id="chunk-size" name="chunkSize" value="50" min="1" max="500" />

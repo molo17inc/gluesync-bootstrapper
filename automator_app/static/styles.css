@@ -75,6 +75,42 @@ body {
   gap: 1.25rem;
 }
 
+.version-label {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.version-changelog {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 0.5rem clamp(1.25rem, 4vw, 3rem) 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.version-changelog-title {
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+  color: var(--text);
+}
+
+.version-changelog-body {
+  white-space: pre-wrap;
+  margin-bottom: 0.25rem;
+}
+
+.version-download-link {
+  display: inline-block;
+  margin-top: 0.1rem;
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.version-download-link:hover,
+.version-download-link:focus {
+  color: var(--accent-dark);
+}
+
 .topbar-link {
   color: var(--bg);
   font-size: 0.9rem;
@@ -173,6 +209,12 @@ select {
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
+input[disabled],
+select[disabled],
+textarea[disabled] {
+  cursor: not-allowed;
+}
+
 input[type="text"]:focus,
 input[type="password"]:focus,
 input[type="number"]:focus,
@@ -189,6 +231,11 @@ select:focus {
   gap: 0.6rem;
   flex-direction: row;
   color: var(--text);
+}
+
+.hint-text {
+  font-size: 0.8rem;
+  color: var(--muted);
 }
 
 .checkbox input {

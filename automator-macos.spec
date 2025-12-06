@@ -1,5 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os
+import subprocess
 import sys
 
 # Add current directory to sys.path to ensure root modules are found
@@ -10,7 +11,54 @@ if current_dir not in sys.path:
 exe_name = 'gluesync-automator-macos'
 runtime_tmpdir = '/tmp'
 
-datas = [('automator_app/static', 'static')]
+
+def _write_version_file() -> None:
+    """Best-effort: derive Automator version from latest `automator-*` git tag.
+
+    Falls back silently if git is unavailable or no matching tag exists.
+    """
+
+    try:
+        # Prefer annotated tags; fallback to any matching tag
+        tag = (
+            subprocess.check_output(
+                ['git', 'describe', '--tags', '--match', 'automator-*', '--abbrev=0'],
+                stderr=subprocess.STDOUT,
+            )
+            .decode('utf-8')
+            .strip()
+        )
+    except Exception:
+        tag = ''
+
+    if not tag:
+        return
+
+    # Strip leading pattern: automator-
+    version = tag
+    if version.startswith('automator-'):
+        version = version[len('automator-') :]
+
+    version = version.strip()
+    if not version:
+        return
+
+    version_path = os.path.join(current_dir, 'automator_app', 'VERSION')
+    try:
+        os.makedirs(os.path.dirname(version_path), exist_ok=True)
+        with open(version_path, 'w', encoding='utf-8') as fh:  # noqa: PTH123
+            fh.write(version + '\n')
+    except Exception:
+        # Do not fail the build if we cannot write the VERSION file
+        pass
+
+
+_write_version_file()
+
+datas = [
+    ('automator_app/static', 'static'),
+    ('automator_app/VERSION', 'automator_app'),
+]
 binaries = []
 hiddenimports = [
     'create_user_defined_functions',

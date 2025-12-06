@@ -11,7 +11,7 @@ Bootstrapper is dual-licensed under the following licenses:
 
 2. MOLO17 Commercial License
     Alternatively, you may use this software under the MOLO17 Commercial License,
-    which includes a warranty and permits proprietary use. Contact MOLO17 at info@molo17.com
+    which includes a warranty and permits proprietary use. Contact MOLO17 at <info@molo17.com>
     for licensing terms and conditions.
 
 You must choose one of these licenses to use this software. Using this software implies
@@ -216,6 +216,7 @@ During a snapshot operation, Gluesync normally deletes all records in the target
 ### Configuration
 
 The filter is configured using a `clauses` array, where each clause specifies:
+
 - `column`: The name of the column to filter on
 - `type`: The data type of the column (string, number, boolean, date)
 - `operation`: The comparison operation to perform
@@ -224,6 +225,7 @@ The filter is configured using a `clauses` array, where each clause specifies:
 ### Supported Operations
 
 For string columns:
+
 - `Equal`: Exact match
 - `NotEqual`: Does not match
 - `Contains`: Contains substring
@@ -232,6 +234,7 @@ For string columns:
 - `EndsWith`: Ends with suffix
 
 For numeric columns:
+
 - `Equal`: Equals
 - `NotEqual`: Not equals
 - `GreaterThan`: Greater than
@@ -240,10 +243,12 @@ For numeric columns:
 - `LessThanOrEqual`: Less than or equal
 
 For boolean columns:
+
 - `Equal`: True or False
 - `NotEqual`: Opposite of the specified value
 
 For date columns:
+
 - `Equal`: Exact date match
 - `NotEqual`: Not the specified date
 - `Before`: Before the specified date
@@ -513,6 +518,7 @@ curl -X POST https://<corehub-url>/authentication/login -H "Content-Type: applic
 Default username and password are `admin` and `admin`. Keep in mind that at the first login you will be prompted to set a new password, you will need to use that new password to get a valid token.
 
 ### Usage of main.py
+
 The `main.py` script is the main entry point for the Gluesync Bootstrapper. It is used to start the synchronization process, creating a new pipeline and starting the agents based on the given config.json file. That config file should contain the connection properties for the source and target databases.
 
 To run the script, use the following command:
@@ -594,11 +600,13 @@ schedules:
 #### Task Types
 
 Supported task types for pipeline-level schedules:
+
 - `pipeline_start`: Start the entire pipeline
 - `pipeline_stop`: Stop the entire pipeline
 - `pipeline_snapshot`: Create a snapshot of the entire pipeline
 
 Supported task types for entity-level schedules:
+
 - `entity_start`: Start a specific entity
 - `entity_stop`: Stop a specific entity
 - `entity_snapshot`: Create a snapshot of a specific entity
@@ -827,6 +835,7 @@ The system implements intelligent column discovery for target-only columns:
 3. **Validation**: If a target-only column is not found in the target table and no complete user-defined properties are provided, the system throws an error requiring all properties to be specified.
 
 This behavior ensures that:
+
 - Existing target table structures are respected when possible
 - Users have full control when defining new columns
 - The system maintains data integrity and consistency
@@ -991,6 +1000,18 @@ pyinstaller automator.spec --clean --distpath .automator-build/dist --workpath .
 
 Outputs will be located under `.automator-build/dist/gluesync-automator/`.
 
+#### macOS-specific build
+
+For a native macOS executable (including VERSION support derived from the latest `automator-*` git tag), run from the repository root:
+
+```bash
+pyinstaller automator-macos.spec --clean --distpath .automator-build/dist --workpath .automator-build/build
+```
+
+The resulting binary will be available at:
+
+- `.automator-build/dist/gluesync-automator-macos`
+
 ### GitLab CI automation
 
 Pushing a tag named `automator-<version>` (for example, `automator-1.0.0`) triggers the `automator_build` job in `.gitlab-ci.yml`. The job:
@@ -1090,6 +1111,7 @@ git push origin dbmoto-1.0.0
 ```
 
 This triggers:
+
 1. **Lambda function** deployment to AWS (manual approval required)
 2. **WordPress plugin** deployment to hosting via FTP (automatic, after Lambda success)
 
