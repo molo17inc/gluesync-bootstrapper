@@ -854,17 +854,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         # Add mappings for target-only columns if they exist (sourceColumnId = 0)
         target_only_columns = custom_config.get('targetOnlyColumns', [])
         if target_only_columns and not is_unlocked_schema:
-            # Continue from the maximum target column ID
-            for idx, target_col in enumerate(target_only_columns):
-                max_target_col_id += 1
-                columns_mapping_matrix.append({
-                    "sourceTableObjectId": source_table_id,
-                    "targetTableObjectId": target_table_id,
-                    "sourceColumnId": 0,  # 0 indicates no source column
-                    "targetColumnId": max_target_col_id
-                })
-            logger.info(f"Added {len(target_only_columns)} target-only column mappings with sourceColumnId=0")
-        
+            pass
+
         # Add columnsMappingMatrix to entityType
         target_entity_type["columnsMappingMatrix"] = columns_mapping_matrix
 
