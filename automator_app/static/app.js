@@ -316,8 +316,11 @@ async function checkAutomatorVersion() {
 
     try {
       const clRes = await fetch(
-        `https://api.backoffice.molo17.com/changelog/automator/${encodeURIComponent(latestGa)}`,
+        `/api/changelog/automator/${encodeURIComponent(latestGa)}`,
       );
+      if (clRes.status === 404) {
+        return;
+      }
       if (!clRes.ok) {
         throw new Error(`Changelog fetch failed: ${clRes.status}`);
       }

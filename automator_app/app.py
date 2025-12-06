@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import requests
 import sys
 import tempfile
 from pathlib import Path
@@ -42,6 +43,8 @@ from .state import state
 from .version import get_version
 
 logger = logging.getLogger(__name__)
+
+CHANGELOG_API_BASE_URL = "https://api.backoffice.molo17.com"
 
 
 def _resource_path(*parts: str) -> Path:
@@ -176,6 +179,35 @@ def create_app() -> FastAPI:
     async def get_state() -> StateResponse:
         snapshot = state.snapshot()
         return StateResponse(**snapshot)
+
+    @app.get("/api/changelog/automator/{version}")
+    async def get_automator_changelog(version: str):
+        url = f"{CHANGELOG_API_BASE_URL}/changelog/automator/{version}"
+        try:
+            resp = requests.get(url, timeout=5)
+        except requests.RequestException as exc:  # type: ignore[attr-defined]
+            logger.exception("Failed to fetch automator changelog")
+            raise HTTPException(status_code=502, detail="Failed to reach changelog service") from exc
+
+        if resp.status_code == 404:
+            raise HTTPException(status_code=404, detail="Changelog not found")
+
+        if resp.status_code >= 400:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Changelog service error: {resp.status_code}",
+            )
+
+        try:
+            data = resp.json()
+        except ValueError as exc:
+            logger.exception("Invalid JSON from changelog service")
+            raise HTTPException(
+                status_code=502,
+                detail="Invalid response from changelog service",
+            ) from exc
+
+        return data
 
     @app.post("/api/login", response_model=ApiMessage)
     async def login(payload: LoginRequest) -> ApiMessage:
