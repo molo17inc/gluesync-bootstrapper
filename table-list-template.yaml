@@ -35,6 +35,10 @@ groups:
     color: "#ffabc058"
 dbo:
   target: dbo
+  # Optional type hints used when importing/exporting pipelines
+  # SQL ~ RDBMS, NoSQL for document / non-relational targets
+  sourceType: SQL
+  targetType: NoSQL
   customProperties:
     source: 
       maxItemsCountPerIteration: 1000

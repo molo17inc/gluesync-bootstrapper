@@ -196,6 +196,8 @@ def build_schemas_from_entities(
 ) -> Dict[str, Dict[str, Any]]:
     """Reconstruct schema/table-level configuration from entities."""
     schemas: Dict[str, Dict[str, Any]] = {}
+    source_types: set[str] = set()
+    target_types: set[str] = set()
 
     for ent in entities:
         entity_name = ent.get("entityName", "")
@@ -207,12 +209,43 @@ def build_schemas_from_entities(
             logger.warning(f"Entity {entity_name} missing source/target agent entities. Skipping.")
             continue
 
+        # Track effective source/target *schema* type based on entity type
+        # - NoSqlEntity -> "NoSQL"
+        # - SingleTable / MultiTable / others -> "SQL" (relational)
+        src_type = source_ae.get("type")
+        tgt_type = target_ae.get("type")
+
+        source_types.add("NoSQL" if src_type == "NoSqlEntity" else "SQL")
+        target_types.add("NoSQL" if tgt_type == "NoSqlEntity" else "SQL")
+
         # Detect MultiTable vs SingleTable
         entity_type = source_ae.get("type") or target_ae.get("type")
         if entity_type == "MultiTable":
             _process_multitable_entity(ent, source_ae, target_ae, schemas, group_id_to_name)
         else:
             _process_single_entity(ent, source_ae, target_ae, schemas, group_id_to_name)
+
+    # If we were able to infer a single source/target type across all entities,
+    # propagate them to each schema configuration so they can be exported to YAML.
+    if source_types and target_types:
+        if len(source_types) == 1 and len(target_types) == 1:
+            inferred_source_type = next(iter(source_types))
+            inferred_target_type = next(iter(target_types))
+            logger.info(
+                "Inferred pipeline types from entities: sourceType=%s, targetType=%s",
+                inferred_source_type,
+                inferred_target_type,
+            )
+            for schema_cfg in schemas.values():
+                schema_cfg["sourceType"] = inferred_source_type
+                schema_cfg["targetType"] = inferred_target_type
+        else:
+            logger.warning(
+                "Unable to infer a single source/target type from entities. "
+                "Found sourceTypes=%s, targetTypes=%s",
+                sorted(source_types),
+                sorted(target_types),
+            )
 
     return schemas
 
@@ -582,6 +615,13 @@ def build_yaml_structure(
         schema_out: Dict[str, Any] = {
             "target": cfg.get("target", schema_name),
         }
+
+        # Optional schema-level source/target type hints (e.g. SQL / NoSQL)
+        # These are used when re-importing the YAML to derive source/target agent types.
+        if cfg.get("sourceType"):
+            schema_out["sourceType"] = cfg["sourceType"]
+        if cfg.get("targetType"):
+            schema_out["targetType"] = cfg["targetType"]
 
         if cfg.get("customProperties"):
             # Only include non-empty customProperties

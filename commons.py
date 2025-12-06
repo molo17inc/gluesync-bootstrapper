@@ -654,6 +654,98 @@ def extract_all_schemas_from_yaml(yaml_file_path):
         logger.error(f"Exception details: {traceback.format_exc()}")
         return []
 
+
+def extract_schema_types_from_yaml(yaml_file_path):
+    """Extract normalized (source_type, target_type) hints from YAML.
+
+    This looks for optional `sourceType` and `targetType` keys under each
+    schema configuration (both single-schema and multi-schema formats).
+
+    Returns a tuple `(source_type, target_type)` where each element is either
+    a normalized string (e.g. "SQL" or "NoSQL") or None if it cannot be
+    determined unambiguously.
+    """
+
+    try:
+        if not os.path.exists(yaml_file_path):
+            logger.error(f"YAML file does not exist: {yaml_file_path}")
+            return None, None
+
+        logger.info(f"Loading YAML configuration from: {yaml_file_path} for type extraction")
+        yaml_config = load_yaml_config(yaml_file_path)
+
+        if not yaml_config:
+            logger.warning(f"YAML file is empty or could not be loaded: {yaml_file_path}")
+            return None, None
+
+        def _normalize(value):
+            if not value:
+                return None
+            text = str(value).strip()
+            upper = text.upper()
+            if upper in {"RDBMS", "SQL"}:
+                return "SQL"
+            if upper == "NOSQL":
+                return "NoSQL"
+            return text
+
+        source_types = set()
+        target_types = set()
+
+        # Format 1: schemas wrapper
+        if isinstance(yaml_config.get('schemas'), dict) and yaml_config.get('schemas'):
+            for schema_config in yaml_config['schemas'].values():
+                if not isinstance(schema_config, dict):
+                    continue
+                st = _normalize(schema_config.get('sourceType'))
+                tt = _normalize(schema_config.get('targetType'))
+                if st:
+                    source_types.add(st)
+                if tt:
+                    target_types.add(tt)
+        else:
+            # Format 2: top-level keys treated as schema configs
+            for key, value in yaml_config.items():
+                if not isinstance(value, dict):
+                    continue
+                if key in {'schemas', 'groups'}:
+                    continue
+                if 'target' not in value and 'tables' not in value:
+                    continue
+                st = _normalize(value.get('sourceType'))
+                tt = _normalize(value.get('targetType'))
+                if st:
+                    source_types.add(st)
+                if tt:
+                    target_types.add(tt)
+
+        if not source_types and not target_types:
+            logger.info("No schema type hints (sourceType/targetType) found in YAML.")
+            return None, None
+
+        source_type = None
+        target_type = None
+
+        if source_types:
+            if len(source_types) == 1:
+                source_type = next(iter(source_types))
+            else:
+                logger.warning(f"Multiple sourceType values found in YAML: {sorted(source_types)}")
+
+        if target_types:
+            if len(target_types) == 1:
+                target_type = next(iter(target_types))
+            else:
+                logger.warning(f"Multiple targetType values found in YAML: {sorted(target_types)}")
+
+        logger.info(f"Extracted schema type hints from YAML: sourceType={source_type}, targetType={target_type}")
+        return source_type, target_type
+
+    except Exception as e:
+        logger.error(f"Error extracting schema types from YAML file {yaml_file_path}: {e}")
+        logger.error(f"Exception details: {traceback.format_exc()}")
+        return None, None
+
 def process_filter_clauses(filter_config, columns_info):
     """
     Process filter clauses from YAML configuration into the required format

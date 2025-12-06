@@ -40,7 +40,7 @@ from urllib.parse import urlparse
 from utils.log import get_logger, create_log_file, log_success, log_failure, lockfile_failure, exit_on_fail, lockfile_complete
 from utils.gluesync_sdk_client import initialize_gluesync_sdk, get_token, get_gluesync_client
 from utils.core_hub_client import CoreHubClient
-from commons import extract_schemas_from_yaml, extract_all_schemas_from_yaml
+from commons import extract_schemas_from_yaml, extract_all_schemas_from_yaml, extract_schema_types_from_yaml
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -520,6 +520,10 @@ def main():
     else:
         logger.info("Starting Gluesync Bootstrapper module in STANDARD mode...")
 
+        # Start with environment defaults; may be overridden by YAML type hints later.
+        effective_source_type = source_type
+        effective_target_type = target_type
+
         # Extract schema information from YAML file
         logger.info(f"Attempting to extract schemas from YAML file: {TABLE_LIST_YAML}")
         schema_pairs = extract_all_schemas_from_yaml(TABLE_LIST_YAML)
@@ -527,6 +531,18 @@ def main():
             logger.warning("No schemas found in YAML file. Entity creation will be skipped.")
         else:
             logger.info(f"Schema extraction successful. {len(schema_pairs)} schema pair(s) found: {schema_pairs}")
+
+            # Optionally derive source/target types from YAML if present
+            yaml_source_type, yaml_target_type = extract_schema_types_from_yaml(TABLE_LIST_YAML)
+            if yaml_source_type:
+                effective_source_type = yaml_source_type
+            if yaml_target_type:
+                effective_target_type = yaml_target_type
+            logger.info(
+                "Using source_type=%s, target_type=%s (env defaults possibly overridden by YAML)",
+                effective_source_type,
+                effective_target_type,
+            )
 
         # Initialize variables that might be used in different code paths
         change_required = False
@@ -762,8 +778,8 @@ def main():
                         entity_creation_script,
                         '--pipeline', pipeline_id,
                         '--source-schema', source_schema,
-                        '--source-type', source_type,
-                        '--target-type', target_type,
+                        '--source-type', effective_source_type,
+                        '--target-type', effective_target_type,
                         '--token', token,
                         '--target-schema', target_schema or source_schema
                     ]

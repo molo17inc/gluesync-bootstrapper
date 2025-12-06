@@ -51,6 +51,7 @@ automator_build:
     - |
       export AUTOMATOR_VERSION="${CI_COMMIT_TAG#automator-}"
       echo "Building Gluesync Automator version $AUTOMATOR_VERSION for Linux"
+      echo "$AUTOMATOR_VERSION" > automator_app/VERSION
       pyinstaller automator-linux.spec --clean --distpath .automator-build/dist --workpath .automator-build/build
     - ls -la .automator-build/dist
   artifacts:
@@ -93,6 +94,7 @@ automator_build_windows:
       $python = Join-Path $env:CI_PROJECT_DIR 'python\python.exe'
       $version = $env:CI_COMMIT_TAG -replace '^automator-', ''
       Write-Host "Building Gluesync Automator version $version for Windows"
+      Set-Content -Path (Join-Path $env:CI_PROJECT_DIR 'automator_app\VERSION') -Value $version
       & $python -m PyInstaller automator-windows.spec --clean --distpath .automator-build/dist --workpath .automator-build/build
     - Get-ChildItem .automator-build/dist
   artifacts:
