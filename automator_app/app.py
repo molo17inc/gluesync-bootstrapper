@@ -491,6 +491,9 @@ def create_app() -> FastAPI:
             with zipfile.ZipFile(io.BytesIO(contents)) as zf:
                 for name in zf.namelist():
                     lower = name.lower()
+                    # Skip macOS resource-fork entries (e.g. __MACOSX/ or ._filename)
+                    if name.startswith("__MACOSX/") or name.rsplit("/", 1)[-1].startswith("._"):
+                        continue
                     if not (lower.endswith(".yaml") or lower.endswith(".yml")):
                         continue
                     if "agents-config" in lower:
@@ -825,6 +828,9 @@ def create_app() -> FastAPI:
             with zipfile.ZipFile(io.BytesIO(contents)) as zf:
                 for name in zf.namelist():
                     lower = name.lower()
+                    # Skip macOS resource-fork entries (e.g. __MACOSX/ or ._filename)
+                    if name.startswith("__MACOSX/") or name.rsplit("/", 1)[-1].startswith("._"):
+                        continue
                     if not (lower.endswith(".yaml") or lower.endswith(".yml")):
                         continue
                     if "agents-config" in lower:
