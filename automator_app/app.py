@@ -521,9 +521,81 @@ def create_app() -> FastAPI:
                     if not base_name:
                         base_name = f"Imported pipeline {old_pipeline_id}" if old_pipeline_id else "Imported pipeline"
 
-                    # Create pipeline + bind agents using the shared agents list
+                    # Select agents for this pipeline: use per-pipeline mapping when present,
+                    # otherwise fall back to the full agents list from agents-config.yaml.
+                    agents_for_pipeline = agents_list
+                    pipeline_agents_meta = meta.get("agents") if isinstance(meta, dict) else None
+                    if isinstance(pipeline_agents_meta, list) and pipeline_agents_meta:
+                        selected: list[dict] = []
+                        for want in pipeline_agents_meta:
+                            if not isinstance(want, dict):
+                                continue
+
+                            a_type = want.get("agentType")
+                            a_tag = want.get("agentTag")
+                            a_id = want.get("agentId") or want.get("id")
+
+                            if not a_type or not a_tag:
+                                errors.append(
+                                    f"{name}: pipeline agents mapping has an entry without agentType/agentTag; skipping that entry."
+                                )
+                                continue
+
+                            def _matches_agent(candidate: dict) -> bool:
+                                if not isinstance(candidate, dict):
+                                    return False
+                                if candidate.get("agentType") != a_type or candidate.get("agentTag") != a_tag:
+                                    return False
+                                if not a_id:
+                                    return True
+                                cand_id = candidate.get("agentId") or candidate.get("id")
+                                return cand_id is not None and str(cand_id) == str(a_id)
+
+                            # Prefer matching by agentId when present to avoid merging distinct
+                            # agents that share the same tag/type. Fall back to tag/type only
+                            # for backwards compatibility with older exports.
+                            match = next((a for a in agents_list if _matches_agent(a)), None)
+                            if not match and a_id is not None:
+                                match = next(
+                                    (
+                                        a
+                                        for a in agents_list
+                                        if isinstance(a, dict)
+                                        and a.get("agentType") == a_type
+                                        and a.get("agentTag") == a_tag
+                                    ),
+                                    None,
+                                )
+
+                            if not match:
+                                errors.append(
+                                    f"{name}: agents-config.yaml declares agentType={a_type!r}, agentTag={a_tag!r} for this pipeline "
+                                    "but it is not present in the top-level agents list."
+                                )
+                            else:
+                                selected.append(match)
+
+                        if selected:
+                            # Deduplicate in case of repeated mappings
+                            seen_local: set[tuple] = set()
+                            deduped: list[dict] = []
+                            for a in selected:
+                                key = (a.get("agentType"), a.get("agentTag"))
+                                if key in seen_local:
+                                    continue
+                                seen_local.add(key)
+                                deduped.append(a)
+                            agents_for_pipeline = deduped
+                        else:
+                            # If mapping exists but nothing could be resolved, skip this pipeline
+                            errors.append(
+                                f"{name}: no valid agents could be resolved from the per-pipeline agents mapping; skipping this pipeline."
+                            )
+                            continue
+
+                    # Create pipeline + bind agents
                     try:
-                        cfg = {"pipelineName": base_name, "agents": agents_list}
+                        cfg = {"pipelineName": base_name, "agents": agents_for_pipeline}
                         result = corehub.import_pipeline_config_only(
                             token=state.token,
                             base_url=state.base_url,

@@ -72,59 +72,88 @@
       </section>
 
       <section class="card" id="config-card">
-        <h2>Import (create entities from YAML)</h2>
+        <h2>Import pipelines, agents and entities</h2>
         <form id="config-form" class="form-grid">
-          <label>
-            Pipeline
-            <select id="pipeline-id" name="pipelineId" required>
-              <option value="">Select a pipeline…</option>
-            </select>
-          </label>
-          <label class="checkbox">
-            <input type="checkbox" id="custom-schemas" />
-            Customize source/target schemas (override YAML)
-          </label>
-          <div id="schema-fields">
+          <fieldset class="fieldset">
+            <legend>Create entities from YAML (single pipeline)</legend>
             <label>
-              Source schema
-              <input type="text" id="source-schema" name="sourceSchema" />
-            </label>
-            <label>
-              Target schema
-              <input type="text" id="target-schema" name="targetSchema" />
-            </label>
-          </div>
-          <div id="type-fields">
-            <label>
-              Source type
-              <select id="source-type" name="sourceType" required>
-                <option value="">Select source type…</option>
-                <option value="SQL">RDBMS (SQL)</option>
-                <option value="NoSQL">Anything else</option>
+              Pipeline
+              <select id="pipeline-id" name="pipelineId" required>
+                <option value="">Select a pipeline…</option>
               </select>
             </label>
-            <label>
-              Target type
-              <select id="target-type" name="targetType" required>
-                <option value="">Select target type…</option>
-                <option value="SQL">RDBMS (SQL)</option>
-                <option value="NoSQL">Anything else</option>
-              </select>
+            <label class="checkbox">
+              <input type="checkbox" id="custom-schemas" />
+              Customize source/target schemas (override YAML)
             </label>
-          </div>
-          <label>
-            Chunk size
-            <input type="number" id="chunk-size" name="chunkSize" value="50" min="1" max="500" />
-          </label>
-          <label>
-            YAML configuration
-            <input type="file" id="yaml-file" accept=".yaml,.yml" />
-          </label>
-          <label class="checkbox">
-            <input type="checkbox" id="skip-errors" />
-            Skip errors
-          </label>
-          <button type="submit" class="primary" disabled id="run-btn">Start entity creation</button>
+            <div id="schema-fields">
+              <label>
+                Source schema
+                <input type="text" id="source-schema" name="sourceSchema" />
+              </label>
+              <label>
+                Target schema
+                <input type="text" id="target-schema" name="targetSchema" />
+              </label>
+            </div>
+            <div id="type-fields">
+              <label>
+                Source type
+                <select id="source-type" name="sourceType" required>
+                  <option value="">Select source type…</option>
+                  <option value="SQL">RDBMS (SQL)</option>
+                  <option value="NoSQL">Anything else</option>
+                </select>
+              </label>
+              <label>
+                Target type
+                <select id="target-type" name="targetType" required>
+                  <option value="">Select target type…</option>
+                  <option value="SQL">RDBMS (SQL)</option>
+                  <option value="NoSQL">Anything else</option>
+                </select>
+              </label>
+            </div>
+            <label>
+              YAML configuration
+              <input type="file" id="yaml-file" accept=".yaml,.yml" />
+            </label>
+            <fieldset class="fieldset">
+              <legend>Advanced options</legend>
+              <label>
+                Chunk size
+                <input type="number" id="chunk-size" name="chunkSize" value="50" min="1" max="500" />
+              </label>
+              <label class="checkbox">
+                <input type="checkbox" id="skip-errors" />
+                Skip errors
+              </label>
+            </fieldset>
+            <button type="submit" class="primary" disabled id="run-btn">Start entity creation</button>
+          </fieldset>
+
+          <fieldset class="fieldset">
+            <legend>Import pipeline settings (config only)</legend>
+            <label>
+              Config file
+              <input type="file" id="import-config-file" accept=".yaml,.yml,.json" />
+            </label>
+            <div class="button-group">
+              <button type="button" class="secondary" id="import-config-btn" disabled>Import config</button>
+            </div>
+          </fieldset>
+
+          <fieldset class="fieldset">
+            <legend>Import full backup (pipeline(s), agents and entities)</legend>
+            <label>
+              Backup archive (ZIP)
+              <input type="file" id="import-all-file" accept=".zip" />
+            </label>
+            <div class="button-group">
+              <button type="button" class="secondary" id="validate-all-btn" disabled>Validate</button>
+              <button type="button" class="secondary" id="import-all-btn" disabled>Import All</button>
+            </div>
+          </fieldset>
         </form>
         <div id="config-message" class="message"></div>
       </section>
@@ -132,30 +161,25 @@
       <section class="card" id="export-card">
         <h2>Export (backup pipeline configuration)</h2>
         <form id="export-form" class="form-grid">
-          <label>
-            Pipeline
-            <select id="export-pipeline-id" name="pipelineId">
-              <option value="">Select a pipeline…</option>
-            </select>
-          </label>
-          <div class="button-group">
-            <button type="submit" class="secondary" id="export-btn" disabled>Download YAML</button>
-            <button type="button" class="secondary" id="export-all-btn" disabled>Export All</button>
-          </div>
+          <fieldset class="fieldset">
+            <legend>Export a single pipeline</legend>
+            <label>
+              Pipeline
+              <select id="export-pipeline-id" name="pipelineId">
+                <option value="">Select a pipeline…</option>
+              </select>
+            </label>
+            <div class="button-group">
+              <button type="submit" class="secondary" id="export-btn" disabled>Download YAML</button>
+            </div>
+          </fieldset>
 
-          <label>
-            Import pipeline settings (agents config)
-            <input type="file" id="import-config-file" accept=".yaml,.yml,.json" />
-          </label>
-          <label>
-            Import full backup (config + templates)
-            <input type="file" id="import-all-file" accept=".zip" />
-          </label>
-          <div class="button-group">
-            <button type="button" class="secondary" id="import-config-btn" disabled>Import config</button>
-            <button type="button" class="secondary" id="validate-all-btn" disabled>Validate</button>
-            <button type="button" class="secondary" id="import-all-btn" disabled>Import All</button>
-          </div>
+          <fieldset class="fieldset">
+            <legend>Export all pipelines (incl. agents and entities)</legend>
+            <div class="button-group">
+              <button type="button" class="secondary" id="export-all-btn" disabled>Export All</button>
+            </div>
+          </fieldset>
         </form>
         <div id="export-message" class="message"></div>
       </section>

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import zipfile
 from contextlib import redirect_stdout
 from typing import Any, Callable, Dict, Optional
@@ -254,6 +255,12 @@ def export_all_pipelines_yaml(
             pipeline_id = pipeline['id']
             pipeline_name = pipeline.get('name', pipeline_id)
 
+            pipeline_meta: Dict[str, Any] = {
+                "pipelineId": pipeline_id,
+                "pipelineName": pipeline_name,
+            }
+            pipelines_meta.append(pipeline_meta)
+
             try:
                 # Export individual pipeline
                 yaml_content = export_pipeline_yaml(
@@ -278,14 +285,6 @@ def export_all_pipelines_yaml(
                 logger.exception("Failed to export pipeline %s: %s", pipeline_id, exc)
                 # Continue with other pipelines
 
-            # Track basic pipeline metadata for the agents-config file
-            pipelines_meta.append(
-                {
-                    "pipelineId": pipeline_id,
-                    "pipelineName": pipeline_name,
-                }
-            )
-
             # Try to collect agents for this pipeline
             try:
                 pipeline_agents = get_pipeline_agents(token, pipeline_id)
@@ -294,6 +293,8 @@ def export_all_pipelines_yaml(
                 pipeline_agents = []
 
             if isinstance(pipeline_agents, list):
+                # Per-pipeline agent references (by type/tag)
+                pipeline_agent_refs: list[dict] = []
                 for agent in pipeline_agents:
                     if not isinstance(agent, dict):
                         continue
@@ -301,18 +302,33 @@ def export_all_pipelines_yaml(
                     agent_type = agent.get("agentType")
                     agent_tag = agent.get("agentTag")
                     host_credentials = agent.get("hostCredentials") or {}
+                    raw_agent_id = agent.get("agentId") or agent.get("id")
 
                     if not agent_type or not agent_tag or not host_credentials:
                         continue
 
-                    # Deduplicate by a composite key of type, tag and basic connection details
-                    key = (
-                        str(agent_type),
-                        str(agent_tag),
-                        str(host_credentials.get("connectionName")),
-                        str(host_credentials.get("host")),
-                        str(host_credentials.get("port")),
-                    )
+                    # Add lightweight reference for this pipeline
+                    ref: Dict[str, Any] = {
+                        "agentType": agent_type,
+                        "agentTag": agent_tag,
+                    }
+                    if raw_agent_id is not None:
+                        ref["agentId"] = str(raw_agent_id)
+                    pipeline_agent_refs.append(ref)
+
+                    # Deduplicate primarily by agentId when available, otherwise by
+                    # a composite key of type, tag and basic connection details
+                    if raw_agent_id is not None:
+                        key = ("id", str(raw_agent_id))
+                    else:
+                        key = (
+                            "props",
+                            str(agent_type),
+                            str(agent_tag),
+                            str(host_credentials.get("connectionName")),
+                            str(host_credentials.get("host")),
+                            str(host_credentials.get("port")),
+                        )
                     if key in seen_agents:
                         continue
                     seen_agents.add(key)
@@ -322,20 +338,20 @@ def export_all_pipelines_yaml(
                     if "password" in masked_host_credentials and masked_host_credentials["password"]:
                         masked_host_credentials["password"] = "*******"
 
-                    all_agents.append(
-                        {
-                            "agentType": agent_type,
-                            "agentTag": agent_tag,
-                            "hostCredentials": masked_host_credentials,
-                            # Keep the same naming as config.json/example-config.json
-                            "customHostCredentials": agent.get("customHostCredentials") or {},
-                            "specificConfiguration": agent.get("specificConfiguration") or {},
-                            # These are part of the Bootstrapper config schema even if often empty
-                            "entitiesConfiguration": agent.get("entitiesConfiguration") or {},
-                            "tablesConfiguration": agent.get("tablesConfiguration") or {},
-                            "entities": agent.get("entities") or [],
-                        }
-                    )
+                    agent_payload: Dict[str, Any] = {
+                        "agentType": agent_type,
+                        "agentTag": agent_tag,
+                        "hostCredentials": masked_host_credentials,
+                        # Keep the same naming as config.json/example-config.json
+                        "customHostCredentials": agent.get("customHostCredentials") or {},
+                        "specificConfiguration": agent.get("specificConfiguration") or {},
+                    }
+                    if raw_agent_id is not None:
+                        agent_payload["agentId"] = str(raw_agent_id)
+                    all_agents.append(agent_payload)
+
+                if pipeline_agent_refs:
+                    pipeline_meta["agents"] = pipeline_agent_refs
 
         # After processing all pipelines, write a consolidated agents-config.yaml if any agents were found
         if all_agents:

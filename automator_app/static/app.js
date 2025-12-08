@@ -137,6 +137,20 @@ const ui = (() => {
 
   footerYear.textContent = new Date().getFullYear();
 
+  // Hide actions that depend on user-provided files until those files are present
+  if (runBtn) {
+    runBtn.style.display = 'none';
+  }
+  if (importConfigBtn) {
+    importConfigBtn.style.display = 'none';
+  }
+  if (importAllBtn) {
+    importAllBtn.style.display = 'none';
+  }
+  if (validateAllBtn) {
+    validateAllBtn.style.display = 'none';
+  }
+
   function setStatus(status, text) {
     statusEl.textContent = text;
     statusEl.className = `status status-${status}`;
@@ -238,7 +252,7 @@ const stateManager = {
     if (!data.tokenPresent) {
       ui.setStatus('idle', 'Not authenticated');
       ui.renderLogs();
-      this.yamlFileId = null;
+      this.setYamlFile(null);
       return;
     }
 
@@ -253,6 +267,9 @@ const stateManager = {
 
   setYamlFile(fileId) {
     this.yamlFileId = fileId;
+     if (ui.runBtn) {
+       ui.runBtn.style.display = fileId ? '' : 'none';
+     }
   },
 
   startPolling() {
@@ -514,6 +531,28 @@ function bindEvents() {
   const sourceTypeSelect = document.getElementById('source-type');
   const targetTypeSelect = document.getElementById('target-type');
 
+  function updateImportButtonsVisibility() {
+    // Import config button: visible only when a config file is selected
+    if (importConfigBtnEl) {
+      const hasConfigFile = !!(importConfigInput && importConfigInput.files && importConfigInput.files[0]);
+      importConfigBtnEl.style.display = hasConfigFile ? '' : 'none';
+    }
+
+    // Validate / Import All: visible only when a ZIP file is selected
+    const hasZipFile = (() => {
+      if (!importAllInput || !importAllInput.files || !importAllInput.files[0]) return false;
+      const name = importAllInput.files[0].name || '';
+      return name.toLowerCase().endsWith('.zip');
+    })();
+
+    if (importAllBtnEl) {
+      importAllBtnEl.style.display = hasZipFile ? '' : 'none';
+    }
+    if (validateAllBtnEl) {
+      validateAllBtnEl.style.display = hasZipFile ? '' : 'none';
+    }
+  }
+
   function updateSchemaVisibility() {
     if (!customSchemasCheckbox) return;
     const enabled = customSchemasCheckbox.checked;
@@ -583,6 +622,17 @@ function bindEvents() {
       if (configPipelineSelect && configPipelineSelect.tagName === 'SELECT') {
         configPipelineSelect.innerHTML = '<option value="">Select a pipeline…</option>';
       }
+      // Clear any selected import files and hide related buttons again
+      if (importConfigInput) {
+        importConfigInput.value = '';
+      }
+      if (importAllInput) {
+        importAllInput.value = '';
+      }
+      if (typeof updateImportButtonsVisibility === 'function') {
+        updateImportButtonsVisibility();
+      }
+      stateManager.setYamlFile(null);
     } catch (err) {
       ui.setAuthMessage(err.message, 'error');
     }
@@ -698,20 +748,28 @@ function bindEvents() {
     console.error('Export All button not found!');
   }
 
+  if (importConfigInput) {
+    importConfigInput.addEventListener('change', updateImportButtonsVisibility);
+  }
+
+  if (importAllInput) {
+    importAllInput.addEventListener('change', updateImportButtonsVisibility);
+  }
+
   if (importConfigBtnEl && importConfigInput) {
     importConfigBtnEl.addEventListener('click', async () => {
       const file = importConfigInput.files?.[0];
       if (!file) {
-        ui.setExportMessage('Please choose a config file to import', 'error');
+        ui.setConfigMessage('Please choose a config file to import', 'error');
         return;
       }
 
-      ui.setExportMessage('Importing config…');
+      ui.setConfigMessage('Importing config…');
       try {
         const result = await api.importConfig(file);
-        ui.setExportMessage(result.message || 'Config imported successfully', 'success');
+        ui.setConfigMessage(result.message || 'Config imported successfully', 'success');
       } catch (err) {
-        ui.setExportMessage(err.message, 'error');
+        ui.setConfigMessage(err.message, 'error');
       }
     });
   }
@@ -720,16 +778,16 @@ function bindEvents() {
     importAllBtnEl.addEventListener('click', async () => {
       const file = importAllInput.files?.[0];
       if (!file) {
-        ui.setExportMessage('Please choose a backup ZIP to import', 'error');
+        ui.setConfigMessage('Please choose a backup ZIP to import', 'error');
         return;
       }
 
-      ui.setExportMessage('Importing full backup…');
+      ui.setConfigMessage('Importing full backup…');
       try {
         const result = await api.importAll(file);
-        ui.setExportMessage(result.message || 'Backup imported successfully', 'success');
+        ui.setConfigMessage(result.message || 'Backup imported successfully', 'success');
       } catch (err) {
-        ui.setExportMessage(err.message, 'error');
+        ui.setConfigMessage(err.message, 'error');
       }
     });
   }
@@ -738,11 +796,11 @@ function bindEvents() {
     validateAllBtnEl.addEventListener('click', async () => {
       const file = importAllInput.files?.[0];
       if (!file) {
-        ui.setExportMessage('Please choose a backup ZIP to validate', 'error');
+        ui.setConfigMessage('Please choose a backup ZIP to validate', 'error');
         return;
       }
 
-      ui.setExportMessage('Validating backup…');
+      ui.setConfigMessage('Validating backup…');
       try {
         const result = await api.validateAll(file);
         const ok = result.success !== false;
@@ -751,9 +809,9 @@ function bindEvents() {
           const lines = text.split('\n');
           ui.renderLogs(lines);
         }
-        ui.setExportMessage(ok ? 'Validation OK' : 'Validation failed', ok ? 'success' : 'error');
+        ui.setConfigMessage(ok ? 'Validation OK' : 'Validation failed', ok ? 'success' : 'error');
       } catch (err) {
-        ui.setExportMessage(err.message, 'error');
+        ui.setConfigMessage(err.message, 'error');
       }
     });
   }
