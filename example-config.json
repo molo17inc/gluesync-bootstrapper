@@ -16,7 +16,7 @@
         "additionalHosts": [],
         "maxConnectionsCount": 100
       },
-      "hostCredentialsCustomProperties": {},
+      "customHostCredentials": {},
       "specificConfiguration": {},
       "entitiesConfiguration": {},
       "tablesConfiguration": {},
@@ -38,7 +38,10 @@
         "additionalHosts": [],
         "maxConnectionsCount": 100
       },
-      "hostCredentialsCustomProperties": {},
+      "customHostCredentials": {
+        "saslMechanism": "PLAIN",
+        "securityProtocol": "PLAINTEXT"
+      },
       "specificConfiguration": {},
       "entitiesConfiguration": {},
       "tablesConfiguration": {},
