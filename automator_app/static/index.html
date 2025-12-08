@@ -54,17 +54,6 @@
               <span class="hint-text">For self-signed TLS certificates, leave checked if unsure</span>
             </label>
           </fieldset>
-          <fieldset class="fieldset">
-            <legend>Preferences</legend>
-            <label class="checkbox">
-              <input type="checkbox" id="enable-scheduling" checked />
-              Enable scheduling
-            </label>
-            <label class="checkbox">
-              <input type="checkbox" id="create-tables" checked />
-              Create missing tables
-            </label>
-          </fieldset>
           <button type="submit" class="primary">Sign in</button>
           <button type="button" id="logout-btn" class="secondary" disabled>Sign out</button>
         </form>
@@ -118,17 +107,6 @@
               YAML configuration
               <input type="file" id="yaml-file" accept=".yaml,.yml" />
             </label>
-            <fieldset class="fieldset">
-              <legend>Advanced options</legend>
-              <label>
-                Chunk size
-                <input type="number" id="chunk-size" name="chunkSize" value="50" min="1" max="500" />
-              </label>
-              <label class="checkbox">
-                <input type="checkbox" id="skip-errors" />
-                Skip errors
-              </label>
-            </fieldset>
             <button type="submit" class="primary" disabled id="run-btn">Start entity creation</button>
           </fieldset>
 
@@ -153,6 +131,26 @@
               <button type="button" class="secondary" id="validate-all-btn" disabled>Validate</button>
               <button type="button" class="secondary" id="import-all-btn" disabled>Import All</button>
             </div>
+          </fieldset>
+
+          <fieldset class="fieldset">
+            <legend>Advanced options</legend>
+            <label>
+              Chunk size
+              <input type="number" id="chunk-size" name="chunkSize" value="50" min="1" max="500" />
+            </label>
+            <label class="checkbox">
+              <input type="checkbox" id="skip-errors" />
+              Skip errors
+            </label>
+            <label class="checkbox">
+              <input type="checkbox" id="create-tables" checked />
+              Create missing tables automatically
+            </label>
+            <label class="checkbox">
+              <input type="checkbox" id="enable-scheduling" checked />
+              Enable scheduling for created entities
+            </label>
           </fieldset>
         </form>
         <div id="config-message" class="message"></div>
