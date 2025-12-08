@@ -242,6 +242,8 @@ select {
   color: var(--text);
   font-size: 0.95rem;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  width: 100%;
+  max-width: 100%;
 }
 
 input[disabled],
