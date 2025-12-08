@@ -78,6 +78,35 @@ fake = Faker()
 log_file = create_log_file()
 logger = get_logger(log_file)
 
+
+def load_config_from_file(path):
+    """Load Bootstrapper configuration from JSON or YAML.
+
+    The format is detected from the file extension when possible, otherwise
+    the function will attempt JSON first and then fall back to YAML.
+    """
+
+    _, ext = os.path.splitext(path)
+    ext = ext.lower()
+
+    with open(path, 'r') as file:
+        if ext in ('.yaml', '.yml'):
+            logger.info(f"Loading YAML configuration from {path}")
+            return yaml.safe_load(file)
+
+        if ext == '.json':
+            logger.info(f"Loading JSON configuration from {path}")
+            return json.load(file)
+
+        # Unknown extension: auto-detect
+        logger.info(f"Loading configuration from {path} (auto-detect JSON/YAML)")
+        text = file.read()
+        try:
+            return json.loads(text)
+        except Exception:
+            return yaml.safe_load(text)
+
+
 # Environment variables and constants
 file_conf_path = os.getenv('FILE_CONF_PATH', './config.json')
 
@@ -193,8 +222,7 @@ if not handle_with_conductor:
         logger.info("Using manual authentication with provided password or token.")
         # Existing authentication logic
         try:
-            with open(file_conf_path, 'r') as file:
-                conf_test = json.load(file)
+            conf_test = load_config_from_file(file_conf_path)
             logger.info(f"Loaded configuration from {file_conf_path}")
         except Exception as e:
             log_failure(logger, f"Failed to load configuration: {str(e)}")
@@ -549,8 +577,7 @@ def main():
         new_password = user_defined_password
         
         try:
-            with open(file_conf_path, 'r') as file:
-                conf_test = json.load(file)
+            conf_test = load_config_from_file(file_conf_path)
             logger.info(f"Loaded configuration from {file_conf_path}")
         except Exception as e:
             log_failure(logger, f"Failed to load configuration: {str(e)}")
@@ -682,14 +709,27 @@ def main():
         logger.debug(f"Unassigned agents: {json.dumps(unassigned_agents, indent=2)}")
         logger.debug(f"Config agents: {json.dumps(conf_test['agents'], indent=2)}")
 
-        # Use provided pipeline name or generate a fancy one
+        # Use provided pipeline name or generate/derive one
         if args.pipeline_name:
             pipeline_name = args.pipeline_name
             pipeline_description = f"Pipeline {pipeline_name}"
         else:
-            fancy_names = generate_fancy_names(2)
-            pipeline_name = fancy_names[0]
-            pipeline_description = fancy_names[1]
+            config_pipeline_name = None
+            try:
+                if isinstance(conf_test, dict):
+                    config_pipeline_name = conf_test.get('pipelineName')
+            except NameError:
+                # conf_test may not be defined in some initialization paths
+                config_pipeline_name = None
+
+            if config_pipeline_name:
+                pipeline_name = str(config_pipeline_name)
+                pipeline_description = f"Pipeline {pipeline_name}"
+                logger.info(f"Using pipeline name from configuration: {pipeline_name}")
+            else:
+                fancy_names = generate_fancy_names(2)
+                pipeline_name = fancy_names[0]
+                pipeline_description = fancy_names[1]
 
         # Create pipeline
         pipeline_response = fetch_core_hub(

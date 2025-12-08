@@ -24,12 +24,16 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import logging
-import requests
 import sys
 import tempfile
+import zipfile
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
+
+import requests
+import yaml
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -37,7 +41,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, validator
 
-from commons import extract_all_schemas_from_yaml
+from commons import extract_all_schemas_from_yaml, extract_schema_types_from_yaml
 from . import corehub
 from .state import state
 from .version import get_version
@@ -143,6 +147,57 @@ def _ensure_static_assets() -> None:
     static_directory = _static_dir()
     if not static_directory.exists():
         raise RuntimeError(f"Static assets not found at {static_directory}")
+
+
+def _load_config_from_bytes(contents: bytes, filename: str) -> Any:
+    """Parse a config file from bytes, supporting JSON and YAML.
+
+    Format is detected from extension when possible, otherwise JSON is tried
+    first and YAML is used as a fallback.
+    """
+
+    text = contents.decode("utf-8")
+    lower_name = (filename or "").lower()
+
+    if lower_name.endswith((".yaml", ".yml")):
+        return yaml.safe_load(text)
+    if lower_name.endswith(".json"):
+        return json.loads(text)
+
+    # Unknown extension: auto-detect
+    try:
+        return json.loads(text)
+    except Exception:
+        return yaml.safe_load(text)
+
+
+def _has_masked_password(value: Any) -> bool:
+    """Recursively detect any password set to the masked sentinel value.
+
+    We specifically look for hostCredentials.password == "*******" or any
+    generic "password" field with that literal value.
+    """
+
+    sentinel = "*******"
+
+    if isinstance(value, dict):
+        # Direct password key
+        if str(value.get("password")) == sentinel:
+            return True
+
+        # Look inside hostCredentials / customHostCredentials
+        for key in ("hostCredentials", "customHostCredentials"):
+            sub = value.get(key)
+            if isinstance(sub, dict) and str(sub.get("password")) == sentinel:
+                return True
+
+        # Recurse into all values
+        return any(_has_masked_password(v) for v in value.values())
+
+    if isinstance(value, (list, tuple, set)):
+        return any(_has_masked_password(v) for v in value)
+
+    return False
 
 
 def create_app() -> FastAPI:
@@ -310,6 +365,471 @@ def create_app() -> FastAPI:
                 "Content-Disposition": f'attachment; filename="{filename}"',
             },
         )
+
+    @app.post("/api/import/config", response_model=ApiMessage)
+    async def import_config(file: UploadFile = File(...)) -> ApiMessage:
+        """Validate a single agents-config file before importing.
+
+        Currently this endpoint only performs format validation and checks that
+        no passwords are still masked as "*******". The actual creation of
+        pipelines, agents and entities will be added in a subsequent step.
+        """
+
+        if not state.token or not state.base_url:
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+        contents = await file.read()
+        if not contents:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+        try:
+            config_obj = _load_config_from_bytes(contents, file.filename or "")
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Failed to parse config during import")
+            raise HTTPException(status_code=400, detail=f"Failed to parse config: {exc}") from exc
+
+        if _has_masked_password(config_obj):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Config contains masked passwords (*******). "
+                    "Please replace them with real passwords before importing."
+                ),
+            )
+
+        try:
+            result = corehub.import_pipeline_config_only(
+                token=state.token,
+                base_url=state.base_url,
+                use_ssl=state.use_ssl,
+                skip_verify=state.skip_verify,
+                config=config_obj,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Config import failed")
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        name = result.get("pipelineName") or "(unnamed)"
+        pid = result.get("pipelineId") or "?"
+        message = f"Config imported: created pipeline {name} ({pid}) without entities."
+        return ApiMessage(message=message)
+
+    @app.post("/api/import/all", response_model=ApiMessage)
+    async def import_all(file: UploadFile = File(...)) -> ApiMessage:
+        """Validate a full backup ZIP (pipelines + agents-config).
+
+        The ZIP is expected to come from the Export All feature and contain
+        at least an agents-config.yaml file. As with /api/import/config, this
+        endpoint currently only validates and enforces password masking rules.
+        """
+
+        if not state.token or not state.base_url:
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+        contents = await file.read()
+        if not contents:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+        # First pass: find and parse agents-config.yaml for shared agents + metadata
+        try:
+            with zipfile.ZipFile(io.BytesIO(contents)) as zf:
+                agents_name = None
+                for name in zf.namelist():
+                    lower = name.lower()
+                    if lower.endswith("agents-config.yaml") or lower.endswith("agents-config.yml"):
+                        agents_name = name
+                        break
+
+                if not agents_name:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Archive does not contain agents-config.yaml",
+                    )
+
+                agents_text = zf.read(agents_name).decode("utf-8")
+        except HTTPException:
+            raise
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Failed to process uploaded ZIP during import-all")
+            raise HTTPException(status_code=400, detail=f"Invalid ZIP archive: {exc}") from exc
+
+        try:
+            agents_config = yaml.safe_load(agents_text)
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Failed to parse agents-config.yaml during import-all")
+            raise HTTPException(status_code=400, detail=f"Failed to parse agents-config.yaml: {exc}") from exc
+
+        if _has_masked_password(agents_config):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Config contains masked passwords (*******). "
+                    "Please replace them with real passwords before importing."
+                ),
+            )
+
+        agents_list = agents_config.get("agents")
+        if not isinstance(agents_list, list) or not agents_list:
+            raise HTTPException(status_code=400, detail="agents-config.yaml does not contain a non-empty 'agents' list")
+
+        # Build lookup for original pipeline metadata, if present
+        pipelines_meta = agents_config.get("pipelines") or []
+        meta_by_old_id = {}
+        if isinstance(pipelines_meta, list):
+            for item in pipelines_meta:
+                if not isinstance(item, dict):
+                    continue
+                old_id = item.get("pipelineId")
+                if old_id is not None:
+                    meta_by_old_id[str(old_id)] = item
+
+        created_pipelines: list[dict] = []
+        errors: list[str] = []
+
+        # Second pass: process each per-pipeline YAML and recreate pipeline + entities
+        try:
+            with zipfile.ZipFile(io.BytesIO(contents)) as zf:
+                for name in zf.namelist():
+                    lower = name.lower()
+                    if not (lower.endswith(".yaml") or lower.endswith(".yml")):
+                        continue
+                    if "agents-config" in lower:
+                        continue
+
+                    try:
+                        yaml_text = zf.read(name).decode("utf-8")
+                    except Exception as exc:  # pylint: disable=broad-except
+                        logger.exception("Failed to read YAML %s from archive", name)
+                        errors.append(f"{name}: failed to read from archive: {exc}")
+                        continue
+
+                    # Derive original pipeline ID from filename: backup_<safe_name>_<pipelineId>.yaml
+                    stem = name.rsplit("/", 1)[-1]  # strip any path
+                    stem_no_ext = stem.rsplit(".", 1)[0]
+                    old_pipeline_id = None
+                    if stem_no_ext.startswith("backup_"):
+                        tail = stem_no_ext[len("backup_") :]
+                        if "_" in tail:
+                            old_pipeline_id = tail.rsplit("_", 1)[-1]
+                        else:
+                            old_pipeline_id = tail
+
+                    meta = meta_by_old_id.get(str(old_pipeline_id)) if old_pipeline_id is not None else None
+                    base_name = None
+                    if isinstance(meta, dict):
+                        base_name = meta.get("pipelineName")
+                    if not base_name:
+                        base_name = f"Imported pipeline {old_pipeline_id}" if old_pipeline_id else "Imported pipeline"
+
+                    # Create pipeline + bind agents using the shared agents list
+                    try:
+                        cfg = {"pipelineName": base_name, "agents": agents_list}
+                        result = corehub.import_pipeline_config_only(
+                            token=state.token,
+                            base_url=state.base_url,
+                            use_ssl=state.use_ssl,
+                            skip_verify=state.skip_verify,
+                            config=cfg,
+                        )
+                    except Exception as exc:  # pylint: disable=broad-except
+                        logger.exception("Failed to import config for %s", name)
+                        errors.append(f"{name}: failed to create pipeline and bind agents: {exc}")
+                        continue
+
+                    new_pipeline_id = result.get("pipelineId")
+                    new_pipeline_name = result.get("pipelineName")
+                    created_pipelines.append(result)
+
+                    # Write YAML to a temporary file for schema extraction and entity creation
+                    try:
+                        temp_dir = Path(tempfile.gettempdir()) / "gluesync_automator_restore"
+                        temp_dir.mkdir(parents=True, exist_ok=True)
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".yaml", dir=temp_dir) as tmp:
+                            tmp.write(yaml_text.encode("utf-8"))
+                            yaml_path = Path(tmp.name)
+                    except Exception as exc:  # pylint: disable=broad-except
+                        logger.exception("Failed to materialize YAML %s to disk", name)
+                        errors.append(f"{name}: failed to materialize YAML to disk: {exc}")
+                        continue
+
+                    # Determine schemas and optional type hints from YAML
+                    schema_pairs = extract_all_schemas_from_yaml(str(yaml_path))
+                    if not schema_pairs:
+                        errors.append(f"{name}: no schemas found in YAML; skipping entity creation")
+                        continue
+
+                    src_type_hint, tgt_type_hint = extract_schema_types_from_yaml(str(yaml_path))
+                    source_type = src_type_hint or "SQL"
+                    target_type = tgt_type_hint or "SQL"
+
+                    prefs = state.preferences()
+                    enable_scheduling = prefs["enableScheduling"]
+                    create_tables = prefs["createTables"]
+
+                    overall_success = True
+                    for src_schema, tgt_schema in schema_pairs:
+                        try:
+                            result_run = corehub.run_create_entities(
+                                token=state.token,
+                                base_url=state.base_url,
+                                pipeline_id=new_pipeline_id,
+                                source_schema=src_schema,
+                                target_schema=tgt_schema,
+                                source_type=source_type,
+                                target_type=target_type,
+                                yaml_file=str(yaml_path),
+                                skip_errors=True,
+                                chunk_size=50,
+                                enable_scheduling=enable_scheduling,
+                                create_tables=create_tables,
+                                use_ssl=state.use_ssl,
+                                skip_verify=state.skip_verify,
+                                log_callback=None,
+                            )
+                            if not result_run.get("success"):
+                                overall_success = False
+                                if result_run.get("error"):
+                                    errors.append(
+                                        f"{name}: entity creation error for {src_schema}->{tgt_schema}: {result_run['error']}"
+                                    )
+                        except Exception as exc:  # pylint: disable=broad-except
+                            overall_success = False
+                            logger.exception(
+                                "Failed to create entities for pipeline %s (%s) from %s", new_pipeline_name, new_pipeline_id, name
+                            )
+                            errors.append(
+                                f"{name}: exception during entity creation for {src_schema}->{tgt_schema}: {exc}"
+                            )
+
+                    if not overall_success:
+                        logger.warning(
+                            "Import-all: entity creation had errors for pipeline %s (%s) from %s",
+                            new_pipeline_name,
+                            new_pipeline_id,
+                            name,
+                        )
+        except HTTPException:
+            raise
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Unexpected error during import-all processing")
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        # Build a human-friendly summary message
+        if created_pipelines:
+            summary_parts = [
+                f"{p.get('pipelineName') or '(unnamed)'} ({p.get('pipelineId') or '?'})"
+                for p in created_pipelines
+            ]
+            summary = "; ".join(summary_parts)
+            base_msg = f"Imported {len(created_pipelines)} pipeline(s): {summary}."
+        else:
+            base_msg = "No pipelines were imported from the archive."
+
+        if errors:
+            error_msg = " Some items encountered errors: " + "; ".join(errors)
+            base_msg += error_msg
+
+        return ApiMessage(message=base_msg)
+
+    @app.post("/api/import/validate-all", response_model=ApiMessage)
+    async def validate_all(file: UploadFile = File(...)) -> ApiMessage:
+        """Dry-run validation for an Export All ZIP archive.
+
+        This endpoint parses the archive, checks that agents-config.yaml is
+        present and well formed, verifies that no masked passwords are
+        present, and ensures that each per-pipeline YAML can be read and has
+        at least one schema pair defined. It does **not** create pipelines,
+        bind agents or create entities.
+        """
+
+        if not state.token or not state.base_url:
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+        contents = await file.read()
+        if not contents:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+        logs: list[str] = []
+        errors: list[str] = []
+
+        # Locate and parse agents-config.yaml
+        try:
+            with zipfile.ZipFile(io.BytesIO(contents)) as zf:
+                names = zf.namelist()
+                logs.append(f"Archive contains {len(names)} entries.")
+
+                agents_name = None
+                for name in names:
+                    lower = name.lower()
+                    if lower.endswith("agents-config.yaml") or lower.endswith("agents-config.yml"):
+                        agents_name = name
+                        break
+
+                if not agents_name:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Archive does not contain agents-config.yaml",
+                    )
+
+                logs.append(f"Found agents config: {agents_name}")
+                agents_text = zf.read(agents_name).decode("utf-8")
+        except HTTPException:
+            raise
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Failed to process uploaded ZIP during validate-all")
+            raise HTTPException(status_code=400, detail=f"Invalid ZIP archive: {exc}") from exc
+
+        try:
+            agents_config = yaml.safe_load(agents_text)
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Failed to parse agents-config.yaml during validate-all")
+            raise HTTPException(status_code=400, detail=f"Failed to parse agents-config.yaml: {exc}") from exc
+
+        if _has_masked_password(agents_config):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Config contains masked passwords (*******). "
+                    "Please replace them with real passwords before importing."
+                ),
+            )
+
+        agents_list = agents_config.get("agents")
+        if not isinstance(agents_list, list) or not agents_list:
+            raise HTTPException(status_code=400, detail="agents-config.yaml does not contain a non-empty 'agents' list")
+
+        logs.append(f"agents-config.yaml defines {len(agents_list)} agent configuration(s).")
+
+        # Optional: check that at least one unassigned agent exists for each agentType/agentTag
+        try:
+            unassigned = corehub.fetch_core_hub("/unassigned-agents", token=state.token)
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Failed to fetch unassigned agents during validate-all")
+            errors.append(f"Failed to fetch unassigned agents: {exc}")
+            unassigned = []
+
+        def _has_unassigned(agent_type: str, agent_tag: str) -> bool:
+            if not isinstance(unassigned, list):
+                return False
+            for item in unassigned:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("agentType") == agent_type and item.get("agentTag") == agent_tag:
+                    return True
+            return False
+
+        for cfg in agents_list:
+            if not isinstance(cfg, dict):
+                continue
+            a_type = cfg.get("agentType")
+            a_tag = cfg.get("agentTag")
+            if not a_type or not a_tag:
+                errors.append("One agent definition is missing agentType/agentTag.")
+                continue
+            if not _has_unassigned(a_type, a_tag):
+                errors.append(
+                    f"No unassigned agent available for agentType={a_type!r}, agentTag={a_tag!r}. "
+                    "Import may fail unless matching agents are created first."
+                )
+
+        # Fetch existing pipelines to estimate final pipeline names that would be created
+        existing_names: set[str] = set()
+        try:
+            existing = corehub.fetch_core_hub("/pipelines", token=state.token)
+            if isinstance(existing, list):
+                for item in existing:
+                    if isinstance(item, dict):
+                        name = item.get("name")
+                        if isinstance(name, str) and name:
+                            existing_names.add(name)
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Failed to fetch existing pipelines during validate-all")
+            errors.append(f"Failed to fetch existing pipelines: {exc}")
+
+        reserved_names = set(existing_names)
+
+        # Validate each per-pipeline YAML can be parsed and has schemas
+        try:
+            with zipfile.ZipFile(io.BytesIO(contents)) as zf:
+                for name in zf.namelist():
+                    lower = name.lower()
+                    if not (lower.endswith(".yaml") or lower.endswith(".yml")):
+                        continue
+                    if "agents-config" in lower:
+                        continue
+
+                    logs.append(f"Validating pipeline definition: {name}")
+
+                    try:
+                        yaml_text = zf.read(name).decode("utf-8")
+                    except Exception as exc:  # pylint: disable=broad-except
+                        logger.exception("Failed to read YAML %s from archive during validate-all", name)
+                        errors.append(f"{name}: failed to read from archive: {exc}")
+                        continue
+
+                    try:
+                        temp_dir = Path(tempfile.gettempdir()) / "gluesync_automator_validate"
+                        temp_dir.mkdir(parents=True, exist_ok=True)
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".yaml", dir=temp_dir) as tmp:
+                            tmp.write(yaml_text.encode("utf-8"))
+                            yaml_path = Path(tmp.name)
+                    except Exception as exc:  # pylint: disable=broad-except
+                        logger.exception("Failed to materialize YAML %s to disk during validate-all", name)
+                        errors.append(f"{name}: failed to materialize YAML to disk: {exc}")
+                        continue
+
+                    # Estimate the pipeline name that would be used on import
+                    stem = name.rsplit("/", 1)[-1]
+                    stem_no_ext = stem.rsplit(".", 1)[0]
+                    old_pipeline_id = None
+                    if stem_no_ext.startswith("backup_"):
+                        tail = stem_no_ext[len("backup_") :]
+                        if "_" in tail:
+                            old_pipeline_id = tail.rsplit("_", 1)[-1]
+                        else:
+                            old_pipeline_id = tail
+
+                    base_name = f"Imported pipeline {old_pipeline_id}" if old_pipeline_id else "Imported pipeline"
+                    pipeline_name = base_name
+                    if pipeline_name in reserved_names:
+                        idx = 1
+                        while True:
+                            suffix = " (restored)" if idx == 1 else f" (restored {idx})"
+                            candidate = f"{base_name}{suffix}"
+                            if candidate not in reserved_names:
+                                pipeline_name = candidate
+                                break
+                            idx += 1
+                    reserved_names.add(pipeline_name)
+
+                    logs.append(
+                        f"{name}: would create pipeline '{pipeline_name}'"
+                        + (f" from original ID {old_pipeline_id}" if old_pipeline_id else "")
+                    )
+
+                    schema_pairs = extract_all_schemas_from_yaml(str(yaml_path))
+                    if not schema_pairs:
+                        errors.append(f"{name}: no schemas found in YAML; entities cannot be recreated.")
+                    else:
+                        logs.append(
+                            f"{name}: discovered {len(schema_pairs)} schema pair(s): "
+                            + ", ".join(f"{s}->{t}" for s, t in schema_pairs)
+                        )
+        except HTTPException:
+            raise
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Unexpected error during validate-all processing")
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        success = not errors
+        if success:
+            logs.insert(0, "Validation OK: archive is structurally consistent and ready to import.")
+        else:
+            logs.insert(0, "Validation failed: one or more problems were detected.")
+            logs.append("Errors:")
+            logs.extend(f"- {e}" for e in errors)
+
+        return ApiMessage(success=success, message="\n".join(logs))
 
     @app.get("/api/export/all-pipelines")
     async def export_all_pipelines():

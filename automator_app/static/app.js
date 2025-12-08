@@ -74,6 +74,45 @@ const api = {
     const filename = response.headers.get('Content-Disposition')?.split('filename=')[1]?.replace(/"/g, '') || 'pipeline_backups.zip';
     return { blob, filename };
   },
+  async importConfig(file) {
+    const form = new FormData();
+    form.append('file', file);
+    const res = await fetch('/api/import/config', {
+      method: 'POST',
+      body: form,
+    });
+    if (!res.ok) {
+      const detail = await res.json().catch(() => ({}));
+      throw new Error(detail.detail || 'Config import failed');
+    }
+    return res.json();
+  },
+  async importAll(file) {
+    const form = new FormData();
+    form.append('file', file);
+    const res = await fetch('/api/import/all', {
+      method: 'POST',
+      body: form,
+    });
+    if (!res.ok) {
+      const detail = await res.json().catch(() => ({}));
+      throw new Error(detail.detail || 'Import all failed');
+    }
+    return res.json();
+  },
+  async validateAll(file) {
+    const form = new FormData();
+    form.append('file', file);
+    const res = await fetch('/api/import/validate-all', {
+      method: 'POST',
+      body: form,
+    });
+    if (!res.ok) {
+      const detail = await res.json().catch(() => ({}));
+      throw new Error(detail.detail || 'Validation failed');
+    }
+    return res.json();
+  },
 };
 
 const ui = (() => {
@@ -85,6 +124,9 @@ const ui = (() => {
   const runBtn = document.getElementById('run-btn');
   const exportBtn = document.getElementById('export-btn');
   const exportAllBtn = document.getElementById('export-all-btn');
+  const validateAllBtn = document.getElementById('validate-all-btn');
+  const importConfigBtn = document.getElementById('import-config-btn');
+  const importAllBtn = document.getElementById('import-all-btn');
   const logOutput = document.getElementById('log-output');
   const logTemplate = document.getElementById('log-line-template');
   const footerYear = document.getElementById('footer-year');
@@ -136,6 +178,15 @@ const ui = (() => {
     }
     if (exportAllBtn) {
       exportAllBtn.disabled = !enabled;
+    }
+    if (validateAllBtn) {
+      validateAllBtn.disabled = !enabled;
+    }
+    if (importConfigBtn) {
+      importConfigBtn.disabled = !enabled;
+    }
+    if (importAllBtn) {
+      importAllBtn.disabled = !enabled;
     }
   }
 
@@ -452,6 +503,11 @@ function bindEvents() {
   const yamlInput = document.getElementById('yaml-file');
   const exportForm = document.getElementById('export-form');
   const exportPipelineSelect = document.getElementById('export-pipeline-id');
+  const importConfigInput = document.getElementById('import-config-file');
+  const importConfigBtnEl = document.getElementById('import-config-btn');
+  const importAllInput = document.getElementById('import-all-file');
+  const importAllBtnEl = document.getElementById('import-all-btn');
+  const validateAllBtnEl = document.getElementById('validate-all-btn');
   const customSchemasCheckbox = document.getElementById('custom-schemas');
   const schemaFields = document.getElementById('schema-fields');
   const typeFields = document.getElementById('type-fields');
@@ -640,6 +696,66 @@ function bindEvents() {
     });
   } else {
     console.error('Export All button not found!');
+  }
+
+  if (importConfigBtnEl && importConfigInput) {
+    importConfigBtnEl.addEventListener('click', async () => {
+      const file = importConfigInput.files?.[0];
+      if (!file) {
+        ui.setExportMessage('Please choose a config file to import', 'error');
+        return;
+      }
+
+      ui.setExportMessage('Importing config…');
+      try {
+        const result = await api.importConfig(file);
+        ui.setExportMessage(result.message || 'Config imported successfully', 'success');
+      } catch (err) {
+        ui.setExportMessage(err.message, 'error');
+      }
+    });
+  }
+
+  if (importAllBtnEl && importAllInput) {
+    importAllBtnEl.addEventListener('click', async () => {
+      const file = importAllInput.files?.[0];
+      if (!file) {
+        ui.setExportMessage('Please choose a backup ZIP to import', 'error');
+        return;
+      }
+
+      ui.setExportMessage('Importing full backup…');
+      try {
+        const result = await api.importAll(file);
+        ui.setExportMessage(result.message || 'Backup imported successfully', 'success');
+      } catch (err) {
+        ui.setExportMessage(err.message, 'error');
+      }
+    });
+  }
+
+  if (validateAllBtnEl && importAllInput) {
+    validateAllBtnEl.addEventListener('click', async () => {
+      const file = importAllInput.files?.[0];
+      if (!file) {
+        ui.setExportMessage('Please choose a backup ZIP to validate', 'error');
+        return;
+      }
+
+      ui.setExportMessage('Validating backup…');
+      try {
+        const result = await api.validateAll(file);
+        const ok = result.success !== false;
+        const text = result.message || '';
+        if (text) {
+          const lines = text.split('\n');
+          ui.renderLogs(lines);
+        }
+        ui.setExportMessage(ok ? 'Validation OK' : 'Validation failed', ok ? 'success' : 'error');
+      } catch (err) {
+        ui.setExportMessage(err.message, 'error');
+      }
+    });
   }
 }
 

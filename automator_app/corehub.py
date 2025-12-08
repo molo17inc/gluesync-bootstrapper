@@ -28,7 +28,7 @@ import zipfile
 from contextlib import redirect_stdout
 from typing import Any, Callable, Dict, Optional
 
-from commons import configure_core_hub, set_scheduling_enabled, fetch_core_hub
+from commons import configure_core_hub, set_scheduling_enabled, fetch_core_hub, get_pipeline_agents
 from create_all_entities import (
     CREATE_TABLE_IF_NOT_EXISTS,
     main as create_entities_main,
@@ -245,6 +245,11 @@ def export_all_pipelines_yaml(
     # Create ZIP file in memory
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        # Accumulate agent configurations across pipelines
+        all_agents: list[dict] = []
+        seen_agents: set[tuple] = set()
+        pipelines_meta: list[dict] = []
+
         for pipeline in pipelines:
             pipeline_id = pipeline['id']
             pipeline_name = pipeline.get('name', pipeline_id)
@@ -269,12 +274,244 @@ def export_all_pipelines_yaml(
                 zip_file.writestr(filename, yaml_content)
                 logger.info("Exported pipeline %s (%s)", pipeline_name, pipeline_id)
 
-            except Exception as exc:  # pylint: disable=broad-except
+            except Exception as exc:  # pylint: disable=broad-excepts
                 logger.exception("Failed to export pipeline %s: %s", pipeline_id, exc)
                 # Continue with other pipelines
 
+            # Track basic pipeline metadata for the agents-config file
+            pipelines_meta.append(
+                {
+                    "pipelineId": pipeline_id,
+                    "pipelineName": pipeline_name,
+                }
+            )
+
+            # Try to collect agents for this pipeline
+            try:
+                pipeline_agents = get_pipeline_agents(token, pipeline_id)
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.exception("Failed to fetch agents for pipeline %s: %s", pipeline_id, exc)
+                pipeline_agents = []
+
+            if isinstance(pipeline_agents, list):
+                for agent in pipeline_agents:
+                    if not isinstance(agent, dict):
+                        continue
+
+                    agent_type = agent.get("agentType")
+                    agent_tag = agent.get("agentTag")
+                    host_credentials = agent.get("hostCredentials") or {}
+
+                    if not agent_type or not agent_tag or not host_credentials:
+                        continue
+
+                    # Deduplicate by a composite key of type, tag and basic connection details
+                    key = (
+                        str(agent_type),
+                        str(agent_tag),
+                        str(host_credentials.get("connectionName")),
+                        str(host_credentials.get("host")),
+                        str(host_credentials.get("port")),
+                    )
+                    if key in seen_agents:
+                        continue
+                    seen_agents.add(key)
+
+                    # Mask secrets when exporting
+                    masked_host_credentials = dict(host_credentials)
+                    if "password" in masked_host_credentials and masked_host_credentials["password"]:
+                        masked_host_credentials["password"] = "*******"
+
+                    all_agents.append(
+                        {
+                            "agentType": agent_type,
+                            "agentTag": agent_tag,
+                            "hostCredentials": masked_host_credentials,
+                            # Keep the same naming as config.json/example-config.json
+                            "customHostCredentials": agent.get("customHostCredentials") or {},
+                            "specificConfiguration": agent.get("specificConfiguration") or {},
+                            # These are part of the Bootstrapper config schema even if often empty
+                            "entitiesConfiguration": agent.get("entitiesConfiguration") or {},
+                            "tablesConfiguration": agent.get("tablesConfiguration") or {},
+                            "entities": agent.get("entities") or [],
+                        }
+                    )
+
+        # After processing all pipelines, write a consolidated agents-config.yaml if any agents were found
+        if all_agents:
+            agents_payload: Dict[str, Any] = {"agents": all_agents}
+            if pipelines_meta:
+                agents_payload["pipelines"] = pipelines_meta
+
+            buffer = io.StringIO()
+            yaml.safe_dump(
+                agents_payload,
+                buffer,
+                sort_keys=False,
+                allow_unicode=True,
+            )
+
+            # Add inline comments to make password obfuscation clear
+            yaml_text_lines = []
+            for line in buffer.getvalue().splitlines():
+                stripped = line.lstrip()
+                if stripped.startswith("password:") and "*******" in stripped:
+                    # Preserve indentation when appending the comment
+                    line = f"{line}  # original password omitted"
+                yaml_text_lines.append(line)
+
+            yaml_text = "\n".join(yaml_text_lines) + "\n"
+            zip_file.writestr("agents-config.yaml", yaml_text)
+
     zip_buffer.seek(0)
     return zip_buffer.read()
+
+
+def import_pipeline_config_only(
+    *,
+    token: str,
+    base_url: str,
+    use_ssl: Optional[bool],
+    skip_verify: Optional[bool],
+    config: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Create a pipeline and bind agents from a single config object.
+
+    The config is expected to look like example-config.json (or its YAML
+    equivalent):
+
+    {
+      "pipelineName": "demo",
+      "pipelineId": "",   # optional, metadata only
+      "agents": [
+        { "agentType": "SOURCE", "agentTag": "...", ... },
+        { "agentType": "TARGET", "agentTag": "...", ... }
+      ]
+    }
+
+    This function:
+    - Creates a new pipeline in Core Hub (never reuses an existing one).
+    - Attaches matching unassigned agents by (agentType, agentTag).
+    - Applies host credentials and specificConfiguration for each agent.
+    - Does NOT create entities or start any syncs.
+    """
+
+    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+
+    if not isinstance(config, dict):
+        raise RuntimeError("Invalid config format: expected an object")
+
+    agents_cfg = config.get("agents")
+    if not isinstance(agents_cfg, list) or not agents_cfg:
+        raise RuntimeError("Config must contain a non-empty 'agents' list")
+
+    # Determine base pipeline name from config or fall back to a generic label
+    base_name = config.get("pipelineName") or "Imported pipeline"
+
+    # Fetch existing pipelines to avoid name collisions
+    existing = fetch_core_hub("/pipelines", token=token)
+    existing_names = set()
+    if isinstance(existing, list):
+        for item in existing:
+            if isinstance(item, dict):
+                name = item.get("name")
+                if isinstance(name, str) and name:
+                    existing_names.add(name)
+
+    pipeline_name = base_name
+    if pipeline_name in existing_names:
+        # Apply '(restored)', '(restored 2)', ... suffixes until unique
+        idx = 1
+        while True:
+            suffix = " (restored)" if idx == 1 else f" (restored {idx})"
+            candidate = f"{base_name}{suffix}"
+            if candidate not in existing_names:
+                pipeline_name = candidate
+                break
+            idx += 1
+
+    pipeline_description = f"Pipeline {pipeline_name}"
+
+    # Create the pipeline
+    body = {
+        "name": pipeline_name,
+        "description": pipeline_description,
+        "configurationCompleted": False,
+    }
+    response = fetch_core_hub("/pipelines", method="POST", token=token, body=body)
+    if not isinstance(response, dict):
+        raise RuntimeError(f"Unexpected response while creating pipeline: {response}")
+
+    raw_id = response.get("pipelineId") or response.get("id") or response.get("pipeline_id")
+    if not raw_id:
+        raise RuntimeError("Pipeline creation succeeded but no ID was returned")
+    pipeline_id = str(raw_id)
+
+    # Discover unassigned agents so we can bind them to the new pipeline
+    unassigned = fetch_core_hub("/unassigned-agents", token=token)
+    if not isinstance(unassigned, list):
+        raise RuntimeError("Failed to retrieve unassigned agents from Core Hub")
+
+    def _find_matching_agent(agent_type: str, agent_tag: str) -> Dict[str, Any]:
+        for item in unassigned:
+            if not isinstance(item, dict):
+                continue
+            if item.get("agentType") == agent_type and item.get("agentTag") == agent_tag:
+                return item
+        raise RuntimeError(
+            f"No unassigned agent found with agentType={agent_type!r}, agentTag={agent_tag!r}"
+        )
+
+    # Bind each configured agent to the pipeline and apply its settings
+    for conf_agent in agents_cfg:
+        if not isinstance(conf_agent, dict):
+            continue
+
+        agent_type = conf_agent.get("agentType")
+        agent_tag = conf_agent.get("agentTag")
+        if not agent_type or not agent_tag:
+            raise RuntimeError("Each agent must declare 'agentType' and 'agentTag'")
+
+        match = _find_matching_agent(agent_type, agent_tag)
+        raw_agent_id = match.get("agentId") or match.get("id")
+        if not raw_agent_id:
+            raise RuntimeError(
+                f"Matched agent for tag={agent_tag!r}, type={agent_type!r} is missing an ID"
+            )
+        agent_id = str(raw_agent_id)
+
+        # Attach agent to pipeline
+        fetch_core_hub(
+            f"/pipelines/{pipeline_id}/agents/{agent_id}",
+            method="PUT",
+            token=token,
+        )
+
+        # Apply credentials
+        host_credentials = conf_agent.get("hostCredentials") or {}
+        custom_host_credentials = conf_agent.get("customHostCredentials") or {}
+        fetch_core_hub(
+            f"/pipelines/{pipeline_id}/agents/{agent_id}/config/credentials",
+            method="PUT",
+            token=token,
+            body={
+                "hostCredentials": host_credentials,
+                "customHostCredentials": custom_host_credentials,
+            },
+        )
+
+        # Apply specific configuration if present
+        specific_conf = conf_agent.get("specificConfiguration") or {}
+        if specific_conf:
+            fetch_core_hub(
+                f"/pipelines/{pipeline_id}/agents/{agent_id}/config/specific",
+                method="PUT",
+                token=token,
+                body={"configuration": specific_conf},
+            )
+
+    logger.info("Imported config-only pipeline %s (%s)", pipeline_name, pipeline_id)
+    return {"pipelineId": pipeline_id, "pipelineName": pipeline_name}
 
 
 def validate_token(token: str) -> bool:
