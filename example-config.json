@@ -1,37 +1,36 @@
 {
+  "pipelineName": "demo-pgsql-to-kafka",
+  "pipelineId": "",
   "agents": [
     {
       "agentType": "SOURCE",
-      "agentTag": "mssql-ct",
+      "agentTag": "postgresql-cdc",
       "hostCredentials": {
-        "connectionName": "MS SQL Server source",
-        "host": "localhost",
-        "port": 1433,
+        "connectionName": "pgsql",
+        "host": "pgsql",
+        "port": 5432,
         "databaseName": "demo",
         "username": "gluesync",
         "password": "password",
         "disableAuth": false,
         "enableTls": false,
-        "trustServerCertificate": false,
+        "trustServerCertificate": true,
         "additionalHosts": [],
         "maxConnectionsCount": 100
       },
       "customHostCredentials": {},
-      "specificConfiguration": {},
-      "entitiesConfiguration": {},
-      "tablesConfiguration": {},
-      "entities": []
+      "specificConfiguration": {}
     },
     {
       "agentType": "TARGET",
-      "agentTag": "couchbase",
+      "agentTag": "kafka",
       "hostCredentials": {
-        "connectionName": "Couchbase target",
-        "host": "localhost",
-        "port": 8091,
-        "databaseName": "demo",
-        "username": "gluesync",
-        "password": "password",
+        "connectionName": "Kafka target",
+        "host": "kafka",
+        "port": 9092,
+        "databaseName": "",
+        "username": "",
+        "password": "",
         "disableAuth": false,
         "enableTls": false,
         "trustServerCertificate": false,
@@ -42,10 +41,7 @@
         "saslMechanism": "PLAIN",
         "securityProtocol": "PLAINTEXT"
       },
-      "specificConfiguration": {},
-      "entitiesConfiguration": {},
-      "tablesConfiguration": {},
-      "entities": []
+      "specificConfiguration": {}
     }
   ]
 }
