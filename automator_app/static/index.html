@@ -71,11 +71,16 @@
                 <option value="">Select a pipeline…</option>
               </select>
             </label>
+            <button type="button" class="secondary" id="bulk-load-schemas-btn" disabled>Load source schemas</button>
             <label>
               Source schema
               <select id="bulk-source-schema" name="bulkSourceSchema" disabled>
                 <option value="">Select a schema…</option>
               </select>
+            </label>
+            <label>
+              Target schema (optional)
+              <input type="text" id="bulk-target-schema" name="bulkTargetSchema" placeholder="Defaults to same as source schema" />
             </label>
             <div id="bulk-tables-container">
               <div id="bulk-tables-summary" class="hint-text">Select a schema to load tables.</div>

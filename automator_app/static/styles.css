@@ -365,6 +365,10 @@ button:disabled {
   grid-column: 1 / -1;
 }
 
+#bulk-card {
+  grid-column: 1 / -1;
+}
+
 /* Import/export panels are only visible once authenticated */
 #config-card,
 #export-card {

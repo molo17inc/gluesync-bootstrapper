@@ -567,10 +567,12 @@ function bindEvents() {
   const bulkForm = document.getElementById('bulk-form');
   const bulkPipelineSelect = document.getElementById('bulk-pipeline-id');
   const bulkSchemaSelect = document.getElementById('bulk-source-schema');
+  const bulkTargetSchemaInput = document.getElementById('bulk-target-schema');
   const bulkTablesList = document.getElementById('bulk-tables-list');
   const bulkTablesSummary = document.getElementById('bulk-tables-summary');
   const bulkToggleAllBtn = document.getElementById('bulk-toggle-all-btn');
   const bulkCreateBtn = document.getElementById('bulk-create-btn');
+  const bulkLoadSchemasBtn = document.getElementById('bulk-load-schemas-btn');
   const importConfigInput = document.getElementById('import-config-file');
   const importConfigBtnEl = document.getElementById('import-config-btn');
   const importAllInput = document.getElementById('import-all-file');
@@ -642,9 +644,230 @@ function bindEvents() {
     }
   }
 
+  function resetBulkState() {
+    bulkTablesState = [];
+    if (bulkSchemaSelect) {
+      bulkSchemaSelect.innerHTML = '<option value="">Select a schema…</option>';
+      bulkSchemaSelect.disabled = true;
+    }
+    if (bulkTargetSchemaInput) {
+      bulkTargetSchemaInput.value = '';
+    }
+    if (bulkTablesList) {
+      bulkTablesList.innerHTML = '';
+    }
+    if (bulkCreateBtn) {
+      bulkCreateBtn.textContent = 'Create all entities (0)';
+      bulkCreateBtn.disabled = true;
+    }
+    if (bulkToggleAllBtn) {
+      bulkToggleAllBtn.disabled = true;
+    }
+    updateBulkSelectionSummary();
+  }
+
   if (customSchemasCheckbox && schemaFields) {
     updateSchemaVisibility();
     customSchemasCheckbox.addEventListener('change', updateSchemaVisibility);
+  }
+
+  if (bulkPipelineSelect) {
+    resetBulkState();
+    bulkPipelineSelect.addEventListener('change', () => {
+      resetBulkState();
+      if (bulkLoadSchemasBtn) {
+        bulkLoadSchemasBtn.disabled = !bulkPipelineSelect.value;
+      }
+      ui.setBulkMessage('', '');
+    });
+  }
+
+  if (bulkLoadSchemasBtn && bulkSchemaSelect) {
+    bulkLoadSchemasBtn.disabled = !(bulkPipelineSelect && bulkPipelineSelect.value);
+    bulkLoadSchemasBtn.addEventListener('click', async () => {
+      if (!bulkPipelineSelect || !bulkPipelineSelect.value) {
+        ui.setBulkMessage('Please select a pipeline first', 'error');
+        return;
+      }
+
+      bulkLoadSchemasBtn.disabled = true;
+      resetBulkState();
+      ui.setBulkMessage('Loading source schemas…');
+
+      try {
+        const res = await api.bulkListSchemas(bulkPipelineSelect.value);
+        const schemas = (res && res.schemas) || [];
+
+        bulkSchemaSelect.innerHTML = '<option value="">Select a schema…</option>';
+        schemas.forEach((schema) => {
+          const opt = document.createElement('option');
+          opt.value = schema;
+          opt.textContent = schema;
+          bulkSchemaSelect.appendChild(opt);
+        });
+        bulkSchemaSelect.disabled = !schemas.length;
+
+        if (!schemas.length) {
+          ui.setBulkMessage('No source schemas found for this pipeline', 'error');
+        } else {
+          ui.setBulkMessage(`Loaded ${schemas.length} schema(s). Select a schema to load tables.`, 'success');
+        }
+      } catch (err) {
+        ui.setBulkMessage(err.message, 'error');
+      } finally {
+        if (bulkLoadSchemasBtn) {
+          bulkLoadSchemasBtn.disabled = !(bulkPipelineSelect && bulkPipelineSelect.value);
+        }
+      }
+    });
+  }
+
+  if (bulkSchemaSelect) {
+    bulkSchemaSelect.addEventListener('change', async () => {
+      if (!bulkSchemaSelect.value) {
+        resetBulkState();
+        return;
+      }
+
+      if (!bulkPipelineSelect || !bulkPipelineSelect.value) {
+        ui.setBulkMessage('Please select a pipeline first', 'error');
+        resetBulkState();
+        return;
+      }
+
+      if (bulkTablesSummary) {
+        bulkTablesSummary.textContent = 'Loading tables…';
+      }
+      if (bulkTablesList) {
+        bulkTablesList.innerHTML = '';
+      }
+      bulkTablesState = [];
+      if (bulkCreateBtn) {
+        bulkCreateBtn.textContent = 'Create all entities (0)';
+        bulkCreateBtn.disabled = true;
+      }
+      if (bulkToggleAllBtn) {
+        bulkToggleAllBtn.disabled = true;
+      }
+
+      try {
+        const res = await api.bulkListTables(bulkPipelineSelect.value, bulkSchemaSelect.value);
+        const tables = (res && res.tables) || [];
+
+        bulkTablesState = tables.map((name) => ({ name, selected: true }));
+
+        if (bulkTablesList) {
+          bulkTablesList.innerHTML = '';
+          bulkTablesState.forEach((table, index) => {
+            const label = document.createElement('label');
+            label.className = 'checkbox';
+            const input = document.createElement('input');
+            input.type = 'checkbox';
+            input.checked = table.selected;
+            input.dataset.index = String(index);
+            input.addEventListener('change', () => {
+              const i = Number(input.dataset.index);
+              if (!Number.isNaN(i) && bulkTablesState[i]) {
+                bulkTablesState[i].selected = input.checked;
+                updateBulkSelectionSummary();
+              }
+            });
+            label.appendChild(input);
+            const textNode = document.createTextNode(table.name);
+            label.appendChild(textNode);
+            bulkTablesList.appendChild(label);
+          });
+        }
+
+        updateBulkSelectionSummary();
+
+        if (!tables.length) {
+          ui.setBulkMessage(`No tables found for schema ${bulkSchemaSelect.value}`, 'error');
+        } else {
+          ui.setBulkMessage('', '');
+        }
+      } catch (err) {
+        ui.setBulkMessage(err.message, 'error');
+        bulkTablesState = [];
+        if (bulkTablesList) {
+          bulkTablesList.innerHTML = '';
+        }
+        updateBulkSelectionSummary();
+      }
+    });
+  }
+
+  if (bulkToggleAllBtn) {
+    bulkToggleAllBtn.addEventListener('click', () => {
+      if (!bulkTablesState.length) return;
+      const allSelected = bulkTablesState.every((t) => t.selected);
+      const next = !allSelected;
+      bulkTablesState.forEach((t) => {
+        t.selected = next;
+      });
+      if (bulkTablesList) {
+        const inputs = bulkTablesList.querySelectorAll('input[type="checkbox"]');
+        inputs.forEach((input) => {
+          input.checked = next;
+        });
+      }
+      updateBulkSelectionSummary();
+    });
+  }
+
+  if (bulkCreateBtn) {
+    bulkCreateBtn.addEventListener('click', async () => {
+      if (!bulkPipelineSelect || !bulkPipelineSelect.value) {
+        ui.setBulkMessage('Please select a pipeline first', 'error');
+        return;
+      }
+      if (!bulkSchemaSelect || !bulkSchemaSelect.value) {
+        ui.setBulkMessage('Please select a source schema first', 'error');
+        return;
+      }
+
+      const selectedTables = bulkTablesState.filter((t) => t.selected).map((t) => t.name);
+      if (!selectedTables.length) {
+        ui.setBulkMessage('Please select at least one table', 'error');
+        return;
+      }
+
+      const sourceSchema = bulkSchemaSelect.value;
+      const targetSchema = (bulkTargetSchemaInput && bulkTargetSchemaInput.value)
+        ? bulkTargetSchemaInput.value
+        : sourceSchema;
+
+      const chunkSizeInput = document.getElementById('chunk-size');
+      const skipErrorsInput = document.getElementById('skip-errors');
+      const enableSchedulingInput = document.getElementById('enable-scheduling');
+      const createTablesInput = document.getElementById('create-tables');
+
+      const payload = {
+        pipelineId: bulkPipelineSelect.value,
+        sourceSchema,
+        targetSchema,
+        sourceType: 'SQL',
+        targetType: 'SQL',
+        tableNames: selectedTables,
+        chunkSize: Number((chunkSizeInput && chunkSizeInput.value) || 50),
+        skipErrors: !!(skipErrorsInput && skipErrorsInput.checked),
+        enableScheduling: !!(enableSchedulingInput && enableSchedulingInput.checked),
+        createTables: !!(createTablesInput && createTablesInput.checked),
+      };
+
+      ui.setBulkMessage('Starting bulk entity creation…');
+
+      try {
+        const res = await api.bulkCreate(payload);
+        if (res && typeof res.message === 'string') {
+          ui.setBulkMessage(res.message, res.success === false ? 'error' : 'success');
+        } else {
+          ui.setBulkMessage('Bulk entity creation completed', 'success');
+        }
+      } catch (err) {
+        ui.setBulkMessage(err.message, 'error');
+      }
+    });
   }
 
   loginForm.addEventListener('submit', async (event) => {
