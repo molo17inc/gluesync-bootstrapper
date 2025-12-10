@@ -251,6 +251,11 @@ def export_all_pipelines_yaml(
         seen_agents: set[tuple] = set()
         pipelines_meta: list[dict] = []
 
+        # Track mapping functions (UDFs) referenced by entities so we can export
+        # their source code once per (pipeline, udfName) pair.
+        # Key: (pipeline_id, udf_name) -> {"name": str, "type": Optional[Any]}
+        udfs_to_export: Dict[tuple[str, str], Dict[str, Any]] = {}
+
         for pipeline in pipelines:
             pipeline_id = pipeline['id']
             pipeline_name = pipeline.get('name', pipeline_id)
@@ -281,9 +286,64 @@ def export_all_pipelines_yaml(
                 zip_file.writestr(filename, yaml_content)
                 logger.info("Exported pipeline %s (%s)", pipeline_name, pipeline_id)
 
-            except Exception as exc:  # pylint: disable=broad-excepts
+            except Exception as exc:  # pylint: disable=broad-except
                 logger.exception("Failed to export pipeline %s: %s", pipeline_id, exc)
                 # Continue with other pipelines
+
+            # Discover mapping functions (UDFs) referenced by this pipeline so we
+            # can export their source code as part of the full backup.
+            try:
+                entities = fetch_pipeline_entities(token, pipeline_id)
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.exception("Failed to fetch entities for UDF export in pipeline %s: %s", pipeline_id, exc)
+                entities = []
+
+            if isinstance(entities, list):
+                for ent in entities:
+                    if not isinstance(ent, dict):
+                        continue
+
+                    # Find the target agent entity for this logical entity
+                    target_ae: Optional[Dict[str, Any]] = None
+                    for ae in ent.get("agentEntities", []) or []:
+                        et = ae.get("entityType") or {}
+                        if et.get("type") == "Target":
+                            target_ae = ae
+                            break
+                    if not target_ae:
+                        continue
+
+                    target_et = target_ae.get("entityType") or {}
+
+                    # Preferred: single mappingFunctionInfo entry
+                    mf_info = target_et.get("mappingFunctionInfo")
+                    if isinstance(mf_info, dict):
+                        udf_name = mf_info.get("name")
+                        if udf_name:
+                            key = (pipeline_id, str(udf_name))
+                            if key not in udfs_to_export:
+                                udfs_to_export[key] = {
+                                    "name": str(udf_name),
+                                    "type": mf_info.get("type"),
+                                }
+                        continue
+
+                    # Backwards-compat: array-style "udf" configuration on entityType
+                    udf_cfg = target_et.get("udf") or []
+                    if isinstance(udf_cfg, list):
+                        for udf in udf_cfg:
+                            if not isinstance(udf, dict):
+                                continue
+                            udf_name = udf.get("name")
+                            if not udf_name:
+                                continue
+                            key = (pipeline_id, str(udf_name))
+                            if key in udfs_to_export:
+                                continue
+                            udfs_to_export[key] = {
+                                "name": str(udf_name),
+                                "type": udf.get("type"),
+                            }
 
             # Try to collect agents for this pipeline
             try:
@@ -353,7 +413,8 @@ def export_all_pipelines_yaml(
                 if pipeline_agent_refs:
                     pipeline_meta["agents"] = pipeline_agent_refs
 
-        # After processing all pipelines, write a consolidated agents-config.yaml if any agents were found
+        # After processing all pipelines, write a consolidated agents-config.yaml
+        # if any agents were found, and export UDF source files when present.
         if all_agents:
             agents_payload: Dict[str, Any] = {"agents": all_agents}
             if pipelines_meta:
@@ -378,6 +439,62 @@ def export_all_pipelines_yaml(
 
             yaml_text = "\n".join(yaml_text_lines) + "\n"
             zip_file.writestr("agents-config.yaml", yaml_text)
+
+        # Export mapping function (UDF) source files, if any were discovered.
+        for (pipeline_id, udf_name), meta in udfs_to_export.items():
+            try:
+                response = fetch_core_hub(
+                    f"/pipelines/{pipeline_id}/config/entities/mapping-functions/{udf_name}",
+                    token=token,
+                )
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.exception("Failed to fetch mapping function %s for pipeline %s: %s", udf_name, pipeline_id, exc)
+                continue
+
+            if not isinstance(response, dict):
+                logger.warning(
+                    "Unexpected response while fetching mapping function %s for pipeline %s: %r",
+                    udf_name,
+                    pipeline_id,
+                    response,
+                )
+                continue
+
+            code = response.get("code")
+            mf_type = response.get("type") or meta.get("type")
+            if not isinstance(code, str) or not code:
+                logger.warning("Mapping function %s for pipeline %s has no code to export", udf_name, pipeline_id)
+                continue
+
+            # Determine file extension based on mapping function type.
+            # Mapping aligned with MappingFunctionsType in CoreHub:
+            # - Java      -> .java
+            # - Kotlin    -> .kt
+            # - Python    -> .js
+            # - Javascript-> .py
+            # - Ruby      -> .rb
+            ext = ".java"
+            if isinstance(mf_type, str):
+                t = mf_type.lower()
+                if t == "java":
+                    ext = ".java"
+                elif t == "kotlin":
+                    ext = ".kt"
+                elif t == "python":
+                    ext = ".js"
+                elif t == "javascript":
+                    ext = ".py"
+                elif t == "ruby":
+                    ext = ".rb"
+
+            safe_udf_name = "".join(c for c in str(udf_name) if c.isalnum() or c in ("_", "-")) or "udf"
+            # Place each UDF under a single top-level folder 'udf-agentid', with the
+            # file named as the UDF name plus extension so it can be reused with the
+            # UDF_PATH-based lookup used by create_user_defined_functions.
+            udf_filename = f"udf-agentid/{safe_udf_name}{ext}"
+
+            # Store source code as UTF-8 text inside the ZIP
+            zip_file.writestr(udf_filename, code.encode("utf-8"))
 
     zip_buffer.seek(0)
     return zip_buffer.read()
