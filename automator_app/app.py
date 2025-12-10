@@ -518,11 +518,35 @@ def create_app() -> FastAPI:
             seen.add(name)
             unique_tables.append(name)
 
+        custom_cfg: dict[str, Any] = {}
+        for name in unique_tables:
+            try:
+                pk_names = corehub.discover_primary_key_names(
+                    token=state.token,
+                    base_url=state.base_url,
+                    pipeline_id=pipeline_id,
+                    schema=source_schema,
+                    table_name=name,
+                    use_ssl=state.use_ssl,
+                    skip_verify=state.skip_verify,
+                )
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.exception(
+                    "Failed to discover primary keys for %s.%s on pipeline %s: %s",
+                    source_schema,
+                    name,
+                    pipeline_id,
+                    exc,
+                )
+                pk_names = []
+
+            custom_cfg[name] = {"keys": pk_names}
+
         schema_cfg: dict[str, Any] = {
             "target": source_schema,
             "tables": {
                 "whitelist": unique_tables,
-                "custom": {name: {"keys": []} for name in unique_tables},
+                "custom": custom_cfg,
             },
         }
 

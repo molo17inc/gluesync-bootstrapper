@@ -31,7 +31,14 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
-from commons import configure_core_hub, set_scheduling_enabled, fetch_core_hub, get_pipeline_agents, get_agent_tables
+from commons import (
+    configure_core_hub,
+    set_scheduling_enabled,
+    fetch_core_hub,
+    get_pipeline_agents,
+    get_agent_tables,
+    get_table_columns,
+)
 from create_all_entities import (
     CREATE_TABLE_IF_NOT_EXISTS,
     create_entities,
@@ -425,6 +432,72 @@ def list_source_tables(
         logger.warning("Unexpected tables discovery response for pipeline %s schema %s: %r", pipeline_id, schema, tables)
 
     return names
+
+
+def discover_primary_key_names(
+    *,
+    token: str,
+    base_url: str,
+    pipeline_id: str,
+    schema: str,
+    table_name: str,
+    use_ssl: Optional[bool],
+    skip_verify: Optional[bool],
+) -> list[str]:
+    """Return primary key column names for a given table using discovery.
+
+    This mirrors the fallback behavior in create_all_entities when no explicit
+    keys are provided in YAML: primary key columns (isPrimaryKey=true) are
+    treated as the entity keys.
+    """
+
+    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+
+    source_agent = _get_source_agent(token, pipeline_id)
+    raw_agent_id = source_agent.get("agentId") or source_agent.get("id")
+    if not raw_agent_id:
+        raise RuntimeError(f"SOURCE agent for pipeline {pipeline_id!r} is missing an ID")
+
+    columns = get_table_columns(token, pipeline_id, raw_agent_id, schema, table_name)
+
+    if not isinstance(columns, dict):
+        logger.warning(
+            "Unexpected columns discovery response for pipeline %s schema %s table %s: %r",
+            pipeline_id,
+            schema,
+            table_name,
+            columns,
+        )
+        return []
+
+    raw_cols = columns.get("columns")
+    if not isinstance(raw_cols, list):
+        logger.warning(
+            "Columns discovery payload missing 'columns' list for pipeline %s schema %s table %s: %r",
+            pipeline_id,
+            schema,
+            table_name,
+            columns,
+        )
+        return []
+
+    seen: set[str] = set()
+    pk_names: list[str] = []
+    for col in raw_cols:
+        if not isinstance(col, dict):
+            continue
+        if not col.get("isPrimaryKey"):
+            continue
+        name = col.get("name")
+        if not name:
+            continue
+        text = str(name)
+        if text in seen:
+            continue
+        seen.add(text)
+        pk_names.append(text)
+
+    return pk_names
 
 
 def infer_agent_schema_types(
