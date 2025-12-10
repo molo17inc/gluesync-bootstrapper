@@ -376,16 +376,14 @@ button:disabled {
 /* Import/export panels are only visible once authenticated */
 #config-card,
 #export-card,
-#advanced-card {
+#advanced-card,
+#bulk-card {
   display: none;
 }
 
 body.is-authenticated #config-card,
 body.is-authenticated #export-card,
-body.is-authenticated #advanced-card {
-  display: block;
-}
-
+body.is-authenticated #advanced-card,
 body.is-authenticated #bulk-card {
   display: block;
 }
