@@ -391,8 +391,20 @@ def _process_single_entity(
 
     target_cp = (target_ae.get("customProperties") or {}).copy()
 
-    # UDFs are stored on entityType, but YAML expects them in customProperties.target.udf
+    # UDFs are stored on entityType, but YAML expects them in customProperties.target.udf.
+    # Prefer the explicit "udf" array when present; otherwise, fall back to
+    # mappingFunctionInfo (the single-UDT representation used by Core Hub).
     udf_cfg = target_et.get("udf")
+    if not udf_cfg:
+        mf_info = target_et.get("mappingFunctionInfo")
+        if isinstance(mf_info, dict):
+            udf_name = mf_info.get("name")
+            if udf_name:
+                udf_entry: Dict[str, Any] = {"name": udf_name}
+                mf_type = mf_info.get("type")
+                if mf_type is not None:
+                    udf_entry["type"] = mf_type
+                udf_cfg = [udf_entry]
     if udf_cfg:
         target_cp["udf"] = udf_cfg
 
