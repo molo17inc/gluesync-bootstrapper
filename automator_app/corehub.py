@@ -500,6 +500,78 @@ def discover_primary_key_names(
     return pk_names
 
 
+def discover_column_metadata_for_table(
+    *,
+    token: str,
+    base_url: str,
+    pipeline_id: str,
+    schema: str,
+    table_name: str,
+    use_ssl: Optional[bool],
+    skip_verify: Optional[bool],
+) -> list[Dict[str, Any]]:
+    """Return column metadata suitable for YAML templates for a given table.
+
+    The shape of each entry matches what create_all_tables.py expects when
+    using metadata-based column definitions: name, type, dataLength,
+    numericPrecision, numericScale, isNullable, id and ordinalPosition.
+    """
+
+    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+
+    source_agent = _get_source_agent(token, pipeline_id)
+    raw_agent_id = source_agent.get("agentId") or source_agent.get("id")
+    if not raw_agent_id:
+        raise RuntimeError(f"SOURCE agent for pipeline {pipeline_id!r} is missing an ID")
+
+    columns = get_table_columns(token, pipeline_id, raw_agent_id, schema, table_name)
+
+    if not isinstance(columns, dict):
+        logger.warning(
+            "Unexpected columns discovery response for pipeline %s schema %s table %s: %r",
+            pipeline_id,
+            schema,
+            table_name,
+            columns,
+        )
+        return []
+
+    raw_cols = columns.get("columns")
+    if not isinstance(raw_cols, list):
+        logger.warning(
+            "Columns discovery payload missing 'columns' list for pipeline %s schema %s table %s: %r",
+            pipeline_id,
+            schema,
+            table_name,
+            columns,
+        )
+        return []
+
+    metadata: list[Dict[str, Any]] = []
+    for idx, col in enumerate(raw_cols, 1):
+        if not isinstance(col, dict):
+            continue
+        name = col.get("name")
+        if not name:
+            continue
+
+        ordinal = col.get("ordinalPosition") or col.get("id") or idx
+
+        meta: Dict[str, Any] = {
+            "name": name,
+            "type": col.get("type"),
+            "dataLength": col.get("dataLength", 0),
+            "numericPrecision": col.get("numericPrecision", 0),
+            "numericScale": col.get("numericScale", 0),
+            "isNullable": col.get("isNullable", False),
+            "id": ordinal,
+            "ordinalPosition": ordinal,
+        }
+        metadata.append(meta)
+
+    return metadata
+
+
 def infer_agent_schema_types(
     *,
     token: str,

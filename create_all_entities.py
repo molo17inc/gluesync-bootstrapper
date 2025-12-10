@@ -612,25 +612,33 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         # Build columns definition with IDs
         columns_def = []
         if custom_config.get('columns'):
-            # Custom column mappings
+            # Custom column mappings (source→target). Metadata-style columns (with a
+            # 'name' field but no source→target mapping) are ignored here and will
+            # fall back to the discovery-based behavior below when no mappings are
+            # resolved.
             for col in columns["columns"]:
                 # Use ordinalPosition from API if available
                 col_id = col.get('ordinalPosition', col.get('id'))
                 if col_id is None:
                     # Fallback to finding position if not provided
                     col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
-                    
+
                 for column_map in custom_config.get('columns', []):
+                    # Simple mapping entries look like {SOURCE_NAME: TARGET_NAME}.
+                    # Metadata entries contain keys like 'name', 'type', etc. and
+                    # will not match any real column name here.
                     for source_name, target_name in column_map.items():
                         if source_name == col["name"]:
                             columns_def.append({
                                 "id": col_id,  # Use actual ordinal position from database
                                 "name": col["name"],
                                 "alias": target_name,
-                                "type": col["type"]
+                                "type": col["type"],
                             })
-        else:
-            # No column mappings - use columns as-is
+
+        # If there are no column mappings or none of them matched, fall back to
+        # using discovery columns as-is (one-to-one source→target mapping).
+        if not custom_config.get('columns') or not columns_def:
             columns_def = []
             for col in columns["columns"]:
                 # Use ordinalPosition from API if available
@@ -638,12 +646,12 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 if col_id is None:
                     # Fallback to finding position if not provided
                     col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
-                    
+
                 columns_def.append({
                     "id": col_id,  # Use actual ordinal position from database
                     "name": col["name"],
                     "alias": col["name"],
-                    "type": col["type"]
+                    "type": col["type"],
                 })
 
         logger.debug(f"Columns definition for {table_name}: {columns_def}")

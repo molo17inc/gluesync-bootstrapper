@@ -540,7 +540,30 @@ def create_app() -> FastAPI:
                 )
                 pk_names = []
 
-            custom_cfg[name] = {"keys": pk_names}
+            try:
+                columns_meta = corehub.discover_column_metadata_for_table(
+                    token=state.token,
+                    base_url=state.base_url,
+                    pipeline_id=pipeline_id,
+                    schema=source_schema,
+                    table_name=name,
+                    use_ssl=state.use_ssl,
+                    skip_verify=state.skip_verify,
+                )
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.exception(
+                    "Failed to discover column metadata for %s.%s on pipeline %s: %s",
+                    source_schema,
+                    name,
+                    pipeline_id,
+                    exc,
+                )
+                columns_meta = []
+
+            entry: dict[str, Any] = {"keys": pk_names}
+            if columns_meta:
+                entry["columns"] = columns_meta
+            custom_cfg[name] = entry
 
         schema_cfg: dict[str, Any] = {
             "target": source_schema,
