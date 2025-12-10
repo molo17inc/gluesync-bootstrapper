@@ -33,6 +33,7 @@ from export_template_from_corehub import (
     build_schemas_from_entities,
     attach_schedules_from_jobs,
     build_yaml_structure,
+    infer_pipeline_schema_types_from_agents,
     logger,
 )
 from utils.log import create_log_file, log_failure, log_success
@@ -81,6 +82,18 @@ def export_single_pipeline(token: str, pipeline_id: str, output_dir: str | None 
         entities_by_id = build_entities_maps(entities)
         group_id_to_name, _, groups_by_name = fetch_groups_map(token, pipeline_id)
         schemas = build_schemas_from_entities(entities, group_id_to_name)
+
+        # Override schema-level type hints using agents.json catalog when possible
+        src_type, tgt_type = infer_pipeline_schema_types_from_agents(token, pipeline_id)
+        if src_type and tgt_type:
+            logger.info(
+                "Using agents.json to set pipeline types: sourceType=%s, targetType=%s",
+                src_type,
+                tgt_type,
+            )
+            for schema_cfg in schemas.values():
+                schema_cfg["sourceType"] = src_type
+                schema_cfg["targetType"] = tgt_type
 
         jobs = fetch_pipeline_jobs(pipeline_id)
         attach_schedules_from_jobs(jobs, entities_by_id, schemas, group_id_to_name)

@@ -23,6 +23,7 @@
 import argparse
 import json
 import os
+from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 import yaml
@@ -34,6 +35,88 @@ from utils.log import create_log_file, get_logger, log_failure, log_success
 
 log_file = create_log_file()
 logger = get_logger(log_file)
+
+_AGENT_TYPE_BY_NAME: Dict[str, str] | None = None
+
+
+def _load_agent_type_catalog() -> Dict[str, str]:
+    """Load agents.json catalog and normalize types to SQL/NoSQL."""
+
+    global _AGENT_TYPE_BY_NAME
+    if _AGENT_TYPE_BY_NAME is not None:
+        return _AGENT_TYPE_BY_NAME
+
+    mapping: Dict[str, str] = {}
+
+    try:
+        base_dir = Path(__file__).resolve().parent
+        json_path = base_dir / "agents.json"
+        if not json_path.exists():
+            _AGENT_TYPE_BY_NAME = mapping
+            return mapping
+
+        with json_path.open("r", encoding="utf-8") as fh:
+            raw = json.load(fh)
+
+        items = raw.get("data") if isinstance(raw, dict) else None
+        if not isinstance(items, list):
+            _AGENT_TYPE_BY_NAME = mapping
+            return mapping
+
+        for entry in items:
+            if not isinstance(entry, dict):
+                continue
+            name = entry.get("internalName")
+            kind = entry.get("type")
+            if not name or not kind:
+                continue
+            label = str(kind).strip().upper()
+            if not label:
+                continue
+            if label == "RDBMS":
+                normalized = "SQL"
+            else:
+                normalized = "NoSQL"
+            mapping[str(name).lower()] = normalized
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Failed to load agents.json catalog for type inference: %s", exc)
+        mapping = {}
+
+    _AGENT_TYPE_BY_NAME = mapping
+    return mapping
+
+
+def infer_pipeline_schema_types_from_agents(token: str, pipeline_id: str) -> Tuple[str, str]:
+    """Infer (sourceType, targetType) as SQL/NoSQL from pipeline agents.
+
+    Uses agents.json as the primary source of truth and falls back to SQL when
+    the agent tag is unknown.
+    """
+
+    try:
+        config = fetch_core_hub(f"/pipelines/{pipeline_id}/config", token=token)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("Failed to fetch pipeline %s config for type inference: %s", pipeline_id, exc)
+        return "SQL", "SQL"
+
+    agents = config.get("agents") if isinstance(config, dict) else None
+    if not isinstance(agents, list):
+        return "SQL", "SQL"
+
+    catalog = _load_agent_type_catalog()
+
+    def _classify(agent: Dict[str, Any]) -> str:
+        tag = str(agent.get("agentTag") or "").lower()
+        if not tag:
+            return "SQL"
+        if tag in catalog:
+            return catalog[tag]
+        return "SQL"
+
+    source_agent = next((a for a in agents if isinstance(a, dict) and a.get("agentType") == "SOURCE"), None)
+    target_agent = next((a for a in agents if isinstance(a, dict) and a.get("agentType") == "TARGET"), None)
+
+    return _classify(source_agent or {}), _classify(target_agent or {})
 
 
 def fetch_pipeline_entities(token: str, pipeline_id: str) -> List[Dict[str, Any]]:
@@ -712,6 +795,18 @@ def main() -> None:
         entities_by_id = build_entities_maps(entities)
         group_id_to_name, _, groups_by_name = fetch_groups_map(token, pipeline_id)
         schemas = build_schemas_from_entities(entities, group_id_to_name)
+
+        # Override schema-level type hints using agents.json catalog when possible
+        src_type, tgt_type = infer_pipeline_schema_types_from_agents(token, pipeline_id)
+        if src_type and tgt_type:
+            logger.info(
+                "Using agents.json to set pipeline types: sourceType=%s, targetType=%s",
+                src_type,
+                tgt_type,
+            )
+            for schema_cfg in schemas.values():
+                schema_cfg["sourceType"] = src_type
+                schema_cfg["targetType"] = tgt_type
 
         jobs = fetch_pipeline_jobs(pipeline_id)
         attach_schedules_from_jobs(jobs, entities_by_id, schemas, group_id_to_name)

@@ -585,6 +585,8 @@ function bindEvents() {
   const targetTypeSelect = document.getElementById('target-type');
 
   let bulkTablesState = [];
+  let bulkSourceType = 'SQL';
+  let bulkTargetType = 'SQL';
 
   function updateImportButtonsVisibility() {
     // Import config button: visible only when a config file is selected
@@ -646,6 +648,8 @@ function bindEvents() {
 
   function resetBulkState() {
     bulkTablesState = [];
+    bulkSourceType = 'SQL';
+    bulkTargetType = 'SQL';
     if (bulkSchemaSelect) {
       bulkSchemaSelect.innerHTML = '<option value="">Select a schema…</option>';
       bulkSchemaSelect.disabled = true;
@@ -697,6 +701,9 @@ function bindEvents() {
       try {
         const res = await api.bulkListSchemas(bulkPipelineSelect.value);
         const schemas = (res && res.schemas) || [];
+
+        bulkSourceType = (res && res.sourceType) || 'SQL';
+        bulkTargetType = (res && res.targetType) || 'SQL';
 
         bulkSchemaSelect.innerHTML = '<option value="">Select a schema…</option>';
         schemas.forEach((schema) => {
@@ -846,8 +853,8 @@ function bindEvents() {
         pipelineId: bulkPipelineSelect.value,
         sourceSchema,
         targetSchema,
-        sourceType: 'SQL',
-        targetType: 'SQL',
+        sourceType: bulkSourceType || 'SQL',
+        targetType: bulkTargetType || 'SQL',
         tableNames: selectedTables,
         chunkSize: Number((chunkSizeInput && chunkSizeInput.value) || 50),
         skipErrors: !!(skipErrorsInput && skipErrorsInput.checked),

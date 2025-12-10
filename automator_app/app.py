@@ -148,6 +148,8 @@ class VersionResponse(BaseModel):
 
 class BulkSchemasResponse(BaseModel):
     schemas: list[str]
+    source_type: Optional[str] = Field(None, alias="sourceType")
+    target_type: Optional[str] = Field(None, alias="targetType")
 
 
 class BulkTablesResponse(BaseModel):
@@ -384,7 +386,15 @@ def create_app() -> FastAPI:
             logger.exception("Failed to list source schemas for pipeline %s", pipelineId)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-        return BulkSchemasResponse(schemas=schemas)
+        source_type, target_type = corehub.infer_agent_schema_types(
+            token=state.token,
+            base_url=state.base_url,
+            pipeline_id=pipelineId,
+            use_ssl=state.use_ssl,
+            skip_verify=state.skip_verify,
+        )
+
+        return BulkSchemasResponse(schemas=schemas, source_type=source_type, target_type=target_type)
 
     @app.get("/api/bulk/tables", response_model=BulkTablesResponse)
     async def bulk_list_tables(pipelineId: str, schema: str) -> BulkTablesResponse:  # pylint: disable=invalid-name

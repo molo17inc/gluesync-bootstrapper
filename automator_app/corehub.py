@@ -23,10 +23,12 @@
 from __future__ import annotations
 
 import io
+import json
 import logging
 import os
 import zipfile
 from contextlib import redirect_stdout
+from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 from commons import configure_core_hub, set_scheduling_enabled, fetch_core_hub, get_pipeline_agents, get_agent_tables
@@ -48,6 +50,57 @@ from export_template_from_corehub import (
 import yaml
 
 logger = logging.getLogger(__name__)
+
+_AGENT_TYPE_BY_NAME: Dict[str, str] | None = None
+
+
+def _load_agent_type_catalog() -> Dict[str, str]:
+    global _AGENT_TYPE_BY_NAME
+    if _AGENT_TYPE_BY_NAME is not None:
+        return _AGENT_TYPE_BY_NAME
+
+    mapping: Dict[str, str] = {}
+
+    try:
+        base_dir = Path(__file__).resolve().parent
+        candidates = [
+            base_dir.parent / "agents.json",
+            base_dir / "agents.json",
+        ]
+        json_path = next((p for p in candidates if p.exists()), None)
+        if json_path is None:
+            _AGENT_TYPE_BY_NAME = mapping
+            return mapping
+
+        with json_path.open("r", encoding="utf-8") as fh:
+            raw = json.load(fh)
+
+        items = raw.get("data") if isinstance(raw, dict) else None
+        if not isinstance(items, list):
+            _AGENT_TYPE_BY_NAME = mapping
+            return mapping
+
+        for entry in items:
+            if not isinstance(entry, dict):
+                continue
+            name = entry.get("internalName")
+            kind = entry.get("type")
+            if not name or not kind:
+                continue
+            label = str(kind).strip().upper()
+            if not label:
+                continue
+            if label == "RDBMS":
+                normalized = "SQL"
+            else:
+                normalized = "NoSQL"
+            mapping[str(name).lower()] = normalized
+    except Exception:  # pylint: disable=broad-except
+        logger.exception("Failed to load agents.json catalog for type inference")
+        mapping = {}
+
+    _AGENT_TYPE_BY_NAME = mapping
+    return mapping
 
 
 def authenticate(
@@ -374,6 +427,54 @@ def list_source_tables(
     return names
 
 
+def infer_agent_schema_types(
+    *,
+    token: str,
+    base_url: str,
+    pipeline_id: str,
+    use_ssl: Optional[bool],
+    skip_verify: Optional[bool],
+) -> tuple[Optional[str], Optional[str]]:
+    """Infer (sourceType, targetType) as "SQL"/"NoSQL" from pipeline agents.
+
+    This is a best-effort helper used by the Automator UI for bulk operations.
+    When types cannot be determined, it falls back to ("SQL", "SQL").
+    """
+
+    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+
+    agents = get_pipeline_agents(token, pipeline_id)
+    if not isinstance(agents, list):
+        return "SQL", "SQL"
+
+    catalog = _load_agent_type_catalog()
+
+    def _classify_tag(tag: str) -> str:
+        key = (tag or "").lower()
+        if not key:
+            return "SQL"
+
+        if key in catalog:
+            return catalog[key]
+
+        # If the agent tag is unknown to the catalog, fall back to SQL.
+        return "SQL"
+
+    source_agent = next(
+        (a for a in agents if isinstance(a, dict) and a.get("agentType") == "SOURCE"),
+        None,
+    )
+    target_agent = next(
+        (a for a in agents if isinstance(a, dict) and a.get("agentType") == "TARGET"),
+        None,
+    )
+
+    source_tag = str(source_agent.get("agentTag")) if isinstance(source_agent, dict) else ""
+    target_tag = str(target_agent.get("agentTag")) if isinstance(target_agent, dict) else ""
+
+    return _classify_tag(source_tag), _classify_tag(target_tag)
+
+
 def list_pipelines(
     *,
     token: str,
@@ -425,6 +526,18 @@ def export_pipeline_yaml(
     entities_by_id = build_entities_maps(entities)
     group_id_to_name, _, groups_by_name = fetch_groups_map(token, pipeline_id)
     schemas = build_schemas_from_entities(entities, group_id_to_name)
+
+    # Align schema-level type hints with agents.json-based inference used elsewhere
+    source_type, target_type = infer_agent_schema_types(
+        token=token,
+        base_url=base_url,
+        pipeline_id=pipeline_id,
+        use_ssl=use_ssl,
+        skip_verify=skip_verify,
+    )
+    for schema_cfg in schemas.values():
+        schema_cfg["sourceType"] = source_type
+        schema_cfg["targetType"] = target_type
 
     jobs = fetch_pipeline_jobs(pipeline_id)
     attach_schedules_from_jobs(jobs, entities_by_id, schemas, group_id_to_name)
