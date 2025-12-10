@@ -34,6 +34,7 @@ import secrets
 import string
 import traceback
 import argparse
+from pathlib import Path
 from requests.adapters import HTTPAdapter
 from urllib3.util.ssl_ import create_urllib3_context
 from urllib.parse import urlparse
@@ -77,6 +78,93 @@ fake = Faker()
 # Initialize logger
 log_file = create_log_file()
 logger = get_logger(log_file)
+
+_AGENT_TYPE_BY_NAME_BOOT: dict[str, str] | None = None
+
+
+def _load_agent_type_catalog_for_bootstrapper() -> dict[str, str]:
+    """Load agents.json catalog and normalize types to SQL/NoSQL for main.py.
+
+    This mirrors the logic used by the export and Automator code paths so that
+    SOURCE_TYPE / TARGET_TYPE can be omitted and inferred from configured agents.
+    """
+
+    global _AGENT_TYPE_BY_NAME_BOOT
+    if _AGENT_TYPE_BY_NAME_BOOT is not None:
+        return _AGENT_TYPE_BY_NAME_BOOT
+
+    mapping: dict[str, str] = {}
+
+    try:
+        base_dir = Path(__file__).resolve().parent
+        json_path = base_dir / "agents.json"
+        if not json_path.exists():
+            _AGENT_TYPE_BY_NAME_BOOT = mapping
+            return mapping
+
+        with json_path.open("r", encoding="utf-8") as fh:
+            raw = json.load(fh)
+
+        items = raw.get("data") if isinstance(raw, dict) else None
+        if not isinstance(items, list):
+            _AGENT_TYPE_BY_NAME_BOOT = mapping
+            return mapping
+
+        for entry in items:
+            if not isinstance(entry, dict):
+                continue
+            name = entry.get("internalName")
+            kind = entry.get("type")
+            if not name or not kind:
+                continue
+            label = str(kind).strip().upper()
+            if not label:
+                continue
+            if label == "RDBMS":
+                normalized = "SQL"
+            else:
+                normalized = "NoSQL"
+            mapping[str(name).lower()] = normalized
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Failed to load agents.json catalog for type inference in bootstrapper: %s", exc)
+        mapping = {}
+
+    _AGENT_TYPE_BY_NAME_BOOT = mapping
+    return mapping
+
+
+def infer_pipeline_schema_types_from_config(conf: dict) -> tuple[str, str]:
+    """Infer (sourceType, targetType) as SQL/NoSQL from config agents.
+
+    Uses agents.json as the primary source of truth and falls back to SQL when
+    an agent tag is unknown. Returns (source_type, target_type).
+    """
+
+    catalog = _load_agent_type_catalog_for_bootstrapper()
+    if not isinstance(conf, dict):
+        return "SQL", "SQL"
+
+    agents_cfg = conf.get("agents")
+    if not isinstance(agents_cfg, list):
+        return "SQL", "SQL"
+
+    src_type: str | None = None
+    tgt_type: str | None = None
+
+    for agent in agents_cfg:
+        if not isinstance(agent, dict):
+            continue
+        tag = str(agent.get("agentTag") or "").lower()
+        agent_type = agent.get("agentType")
+        if not tag or agent_type not in {"SOURCE", "TARGET"}:
+            continue
+
+        if agent_type == "SOURCE" and src_type is None:
+            src_type = catalog.get(tag, "SQL")
+        elif agent_type == "TARGET" and tgt_type is None:
+            tgt_type = catalog.get(tag, "SQL")
+
+    return src_type or "SQL", tgt_type or "SQL"
 
 
 def load_config_from_file(path):
@@ -142,8 +230,10 @@ if not core_hub_url:
 default_user = 'admin'
 default_password = ''
 user_defined_password = os.getenv('DEFAULT_PASSWORD', default_password)
-source_type = os.getenv('SOURCE_TYPE', 'SQL')
-target_type = os.getenv('TARGET_TYPE', 'NoSQL')
+_raw_source_type = os.getenv('SOURCE_TYPE')
+_raw_target_type = os.getenv('TARGET_TYPE')
+source_type = _raw_source_type.strip() if _raw_source_type else None
+target_type = _raw_target_type.strip() if _raw_target_type else None
 TABLE_LIST_YAML = os.getenv('TABLE_LIST_YAML', '/opt/config/tables-list.yaml')
 
 # Schema extraction will be done after logger initialization
@@ -548,7 +638,8 @@ def main():
     else:
         logger.info("Starting Gluesync Bootstrapper module in STANDARD mode...")
 
-        # Start with environment defaults; may be overridden by YAML type hints later.
+        # Start with explicit environment overrides when provided; these will
+        # be refined/overridden by YAML hints and agents.json when absent.
         effective_source_type = source_type
         effective_target_type = target_type
 
@@ -567,9 +658,9 @@ def main():
             if yaml_target_type:
                 effective_target_type = yaml_target_type
             logger.info(
-                "Using source_type=%s, target_type=%s (env defaults possibly overridden by YAML)",
-                effective_source_type,
-                effective_target_type,
+                "YAML type hints: sourceType=%s, targetType=%s",
+                yaml_source_type,
+                yaml_target_type,
             )
 
         # Initialize variables that might be used in different code paths
@@ -583,6 +674,26 @@ def main():
             log_failure(logger, f"Failed to load configuration: {str(e)}")
             lockfile_failure()
             return
+
+        # If no explicit env/YAML type was provided, derive from config agents via agents.json
+        if effective_source_type is None or effective_target_type is None:
+            src_from_cfg, tgt_from_cfg = infer_pipeline_schema_types_from_config(conf_test)
+            if effective_source_type is None:
+                effective_source_type = src_from_cfg
+            if effective_target_type is None:
+                effective_target_type = tgt_from_cfg
+
+        # Final fallbacks if everything else failed
+        if effective_source_type is None:
+            effective_source_type = "SQL"
+        if effective_target_type is None:
+            effective_target_type = "NoSQL"
+
+        logger.info(
+            "Using source_type=%s, target_type=%s (env/YAML/agents.json)",
+            effective_source_type,
+            effective_target_type,
+        )
         
         # First check if we have a valid SDK token
         sdk_token = None
