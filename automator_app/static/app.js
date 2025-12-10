@@ -87,6 +87,21 @@ const api = {
     }
     return res.json();
   },
+  async bulkTemplate(payload) {
+    const res = await fetch('/api/bulk/template', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const detail = await res.json().catch(() => ({}));
+      throw new Error(detail.detail || 'Bulk template export failed');
+    }
+    const blob = await res.blob();
+    const filename = res.headers.get('Content-Disposition')?.split('filename=')[1]?.replace(/"/g, '')
+      || 'template.yaml';
+    return { blob, filename };
+  },
   async exportPipeline(pipelineId) {
     const response = await fetch(`/api/export/pipeline/${encodeURIComponent(pipelineId)}`);
     if (!response.ok) {
@@ -573,6 +588,7 @@ function bindEvents() {
   const bulkToggleAllBtn = document.getElementById('bulk-toggle-all-btn');
   const bulkCreateBtn = document.getElementById('bulk-create-btn');
   const bulkLoadSchemasBtn = document.getElementById('bulk-load-schemas-btn');
+  const bulkDownloadYamlBtn = document.getElementById('bulk-download-yaml-btn');
   const importConfigInput = document.getElementById('import-config-file');
   const importConfigBtnEl = document.getElementById('import-config-btn');
   const importAllInput = document.getElementById('import-all-file');
@@ -682,6 +698,9 @@ function bindEvents() {
       if (bulkLoadSchemasBtn) {
         bulkLoadSchemasBtn.disabled = !bulkPipelineSelect.value;
       }
+      if (bulkDownloadYamlBtn) {
+        bulkDownloadYamlBtn.disabled = !bulkPipelineSelect.value;
+      }
       ui.setBulkMessage('', '');
     });
   }
@@ -725,6 +744,48 @@ function bindEvents() {
         if (bulkLoadSchemasBtn) {
           bulkLoadSchemasBtn.disabled = !(bulkPipelineSelect && bulkPipelineSelect.value);
         }
+      }
+    });
+  }
+
+  if (bulkDownloadYamlBtn) {
+    bulkDownloadYamlBtn.addEventListener('click', async () => {
+      if (!bulkPipelineSelect || !bulkPipelineSelect.value) {
+        ui.setBulkMessage('Please select a pipeline first', 'error');
+        return;
+      }
+      if (!bulkSchemaSelect || !bulkSchemaSelect.value) {
+        ui.setBulkMessage('Please select a source schema first', 'error');
+        return;
+      }
+
+      const selectedTables = bulkTablesState.filter((t) => t.selected).map((t) => t.name);
+      if (!selectedTables.length) {
+        ui.setBulkMessage('Please select at least one table', 'error');
+        return;
+      }
+
+      const payload = {
+        pipelineId: bulkPipelineSelect.value,
+        sourceSchema: bulkSchemaSelect.value,
+        tableNames: selectedTables,
+      };
+
+      ui.setBulkMessage('Preparing YAML template…');
+
+      try {
+        const { blob, filename } = await api.bulkTemplate(payload);
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(url);
+        ui.setBulkMessage(`Downloaded ${filename}`, 'success');
+      } catch (err) {
+        ui.setBulkMessage(err.message, 'error');
       }
     });
   }

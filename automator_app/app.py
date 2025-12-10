@@ -85,6 +85,15 @@ class LoginRequest(BaseModel):
         allow_population_by_field_name = True
 
 
+class BulkTemplateRequest(BaseModel):
+    pipeline_id: str = Field(..., alias="pipelineId")
+    source_schema: str = Field(..., alias="sourceSchema")
+    table_names: list[str] = Field(..., alias="tableNames")
+
+    class Config:
+        allow_population_by_field_name = True
+
+
 class RunRequest(BaseModel):
     pipeline_id: str = Field(..., alias="pipelineId")
     source_schema: str = Field(..., alias="sourceSchema")
@@ -458,6 +467,87 @@ def create_app() -> FastAPI:
 
         msg = "Bulk entity creation completed successfully" if ok else result.get("error") or "Bulk entity creation failed"
         return ApiMessage(success=ok, message=msg)
+
+    @app.post("/api/bulk/template")
+    async def bulk_export_template(request: BulkTemplateRequest):
+        """Generate an on-the-fly table-list-style YAML for the selected tables.
+
+        This does *not* export an existing pipeline configuration. Instead it
+        produces a minimal table-list-template.yaml-shaped document containing
+        only the chosen source schema and tables, so it can be refined and
+        later used with the CLI bootstrapper.
+        """
+
+        if not state.token or not state.base_url:
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+        pipeline_id = request.pipeline_id
+        source_schema = request.source_schema
+        table_names = [name for name in request.table_names or [] if name]
+
+        if not pipeline_id:
+            raise HTTPException(status_code=400, detail="pipelineId is required")
+        if not source_schema:
+            raise HTTPException(status_code=400, detail="sourceSchema is required")
+        if not table_names:
+            raise HTTPException(status_code=400, detail="tableNames must contain at least one table")
+
+        # Infer default source/target types from the pipeline agents so the
+        # generated template is immediately usable by the CLI.
+        try:
+            source_type, target_type = corehub.infer_agent_schema_types(
+                token=state.token,
+                base_url=state.base_url,
+                pipeline_id=pipeline_id,
+                use_ssl=state.use_ssl,
+                skip_verify=state.skip_verify,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception(
+                "Failed to infer schema types for bulk template on pipeline %s", pipeline_id
+            )
+            source_type, target_type = "SQL", "SQL"
+
+        # Deduplicate tables while preserving selection order
+        seen = set()
+        unique_tables: list[str] = []
+        for raw in table_names:
+            name = str(raw)
+            if name in seen:
+                continue
+            seen.add(name)
+            unique_tables.append(name)
+
+        schema_cfg: dict[str, Any] = {
+            "target": source_schema,
+            "tables": {
+                "whitelist": unique_tables,
+                "custom": {name: {"keys": []} for name in unique_tables},
+            },
+        }
+
+        if source_type:
+            schema_cfg["sourceType"] = source_type
+        if target_type:
+            schema_cfg["targetType"] = target_type
+
+        # Direct schema configuration (no top-level "schemas" wrapper)
+        yaml_doc: dict[str, Any] = {source_schema: schema_cfg}
+
+        yaml_text = yaml.safe_dump(
+            yaml_doc,
+            sort_keys=False,
+            allow_unicode=True,
+        )
+
+        filename = f"template_{pipeline_id}_{source_schema}.yaml"
+        return StreamingResponse(
+            io.BytesIO(yaml_text.encode("utf-8")),
+            media_type="application/x-yaml",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+            },
+        )
 
     @app.get("/api/export/pipeline/{pipeline_id}")
     async def export_pipeline(pipeline_id: str):

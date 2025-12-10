@@ -369,15 +369,23 @@ button:disabled {
   grid-column: 1 / -1;
 }
 
+#advanced-card {
+  grid-column: 1 / -1;
+}
+
 /* Import/export panels are only visible once authenticated */
 #config-card,
 #export-card,
-#bulk-card {
+#advanced-card {
   display: none;
 }
 
 body.is-authenticated #config-card,
 body.is-authenticated #export-card,
+body.is-authenticated #advanced-card {
+  display: block;
+}
+
 body.is-authenticated #bulk-card {
   display: block;
 }

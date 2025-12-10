@@ -88,11 +88,37 @@
             </div>
             <div class="button-group">
               <button type="button" class="secondary" id="bulk-toggle-all-btn" disabled>Toggle all</button>
+              <button type="button" class="secondary" id="bulk-download-yaml-btn" disabled>Get YAML template</button>
               <button type="button" class="primary" id="bulk-create-btn" disabled>Create all entities (0)</button>
             </div>
           </fieldset>
         </form>
         <div id="bulk-message" class="message"></div>
+      </section>
+
+      <section class="card" id="advanced-card">
+        <h2>Advanced options</h2>
+        <form id="advanced-form" class="form-grid">
+          <fieldset class="fieldset">
+            <legend>Global settings</legend>
+            <label>
+              Chunk size
+              <input type="number" id="chunk-size" name="chunkSize" value="50" min="1" max="500" />
+            </label>
+            <label class="checkbox">
+              <input type="checkbox" id="skip-errors" />
+              Skip errors
+            </label>
+            <label class="checkbox">
+              <input type="checkbox" id="create-tables" checked />
+              Create missing tables automatically
+            </label>
+            <label class="checkbox">
+              <input type="checkbox" id="enable-scheduling" checked />
+              Enable scheduling for created entities
+            </label>
+          </fieldset>
+        </form>
       </section>
 
       <section class="card" id="config-card">
@@ -166,26 +192,6 @@
               <button type="button" class="secondary" id="validate-all-btn" disabled>Validate</button>
               <button type="button" class="secondary" id="import-all-btn" disabled>Import All</button>
             </div>
-          </fieldset>
-
-          <fieldset class="fieldset">
-            <legend>Advanced options</legend>
-            <label>
-              Chunk size
-              <input type="number" id="chunk-size" name="chunkSize" value="50" min="1" max="500" />
-            </label>
-            <label class="checkbox">
-              <input type="checkbox" id="skip-errors" />
-              Skip errors
-            </label>
-            <label class="checkbox">
-              <input type="checkbox" id="create-tables" checked />
-              Create missing tables automatically
-            </label>
-            <label class="checkbox">
-              <input type="checkbox" id="enable-scheduling" checked />
-              Enable scheduling for created entities
-            </label>
           </fieldset>
         </form>
         <div id="config-message" class="message"></div>
