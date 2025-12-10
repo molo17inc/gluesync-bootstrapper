@@ -29,9 +29,10 @@ import zipfile
 from contextlib import redirect_stdout
 from typing import Any, Callable, Dict, Optional
 
-from commons import configure_core_hub, set_scheduling_enabled, fetch_core_hub, get_pipeline_agents
+from commons import configure_core_hub, set_scheduling_enabled, fetch_core_hub, get_pipeline_agents, get_agent_tables
 from create_all_entities import (
     CREATE_TABLE_IF_NOT_EXISTS,
+    create_entities,
     main as create_entities_main,
     set_create_table_if_not_exists,
 )
@@ -155,6 +156,222 @@ def run_create_entities(
         "success": True,
         "logs": buffer.getvalue().splitlines(),
     }
+
+
+def run_create_entities_for_tables(
+    *,
+    token: str,
+    base_url: str,
+    pipeline_id: str,
+    source_schema: str,
+    target_schema: str,
+    source_type: str,
+    target_type: str,
+    table_names: list[str],
+    skip_errors: bool,
+    chunk_size: int,
+    enable_scheduling: bool,
+    create_tables: bool,
+    use_ssl: Optional[bool],
+    skip_verify: Optional[bool],
+) -> Dict[str, Any]:
+    """Create entities only for the specified source tables.
+
+    This is a bulk helper used by the Automator "Bulk operations" UI. It
+    mirrors run_create_entities, but restricts the processing to the
+    user-selected subset of tables instead of all discovered tables.
+    """
+
+    set_scheduling_enabled(enable_scheduling)
+    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+
+    prev_env_create_tables = os.environ.get("CREATE_TABLE_IF_NOT_EXISTS")
+    prev_flag_create_tables = CREATE_TABLE_IF_NOT_EXISTS
+    set_create_table_if_not_exists(create_tables)
+    os.environ["CREATE_TABLE_IF_NOT_EXISTS"] = "true" if create_tables else "false"
+
+    buffer = io.StringIO()
+
+    try:
+        # Discover source/target agents for the pipeline
+        agents = get_pipeline_agents(token, pipeline_id)
+        if not isinstance(agents, list):
+            raise RuntimeError(f"Unexpected agents payload for pipeline {pipeline_id!r}: {agents!r}")
+
+        source_agent = next((a for a in agents if isinstance(a, dict) and a.get("agentType") == "SOURCE"), None)
+        target_agent = next((a for a in agents if isinstance(a, dict) and a.get("agentType") == "TARGET"), None)
+        if not source_agent or not target_agent:
+            raise RuntimeError(
+                f"Could not find required agents. Source ({source_type}): {source_agent}, Target ({target_type}): {target_agent}"
+            )
+
+        raw_source_id = source_agent.get("agentId") or source_agent.get("id")
+        raw_target_id = target_agent.get("agentId") or target_agent.get("id")
+        if not raw_source_id or not raw_target_id:
+            raise RuntimeError("Source/target agents are missing IDs")
+
+        # Discover all tables for this schema, then restrict to the selected ones
+        discovered_tables = get_agent_tables(token, pipeline_id, raw_source_id, source_schema)
+        if not isinstance(discovered_tables, list):
+            raise RuntimeError(f"Unexpected tables payload for {source_schema!r}: {discovered_tables!r}")
+
+        wanted = {t.lower() for t in table_names}
+        filtered_tables: list[Any] = []
+        for tbl in discovered_tables:
+            name: Optional[str] = None
+            if isinstance(tbl, str):
+                name = tbl
+            elif isinstance(tbl, dict):
+                name = tbl.get("name") or tbl.get("tableName")
+            if not name:
+                continue
+            if name.lower() in wanted:
+                filtered_tables.append(tbl)
+
+        if not filtered_tables:
+            raise RuntimeError(
+                f"No matching tables found in discovery for schema {source_schema!r} and selection {sorted(table_names)!r}"
+            )
+
+        # Invoke the lower-level create_entities helper directly so we can
+        # pass the filtered tables list. YAML configuration is optional here;
+        # when omitted, create_entities will use discovery defaults.
+        with redirect_stdout(buffer):
+            result = create_entities(
+                token,
+                pipeline_id,
+                source_schema,
+                target_schema,
+                filtered_tables,
+                raw_source_id,
+                raw_target_id,
+                source_type,
+                target_type,
+                yaml_config=None,
+                skip_errors=skip_errors,
+                chunk_size=chunk_size,
+            )
+
+        logs = buffer.getvalue().splitlines()
+        success = not result or not result.get("failed")
+        payload: Dict[str, Any] = {"success": success, "logs": logs, "result": result or {}}
+        if not success:
+            payload["error"] = f"Some entities failed: {result.get('failed')} out of {result.get('total')}"
+        return payload
+
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Bulk create_entities_for_tables execution failed")
+        return {"success": False, "logs": buffer.getvalue().splitlines(), "error": str(exc)}
+    finally:
+        if prev_env_create_tables is not None:
+            os.environ["CREATE_TABLE_IF_NOT_EXISTS"] = prev_env_create_tables
+        else:
+            os.environ.pop("CREATE_TABLE_IF_NOT_EXISTS", None)
+        set_create_table_if_not_exists(prev_flag_create_tables)
+
+
+def _get_source_agent(token: str, pipeline_id: str) -> Dict[str, Any]:
+    """Return the SOURCE agent definition for a pipeline.
+
+    Raises RuntimeError if a suitable agent cannot be found.
+    """
+
+    agents = get_pipeline_agents(token, pipeline_id)
+    if not isinstance(agents, list):
+        raise RuntimeError(f"Unexpected agents payload for pipeline {pipeline_id!r}: {agents!r}")
+
+    for agent in agents:
+        if not isinstance(agent, dict):
+            continue
+        if agent.get("agentType") == "SOURCE":
+            return agent
+
+    raise RuntimeError(f"No SOURCE agent found for pipeline {pipeline_id!r}")
+
+
+def list_source_schemas(
+    *,
+    token: str,
+    base_url: str,
+    pipeline_id: str,
+    use_ssl: Optional[bool],
+    skip_verify: Optional[bool],
+) -> list[str]:
+    """List available schemas from the SOURCE agent for a pipeline."""
+
+    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+
+    source_agent = _get_source_agent(token, pipeline_id)
+    raw_agent_id = source_agent.get("agentId") or source_agent.get("id")
+    if not raw_agent_id:
+        raise RuntimeError(f"SOURCE agent for pipeline {pipeline_id!r} is missing an ID")
+
+    response = fetch_core_hub(
+        f"/pipelines/{pipeline_id}/agents/{raw_agent_id}/discovery/schemas",
+        token=token,
+    )
+
+    items: list[Any]
+    if isinstance(response, dict):
+        items = response.get("schemas") or response.get("items") or []
+    elif isinstance(response, list):
+        items = response
+    else:
+        logger.warning("Unexpected schemas discovery response for pipeline %s: %r", pipeline_id, response)
+        return []
+
+    schemas: list[str] = []
+    for item in items:
+        name: Optional[str] = None
+        if isinstance(item, str):
+            name = item
+        elif isinstance(item, dict):
+            name = (
+                item.get("schema")
+                or item.get("schemaName")
+                or item.get("name")
+            )
+        if name:
+            schemas.append(str(name))
+
+    return schemas
+
+
+def list_source_tables(
+    *,
+    token: str,
+    base_url: str,
+    pipeline_id: str,
+    schema: str,
+    use_ssl: Optional[bool],
+    skip_verify: Optional[bool],
+) -> list[str]:
+    """List available tables from the SOURCE agent for a given schema."""
+
+    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+
+    source_agent = _get_source_agent(token, pipeline_id)
+    raw_agent_id = source_agent.get("agentId") or source_agent.get("id")
+    if not raw_agent_id:
+        raise RuntimeError(f"SOURCE agent for pipeline {pipeline_id!r} is missing an ID")
+
+    tables = get_agent_tables(token, pipeline_id, raw_agent_id, schema)
+
+    names: list[str] = []
+    if isinstance(tables, list):
+        for tbl in tables:
+            if isinstance(tbl, str):
+                name = tbl
+            elif isinstance(tbl, dict):
+                name = tbl.get("name") or tbl.get("tableName")
+            else:
+                continue
+            if name:
+                names.append(str(name))
+    else:
+        logger.warning("Unexpected tables discovery response for pipeline %s schema %s: %r", pipeline_id, schema, tables)
+
+    return names
 
 
 def list_pipelines(

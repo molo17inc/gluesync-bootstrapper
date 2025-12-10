@@ -60,6 +60,36 @@
         <div id="auth-message" class="message"></div>
       </section>
 
+      <section class="card" id="bulk-card">
+        <h2>Bulk operations</h2>
+        <form id="bulk-form" class="form-grid">
+          <fieldset class="fieldset">
+            <legend>Create entities from source tables</legend>
+            <label>
+              Pipeline
+              <select id="bulk-pipeline-id" name="bulkPipelineId">
+                <option value="">Select a pipeline…</option>
+              </select>
+            </label>
+            <label>
+              Source schema
+              <select id="bulk-source-schema" name="bulkSourceSchema" disabled>
+                <option value="">Select a schema…</option>
+              </select>
+            </label>
+            <div id="bulk-tables-container">
+              <div id="bulk-tables-summary" class="hint-text">Select a schema to load tables.</div>
+              <div id="bulk-tables-list" class="bulk-tables-list"></div>
+            </div>
+            <div class="button-group">
+              <button type="button" class="secondary" id="bulk-toggle-all-btn" disabled>Toggle all</button>
+              <button type="button" class="primary" id="bulk-create-btn" disabled>Create all entities (0)</button>
+            </div>
+          </fieldset>
+        </form>
+        <div id="bulk-message" class="message"></div>
+      </section>
+
       <section class="card" id="config-card">
         <h2>Import pipelines, agents and entities</h2>
         <form id="config-form" class="form-grid">

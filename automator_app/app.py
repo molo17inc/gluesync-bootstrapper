@@ -146,6 +146,30 @@ class VersionResponse(BaseModel):
     version: str
 
 
+class BulkSchemasResponse(BaseModel):
+    schemas: list[str]
+
+
+class BulkTablesResponse(BaseModel):
+    tables: list[str]
+
+
+class BulkCreateRequest(BaseModel):
+    pipeline_id: str = Field(..., alias="pipelineId")
+    source_schema: str = Field(..., alias="sourceSchema")
+    target_schema: str = Field(..., alias="targetSchema")
+    source_type: str = Field(..., alias="sourceType")
+    target_type: str = Field(..., alias="targetType")
+    table_names: list[str] = Field(..., alias="tableNames")
+    chunk_size: int = Field(50, alias="chunkSize", ge=1, le=500)
+    skip_errors: bool = Field(True, alias="skipErrors")
+    enable_scheduling: Optional[bool] = Field(None, alias="enableScheduling")
+    create_tables: Optional[bool] = Field(None, alias="createTables")
+
+    class Config:
+        allow_population_by_field_name = True
+
+
 def _ensure_static_assets() -> None:
     static_directory = _static_dir()
     if not static_directory.exists():
@@ -342,6 +366,88 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
         return PipelinesResponse(pipelines=[PipelineInfo(**p) for p in pipelines])
+
+    @app.get("/api/bulk/schemas", response_model=BulkSchemasResponse)
+    async def bulk_list_schemas(pipelineId: str) -> BulkSchemasResponse:  # pylint: disable=invalid-name
+        if not state.token or not state.base_url:
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+        try:
+            schemas = corehub.list_source_schemas(
+                token=state.token,
+                base_url=state.base_url,
+                pipeline_id=pipelineId,
+                use_ssl=state.use_ssl,
+                skip_verify=state.skip_verify,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Failed to list source schemas for pipeline %s", pipelineId)
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        return BulkSchemasResponse(schemas=schemas)
+
+    @app.get("/api/bulk/tables", response_model=BulkTablesResponse)
+    async def bulk_list_tables(pipelineId: str, schema: str) -> BulkTablesResponse:  # pylint: disable=invalid-name
+        if not state.token or not state.base_url:
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+        try:
+            tables = corehub.list_source_tables(
+                token=state.token,
+                base_url=state.base_url,
+                pipeline_id=pipelineId,
+                schema=schema,
+                use_ssl=state.use_ssl,
+                skip_verify=state.skip_verify,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Failed to list source tables for pipeline %s schema %s", pipelineId, schema)
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        return BulkTablesResponse(tables=tables)
+
+    @app.post("/api/bulk/create", response_model=ApiMessage)
+    async def bulk_create_entities(request: BulkCreateRequest) -> ApiMessage:
+        if not state.token or not state.base_url:
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+        prefs = state.preferences()
+        enable_scheduling = request.enable_scheduling
+        if enable_scheduling is None:
+            enable_scheduling = prefs["enableScheduling"]
+        create_tables = request.create_tables
+        if create_tables is None:
+            create_tables = prefs["createTables"]
+
+        try:
+            result = corehub.run_create_entities_for_tables(
+                token=state.token,
+                base_url=state.base_url,
+                pipeline_id=request.pipeline_id,
+                source_schema=request.source_schema,
+                target_schema=request.target_schema,
+                source_type=request.source_type,
+                target_type=request.target_type,
+                table_names=request.table_names,
+                skip_errors=request.skip_errors,
+                chunk_size=request.chunk_size,
+                enable_scheduling=bool(enable_scheduling),
+                create_tables=bool(create_tables),
+                use_ssl=state.use_ssl,
+                skip_verify=state.skip_verify,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Bulk create entities failed")
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        ok = result.get("success", False)
+        logs = result.get("logs") or []
+        if logs:
+            for line in logs:
+                logger.info("[bulk-create] %s", line)
+
+        msg = "Bulk entity creation completed successfully" if ok else result.get("error") or "Bulk entity creation failed"
+        return ApiMessage(success=ok, message=msg)
 
     @app.get("/api/export/pipeline/{pipeline_id}")
     async def export_pipeline(pipeline_id: str):

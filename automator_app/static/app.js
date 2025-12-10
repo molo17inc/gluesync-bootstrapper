@@ -65,6 +65,28 @@ const api = {
     if (!res.ok) throw new Error('Failed to list pipelines');
     return res.json();
   },
+  async bulkListSchemas(pipelineId) {
+    const res = await fetch(`/api/bulk/schemas?pipelineId=${encodeURIComponent(pipelineId)}`);
+    if (!res.ok) throw new Error('Failed to list source schemas');
+    return res.json();
+  },
+  async bulkListTables(pipelineId, schema) {
+    const res = await fetch(`/api/bulk/tables?pipelineId=${encodeURIComponent(pipelineId)}&schema=${encodeURIComponent(schema)}`);
+    if (!res.ok) throw new Error('Failed to list source tables');
+    return res.json();
+  },
+  async bulkCreate(payload) {
+    const res = await fetch('/api/bulk/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const detail = await res.json().catch(() => ({}));
+      throw new Error(detail.detail || 'Bulk entity creation failed');
+    }
+    return res.json();
+  },
   async exportPipeline(pipelineId) {
     const response = await fetch(`/api/export/pipeline/${encodeURIComponent(pipelineId)}`);
     if (!response.ok) {
@@ -129,6 +151,7 @@ const ui = (() => {
   const authMessageEl = document.getElementById('auth-message');
   const configMessageEl = document.getElementById('config-message');
   const exportMessageEl = document.getElementById('export-message');
+  const bulkMessageEl = document.getElementById('bulk-message');
   const logoutBtn = document.getElementById('logout-btn');
   const runBtn = document.getElementById('run-btn');
   const exportBtn = document.getElementById('export-btn');
@@ -182,6 +205,12 @@ const ui = (() => {
     exportMessageEl.className = `message ${type}`;
   }
 
+  function setBulkMessage(message, type = '') {
+    if (!bulkMessageEl) return;
+    bulkMessageEl.textContent = message;
+    bulkMessageEl.className = `message ${type}`;
+  }
+
   function setVersionLabel(message) {
     if (!versionLabel) return;
     versionLabel.textContent = message;
@@ -232,6 +261,7 @@ const ui = (() => {
     setAuthMessage,
     setConfigMessage,
     setExportMessage,
+    setBulkMessage,
     setAuthEnabled,
     renderLogs,
     lockAuthFields: setAuthFieldsLocked,
@@ -534,6 +564,13 @@ function bindEvents() {
   const yamlInput = document.getElementById('yaml-file');
   const exportForm = document.getElementById('export-form');
   const exportPipelineSelect = document.getElementById('export-pipeline-id');
+  const bulkForm = document.getElementById('bulk-form');
+  const bulkPipelineSelect = document.getElementById('bulk-pipeline-id');
+  const bulkSchemaSelect = document.getElementById('bulk-source-schema');
+  const bulkTablesList = document.getElementById('bulk-tables-list');
+  const bulkTablesSummary = document.getElementById('bulk-tables-summary');
+  const bulkToggleAllBtn = document.getElementById('bulk-toggle-all-btn');
+  const bulkCreateBtn = document.getElementById('bulk-create-btn');
   const importConfigInput = document.getElementById('import-config-file');
   const importConfigBtnEl = document.getElementById('import-config-btn');
   const importAllInput = document.getElementById('import-all-file');
@@ -544,6 +581,8 @@ function bindEvents() {
   const typeFields = document.getElementById('type-fields');
   const sourceTypeSelect = document.getElementById('source-type');
   const targetTypeSelect = document.getElementById('target-type');
+
+  let bulkTablesState = [];
 
   function updateImportButtonsVisibility() {
     // Import config button: visible only when a config file is selected
@@ -581,6 +620,26 @@ function bindEvents() {
     // When schemas are driven by YAML (default), keep type dropdowns read-only/hidden
     if (sourceTypeSelect) sourceTypeSelect.disabled = !enabled;
     if (targetTypeSelect) targetTypeSelect.disabled = !enabled;
+  }
+
+  function updateBulkSelectionSummary() {
+    if (!bulkTablesSummary) return;
+    const total = bulkTablesState.length;
+    const selected = bulkTablesState.filter((t) => t.selected).length;
+    if (!total) {
+      bulkTablesSummary.textContent = bulkSchemaSelect && bulkSchemaSelect.value
+        ? `No tables found for schema ${bulkSchemaSelect.value}.`
+        : 'Select a schema to load tables.';
+    } else {
+      bulkTablesSummary.textContent = `${total} table(s) available, ${selected} selected.`;
+    }
+    if (bulkCreateBtn) {
+      bulkCreateBtn.textContent = `Create all entities (${selected})`;
+      bulkCreateBtn.disabled = !selected;
+    }
+    if (bulkToggleAllBtn) {
+      bulkToggleAllBtn.disabled = !total;
+    }
   }
 
   if (customSchemasCheckbox && schemaFields) {
@@ -860,7 +919,8 @@ function bindEvents() {
 async function loadPipelines() {
   const exportSelect = document.getElementById('export-pipeline-id');
   const configSelect = document.getElementById('pipeline-id');
-  if (!exportSelect && !configSelect) return;
+  const bulkSelect = document.getElementById('bulk-pipeline-id');
+  if (!exportSelect && !configSelect && !bulkSelect) return;
 
   try {
     const data = await api.listPipelines();
@@ -890,6 +950,7 @@ async function loadPipelines() {
 
     populateSelect(exportSelect);
     populateSelect(configSelect);
+    populateSelect(bulkSelect);
   } catch (err) {
     console.error(err);
     ui.setExportMessage(err.message, 'error');
