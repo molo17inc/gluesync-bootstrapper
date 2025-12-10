@@ -26,6 +26,8 @@ import asyncio
 import io
 import json
 import logging
+import os
+import shutil
 import sys
 import tempfile
 import zipfile
@@ -34,6 +36,7 @@ from typing import Any, Optional
 
 import requests
 import yaml
+import create_user_defined_functions
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -342,6 +345,8 @@ def create_app() -> FastAPI:
 
     @app.get("/api/export/pipeline/{pipeline_id}")
     async def export_pipeline(pipeline_id: str):
+        """Export only the YAML metadata for a single pipeline."""
+
         if not state.token or not state.base_url:
             raise HTTPException(status_code=401, detail="Authentication required")
 
@@ -361,6 +366,49 @@ def create_app() -> FastAPI:
         return StreamingResponse(
             io.BytesIO(yaml_text.encode("utf-8")),
             media_type="application/x-yaml",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+            },
+        )
+
+    @app.get("/api/export/pipeline/{pipeline_id}/full")
+    async def export_pipeline_full_backup(pipeline_id: str):
+        """Export a full backup (YAML + agents-config + UDFs) for a single pipeline."""
+
+        if not state.token or not state.base_url:
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+        try:
+            zip_data = corehub.export_pipeline_full_backup(
+                token=state.token,
+                base_url=state.base_url,
+                pipeline_id=pipeline_id,
+                use_ssl=state.use_ssl,
+                skip_verify=state.skip_verify,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Failed to export full backup for pipeline %s", pipeline_id)
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        # Derive a human-friendly filename aligned with the internal YAML name:
+        # backup_<safePipelineName>_<pipelineId>.zip
+        safe_name = pipeline_id
+        try:
+            details = corehub.fetch_core_hub(f"/pipelines/{pipeline_id}", token=state.token)
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("Failed to fetch pipeline %s metadata for filename: %s", pipeline_id, exc)
+            details = None
+        if isinstance(details, dict):
+            name = details.get("name")
+            if isinstance(name, str) and name:
+                cleaned = "".join(c for c in name if c.isalnum() or c in (" ", "-", "_")).rstrip()
+                if cleaned:
+                    safe_name = cleaned
+
+        filename = f"backup_{safe_name}_{pipeline_id}.zip"
+        return StreamingResponse(
+            io.BytesIO(zip_data),
+            media_type="application/zip",
             headers={
                 "Content-Disposition": f'attachment; filename="{filename}"',
             },
@@ -429,6 +477,52 @@ def create_app() -> FastAPI:
         contents = await file.read()
         if not contents:
             raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+        # Extract UDF source files (if present) into a temporary directory so they
+        # can be compiled automatically during import. Both Export All and
+        # single-pipeline Full backup ZIPs place UDFs under folders named
+        # 'udf-<agentId>' (optionally nested under pipeline_<id>/ for single
+        # pipeline backups).
+        udf_root: Optional[Path] = None
+        try:
+            udf_root = Path(tempfile.gettempdir()) / "gluesync_automator_udfs"
+            if udf_root.exists():
+                shutil.rmtree(udf_root)
+            udf_root.mkdir(parents=True, exist_ok=True)
+
+            with zipfile.ZipFile(io.BytesIO(contents)) as zf_udf:
+                for member in zf_udf.namelist():
+                    lower = member.lower()
+                    # Skip macOS resource-fork entries
+                    if member.startswith("__MACOSX/") or member.rsplit("/", 1)[-1].startswith("._"):
+                        continue
+                    # Only consider files under udf-* folders
+                    if "udf-" not in member and not member.lstrip("/").startswith("udf-"):
+                        continue
+                    # Only extract recognized UDF source extensions
+                    if not (
+                        lower.endswith(".java")
+                        or lower.endswith(".kt")
+                        or lower.endswith(".js")
+                        or lower.endswith(".py")
+                        or lower.endswith(".rb")
+                    ):
+                        continue
+
+                    dest_path = udf_root / member
+                    dest_path.parent.mkdir(parents=True, exist_ok=True)
+                    with zf_udf.open(member) as src, open(dest_path, "wb") as dst:
+                        shutil.copyfileobj(src, dst)
+
+            # Point the UDF helper module to this directory so it can resolve
+            # files via UDF_NAME + extension lookups.
+            create_user_defined_functions.UDF_PATH = str(udf_root)
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception(
+                "Failed to extract UDF source files from backup; UDF compilation will be skipped: %s",
+                exc,
+            )
+            udf_root = None
 
         # First pass: find and parse agents-config.yaml for shared agents + metadata
         try:
@@ -666,6 +760,36 @@ def create_app() -> FastAPI:
                                 if result_run.get("error"):
                                     errors.append(
                                         f"{name}: entity creation error for {src_schema}->{tgt_schema}: {result_run['error']}"
+                                    )
+
+                            # After entities are created for this schema pair, automatically
+                            # compile and register any UDFs referenced in the YAML using the
+                            # exported source files from the backup.
+                            if udf_root is not None:
+                                try:
+                                    create_user_defined_functions.main(
+                                        new_pipeline_id,
+                                        src_schema,
+                                        tgt_schema,
+                                        source_type,
+                                        target_type,
+                                        str(yaml_path),
+                                        state.token,
+                                        True,  # skip_errors
+                                        50,  # chunk_size
+                                    )
+                                except Exception as exc_udf:  # pylint: disable=broad-except
+                                    overall_success = False
+                                    logger.exception(
+                                        "Failed to process UDFs for pipeline %s (%s) schema %s->%s from %s",
+                                        new_pipeline_name,
+                                        new_pipeline_id,
+                                        src_schema,
+                                        tgt_schema,
+                                        name,
+                                    )
+                                    errors.append(
+                                        f"{name}: UDF compilation error for {src_schema}->{tgt_schema}: {exc_udf}"
                                     )
                         except Exception as exc:  # pylint: disable=broad-except
                             overall_success = False

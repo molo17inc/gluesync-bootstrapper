@@ -4,6 +4,15 @@ const api = {
     if (!res.ok) throw new Error(`State request failed: ${res.status}`);
     return res.json();
   },
+  async exportPipelineFull(pipelineId) {
+    const response = await fetch(`/api/export/pipeline/${encodeURIComponent(pipelineId)}/full`);
+    if (!response.ok) {
+      throw new Error(`Full backup export failed: ${response.status} ${response.statusText}`);
+    }
+    const blob = await response.blob();
+    const filename = response.headers.get('Content-Disposition')?.split('filename=')[1]?.replace(/"/g, '') || `pipeline_${pipelineId}_backup.zip`;
+    return { blob, filename };
+  },
   async login(payload) {
     const res = await fetch('/api/login', {
       method: 'POST',
@@ -123,6 +132,7 @@ const ui = (() => {
   const logoutBtn = document.getElementById('logout-btn');
   const runBtn = document.getElementById('run-btn');
   const exportBtn = document.getElementById('export-btn');
+  const exportPipelineFullBtn = document.getElementById('export-pipeline-full-btn');
   const exportAllBtn = document.getElementById('export-all-btn');
   const validateAllBtn = document.getElementById('validate-all-btn');
   const importConfigBtn = document.getElementById('import-config-btn');
@@ -190,6 +200,9 @@ const ui = (() => {
     if (exportBtn) {
       exportBtn.disabled = !enabled;
     }
+    if (exportPipelineFullBtn) {
+      exportPipelineFullBtn.disabled = !enabled;
+    }
     if (exportAllBtn) {
       exportAllBtn.disabled = !enabled;
     }
@@ -226,6 +239,7 @@ const ui = (() => {
     runBtn,
     logoutBtn,
     exportAllBtn,
+    exportPipelineFullBtn,
   };
 })();
 
@@ -700,13 +714,39 @@ function bindEvents() {
       event.preventDefault();
       const pipelineId = exportPipelineSelect.value;
       if (!pipelineId) {
-        ui.setExportMessage('Please select a pipeline to export', 'error');
+        ui.setExportMessage('Please select a pipeline to export metadata for', 'error');
         return;
       }
 
-      ui.setExportMessage('Exporting…');
+      ui.setExportMessage('Exporting metadata…');
       try {
         const { blob, filename } = await api.exportPipeline(pipelineId);
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(url);
+        ui.setExportMessage(`Exported ${filename}`, 'success');
+      } catch (err) {
+        ui.setExportMessage(err.message, 'error');
+      }
+    });
+  }
+
+  if (ui.exportPipelineFullBtn && exportPipelineSelect) {
+    ui.exportPipelineFullBtn.addEventListener('click', async () => {
+      const pipelineId = exportPipelineSelect.value;
+      if (!pipelineId) {
+        ui.setExportMessage('Please select a pipeline to export a full backup for', 'error');
+        return;
+      }
+
+      ui.setExportMessage('Exporting full backup…');
+      try {
+        const { blob, filename } = await api.exportPipelineFull(pipelineId);
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;

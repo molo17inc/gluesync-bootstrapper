@@ -122,9 +122,9 @@
           </fieldset>
 
           <fieldset class="fieldset">
-            <legend>Import full backup (pipeline(s), agents and entities)</legend>
+            <legend>Import a full backup</legend>
             <label>
-              Backup archive (ZIP)
+              Backup archive (ZIP) containing pipeline(s), agents, entities, schedules and UDFs
               <input type="file" id="import-all-file" accept=".zip" />
             </label>
             <div class="button-group">
@@ -168,14 +168,18 @@
               </select>
             </label>
             <div class="button-group">
-              <button type="submit" class="secondary" id="export-btn" disabled>Download YAML</button>
+              <button type="submit" class="secondary" id="export-btn" disabled>Export metadata</button>
+              <button type="button" class="secondary" id="export-pipeline-full-btn" disabled>Full backup</button>
             </div>
           </fieldset>
 
           <fieldset class="fieldset">
-            <legend>Export all pipelines (incl. agents and entities)</legend>
+            <legend>Export all</legend>
             <div class="button-group">
-              <button type="button" class="secondary" id="export-all-btn" disabled>Export All</button>
+              <label>
+                Export includes pipelines, agents, entities, schedules and UDFs
+                <button type="button" class="secondary" id="export-all-btn" disabled>Export all metadata</button>
+              </label>
             </div>
           </fieldset>
         </form>

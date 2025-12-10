@@ -224,6 +224,269 @@ def export_pipeline_yaml(
     return buffer.getvalue()
 
 
+def export_pipeline_full_backup(
+    *,
+    token: str,
+    base_url: str,
+    pipeline_id: str,
+    use_ssl: Optional[bool],
+    skip_verify: Optional[bool],
+) -> bytes:
+    """Export a full backup (YAML + agents-config + UDFs) for a single pipeline."""
+
+    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+
+    pipeline_name = pipeline_id
+    try:
+        response = fetch_core_hub(f"/pipelines/{pipeline_id}", token=token)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Failed to fetch pipeline %s metadata", pipeline_id)
+        raise
+    if isinstance(response, dict):
+        name = response.get("name")
+        if isinstance(name, str) and name:
+            pipeline_name = name
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+        all_agents: list[dict] = []
+        seen_agents: set[tuple] = set()
+        pipelines_meta: list[dict] = []
+        udfs_to_export: Dict[str, Dict[str, Any]] = {}
+
+        # Top-level folder for this pipeline inside the ZIP
+        root_prefix = f"pipeline_{pipeline_id}/"
+
+        pipeline_meta: Dict[str, Any] = {
+            "pipelineId": pipeline_id,
+            "pipelineName": pipeline_name,
+        }
+        pipelines_meta.append(pipeline_meta)
+
+        # Export pipeline YAML configuration
+        yaml_content = export_pipeline_yaml(
+            token=token,
+            base_url=base_url,
+            pipeline_id=pipeline_id,
+            use_ssl=use_ssl,
+            skip_verify=skip_verify,
+        )
+
+        safe_name = "".join(c for c in pipeline_name if c.isalnum() or c in (" ", "-", "_")).rstrip()
+        if not safe_name:
+            safe_name = pipeline_id
+        filename = f"{root_prefix}backup_{safe_name}_{pipeline_id}.yaml"
+        zip_file.writestr(filename, yaml_content)
+        logger.info("Exported pipeline %s (%s) YAML", pipeline_name, pipeline_id)
+
+        # Discover mapping functions (UDFs) referenced by this pipeline
+        try:
+            entities = fetch_pipeline_entities(token, pipeline_id)
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Failed to fetch entities for UDF export in pipeline %s: %s", pipeline_id, exc)
+            entities = []
+
+        if isinstance(entities, list):
+            for ent in entities:
+                if not isinstance(ent, dict):
+                    continue
+
+                # Find the target agent entity for this logical entity
+                target_ae: Optional[Dict[str, Any]] = None
+                for ae in ent.get("agentEntities", []) or []:
+                    et = ae.get("entityType") or {}
+                    if et.get("type") == "Target":
+                        target_ae = ae
+                        break
+                if not target_ae:
+                    continue
+
+                target_et = target_ae.get("entityType") or {}
+
+                # Preferred: single mappingFunctionInfo entry
+                mf_info = target_et.get("mappingFunctionInfo")
+                if isinstance(mf_info, dict):
+                    udf_name = mf_info.get("name")
+                    if udf_name:
+                        key = str(udf_name)
+                        if key not in udfs_to_export:
+                            raw_agent_id = target_ae.get("agentId") or target_ae.get("id")
+                            udfs_to_export[key] = {
+                                "name": str(udf_name),
+                                "type": mf_info.get("type"),
+                                "agentId": str(raw_agent_id) if raw_agent_id is not None else None,
+                            }
+                    continue
+
+                # Backwards-compat: array-style "udf" configuration on entityType
+                udf_cfg = target_et.get("udf") or []
+                if isinstance(udf_cfg, list):
+                    for udf in udf_cfg:
+                        if not isinstance(udf, dict):
+                            continue
+                        udf_name = udf.get("name")
+                        if not udf_name:
+                            continue
+                        key = str(udf_name)
+                        if key in udfs_to_export:
+                            continue
+                        raw_agent_id = target_ae.get("agentId") or target_ae.get("id")
+                        udfs_to_export[key] = {
+                            "name": str(udf_name),
+                            "type": udf.get("type"),
+                            "agentId": str(raw_agent_id) if raw_agent_id is not None else None,
+                        }
+
+        # Collect agents for this pipeline
+        try:
+            pipeline_agents = get_pipeline_agents(token, pipeline_id)
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Failed to fetch agents for pipeline %s: %s", pipeline_id, exc)
+            pipeline_agents = []
+
+        if isinstance(pipeline_agents, list):
+            pipeline_agent_refs: list[dict] = []
+            for agent in pipeline_agents:
+                if not isinstance(agent, dict):
+                    continue
+
+                agent_type = agent.get("agentType")
+                agent_tag = agent.get("agentTag")
+                host_credentials = agent.get("hostCredentials") or {}
+                raw_agent_id = agent.get("agentId") or agent.get("id")
+
+                if not agent_type or not agent_tag or not host_credentials:
+                    continue
+
+                ref: Dict[str, Any] = {
+                    "agentType": agent_type,
+                    "agentTag": agent_tag,
+                }
+                if raw_agent_id is not None:
+                    ref["agentId"] = str(raw_agent_id)
+                pipeline_agent_refs.append(ref)
+
+                if raw_agent_id is not None:
+                    key = ("id", str(raw_agent_id))
+                else:
+                    key = (
+                        "props",
+                        str(agent_type),
+                        str(agent_tag),
+                        str(host_credentials.get("connectionName")),
+                        str(host_credentials.get("host")),
+                        str(host_credentials.get("port")),
+                    )
+                if key in seen_agents:
+                    continue
+                seen_agents.add(key)
+
+                masked_host_credentials = dict(host_credentials)
+                if "password" in masked_host_credentials and masked_host_credentials["password"]:
+                    masked_host_credentials["password"] = "*******"
+
+                agent_payload: Dict[str, Any] = {
+                    "agentType": agent_type,
+                    "agentTag": agent_tag,
+                    "hostCredentials": masked_host_credentials,
+                    "customHostCredentials": agent.get("customHostCredentials") or {},
+                    "specificConfiguration": agent.get("specificConfiguration") or {},
+                }
+                if raw_agent_id is not None:
+                    agent_payload["agentId"] = str(raw_agent_id)
+                all_agents.append(agent_payload)
+
+            if pipeline_agent_refs:
+                pipeline_meta["agents"] = pipeline_agent_refs
+
+        if all_agents:
+            agents_payload: Dict[str, Any] = {"agents": all_agents}
+            if pipelines_meta:
+                agents_payload["pipelines"] = pipelines_meta
+
+            buffer = io.StringIO()
+            yaml.safe_dump(
+                agents_payload,
+                buffer,
+                sort_keys=False,
+                allow_unicode=True,
+            )
+
+            yaml_text_lines = []
+            for line in buffer.getvalue().splitlines():
+                stripped = line.lstrip()
+                if stripped.startswith("password:") and "*******" in stripped:
+                    line = f"{line}  # original password omitted"
+                yaml_text_lines.append(line)
+
+            yaml_text = "\n".join(yaml_text_lines) + "\n"
+            zip_file.writestr(f"{root_prefix}agents-config.yaml", yaml_text)
+
+        # Export mapping function (UDF) source files, if any were discovered.
+        for udf_name, meta in udfs_to_export.items():
+            try:
+                response = fetch_core_hub(
+                    f"/pipelines/{pipeline_id}/config/entities/mapping-functions/{udf_name}",
+                    token=token,
+                )
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.exception("Failed to fetch mapping function %s for pipeline %s: %s", udf_name, pipeline_id, exc)
+                continue
+
+            if not isinstance(response, dict):
+                logger.warning(
+                    "Unexpected response while fetching mapping function %s for pipeline %s: %r",
+                    udf_name,
+                    pipeline_id,
+                    response,
+                )
+                continue
+
+            code = response.get("code")
+            mf_type = response.get("type") or meta.get("type")
+            if not isinstance(code, str) or not code:
+                logger.warning("Mapping function %s for pipeline %s has no code to export", udf_name, pipeline_id)
+                continue
+
+            # Determine file extension based on mapping function type.
+            # Mapping aligned with MappingFunctionsType in CoreHub:
+            # - Java      -> .java
+            # - Kotlin    -> .kt
+            # - Python    -> .js
+            # - Javascript-> .py
+            # - Ruby      -> .rb
+            ext = ".java"
+            if isinstance(mf_type, str):
+                t = mf_type.lower()
+                if t == "java":
+                    ext = ".java"
+                elif t == "kotlin":
+                    ext = ".kt"
+                elif t == "python":
+                    ext = ".js"
+                elif t == "javascript":
+                    ext = ".py"
+                elif t == "ruby":
+                    ext = ".rb"
+
+            safe_udf_name = "".join(c for c in str(udf_name) if c.isalnum() or c in ("_", "-")) or "udf"
+            # Place each UDF under a folder named 'udf-<agentId>', with the file
+            # named as the UDF name plus extension so it can be reused with the
+            # UDF_PATH-based lookup used by create_user_defined_functions.
+            agent_id = meta.get("agentId")
+            if agent_id is not None:
+                safe_agent_id = "".join(c for c in str(agent_id) if c.isalnum() or c in ("_", "-")) or "unknown"
+                folder = f"udf-{safe_agent_id}"
+            else:
+                folder = "udf-unknown"
+            udf_filename = f"{root_prefix}{folder}/{safe_udf_name}{ext}"
+
+            zip_file.writestr(udf_filename, code.encode("utf-8"))
+
+    zip_buffer.seek(0)
+    return zip_buffer.read()
+
+
 def export_all_pipelines_yaml(
     *,
     token: str,
@@ -322,9 +585,11 @@ def export_all_pipelines_yaml(
                         if udf_name:
                             key = (pipeline_id, str(udf_name))
                             if key not in udfs_to_export:
+                                raw_agent_id = target_ae.get("agentId") or target_ae.get("id")
                                 udfs_to_export[key] = {
                                     "name": str(udf_name),
                                     "type": mf_info.get("type"),
+                                    "agentId": str(raw_agent_id) if raw_agent_id is not None else None,
                                 }
                         continue
 
@@ -340,9 +605,11 @@ def export_all_pipelines_yaml(
                             key = (pipeline_id, str(udf_name))
                             if key in udfs_to_export:
                                 continue
+                            raw_agent_id = target_ae.get("agentId") or target_ae.get("id")
                             udfs_to_export[key] = {
                                 "name": str(udf_name),
                                 "type": udf.get("type"),
+                                "agentId": str(raw_agent_id) if raw_agent_id is not None else None,
                             }
 
             # Try to collect agents for this pipeline
@@ -488,10 +755,16 @@ def export_all_pipelines_yaml(
                     ext = ".rb"
 
             safe_udf_name = "".join(c for c in str(udf_name) if c.isalnum() or c in ("_", "-")) or "udf"
-            # Place each UDF under a single top-level folder 'udf-agentid', with the
-            # file named as the UDF name plus extension so it can be reused with the
+            # Place each UDF under a folder named 'udf-<agentId>', with the file
+            # named as the UDF name plus extension so it can be reused with the
             # UDF_PATH-based lookup used by create_user_defined_functions.
-            udf_filename = f"udf-agentid/{safe_udf_name}{ext}"
+            agent_id = meta.get("agentId")
+            if agent_id is not None:
+                safe_agent_id = "".join(c for c in str(agent_id) if c.isalnum() or c in ("_", "-")) or "unknown"
+                folder = f"udf-{safe_agent_id}"
+            else:
+                folder = "udf-unknown"
+            udf_filename = f"{folder}/{safe_udf_name}{ext}"
 
             # Store source code as UTF-8 text inside the ZIP
             zip_file.writestr(udf_filename, code.encode("utf-8"))
