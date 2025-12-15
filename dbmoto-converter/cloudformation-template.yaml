@@ -43,6 +43,24 @@ Resources:
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DbmotoConverterSQSDynamoPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                Resource: !GetAtt JobsQueue.Arn
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:GetItem
+                Resource: !GetAtt JobsTable.Arn
 
   # Lambda function
   ConversionLambda:
@@ -61,6 +79,8 @@ Resources:
           FTP_USER: !Ref FtpUser
           FTP_PASSWORD: !Ref FtpPassword
           FTP_BASE_PATH: !Ref FtpBasePath
+          SQS_QUEUE_URL: !Ref JobsQueue
+          DDB_TABLE_NAME: !Ref JobsTable
       Role: !GetAtt LambdaExecutionRole.Arn
       Timeout: 900
       MemorySize: 1024
@@ -85,7 +105,7 @@ Resources:
       ParentId: !GetAtt ApiGateway.RootResourceId
       PathPart: convert
 
-  # API Gateway method
+  # API Gateway method (POST /convert -> submit job)
   ApiMethod:
     Type: AWS::ApiGateway::Method
     Properties:
@@ -98,10 +118,25 @@ Resources:
         IntegrationHttpMethod: POST
         Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ConversionLambda.Arn}/invocations'
 
+  # API Gateway method (GET /convert -> job status)
+  ApiMethodGet:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref ApiResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ConversionLambda.Arn}/invocations'
+
   # API Gateway deployment
   ApiDeployment:
     Type: AWS::ApiGateway::Deployment
-    DependsOn: ApiMethod
+    DependsOn:
+      - ApiMethod
+      - ApiMethodGet
     Properties:
       RestApiId: !Ref ApiGateway
       StageName: prod
@@ -141,6 +176,35 @@ Resources:
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/*'
 
+  # SQS queue for conversion jobs
+  JobsQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: dbmoto-xml-converter-jobs
+      VisibilityTimeout: 900
+
+  # DynamoDB table for job status tracking
+  JobsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: dbmoto-xml-converter-jobs
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: job_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: job_id
+          KeyType: HASH
+
+  # Event source mapping from SQS to Lambda (worker processing)
+  JobsQueueEventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !GetAtt JobsQueue.Arn
+      FunctionName: !Ref ConversionLambda
+      BatchSize: 1
+      Enabled: true
+
 Outputs:
   ApiEndpoint:
     Description: API Gateway endpoint URL
@@ -165,3 +229,12 @@ Outputs:
   FtpBasePath:
     Description: Base path for FTP uploads
     Value: !Ref FtpBasePath
+
+  JobsQueueUrl:
+    Description: URL of the SQS queue used for async conversion jobs
+    Value: !Ref JobsQueue
+
+  JobsTableName:
+    Description: Name of the DynamoDB table used for job status tracking
+    Value: !Ref JobsTable
+

@@ -24,7 +24,7 @@ echo "📦 Creating Lambda deployment package..."
 TEMP_DIR=$(mktemp -d)
 echo "Working in: $TEMP_DIR"
 
-# Copy source files from parent directory
+# Copy source files from parent directory  
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PARENT_DIR="$(dirname "$SCRIPT_DIR")"
 

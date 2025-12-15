@@ -307,17 +307,81 @@ class DbMotoConverterPlugin {
             }
 
             $result = json_decode($response_body, true);
-            if (!$result) {
+            if (!is_array($result)) {
                 wp_send_json_error('Invalid API response');
                 return;
             }
 
-            if ($result['status'] !== 'success') {
-                wp_send_json_error($result['message'] ?? 'Conversion failed');
+            // Synchronous success (backward compatibility)
+            if (isset($result['status']) && $result['status'] === 'success') {
+                wp_send_json_success($result);
+            }
+
+            // Asynchronous flow: job queued
+            if (!isset($result['status'], $result['job_id']) || $result['status'] !== 'queued') {
+                wp_send_json_error($result['message'] ?? 'Unexpected API response');
                 return;
             }
 
-            wp_send_json_success($result);
+            $job_id = $result['job_id'];
+
+            // Poll job status until completion or timeout
+            $max_attempts = 30; // ~90 seconds with 3s sleep
+            $attempt = 0;
+            $poll_interval = 3; // seconds
+
+            while ($attempt < $max_attempts) {
+                $attempt++;
+
+                $status_response = wp_remote_get(
+                    $this->api_convert_endpoint . '?job_id=' . urlencode($job_id),
+                    array(
+                        'timeout' => 15,
+                    )
+                );
+
+                if (is_wp_error($status_response)) {
+                    wp_send_json_error('Status check failed: ' . $status_response->get_error_message());
+                }
+
+                $status_code = wp_remote_retrieve_response_code($status_response);
+                $status_body = wp_remote_retrieve_body($status_response);
+
+                if ($status_code !== 200) {
+                    $error_data = json_decode($status_body, true);
+                    $error_message = 'Status check returned error ' . $status_code;
+
+                    if (is_array($error_data) && isset($error_data['error'])) {
+                        $error_message .= ': ' . $error_data['error'];
+                    } elseif (!empty($status_body)) {
+                        $error_message .= ': ' . substr($status_body, 0, 200);
+                    }
+
+                    wp_send_json_error($error_message);
+                }
+
+                $status_data = json_decode($status_body, true);
+                if (!is_array($status_data)) {
+                    wp_send_json_error('Invalid status response from conversion API');
+                }
+
+                $job_status = isset($status_data['status']) ? $status_data['status'] : null;
+
+                if ($job_status === 'success') {
+                    // Final result includes download_url, stats, etc.
+                    wp_send_json_success($status_data);
+                }
+
+                if ($job_status === 'error') {
+                    $message = isset($status_data['message']) ? $status_data['message'] : 'Conversion failed';
+                    wp_send_json_error($message);
+                }
+
+                // Still pending/processing - wait and poll again
+                sleep($poll_interval);
+            }
+
+            wp_send_json_error('Conversion is still processing. Please try again later with job ID ' . $job_id);
 
         } catch (Exception $e) {
             wp_send_json_error('Conversion error: ' . $e->getMessage());
