@@ -24,6 +24,7 @@ import os
 import yaml
 import argparse
 import sys
+import re
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Parse DbMoto metadata XML and generate YAML configurations.')
@@ -95,6 +96,102 @@ TYPE_ALIASES = {
     "TIMESTMP": "TIMESTAMP",
 }
 
+
+def _is_allowed_xml_char(codepoint: int) -> bool:
+    """Return True if the codepoint is allowed in XML 1.0."""
+    return (
+        codepoint in (0x9, 0xA, 0xD)
+        or 0x20 <= codepoint <= 0xD7FF
+        or 0xE000 <= codepoint <= 0xFFFD
+        or 0x10000 <= codepoint <= 0x10FFFF
+    )
+
+
+def sanitize_xml_file(xml_path: str) -> None:
+    """Sanitize an XML file in-place, replacing invalid characters with spaces.
+
+    This performs a best-effort cleanup so that parsers like xml.etree.ElementTree
+    do not fail on constructs such as "&#x0;" or other invalid XML 1.0 characters.
+    """
+
+    if not os.path.isfile(xml_path):
+        return
+
+    try:
+        with open(xml_path, "rb") as f:
+            data = f.read()
+    except OSError:
+        return
+
+    if not data:
+        return
+
+    # Detect encoding from XML declaration, fallback to UTF-8
+    encoding = "utf-8"
+    try:
+        header_chunk = data[:200]
+        m = re.search(br'encoding=["\']([A-Za-z0-9_\-]+)["\']', header_chunk)
+        if m:
+            declared = m.group(1).decode("ascii", errors="ignore")
+            if declared:
+                encoding = declared
+    except Exception:
+        # On any issue, keep default encoding
+        pass
+
+    try:
+        text = data.decode(encoding, errors="replace")
+    except LookupError:
+        # Unknown codec, fallback to UTF-8
+        encoding = "utf-8"
+        text = data.decode(encoding, errors="replace")
+
+    # 1) Replace explicit "&#x0;" references with a space
+    text = text.replace("&#x0;", " ")
+
+    # 2) Replace raw control characters not allowed in XML 1.0 with spaces
+    cleaned_chars = []
+    for ch in text:
+        cp = ord(ch)
+        if cp < 0x20 and ch not in ("\t", "\n", "\r"):
+            cleaned_chars.append(" ")
+        else:
+            cleaned_chars.append(ch)
+    text = "".join(cleaned_chars)
+
+    # 3) Replace numeric character references that point to invalid XML chars
+    entity_pattern = re.compile(r"&#(x[0-9A-Fa-f]+|\d+);")
+
+    def _replace_entity(match: re.Match) -> str:
+        body = match.group(1)
+        try:
+            if body[0] in ("x", "X"):
+                cp = int(body[1:], 16)
+            else:
+                cp = int(body, 10)
+        except ValueError:
+            # Non interpretable reference -> neutralize
+            return " "
+
+        if not _is_allowed_xml_char(cp):
+            return " "
+        return match.group(0)
+
+    text = entity_pattern.sub(_replace_entity, text)
+
+    try:
+        new_data = text.encode(encoding, errors="replace")
+    except LookupError:
+        new_data = text.encode("utf-8", errors="replace")
+
+    if new_data != data:
+        try:
+            with open(xml_path, "wb") as f:
+                f.write(new_data)
+        except OSError:
+            # Best-effort: if we cannot write back, we leave the original file
+            pass
+
 def parse_xml():
     xml_path = os.environ.get('XML_PATH') or args.xml_path
     if not xml_path:
@@ -102,7 +199,10 @@ def parse_xml():
     print(f"Parsing XML: {xml_path}")
     if not os.path.isfile(xml_path):
         raise FileNotFoundError(f"XML file not found: {xml_path}")
-    
+
+    # Sanitize XML content before parsing to avoid invalid character errors
+    sanitize_xml_file(xml_path)
+
     # Parse the XML file
     tree = ET.parse(xml_path)
     root = tree.getroot()
