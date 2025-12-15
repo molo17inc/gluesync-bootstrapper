@@ -46,6 +46,7 @@ import ftplib
 import os.path
 from urllib.parse import urljoin
 from datetime import datetime
+from decimal import Decimal
 
 import boto3
 from botocore.exceptions import ClientError
@@ -57,6 +58,20 @@ sqs = boto3.client("sqs")
 dynamodb = boto3.resource("dynamodb")
 
 
+def _json_default(obj):
+    """JSON serializer for objects not serializable by default json code.
+
+    DynamoDB uses Decimal for all numeric types; convert these to int/float
+    so they can be emitted in JSON responses.
+    """
+    if isinstance(obj, Decimal):
+        # Prefer int when the value is integral to avoid surprises
+        if obj % 1 == 0:
+            return int(obj)
+        return float(obj)
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+
 def _response(status_code, body_dict):
     """Helper to build HTTP-style responses for API Gateway."""
     return {
@@ -65,7 +80,7 @@ def _response(status_code, body_dict):
             "Content-Type": "application/json",
             "Access-Control-Allow-Origin": "*",
         },
-        "body": json.dumps(body_dict),
+        "body": json.dumps(body_dict, default=_json_default),
     }
 
 
