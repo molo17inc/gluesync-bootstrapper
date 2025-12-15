@@ -113,8 +113,10 @@ def _update_job_status(job_id, status, message=None, download_url=None, stats=No
     elif status == "FAILED":
         external_status = "error"
 
-    update_expr = "SET job_status = :s, status = :es, updated_at = :u"
+    # Use ExpressionAttributeNames to avoid reserved keyword conflicts (e.g. "status").
+    update_expr = "SET job_status = :s, #status = :es, updated_at = :u"
     expr_values = {":s": status, ":es": external_status, ":u": now}
+    expr_names = {"#status": "status"}
 
     if message is not None:
         update_expr += ", message = :m"
@@ -129,6 +131,7 @@ def _update_job_status(job_id, status, message=None, download_url=None, stats=No
     table.update_item(
         Key={"job_id": job_id},
         UpdateExpression=update_expr,
+        ExpressionAttributeNames=expr_names,
         ExpressionAttributeValues=expr_values,
     )
 
