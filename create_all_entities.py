@@ -651,6 +651,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     "id": col_id,  # Use actual ordinal position from database
                     "name": col["name"],
                     "alias": col["name"],
+
                     "type": col["type"],
                 })
 
@@ -725,8 +726,17 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
         if CREATE_TABLE_IF_NOT_EXISTS:
             logger.info(f"CREATE_TABLE_IF_NOT_EXISTS is enabled - creating table {target_table_name}")
-            handle_table_creation(pipeline_id, target_table_name, yaml_target_schema, keys, token, columns, custom_config,
-                              source_node_info, target_node_info)
+            handle_table_creation(
+                pipeline_id,
+                target_table_name,
+                yaml_target_schema,
+                keys,
+                token,
+                columns,
+                custom_config,
+                source_node_info,
+                target_node_info
+            )
 
         # Generate table IDs for use in entities (prefer discovered IDs)
         source_table_id = None
@@ -867,6 +877,22 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         # Add columnsMappingMatrix to entityType
         target_entity_type["columnsMappingMatrix"] = columns_mapping_matrix
 
+        target_discovered_columns = None
+        target_discovered_columns_by_name = {}
+        try:
+            target_discovered_columns = get_table_columns(token, pipeline_id, target_agent_id, yaml_target_schema, target_table_name)
+            if target_discovered_columns and isinstance(target_discovered_columns.get('columns'), list):
+                target_discovered_columns_by_name = {
+                    c.get('name'): c
+                    for c in target_discovered_columns['columns']
+                    if c.get('name')
+                }
+                logger.debug(
+                    f"Found {len(target_discovered_columns_by_name)} existing columns in target table {yaml_target_schema}.{target_table_name}"
+                )
+        except Exception as e:
+            logger.debug(f"Could not get target columns for {yaml_target_schema}.{target_table_name}: {str(e)}")
+
         # Build target columns definition with IDs
         target_columns_def = []
         max_target_col_id = 0
@@ -885,11 +911,18 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 for column_map in custom_config.get('columns', []):
                     for source_name, target_name in column_map.items():
                         if source_name == col["name"]:
+                            discovered_target_col = target_discovered_columns_by_name.get(target_name)
+                            resolved_target_type = None
+                            if discovered_target_col and discovered_target_col.get('type'):
+                                resolved_target_type = discovered_target_col.get('type')
+                            else:
+                                resolved_target_type = map_data_type(col["type"], source_node_info, target_node_info)
+
                             target_columns_def.append({
                                 "id": col_id,  # Use actual ordinal position from database
                                 "name": target_name,
                                 "alias": target_name,
-                                "type": map_data_type(col["type"], source_node_info, target_node_info)
+                                "type": resolved_target_type
                             })
         else:
             # No column mappings - use columns as-is with mapped types
@@ -901,12 +934,19 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
                 
                 max_target_col_id = max(max_target_col_id, col_id)
-                
+
+                discovered_target_col = target_discovered_columns_by_name.get(col["name"])
+                resolved_target_type = None
+                if discovered_target_col and discovered_target_col.get('type'):
+                    resolved_target_type = discovered_target_col.get('type')
+                else:
+                    resolved_target_type = map_data_type(col["type"], source_node_info, target_node_info)
+
                 target_columns_def.append({
                     "id": col_id,  # Use actual ordinal position from database
                     "name": col["name"],
                     "alias": col["name"],
-                    "type": map_data_type(col["type"], source_node_info, target_node_info)
+                    "type": resolved_target_type
                 })
         
         # Add target-only columns if specified (only supported with unlocked schema)
@@ -1000,24 +1040,30 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         if custom_config and 'keys' in custom_config:
             # Check if we have column mappings
             if custom_config.get('columns'):
-                # Use column mappings for keys - need to find target column by its ID
+                # Use column mappings for keys - map source key names to target key names
                 for col in columns["columns"]:
                     # Use ordinalPosition from API if available
                     col_id = col.get('ordinalPosition', col.get('id'))
                     if col_id is None:
                         # Fallback to finding position if not provided
                         col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
-                        
-                    for column_map in custom_config['columns']:
+
+                    for column_map in custom_config.get('columns', []):
                         for source_name, target_name in column_map.items():
-                            if source_name == col["name"]:
-                                if col["name"] in custom_config["keys"]:
-                                    target_keys.append({
-                                        "id": col_id,  # Use actual ordinal position from database
-                                        "name": target_name,
-                                        "alias": target_name,
-                                        "type": map_data_type(col["type"], source_node_info, target_node_info)
-                                    })
+                            if source_name == col["name"] and source_name in custom_config.get('keys', []):
+                                discovered_target_col = target_discovered_columns_by_name.get(target_name)
+                                resolved_target_type = None
+                                if discovered_target_col and discovered_target_col.get('type'):
+                                    resolved_target_type = discovered_target_col.get('type')
+                                else:
+                                    resolved_target_type = map_data_type(col["type"], source_node_info, target_node_info)
+
+                                target_keys.append({
+                                    "id": col_id,  # Use actual ordinal position from database
+                                    "name": target_name,
+                                    "alias": target_name,
+                                    "type": resolved_target_type
+                                })
                                 break
             else:
                 # No column mappings, use keys directly from source columns
@@ -1030,18 +1076,23 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             if col_id is None:
                                 # Fallback to finding position if not provided
                                 col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
-                                
+
+                            discovered_target_col = target_discovered_columns_by_name.get(key_name)
+                            resolved_target_type = None
+                            if discovered_target_col and discovered_target_col.get('type'):
+                                resolved_target_type = discovered_target_col.get('type')
+                            else:
+                                resolved_target_type = map_data_type(col["type"], source_node_info, target_node_info)
+
                             target_keys.append({
                                 "id": col_id,  # Use actual ordinal position from database
-                                "name": col["name"],
-                                "alias": col["name"],
-                                "type": map_data_type(col["type"], source_node_info, target_node_info)
+                                "name": key_name,
+                                "alias": key_name,
+                                "type": resolved_target_type
                             })
                             break
                     else:
                         logger.warning(f"Key '{key_name}' not found in columns for table '{table_name}'")
-            
-            logger.debug(f"Using custom target keys for {table_name}: {target_keys}")
         else:
             target_keys = []
             for col in columns["columns"]:
@@ -1056,7 +1107,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         "id": col_id,  # Use actual ordinal position from database
                         "name": col["name"],
                         "alias": col["name"],
-                        "type": map_data_type(col["type"], source_node_info, target_node_info)
+                        "type": target_discovered_columns_by_name.get(col["name"], {}).get('type') or map_data_type(col["type"], source_node_info, target_node_info)
                     })
             logger.debug(f"Using primary target keys for {table_name}: {target_keys}")
 
