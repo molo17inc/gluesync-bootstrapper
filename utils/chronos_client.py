@@ -30,8 +30,21 @@ logger = get_logger()
 class ChronosClient:
     """Client for interacting with the Chronos scheduling service."""
     
-    def __init__(self, base_url=None):
-        self.base_url = base_url or os.getenv('CHRONOS_URL', 'http://gluesync-chronos:8000')
+    def __init__(self, base_url=None, corehub_url=None):
+        if corehub_url and not base_url:
+            # Build chronos URL from corehub URL: same host/protocol/port + /chronos path
+            try:
+                from urllib.parse import urljoin
+                chronos_url = urljoin(corehub_url.rstrip('/'), '/chronos')
+                logger.info(f"Using corehub-derived chronos URL: {chronos_url}")
+                base_url = chronos_url
+            except Exception as exc:
+                logger.warning(f"Failed to derive chronos URL from corehub: {exc}")
+                base_url = os.getenv('CHRONOS_URL', 'http://gluesync-chronos:8000')
+        elif not base_url:
+            base_url = os.getenv('CHRONOS_URL', 'http://gluesync-chronos:8000')
+            
+        self.base_url = base_url
         if not self.base_url.endswith('/'):
             self.base_url += '/'
             

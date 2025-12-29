@@ -159,6 +159,31 @@ const api = {
     }
     return res.json();
   },
+  async duplicatePipeline(payload, options = {}) {
+    const { signal } = options;
+    const requestInit = {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    };
+    if (signal) {
+      requestInit.signal = signal;
+    }
+    const res = await fetch(`/api/duplicate/pipeline/${encodeURIComponent(payload.pipelineId)}`, requestInit);
+    if (!res.ok) {
+      const detail = await res.json().catch(() => ({}));
+      throw new Error(detail.detail || 'Pipeline duplication failed');
+    }
+    return res.json();
+  },
+  async cancelDuplicate() {
+    const res = await fetch('/api/duplicate/cancel', { method: 'POST' });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(body.detail || body.message || 'Duplicate cancellation failed');
+    }
+    return body;
+  },
 };
 
 const ui = (() => {
@@ -167,6 +192,7 @@ const ui = (() => {
   const configMessageEl = document.getElementById('config-message');
   const exportMessageEl = document.getElementById('export-message');
   const bulkMessageEl = document.getElementById('bulk-message');
+  const duplicateMessageEl = document.getElementById('duplicate-message');
   const logoutBtn = document.getElementById('logout-btn');
   const runBtn = document.getElementById('run-btn');
   const exportBtn = document.getElementById('export-btn');
@@ -226,6 +252,12 @@ const ui = (() => {
     bulkMessageEl.className = `message ${type}`;
   }
 
+  function setDuplicateMessage(message, type = '') {
+    if (!duplicateMessageEl) return;
+    duplicateMessageEl.textContent = message;
+    duplicateMessageEl.className = `message ${type}`;
+  }
+
   function setVersionLabel(message) {
     if (!versionLabel) return;
     versionLabel.textContent = message;
@@ -259,16 +291,38 @@ const ui = (() => {
     if (importAllBtn) {
       importAllBtn.disabled = !enabled;
     }
+    const duplicateBtn = document.getElementById('duplicate-btn');
+    if (duplicateBtn) {
+      duplicateBtn.disabled = !enabled;
+    }
+    const duplicateSelect = document.getElementById('duplicate-pipeline-id');
+    if (duplicateSelect) {
+      duplicateSelect.disabled = !enabled;
+    }
+  }
+
+  function makeLogNode(text) {
+    if (logTemplate && logTemplate.content && logTemplate.content.firstElementChild) {
+      const node = logTemplate.content.firstElementChild.cloneNode(true);
+      node.textContent = text;
+      return node;
+    }
+    const fallback = document.createElement('div');
+    fallback.className = 'log-line';
+    fallback.textContent = text;
+    return fallback;
+  }
+
+  function appendLogLine(text) {
+    if (!logOutput || typeof text !== 'string' || !text.trim()) return;
+    logOutput.appendChild(makeLogNode(text));
+    logOutput.scrollTop = logOutput.scrollHeight;
   }
 
   function renderLogs(logs = []) {
+    if (!logOutput) return;
     logOutput.innerHTML = '';
-    logs.forEach((line) => {
-      const node = logTemplate.content.firstElementChild.cloneNode(true);
-      node.textContent = line;
-      logOutput.appendChild(node);
-    });
-    logOutput.scrollTop = logOutput.scrollHeight;
+    logs.forEach((line) => appendLogLine(line));
   }
 
   return {
@@ -277,8 +331,10 @@ const ui = (() => {
     setConfigMessage,
     setExportMessage,
     setBulkMessage,
+    setDuplicateMessage,
     setAuthEnabled,
     renderLogs,
+    appendLogLine,
     lockAuthFields: setAuthFieldsLocked,
     setVersion: setVersionLabel,
     runBtn,
@@ -287,6 +343,13 @@ const ui = (() => {
     exportPipelineFullBtn,
   };
 })();
+
+function logActivity(scope, message) {
+  if (!message) return;
+  const timestamp = new Date().toLocaleTimeString();
+  const prefix = scope ? `[${scope}]` : '';
+  ui.appendLogLine(`${timestamp} ${prefix} ${message}`.trim());
+}
 
 const stateManager = {
   yamlFileId: null,
@@ -608,21 +671,16 @@ function bindEvents() {
     // Import config button: visible only when a config file is selected
     if (importConfigBtnEl) {
       const hasConfigFile = !!(importConfigInput && importConfigInput.files && importConfigInput.files[0]);
-      importConfigBtnEl.style.display = hasConfigFile ? '' : 'none';
+      importConfigBtnEl.disabled = !hasConfigFile;
     }
 
-    // Validate / Import All: visible only when a ZIP file is selected
-    const hasZipFile = (() => {
-      if (!importAllInput || !importAllInput.files || !importAllInput.files[0]) return false;
-      const name = importAllInput.files[0].name || '';
-      return name.toLowerCase().endsWith('.zip');
-    })();
-
-    if (importAllBtnEl) {
-      importAllBtnEl.style.display = hasZipFile ? '' : 'none';
-    }
+    // Validate / Import All buttons: visible only when a ZIP file is selected
+    const hasZipFile = !!(importAllInput && importAllInput.files && importAllInput.files[0]);
     if (validateAllBtnEl) {
-      validateAllBtnEl.style.display = hasZipFile ? '' : 'none';
+      validateAllBtnEl.disabled = !hasZipFile;
+    }
+    if (importAllBtnEl) {
+      importAllBtnEl.disabled = !hasZipFile;
     }
   }
 
@@ -716,6 +774,7 @@ function bindEvents() {
       bulkLoadSchemasBtn.disabled = true;
       resetBulkState();
       ui.setBulkMessage('Loading source schemas…');
+      logActivity('Bulk', `Loading source schemas for pipeline ${bulkPipelineSelect.value}`);
 
       try {
         const res = await api.bulkListSchemas(bulkPipelineSelect.value);
@@ -735,11 +794,14 @@ function bindEvents() {
 
         if (!schemas.length) {
           ui.setBulkMessage('No source schemas found for this pipeline', 'error');
+          logActivity('Bulk', `No schemas returned for pipeline ${bulkPipelineSelect.value}`);
         } else {
           ui.setBulkMessage(`Loaded ${schemas.length} schema(s). Select a schema to load tables.`, 'success');
+          logActivity('Bulk', `Loaded ${schemas.length} schema(s) for pipeline ${bulkPipelineSelect.value}`);
         }
       } catch (err) {
         ui.setBulkMessage(err.message, 'error');
+        logActivity('Bulk', `Failed to load schemas: ${err.message}`);
       } finally {
         if (bulkLoadSchemasBtn) {
           bulkLoadSchemasBtn.disabled = !(bulkPipelineSelect && bulkPipelineSelect.value);
@@ -772,6 +834,7 @@ function bindEvents() {
       };
 
       ui.setBulkMessage('Preparing YAML template…');
+      logActivity('Bulk', `Generating YAML template for ${selectedTables.length} table(s) in schema ${bulkSchemaSelect.value}`);
 
       try {
         const { blob, filename } = await api.bulkTemplate(payload);
@@ -784,8 +847,10 @@ function bindEvents() {
         a.remove();
         window.URL.revokeObjectURL(url);
         ui.setBulkMessage(`Downloaded ${filename}`, 'success');
+        logActivity('Bulk', `Downloaded YAML template ${filename}`);
       } catch (err) {
         ui.setBulkMessage(err.message, 'error');
+        logActivity('Bulk', `Failed to generate YAML template: ${err.message}`);
       }
     });
   }
@@ -851,11 +916,14 @@ function bindEvents() {
 
         if (!tables.length) {
           ui.setBulkMessage(`No tables found for schema ${bulkSchemaSelect.value}`, 'error');
+          logActivity('Bulk', `No tables found for schema ${bulkSchemaSelect.value}`);
         } else {
           ui.setBulkMessage('', '');
+          logActivity('Bulk', `Loaded ${tables.length} table(s) for schema ${bulkSchemaSelect.value}`);
         }
       } catch (err) {
         ui.setBulkMessage(err.message, 'error');
+        logActivity('Bulk', `Failed to load tables: ${err.message}`);
         bulkTablesState = [];
         if (bulkTablesList) {
           bulkTablesList.innerHTML = '';
@@ -924,16 +992,20 @@ function bindEvents() {
       };
 
       ui.setBulkMessage('Starting bulk entity creation…');
+      logActivity('Bulk', `Starting bulk entity creation for ${selectedTables.length} table(s) from schema ${sourceSchema}`);
 
       try {
         const res = await api.bulkCreate(payload);
         if (res && typeof res.message === 'string') {
           ui.setBulkMessage(res.message, res.success === false ? 'error' : 'success');
+          logActivity('Bulk', res.message);
         } else {
           ui.setBulkMessage('Bulk entity creation completed', 'success');
+          logActivity('Bulk', 'Bulk entity creation completed');
         }
       } catch (err) {
         ui.setBulkMessage(err.message, 'error');
+        logActivity('Bulk', `Bulk entity creation failed: ${err.message}`);
       }
     });
   }
@@ -941,6 +1013,7 @@ function bindEvents() {
   loginForm.addEventListener('submit', async (event) => {
     event.preventDefault();
     ui.setAuthMessage('Signing in…');
+    logActivity('Auth', 'Authenticating with CoreHub…');
 
     const payload = {
       baseUrl: document.getElementById('corehub-url').value,
@@ -955,6 +1028,7 @@ function bindEvents() {
     try {
       await api.login(payload);
       ui.setAuthMessage('Authentication successful', 'success');
+      logActivity('Auth', 'Authentication successful');
       const snapshot = await api.getState();
       stateManager.updateFromState(snapshot);
       ui.lockAuthFields(true);
@@ -962,13 +1036,16 @@ function bindEvents() {
     } catch (err) {
       ui.setAuthMessage(err.message, 'error');
       ui.setAuthEnabled(false);
+      logActivity('Auth', `Authentication failed: ${err.message}`);
     }
   });
 
   ui.logoutBtn.addEventListener('click', async () => {
+    logActivity('Auth', 'Logging out…');
     try {
       await api.logout();
       ui.setAuthMessage('Logged out', 'success');
+      logActivity('Auth', 'Logged out successfully');
       ui.setAuthEnabled(false);
       ui.setStatus('idle', 'Not authenticated');
       ui.lockAuthFields(false);
@@ -986,6 +1063,10 @@ function bindEvents() {
       if (configPipelineSelect && configPipelineSelect.tagName === 'SELECT') {
         configPipelineSelect.innerHTML = '<option value="">Select a pipeline…</option>';
       }
+      const duplicatePipelineSelect = document.getElementById('duplicate-pipeline-id');
+      if (duplicatePipelineSelect && duplicatePipelineSelect.tagName === 'SELECT') {
+        duplicatePipelineSelect.innerHTML = '<option value="">Select a pipeline to duplicate…</option>';
+      }
       // Clear any selected import files and hide related buttons again
       if (importConfigInput) {
         importConfigInput.value = '';
@@ -999,6 +1080,7 @@ function bindEvents() {
       stateManager.setYamlFile(null);
     } catch (err) {
       ui.setAuthMessage(err.message, 'error');
+      logActivity('Auth', `Logout failed: ${err.message}`);
     }
   });
 
@@ -1006,13 +1088,16 @@ function bindEvents() {
     const file = event.target.files?.[0];
     if (!file) return;
     ui.setConfigMessage('Uploading…');
+    logActivity('Config', `Uploading ${file.name}…`);
     try {
       const response = await api.uploadYaml(file);
       stateManager.setYamlFile(response.fileId);
       ui.setConfigMessage(`Uploaded ${response.filename}`, 'success');
+      logActivity('Config', `Uploaded ${response.filename}`);
     } catch (err) {
       ui.setConfigMessage(err.message, 'error');
       stateManager.setYamlFile(null);
+      logActivity('Config', `Upload failed: ${err.message}`);
     }
   });
 
@@ -1047,15 +1132,18 @@ function bindEvents() {
     ui.setAuthEnabled(false);
     ui.renderLogs();
     ui.setStatus('running', 'Running');
+    logActivity('Config', `Starting entity creation for pipeline ${payload.pipelineId || '(none)'}…`);
 
     try {
       await api.startRun(payload);
       stateManager.startPolling();
       ui.setConfigMessage('Entity creation started', 'success');
+      logActivity('Config', 'Entity creation started');
     } catch (err) {
       ui.setConfigMessage(err.message, 'error');
       ui.setAuthEnabled(true);
       ui.setStatus('failed', 'Failed to start');
+      logActivity('Config', `Failed to start entity creation: ${err.message}`);
     }
   });
 
@@ -1069,6 +1157,7 @@ function bindEvents() {
       }
 
       ui.setExportMessage('Exporting metadata…');
+       logActivity('Export', `Exporting metadata for pipeline ${pipelineId}…`);
       try {
         const { blob, filename } = await api.exportPipeline(pipelineId);
         const url = window.URL.createObjectURL(blob);
@@ -1080,8 +1169,10 @@ function bindEvents() {
         a.remove();
         window.URL.revokeObjectURL(url);
         ui.setExportMessage(`Exported ${filename}`, 'success');
+        logActivity('Export', `Metadata export completed: ${filename}`);
       } catch (err) {
         ui.setExportMessage(err.message, 'error');
+        logActivity('Export', `Metadata export failed: ${err.message}`);
       }
     });
   }
@@ -1095,6 +1186,7 @@ function bindEvents() {
       }
 
       ui.setExportMessage('Exporting full backup…');
+      logActivity('Export', `Exporting full backup for pipeline ${pipelineId}…`);
       try {
         const { blob, filename } = await api.exportPipelineFull(pipelineId);
         const url = window.URL.createObjectURL(blob);
@@ -1106,8 +1198,10 @@ function bindEvents() {
         a.remove();
         window.URL.revokeObjectURL(url);
         ui.setExportMessage(`Exported ${filename}`, 'success');
+        logActivity('Export', `Full backup completed: ${filename}`);
       } catch (err) {
         ui.setExportMessage(err.message, 'error');
+        logActivity('Export', `Full backup failed: ${err.message}`);
       }
     });
   }
@@ -1117,6 +1211,7 @@ function bindEvents() {
     ui.exportAllBtn.addEventListener('click', async () => {
       console.log('Export All button clicked');
       ui.setExportMessage('Exporting all pipelines…');
+      logActivity('Export', 'Exporting all pipelines…');
       try {
         const { blob, filename } = await api.exportAllPipelines();
         console.log('Export All API call successful, filename:', filename);
@@ -1129,9 +1224,11 @@ function bindEvents() {
         a.remove();
         window.URL.revokeObjectURL(url);
         ui.setExportMessage(`Exported ${filename}`, 'success');
+        logActivity('Export', `All pipelines export completed: ${filename}`);
       } catch (err) {
         console.error('Export All failed:', err);
         ui.setExportMessage(err.message, 'error');
+        logActivity('Export', `Export all failed: ${err.message}`);
       }
     });
   } else {
@@ -1155,11 +1252,14 @@ function bindEvents() {
       }
 
       ui.setConfigMessage('Importing config…');
+      logActivity('Config', `Importing config file ${file.name}…`);
       try {
         const result = await api.importConfig(file);
         ui.setConfigMessage(result.message || 'Config imported successfully', 'success');
+        logActivity('Config', result.message || 'Config import completed');
       } catch (err) {
         ui.setConfigMessage(err.message, 'error');
+        logActivity('Config', `Config import failed: ${err.message}`);
       }
     });
   }
@@ -1173,11 +1273,14 @@ function bindEvents() {
       }
 
       ui.setConfigMessage('Importing full backup…');
+      logActivity('Config', `Importing full backup ${file.name}…`);
       try {
         const result = await api.importAll(file);
         ui.setConfigMessage(result.message || 'Backup imported successfully', 'success');
+        logActivity('Config', result.message || 'Full backup import completed');
       } catch (err) {
         ui.setConfigMessage(err.message, 'error');
+        logActivity('Config', `Full backup import failed: ${err.message}`);
       }
     });
   }
@@ -1191,6 +1294,7 @@ function bindEvents() {
       }
 
       ui.setConfigMessage('Validating backup…');
+      logActivity('Config', `Validating backup ${file.name}…`);
       try {
         const result = await api.validateAll(file);
         const ok = result.success !== false;
@@ -1198,12 +1302,250 @@ function bindEvents() {
         if (text) {
           const lines = text.split('\n');
           ui.renderLogs(lines);
+          logActivity('Config', 'Validation output displayed in log');
         }
         ui.setConfigMessage(ok ? 'Validation OK' : 'Validation failed', ok ? 'success' : 'error');
+        logActivity('Config', ok ? 'Backup validation OK' : 'Backup validation failed');
       } catch (err) {
         ui.setConfigMessage(err.message, 'error');
+        logActivity('Config', `Backup validation failed: ${err.message}`);
       }
     });
+  }
+
+  const duplicateForm = document.getElementById('duplicate-form');
+  const duplicatePipelineSelect = document.getElementById('duplicate-pipeline-id');
+  const duplicateBtn = document.getElementById('duplicate-btn');
+  if (duplicateBtn && !duplicateBtn.dataset.defaultLabel) {
+    duplicateBtn.dataset.defaultLabel = duplicateBtn.textContent;
+  }
+
+  let duplicateRequestController = null;
+
+  function setDuplicateControlsDisabled(disabled) {
+    const controlIds = [
+      'duplicate-pipeline-id',
+      'duplicate-new-name',
+      'customize-agents',
+      'duplicate-source-tag',
+      'duplicate-target-tag',
+      'customize-conductor',
+      'duplicate-conductor-url',
+    ];
+    controlIds.forEach((id) => {
+      const el = document.getElementById(id);
+      if (!el || el === duplicateBtn) return;
+      if (disabled) {
+        el.setAttribute('data-prev-disabled', el.disabled ? 'true' : 'false');
+        el.disabled = true;
+      } else if (el.hasAttribute('data-prev-disabled')) {
+        const wasDisabled = el.getAttribute('data-prev-disabled') === 'true';
+        el.disabled = wasDisabled;
+        el.removeAttribute('data-prev-disabled');
+      } else {
+        el.disabled = false;
+      }
+    });
+  }
+
+  function setDuplicateBusy(isBusy, label) {
+    if (!duplicateBtn) return;
+    const defaultLabel = duplicateBtn.dataset.defaultLabel || 'Duplicate Pipeline';
+    duplicateBtn.textContent = isBusy ? (label || 'Stop duplication') : defaultLabel;
+    if (isBusy) {
+      duplicateBtn.classList.add('danger');
+    } else {
+      duplicateBtn.classList.remove('danger');
+    }
+    if (!duplicatePipelineSelect) return;
+    if (!isBusy) {
+      duplicateBtn.disabled = !duplicatePipelineSelect.value;
+    }
+  }
+
+  function resetDuplicateState() {
+    if (duplicateRequestController) {
+      duplicateRequestController = null;
+    }
+    setDuplicateBusy(false);
+    setDuplicateControlsDisabled(false);
+  }
+
+  if (duplicateForm) {
+    duplicateForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (duplicateRequestController) {
+        try {
+          const response = await api.cancelDuplicate();
+          ui.setDuplicateMessage(response.message || 'Cancelling duplicate request…', 'warning');
+          logActivity('duplicate', response.message || 'Cancellation requested by user');
+        } catch (err) {
+          ui.setDuplicateMessage(err.message || 'Failed to request cancellation', 'error');
+          logActivity('duplicate', `Failed to request cancellation: ${err.message}`);
+        } finally {
+          duplicateRequestController.abort();
+        }
+        return;
+      }
+      const pipelineId = document.getElementById('duplicate-pipeline-id').value;
+      if (!pipelineId) {
+        ui.setDuplicateMessage('Please select a pipeline to duplicate', 'error');
+        return;
+      }
+      logActivity('duplicate', `Starting duplication for pipeline ${pipelineId}`);
+
+      const customizeAgentsEnabled = !!(document.getElementById('customize-agents') && document.getElementById('customize-agents').checked);
+      const fallbackSourceTag = duplicateForm.dataset.currentSourceTag || '';
+      const fallbackTargetTag = duplicateForm.dataset.currentTargetTag || '';
+
+      const sourceAgentTagValue = customizeAgentsEnabled
+        ? document.getElementById('duplicate-source-tag').value
+        : fallbackSourceTag;
+      const targetAgentTagValue = customizeAgentsEnabled
+        ? document.getElementById('duplicate-target-tag').value
+        : fallbackTargetTag;
+
+      if (!sourceAgentTagValue || !targetAgentTagValue) {
+        ui.setDuplicateMessage('Current agent tags are unavailable. Please fetch pipeline details or enable customization.', 'error');
+        return;
+      }
+      logActivity(
+        'duplicate',
+        `Cloning with SOURCE tag "${sourceAgentTagValue}" and TARGET tag "${targetAgentTagValue}"`
+      );
+
+      const payload = {
+        pipelineId: pipelineId,
+        newPipelineName: document.getElementById('duplicate-new-name').value,
+        sourceAgentTag: sourceAgentTagValue,
+        targetAgentTag: targetAgentTagValue,
+        conductorUrl: document.getElementById('duplicate-conductor-url').value || undefined,
+      };
+      if (payload.conductorUrl) {
+        logActivity('duplicate', `Using custom Conductor URL: ${payload.conductorUrl}`);
+      } else {
+        logActivity('duplicate', 'Using CoreHub-derived Conductor URL');
+      }
+
+      duplicateRequestController = new AbortController();
+      setDuplicateControlsDisabled(true);
+      setDuplicateBusy(true);
+      ui.setDuplicateMessage('Duplicating pipeline… exporting configuration and checking agent availability. Click "Stop" to cancel.', 'info');
+      logActivity('duplicate', 'Payload sent to backend. Awaiting response…');
+      try {
+        const result = await api.duplicatePipeline(payload, { signal: duplicateRequestController.signal });
+        ui.setDuplicateMessage(`Pipeline duplicated successfully: ${result.pipelineName} (${result.pipelineId})`, 'success');
+        logActivity('duplicate', `Duplicate succeeded: ${result.pipelineName} (${result.pipelineId})`);
+        // Refresh pipeline list to include the new pipeline
+        await loadPipelines();
+      } catch (err) {
+        if (err.name === 'AbortError') {
+          ui.setDuplicateMessage('Duplicate request cancelled by user', 'warning');
+          logActivity('duplicate', 'Duplicate request cancelled');
+        } else {
+          ui.setDuplicateMessage(err.message, 'error');
+          logActivity('duplicate', `Duplicate failed: ${err.message}`);
+        }
+      }
+      logActivity('duplicate', 'Duplicate flow finished. Resetting UI state.');
+      resetDuplicateState();
+    });
+  }
+
+  // Update duplicate button state when pipeline selection changes
+  if (duplicatePipelineSelect) {
+    const setCurrentTags = (sourceTag = '', targetTag = '') => {
+      const currentSourceTagInput = document.getElementById('duplicate-current-source-tag');
+      const currentTargetTagInput = document.getElementById('duplicate-current-target-tag');
+      if (currentSourceTagInput) currentSourceTagInput.value = sourceTag || '';
+      if (currentTargetTagInput) currentTargetTagInput.value = targetTag || '';
+    };
+
+    const clearNewTags = () => {
+      const sourceTagInput = document.getElementById('duplicate-source-tag');
+      const targetTagInput = document.getElementById('duplicate-target-tag');
+      if (sourceTagInput) sourceTagInput.value = '';
+      if (targetTagInput) targetTagInput.value = '';
+    };
+
+    duplicatePipelineSelect.addEventListener('change', async () => {
+      const pipelineId = duplicatePipelineSelect.value;
+      const duplicateBtn = document.getElementById('duplicate-btn');
+      if (duplicateBtn && !duplicateRequestController) {
+        duplicateBtn.disabled = !pipelineId;
+      }
+
+      setCurrentTags('', '');
+      clearNewTags();
+
+      if (!pipelineId) {
+        ui.setDuplicateMessage('', '');
+        return;
+      }
+
+      ui.setDuplicateMessage('Loading current agent tags…');
+      try {
+        const response = await fetch(`/api/pipeline/${encodeURIComponent(pipelineId)}/agents`);
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(data.detail || 'Failed to load pipeline agents');
+        }
+
+        if (duplicateForm) {
+          duplicateForm.dataset.currentSourceTag = data.sourceAgentTag || '';
+          duplicateForm.dataset.currentTargetTag = data.targetAgentTag || '';
+        }
+
+        setCurrentTags(data.sourceAgentTag, data.targetAgentTag);
+        if (customizeAgentsCheckbox && !customizeAgentsCheckbox.checked) {
+          clearNewTags();
+        }
+        ui.setDuplicateMessage('', '');
+      } catch (err) {
+        console.error('Failed to fetch pipeline agents for auto-population:', err);
+        ui.setDuplicateMessage(err.message || 'Failed to fetch pipeline agents', 'error');
+      }
+    });
+  }
+
+  const customizeAgentsCheckbox = document.getElementById('customize-agents');
+  const agentCustomizationFields = document.getElementById('agent-customization-fields');
+  const customizeConductorCheckbox = document.getElementById('customize-conductor');
+  const conductorFields = document.getElementById('conductor-fields');
+
+  function updateAgentCustomizationVisibility() {
+    if (!customizeAgentsCheckbox || !agentCustomizationFields) return;
+    const enabled = customizeAgentsCheckbox.checked;
+    agentCustomizationFields.style.display = enabled ? '' : 'none';
+    const editableInputs = [
+      document.getElementById('duplicate-source-tag'),
+      document.getElementById('duplicate-target-tag'),
+    ];
+    editableInputs.forEach((input) => {
+      if (!input) return;
+      input.disabled = !enabled;
+      if (enabled) {
+        input.setAttribute('required', 'required');
+      } else {
+        input.removeAttribute('required');
+        input.value = '';
+      }
+    });
+  }
+
+  function updateConductorVisibility() {
+    if (!customizeConductorCheckbox || !conductorFields) return;
+    const enabled = customizeConductorCheckbox.checked;
+    conductorFields.style.display = enabled ? '' : 'none';
+  }
+
+  if (customizeAgentsCheckbox) {
+    updateAgentCustomizationVisibility();
+    customizeAgentsCheckbox.addEventListener('change', updateAgentCustomizationVisibility);
+  }
+  if (customizeConductorCheckbox) {
+    updateConductorVisibility();
+    customizeConductorCheckbox.addEventListener('change', updateConductorVisibility);
   }
 }
 
@@ -1211,7 +1553,8 @@ async function loadPipelines() {
   const exportSelect = document.getElementById('export-pipeline-id');
   const configSelect = document.getElementById('pipeline-id');
   const bulkSelect = document.getElementById('bulk-pipeline-id');
-  if (!exportSelect && !configSelect && !bulkSelect) return;
+  const duplicateSelect = document.getElementById('duplicate-pipeline-id');
+  if (!exportSelect && !configSelect && !bulkSelect && !duplicateSelect) return;
 
   try {
     const data = await api.listPipelines();
@@ -1229,11 +1572,16 @@ async function loadPipelines() {
 
     const populateSelect = (selectEl) => {
       if (!selectEl) return;
-      selectEl.innerHTML = '<option value="">Select a pipeline…</option>';
+      selectEl.disabled = false;
+      const placeholder = selectEl.id === 'duplicate-pipeline-id' ? 'Select a pipeline to duplicate…' : 'Select a pipeline…';
+      selectEl.innerHTML = `<option value="">${placeholder}</option>`;
       pipelines.forEach((p) => {
+        const pipelineId = p.pipelineId || p.id || p.pipeline_id;
+        if (!pipelineId) return;
         const opt = document.createElement('option');
-        opt.value = p.id;
-        const label = p.name ? `${p.name} (${p.id})` : p.id;
+        opt.value = pipelineId;
+        const displayId = pipelineId.length > 12 ? pipelineId.slice(0, 8) + '…' : pipelineId;
+        const label = p.name ? `${p.name} (${displayId})` : pipelineId;
         opt.textContent = label;
         selectEl.appendChild(opt);
       });
@@ -1242,9 +1590,11 @@ async function loadPipelines() {
     populateSelect(exportSelect);
     populateSelect(configSelect);
     populateSelect(bulkSelect);
+    populateSelect(duplicateSelect);
   } catch (err) {
     console.error(err);
     ui.setExportMessage(err.message, 'error');
+    ui.setDuplicateMessage(err.message, 'error');
   }
 }
 

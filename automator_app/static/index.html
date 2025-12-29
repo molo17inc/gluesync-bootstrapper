@@ -5,21 +5,46 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Gluesync Automator</title>
     <link rel="stylesheet" href="/static/styles.css" />
-    <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png" />
+    <link
+      rel="apple-touch-icon"
+      sizes="180x180"
+      href="/static/apple-touch-icon.png"
+    />
     <link rel="icon" type="image/x-icon" href="/static/favicon.ico" />
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   </head>
   <body>
     <header class="topbar">
       <div class="brand">
-        <img src="/static/gluesync-bootstrapper.svg" alt="Gluesync Automator" class="brand-logo" />
+        <img
+          src="/static/gluesync-bootstrapper.svg"
+          alt="Gluesync Automator"
+          class="brand-logo"
+        />
         <span>Gluesync Automator</span>
-        <span id="version-label" class="version-label">Automator version: loading…</span>
+        <span id="version-label" class="version-label"
+          >Automator version: loading…</span
+        >
       </div>
       <div class="topbar-links">
-        <a href="https://docs.molo17.com/gluesync/v2.1/gs-modules/automator.html" target="_blank" rel="noopener" class="topbar-link">Documentation</a>
-        <a href="https://molo17.atlassian.net/servicedesk/customer/portal/30" target="_blank" rel="noopener" class="topbar-link">Support</a>
+        <a
+          href="https://docs.molo17.com/gluesync/v2.1/gs-modules/automator.html"
+          target="_blank"
+          rel="noopener"
+          class="topbar-link"
+          >Documentation</a
+        >
+        <a
+          href="https://molo17.atlassian.net/servicedesk/customer/portal/30"
+          target="_blank"
+          rel="noopener"
+          class="topbar-link"
+          >Support</a
+        >
         <div id="status-indicator" class="status status-idle">Idle</div>
+        <button type="button" id="logout-btn" class="secondary topbar-logout-btn" disabled>
+          Sign out
+        </button>
       </div>
     </header>
 
@@ -31,7 +56,13 @@
         <form id="login-form" class="form-grid">
           <label>
             CoreHub URL
-            <input type="text" id="corehub-url" name="corehubUrl" placeholder="https://localhost" required />
+            <input
+              type="text"
+              id="corehub-url"
+              name="corehubUrl"
+              placeholder="https://localhost"
+              required
+            />
           </label>
           <label>
             Username
@@ -51,11 +82,12 @@
               <input type="checkbox" id="skip-verify" checked />
               Skip certificate verification
               <br />
-              <span class="hint-text">For self-signed TLS certificates, leave checked if unsure</span>
+              <span class="hint-text"
+                >For self-signed TLS certificates, leave checked if unsure</span
+              >
             </label>
           </fieldset>
           <button type="submit" class="primary">Sign in</button>
-          <button type="button" id="logout-btn" class="secondary" disabled>Sign out</button>
         </form>
         <div id="auth-message" class="message"></div>
       </section>
@@ -71,7 +103,14 @@
                 <option value="">Select a pipeline…</option>
               </select>
             </label>
-            <button type="button" class="secondary" id="bulk-load-schemas-btn" disabled>Load source schemas</button>
+            <button
+              type="button"
+              class="secondary"
+              id="bulk-load-schemas-btn"
+              disabled
+            >
+              Load source schemas
+            </button>
             <label>
               Source schema
               <select id="bulk-source-schema" name="bulkSourceSchema" disabled>
@@ -80,16 +119,44 @@
             </label>
             <label>
               Target schema (optional)
-              <input type="text" id="bulk-target-schema" name="bulkTargetSchema" placeholder="Defaults to same as source schema" />
+              <input
+                type="text"
+                id="bulk-target-schema"
+                name="bulkTargetSchema"
+                placeholder="Defaults to same as source schema"
+              />
             </label>
             <div id="bulk-tables-container">
-              <div id="bulk-tables-summary" class="hint-text">Select a schema to load tables.</div>
+              <div id="bulk-tables-summary" class="hint-text">
+                Select a schema to load tables.
+              </div>
               <div id="bulk-tables-list" class="bulk-tables-list"></div>
             </div>
             <div class="button-group">
-              <button type="button" class="secondary" id="bulk-toggle-all-btn" disabled>Toggle all</button>
-              <button type="button" class="secondary" id="bulk-download-yaml-btn" disabled>Get YAML template</button>
-              <button type="button" class="primary" id="bulk-create-btn" disabled>Create all entities (0)</button>
+              <button
+                type="button"
+                class="secondary"
+                id="bulk-toggle-all-btn"
+                disabled
+              >
+                Toggle all
+              </button>
+              <button
+                type="button"
+                class="secondary"
+                id="bulk-download-yaml-btn"
+                disabled
+              >
+                Get YAML template
+              </button>
+              <button
+                type="button"
+                class="primary"
+                id="bulk-create-btn"
+                disabled
+              >
+                Create all entities (0)
+              </button>
             </div>
           </fieldset>
         </form>
@@ -103,7 +170,14 @@
             <legend>Global settings</legend>
             <label>
               Chunk size
-              <input type="number" id="chunk-size" name="chunkSize" value="50" min="1" max="500" />
+              <input
+                type="number"
+                id="chunk-size"
+                name="chunkSize"
+                value="50"
+                min="1"
+                max="500"
+              />
             </label>
             <label class="checkbox">
               <input type="checkbox" id="skip-errors" />
@@ -168,29 +242,57 @@
               YAML configuration
               <input type="file" id="yaml-file" accept=".yaml,.yml" />
             </label>
-            <button type="submit" class="primary" disabled id="run-btn">Start entity creation</button>
+            <button type="submit" class="primary" disabled id="run-btn">
+              Start entity creation
+            </button>
           </fieldset>
 
           <fieldset class="fieldset">
             <legend>Import pipeline settings (config only)</legend>
             <label>
               Config file
-              <input type="file" id="import-config-file" accept=".yaml,.yml,.json" />
+              <input
+                type="file"
+                id="import-config-file"
+                accept=".yaml,.yml,.json"
+              />
             </label>
             <div class="button-group">
-              <button type="button" class="secondary" id="import-config-btn" disabled>Import config</button>
+              <button
+                type="button"
+                class="secondary"
+                id="import-config-btn"
+                disabled
+              >
+                Import config
+              </button>
             </div>
           </fieldset>
 
           <fieldset class="fieldset">
             <legend>Import a full backup</legend>
             <label>
-              Backup archive (ZIP) containing pipeline(s), agents, entities, schedules and UDFs
+              Backup archive (ZIP) containing pipeline(s), agents, entities,
+              schedules and UDFs
               <input type="file" id="import-all-file" accept=".zip" />
             </label>
             <div class="button-group">
-              <button type="button" class="secondary" id="validate-all-btn" disabled>Validate</button>
-              <button type="button" class="secondary" id="import-all-btn" disabled>Import All</button>
+              <button
+                type="button"
+                class="secondary"
+                id="validate-all-btn"
+                disabled
+              >
+                Validate
+              </button>
+              <button
+                type="button"
+                class="secondary"
+                id="import-all-btn"
+                disabled
+              >
+                Import All
+              </button>
             </div>
           </fieldset>
         </form>
@@ -209,8 +311,17 @@
               </select>
             </label>
             <div class="button-group">
-              <button type="submit" class="secondary" id="export-btn" disabled>Export metadata</button>
-              <button type="button" class="secondary" id="export-pipeline-full-btn" disabled>Full backup</button>
+              <button type="submit" class="secondary" id="export-btn" disabled>
+                Export metadata
+              </button>
+              <button
+                type="button"
+                class="secondary"
+                id="export-pipeline-full-btn"
+                disabled
+              >
+                Full backup
+              </button>
             </div>
           </fieldset>
 
@@ -219,12 +330,102 @@
             <div class="button-group">
               <label>
                 Export includes pipelines, agents, entities, schedules and UDFs
-                <button type="button" class="secondary" id="export-all-btn" disabled>Export all metadata</button>
+                <button
+                  type="button"
+                  class="secondary"
+                  id="export-all-btn"
+                  disabled
+                >
+                  Export all metadata
+                </button>
               </label>
             </div>
           </fieldset>
         </form>
         <div id="export-message" class="message"></div>
+      </section>
+
+      <section class="card requires-auth" id="duplicate-card">
+        <h2>Duplicate pipeline (w/ agents)</h2>
+        <form id="duplicate-form" class="form-grid">
+          <fieldset class="fieldset">
+            <legend>Duplicate an existing pipeline</legend>
+            <label>
+              Source pipeline
+              <select id="duplicate-pipeline-id" name="pipelineId" required>
+                <option value="">Select a pipeline to duplicate…</option>
+              </select>
+            </label>
+            <label>
+              New pipeline name
+              <input
+                type="text"
+                id="duplicate-new-name"
+                name="newPipelineName"
+                placeholder="Enter name for duplicated pipeline"
+                required
+              />
+            </label>
+            <div class="danger-zone">
+              <label
+                class="checkbox danger-toggle"
+                title="Danger zone: override agent tags only if you're sure the destination agents exist or can be deployed."
+              >
+                <input type="checkbox" id="customize-agents" />
+                Customize new source/target agents (Danger zone)
+              </label>
+              <div id="agent-customization-fields" style="display: none;">
+                <label>
+                  Current source agent tag
+                  <input type="text" id="duplicate-current-source-tag" readonly />
+                </label>
+                <label>
+                  New source agent tag
+                  <input
+                    type="text"
+                    id="duplicate-source-tag"
+                    name="sourceAgentTag"
+                    placeholder="e.g., mysql-dev"
+                    required
+                  />
+                </label>
+                <label>
+                  Current target agent tag
+                  <input type="text" id="duplicate-current-target-tag" readonly />
+                </label>
+                <label>
+                  New target agent tag
+                  <input
+                    type="text"
+                    id="duplicate-target-tag"
+                    name="targetAgentTag"
+                    placeholder="e.g., postgres-dev"
+                    required
+                  />
+                </label>
+              </div>
+            </div>
+            <label class="checkbox">
+              <input type="checkbox" id="customize-conductor" />
+              Customize Conductor settings
+            </label>
+            <div id="conductor-fields" style="display: none;">
+              <label>
+                Conductor URL (optional)
+                <input
+                  type="text"
+                  id="duplicate-conductor-url"
+                  name="conductorUrl"
+                  placeholder="Leave empty to use default from CoreHub"
+                />
+              </label>
+            </div>
+            <button type="submit" class="primary" disabled id="duplicate-btn">
+              Duplicate Pipeline
+            </button>
+          </fieldset>
+        </form>
+        <div id="duplicate-message" class="message"></div>
       </section>
 
       <section class="card log-card">
@@ -233,7 +434,9 @@
       </section>
     </main>
 
-    <footer class="footer">&copy; <span id="footer-year"></span> MOLO17. All rights reserved.</footer>
+    <footer class="footer">
+      &copy; <span id="footer-year"></span> MOLO17. All rights reserved.
+    </footer>
 
     <template id="log-line-template">
       <div class="log-line"></div>

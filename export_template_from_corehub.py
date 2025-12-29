@@ -185,7 +185,7 @@ def fetch_groups_map(token: str, pipeline_id: str) -> Tuple[Dict[str, str], Dict
 
 def fetch_pipeline_jobs(pipeline_id: str) -> List[Dict[str, Any]]:
     """Fetch all Chronos jobs for the given pipeline."""
-    chronos_client = ChronosClient(os.getenv("CHRONOS_URL"))
+    chronos_client = ChronosClient(corehub_url=os.getenv("CORE_HUB_URL"))
     try:
         jobs = chronos_client._request(  # type: ignore[attr-defined]
             "api/jobs/", params={"pipeline_id": pipeline_id, "limit": 1000}
