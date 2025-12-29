@@ -27,6 +27,7 @@ import json
 import logging
 import os
 import zipfile
+import tempfile
 from contextlib import redirect_stdout
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
@@ -38,6 +39,8 @@ from commons import (
     get_pipeline_agents,
     get_agent_tables,
     get_table_columns,
+    extract_all_schemas_from_yaml,
+    extract_schema_types_from_yaml,
 )
 from create_all_entities import (
     CREATE_TABLE_IF_NOT_EXISTS,
@@ -65,6 +68,15 @@ class DuplicateCancelledError(RuntimeError):
 
 _AGENT_TYPE_BY_NAME: Dict[str, str] | None = None
 _AGENTS_FILE = "agents.json"
+
+def _write_temp_yaml(contents: str) -> str:
+    """Persist YAML text to a temporary file and return its path."""
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".yaml")
+    tmp.write(contents.encode("utf-8"))
+    tmp.flush()
+    tmp.close()
+    return tmp.name
+
 
 def _load_agent_type_catalog() -> Dict[str, str]:
     global _AGENT_TYPE_BY_NAME
@@ -1393,9 +1405,12 @@ def duplicate_pipeline(
     token: str,
     base_url: str,
     pipeline_id: str,
-    new_pipeline_name: str,
+    new_pipeline_name: Optional[str],
     source_agent_tag: str,
     target_agent_tag: str,
+    source_agent_password: str,
+    target_agent_password: str,
+    clone_entities: bool,
     use_ssl: Optional[bool],
     skip_verify: Optional[bool],
     conductor_url: Optional[str] = None,
@@ -1434,9 +1449,6 @@ def duplicate_pipeline(
 
     configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
 
-    logger.info("Starting pipeline duplication: %s -> %s", pipeline_id, new_pipeline_name)
-    _raise_if_cancelled()
-
     # Step 1: Get the original pipeline's agent configuration
     try:
         pipeline_config = fetch_core_hub(f"/pipelines/{pipeline_id}/config", token=token)
@@ -1466,6 +1478,17 @@ def duplicate_pipeline(
     except Exception as exc:
         logger.exception("Failed to retrieve original pipeline agent configuration: %s", exc)
         raise RuntimeError(f"Failed to retrieve pipeline agent configuration: {exc}") from exc
+
+    original_pipeline_name = (
+        pipeline_config.get("pipelineName")
+        or pipeline_config.get("pipeline", {}).get("name")
+        or f"Pipeline {pipeline_id}"
+    )
+    if not new_pipeline_name:
+        new_pipeline_name = f"{original_pipeline_name} (copy)"
+
+    logger.info("Starting pipeline duplication: %s -> %s", pipeline_id, new_pipeline_name)
+    _raise_if_cancelled()
 
     configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
 
@@ -1622,11 +1645,16 @@ def duplicate_pipeline(
     if "pipelineName" in config_dict:
         config_dict["pipelineName"] = new_pipeline_name
 
-    def _convert_agent_payload(agent_template: dict, new_tag: str) -> dict:
+    def _convert_agent_payload(agent_template: dict, new_tag: str, password: str, label: str) -> dict:
+        if not password:
+            raise RuntimeError(f"{label} agent password is required to duplicate the pipeline.")
         payload = {
             "agentType": agent_template.get("agentType"),
             "agentTag": new_tag,
-            "hostCredentials": agent_template.get("hostCredentials") or {},
+            "hostCredentials": {
+                **(agent_template.get("hostCredentials") or {}),
+                "password": password,
+            },
             "customHostCredentials": agent_template.get("customHostCredentials")
             or agent_template.get("hostCredentialsCustomProperties")
             or {},
@@ -1635,20 +1663,9 @@ def duplicate_pipeline(
         return payload
 
     config_dict["agents"] = [
-        _convert_agent_payload(source_agent, source_agent_tag),
-        _convert_agent_payload(target_agent, target_agent_tag),
+        _convert_agent_payload(source_agent, source_agent_tag, source_agent_password, "Source"),
+        _convert_agent_payload(target_agent, target_agent_tag, target_agent_password, "Target"),
     ]
-
-    pipelines_meta = config_dict.get("pipelines")
-    if not isinstance(pipelines_meta, list):
-        pipelines_meta = []
-    pipelines_meta.append(
-        {
-            "pipelineId": pipeline_id,
-            "pipelineName": new_pipeline_name,
-        }
-    )
-    config_dict["pipelines"] = pipelines_meta
 
     # If we deployed agents, update the configuration with their details
     if deployed_agents:
@@ -1658,18 +1675,79 @@ def duplicate_pipeline(
     # Step 6: Import the modified configuration to create the new pipeline
     try:
         _raise_if_cancelled()
+        import_payload = {
+            "pipelineName": new_pipeline_name,
+            "agents": config_dict["agents"],
+        }
+
         result = import_pipeline_config_only(
             token=token,
             base_url=base_url,
             use_ssl=use_ssl,
             skip_verify=skip_verify,
-            config=config_dict,
+            config=import_payload,
         )
     except Exception as exc:
         logger.exception("Failed to create duplicated pipeline: %s", exc)
         raise RuntimeError(f"Failed to create duplicated pipeline: {exc}") from exc
 
     new_pipeline_id = result.get("pipelineId")
+    entity_clone_status = "skipped"
+    entity_clone_errors: list[str] = []
+    if clone_entities:
+        try:
+            _raise_if_cancelled()
+            snapshot_path = _write_temp_yaml(yaml_config)
+            try:
+                schema_pairs = extract_all_schemas_from_yaml(snapshot_path)
+                source_type_hint, target_type_hint = extract_schema_types_from_yaml(snapshot_path)
+                source_type_hint = source_type_hint or "SQL"
+                target_type_hint = target_type_hint or "SQL"
+                entity_clone_status = "completed"
+                if not schema_pairs:
+                    entity_clone_status = "empty"
+                for source_schema, target_schema in schema_pairs:
+                    _raise_if_cancelled()
+                    result = run_create_entities(
+                        token=token,
+                        base_url=base_url,
+                        pipeline_id=new_pipeline_id,
+                        source_schema=source_schema,
+                        target_schema=target_schema,
+                        source_type=source_type_hint,
+                        target_type=target_type_hint,
+                        yaml_file=snapshot_path,
+                        skip_errors=True,
+                        chunk_size=50,
+                        enable_scheduling=False,
+                        create_tables=False,
+                        use_ssl=use_ssl,
+                        skip_verify=skip_verify,
+                    )
+                    if not result.get("success"):
+                        entity_clone_status = "failed"
+                        error_msg = result.get("error") or "Unknown error during entity creation"
+                        entity_clone_errors.append(f"{source_schema}->{target_schema}: {error_msg}")
+                        logger.warning("Entity creation failed for %s -> %s: %s", source_schema, target_schema, error_msg)
+            finally:
+                os.unlink(snapshot_path)
+        except DuplicateCancelledError:
+            raise
+        except Exception as exc:  # pylint: disable=broad-except
+            entity_clone_status = "failed"
+            entity_clone_errors.append(str(exc))
+            logger.exception("Failed to clone entities for pipeline %s: %s", pipeline_id, exc)
+
+    try:
+        fetch_core_hub(
+            f"/pipelines/{new_pipeline_id}",
+            method="PUT",
+            token=token,
+            body={"configurationCompleted": True, "name": new_pipeline_name},
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("Failed to mark pipeline %s as configuration completed: %s", new_pipeline_id, exc)
+
     logger.info("Successfully duplicated pipeline %s to %s (%s)", pipeline_id, new_pipeline_name, new_pipeline_id)
 
     return {
@@ -1680,6 +1758,8 @@ def duplicate_pipeline(
         "deployedAgents": deployed_agents,
         "sourceAgent": {"type": source_agent_type, "tag": source_agent_tag},
         "targetAgent": {"type": target_agent_type, "tag": target_agent_tag},
+        "entityCloneStatus": entity_clone_status,
+        "entityCloneErrors": entity_clone_errors or None,
     }
 
 

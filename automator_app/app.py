@@ -183,10 +183,13 @@ class BulkCreateRequest(BaseModel):
 
 
 class DuplicatePipelineRequest(BaseModel):
-    new_pipeline_name: str = Field(..., alias="newPipelineName")
+    new_pipeline_name: Optional[str] = Field(None, alias="newPipelineName")
     source_agent_tag: str = Field(..., alias="sourceAgentTag")
     target_agent_tag: str = Field(..., alias="targetAgentTag")
+    source_agent_password: str = Field(..., alias="sourceAgentPassword")
+    target_agent_password: str = Field(..., alias="targetAgentPassword")
     conductor_url: Optional[str] = Field(None, alias="conductorUrl")
+    clone_entities: bool = Field(True, alias="cloneEntities")
 
     class Config:
         allow_population_by_field_name = True
@@ -200,6 +203,8 @@ class DuplicatePipelineResponse(BaseModel):
     deployed_agents: list[str] = Field(..., alias="deployedAgents")
     source_agent: dict = Field(..., alias="sourceAgent")
     target_agent: dict = Field(..., alias="targetAgent")
+    entity_clone_status: Optional[str] = Field(None, alias="entityCloneStatus")
+    entity_clone_errors: Optional[list[str]] = Field(None, alias="entityCloneErrors")
 
     class Config:
         allow_population_by_field_name = True
@@ -712,14 +717,14 @@ def create_app() -> FastAPI:
         if not state.token or not state.base_url:
             raise HTTPException(status_code=401, detail="Authentication required")
 
-        if not request.new_pipeline_name:
-            raise HTTPException(status_code=400, detail="newPipelineName is required")
-
         if not request.source_agent_tag:
             raise HTTPException(status_code=400, detail="sourceAgentTag is required")
-
         if not request.target_agent_tag:
             raise HTTPException(status_code=400, detail="targetAgentTag is required")
+        if not request.source_agent_password:
+            raise HTTPException(status_code=400, detail="sourceAgentPassword is required")
+        if not request.target_agent_password:
+            raise HTTPException(status_code=400, detail="targetAgentPassword is required")
 
         try:
             state.begin_duplicate()
@@ -736,6 +741,9 @@ def create_app() -> FastAPI:
                 new_pipeline_name=request.new_pipeline_name,
                 source_agent_tag=request.source_agent_tag,
                 target_agent_tag=request.target_agent_tag,
+                source_agent_password=request.source_agent_password,
+                target_agent_password=request.target_agent_password,
+                clone_entities=request.clone_entities,
                 use_ssl=state.use_ssl,
                 skip_verify=state.skip_verify,
                 conductor_url=request.conductor_url,

@@ -1394,6 +1394,16 @@ function bindEvents() {
       }
       logActivity('duplicate', `Starting duplication for pipeline ${pipelineId}`);
 
+      const sourcePasswordInput = document.getElementById('duplicate-source-password');
+      const targetPasswordInput = document.getElementById('duplicate-target-password');
+      const sourcePassword = sourcePasswordInput ? sourcePasswordInput.value.trim() : '';
+      const targetPassword = targetPasswordInput ? targetPasswordInput.value.trim() : '';
+
+      if (!sourcePassword || !targetPassword) {
+        ui.setDuplicateMessage('Both source and target agent passwords are required.', 'error');
+        return;
+      }
+
       const customizeAgentsEnabled = !!(document.getElementById('customize-agents') && document.getElementById('customize-agents').checked);
       const fallbackSourceTag = duplicateForm.dataset.currentSourceTag || '';
       const fallbackTargetTag = duplicateForm.dataset.currentTargetTag || '';
@@ -1414,11 +1424,19 @@ function bindEvents() {
         `Cloning with SOURCE tag "${sourceAgentTagValue}" and TARGET tag "${targetAgentTagValue}"`
       );
 
+      const newPipelineNameInput = document.getElementById('duplicate-new-name');
+      const newPipelineNameValue = newPipelineNameInput ? newPipelineNameInput.value.trim() : '';
+      const cloneEntitiesToggle = document.getElementById('duplicate-clone-entities');
+      const cloneEntitiesValue = cloneEntitiesToggle ? cloneEntitiesToggle.checked : true;
+
       const payload = {
         pipelineId: pipelineId,
-        newPipelineName: document.getElementById('duplicate-new-name').value,
+        newPipelineName: newPipelineNameValue || undefined,
         sourceAgentTag: sourceAgentTagValue,
         targetAgentTag: targetAgentTagValue,
+        sourceAgentPassword: sourcePassword,
+        targetAgentPassword: targetPassword,
+        cloneEntities: cloneEntitiesValue,
         conductorUrl: document.getElementById('duplicate-conductor-url').value || undefined,
       };
       if (payload.conductorUrl) {
@@ -1434,8 +1452,10 @@ function bindEvents() {
       logActivity('duplicate', 'Payload sent to backend. Awaiting response…');
       try {
         const result = await api.duplicatePipeline(payload, { signal: duplicateRequestController.signal });
-        ui.setDuplicateMessage(`Pipeline duplicated successfully: ${result.pipelineName} (${result.pipelineId})`, 'success');
-        logActivity('duplicate', `Duplicate succeeded: ${result.pipelineName} (${result.pipelineId})`);
+        const duplicatedName = result.newPipelineName || result.pipelineName || '(unnamed pipeline)';
+        const duplicatedId = result.newPipelineId || result.pipelineId || '(unknown id)';
+        ui.setDuplicateMessage(`Pipeline duplicated successfully: ${duplicatedName} (${duplicatedId})`, 'success');
+        logActivity('duplicate', `Duplicate succeeded: ${duplicatedName} (${duplicatedId})`);
         // Refresh pipeline list to include the new pipeline
         await loadPipelines();
       } catch (err) {

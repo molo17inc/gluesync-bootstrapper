@@ -82,7 +82,6 @@ body {
   color: var(--bg);
   padding: 0.35rem 0.9rem;
   border-radius: 999px;
-  font-size: 0.85rem;
   cursor: pointer;
   transition: background 0.2s ease, color 0.2s ease;
 }

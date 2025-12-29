@@ -62,6 +62,16 @@ def _build_agent_spec(agent: dict, globals_cfg: dict) -> Dict[str, Any]:
     tag = agent["agentTag"].lower()
     agent_type = agent["agentType"].lower()
     
+    # Ensure we never forward docker-compose style overrides that conductor would reject
+    for forbidden_key in ("deploy", "resources"):
+        if forbidden_key in agent:
+            logger.warning(
+                "Ignoring forbidden key '%s' in agent %s to avoid conductor deploy overrides",
+                forbidden_key,
+                agent.get("agentTag"),
+            )
+            agent.pop(forbidden_key, None)
+
     # Build environment variables
     env_vars = agent.get("environment", {})
     if not env_vars:
