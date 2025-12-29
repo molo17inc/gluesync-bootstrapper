@@ -41,15 +41,15 @@ Return structure
 #
 # Copyright (C) 2025 MOLO17. All rights reserved.
 
-import os
 import json
-from typing import Dict, Any, Optional
-import requests
-from utils.log import get_logger, create_log_file
+import logging
+import os
+import tempfile
+from typing import Any, Dict, Optional
 
-# Initialize logger
-log_file = create_log_file()
-logger = get_logger(log_file)
+import requests
+
+logger = logging.getLogger(__name__)
 
 def _load_config(path: str) -> dict:
     with open(path, encoding="utf-8") as fh:
@@ -62,6 +62,16 @@ def _build_agent_spec(agent: dict, globals_cfg: dict) -> Dict[str, Any]:
     tag = agent["agentTag"].lower()
     agent_type = agent["agentType"].lower()
     
+    # Ensure we never forward docker-compose style overrides that conductor would reject
+    for forbidden_key in ("deploy", "resources"):
+        if forbidden_key in agent:
+            logger.warning(
+                "Ignoring forbidden key '%s' in agent %s to avoid conductor deploy overrides",
+                forbidden_key,
+                agent.get("agentTag"),
+            )
+            agent.pop(forbidden_key, None)
+
     # Build environment variables
     env_vars = agent.get("environment", {})
     if not env_vars:
@@ -75,12 +85,7 @@ def _build_agent_spec(agent: dict, globals_cfg: dict) -> Dict[str, Any]:
             env_vars["JAVA_TOOL_OPTIONS"] = "--add-opens=java.base/java.nio=ALL-UNNAMED"
     
     # Build volumes array (strings per OpenAPI spec)
-    volumes = agent.get("volumes", [])
-    log_volumes = [
-        f"./gluesync-{tag}-{agent_type}-agent:/opt/gluesync/logs"
-    ]
-
-    volumes += log_volumes
+    volumes = agent.get("volumes") or []
 
     # Build labels object
     labels = {
@@ -88,32 +93,39 @@ def _build_agent_spec(agent: dict, globals_cfg: dict) -> Dict[str, Any]:
         "com.molo17.conductor.type": "agent"
     }
     
-    # Build dependsOn (camelCase for API)
-    depends_on = agent.get("dependsOn", {})
-    if not depends_on:
-        depends_on = {"gluesync-core-hub": {"condition": "service_started"}}
-        if tag in ("mongodb", "gridgain"):
-            depends_on[tag] = {"condition": "service_healthy"}
-    
     # Return full agent specification per OpenAPI schema
-    return {
+    spec: Dict[str, Any] = {
         "imageName": f"gluesync-{tag}",
         "type": "agent",
         "agentType": agent_type,
         "environment": env_vars,
         "labels": labels,
-        "ports": agent.get("ports", []),
-        "volumes": volumes,
-        "reservations": agent.get("reservations", {}),
-        "limits": agent.get("limits", {}),
-        # "dependsOn": depends_on  # camelCase per OpenAPI spec
     }
+
+    ports = agent.get("ports")
+    if ports:
+        spec["ports"] = ports
+    if volumes:
+        spec["volumes"] = volumes
+
+    return spec
+
+def _normalize_conductor_url(conductor_url: str) -> str:
+    if not conductor_url:
+        return conductor_url
+    base = conductor_url.rstrip("/")
+    if not base.endswith("/api"):
+        base = f"{base}/api"
+    return base
+
 
 def add_agents_with_conductor(
     config_path: str,
     conductor_url: str,
-    auth_token: Optional[str] = None
+    auth_token: Optional[str] = None,
+    verify_ssl: bool = True,
 ) -> Dict[str, Any]:
+    conductor_url = _normalize_conductor_url(conductor_url)
     # 1. Load config
     try:
         cfg = _load_config(config_path)
@@ -138,13 +150,15 @@ def add_agents_with_conductor(
     logger.info(f"POST {conductor_url}/services")
     logger.info(f"Headers: {headers}")
     logger.info(f"Payload: {json.dumps(payload, indent=2)}")
+    logger.info("SSL verification for conductor calls: %s", verify_ssl)
 
     try:
         resp = requests.post(
             f"{conductor_url}/services",
             json=payload,
             headers=headers,
-            timeout=30
+            timeout=30,
+            verify=verify_ssl,
         )
         
         # **LOG RESPONSE DETAILS**
@@ -179,7 +193,8 @@ def add_agents_with_conductor(
                 f"{conductor_url}/containers",
                 json=start_body,
                 headers=headers,
-                timeout=60
+                timeout=60,
+            verify=verify_ssl,
             )
             start_r.raise_for_status()
             start_json = start_r.json()

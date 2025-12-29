@@ -75,6 +75,41 @@ body {
   gap: 1.25rem;
 }
 
+.topbar-logout-btn {
+  display: none;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  background: transparent;
+  color: var(--bg);
+  padding: 0.35rem 0.9rem;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.2s ease, color 0.2s ease;
+}
+
+.topbar-logout-btn:hover:not(:disabled),
+.topbar-logout-btn:focus-visible:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.topbar-logout-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+body.is-authenticated .topbar-logout-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.requires-auth {
+  display: none;
+}
+
+body.is-authenticated .requires-auth {
+  display: block;
+}
+
 .version-label {
   font-size: 0.8rem;
   color: var(--muted);
@@ -270,6 +305,27 @@ select:focus {
   color: var(--text);
 }
 
+.danger-zone {
+  border: 1px solid rgba(212, 66, 70, 0.4);
+  border-radius: 0.75rem;
+  padding: 0.9rem;
+  background: rgba(212, 66, 70, 0.08);
+  display: grid;
+  gap: 0.6rem;
+}
+
+.danger-toggle {
+  background: linear-gradient(90deg, rgba(212, 66, 70, 0.95), rgba(255, 103, 107, 0.95));
+  color: #fff;
+  padding: 0.5rem;
+  border-radius: 0.5rem;
+  font-weight: 600;
+}
+
+.danger-toggle input[type="checkbox"] {
+  accent-color: #fff;
+}
+
 .hint-text {
   font-size: 0.8rem;
   color: var(--muted);
@@ -386,6 +442,10 @@ body.is-authenticated #export-card,
 body.is-authenticated #advanced-card,
 body.is-authenticated #bulk-card {
   display: block;
+}
+
+body.is-authenticated #auth-card {
+  display: none;
 }
 
 /* After authentication, collapse auth card to header + sign out button */

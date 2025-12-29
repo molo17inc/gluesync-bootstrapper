@@ -195,7 +195,7 @@ def create_entity_schedules(token, pipeline_id, entity_id, entity_name, schedule
 
     logger.info(f"Creating schedules for entity {entity_name} (ID: {entity_id})")
 
-    chronos_client = ChronosClient(CHRONOS_URL)
+    chronos_client = ChronosClient(corehub_url=CORE_HUB_URL)
 
     for schedule_config in schedules_config:
         try:
@@ -256,7 +256,7 @@ def create_group_schedules(token, pipeline_id, group_schedules):
 
     logger.info(f"Creating group-level schedules for pipeline {pipeline_id}")
 
-    chronos_client = ChronosClient(CHRONOS_URL)
+    chronos_client = ChronosClient(corehub_url=CORE_HUB_URL)
     
     # Handle case where group_schedules is a list of schedule configs for multiple groups
     if isinstance(group_schedules, list):

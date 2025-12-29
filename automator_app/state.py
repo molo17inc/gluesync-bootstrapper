@@ -58,6 +58,8 @@ class AutomatorState:
         self._create_tables: bool = True
         self.uploads: Dict[str, UploadedFile] = {}
         self.current_run: Optional[RunStatus] = None
+        self._duplicate_in_progress: bool = False
+        self._duplicate_cancel_requested: bool = False
 
     # Authentication -----------------------------------------------------
     def set_auth(
@@ -150,6 +152,37 @@ class AutomatorState:
                 "createTables": self._create_tables,
             }
 
+    # Duplicate pipeline coordination -----------------------------------
+    def begin_duplicate(self) -> None:
+        with self._lock:
+            if self._duplicate_in_progress:
+                raise RuntimeError("Duplicate already running")
+            self._duplicate_in_progress = True
+            self._duplicate_cancel_requested = False
+
+    def end_duplicate(self) -> None:
+        with self._lock:
+            self._duplicate_in_progress = False
+            self._duplicate_cancel_requested = False
+
+    def request_duplicate_cancel(self) -> bool:
+        with self._lock:
+            if not self._duplicate_in_progress:
+                return False
+            self._duplicate_cancel_requested = True
+            return True
+
+    def is_duplicate_cancelled(self) -> bool:
+        with self._lock:
+            return self._duplicate_cancel_requested
+
+    def duplicate_status(self) -> Dict[str, bool]:
+        with self._lock:
+            return {
+                "inProgress": self._duplicate_in_progress,
+                "cancelRequested": self._duplicate_cancel_requested,
+            }
+
     # Accessors ----------------------------------------------------------
     @property
     def token(self) -> Optional[str]:
@@ -180,6 +213,10 @@ class AutomatorState:
                 "skipVerify": self._skip_verify,
                 "enableScheduling": self._enable_scheduling,
                 "createTables": self._create_tables,
+                "duplicate": {
+                    "inProgress": self._duplicate_in_progress,
+                    "cancelRequested": self._duplicate_cancel_requested,
+                },
                 "run": None
                 if not self.current_run
                 else {

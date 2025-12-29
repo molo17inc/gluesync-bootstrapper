@@ -27,6 +27,7 @@ import json
 import logging
 import os
 import zipfile
+import tempfile
 from contextlib import redirect_stdout
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
@@ -38,6 +39,8 @@ from commons import (
     get_pipeline_agents,
     get_agent_tables,
     get_table_columns,
+    extract_all_schemas_from_yaml,
+    extract_schema_types_from_yaml,
 )
 from create_all_entities import (
     CREATE_TABLE_IF_NOT_EXISTS,
@@ -54,60 +57,62 @@ from export_template_from_corehub import (
     attach_schedules_from_jobs,
     build_yaml_structure,
 )
+import time
 import yaml
 
 logger = logging.getLogger(__name__)
 
+
+class DuplicateCancelledError(RuntimeError):
+    """Raised when a duplicate pipeline request is cancelled by the user."""
+
 _AGENT_TYPE_BY_NAME: Dict[str, str] | None = None
+_AGENTS_FILE = "agents.json"
+
+def _write_temp_yaml(contents: str) -> str:
+    """Persist YAML text to a temporary file and return its path."""
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".yaml")
+    tmp.write(contents.encode("utf-8"))
+    tmp.flush()
+    tmp.close()
+    return tmp.name
 
 
 def _load_agent_type_catalog() -> Dict[str, str]:
     global _AGENT_TYPE_BY_NAME
     if _AGENT_TYPE_BY_NAME is not None:
         return _AGENT_TYPE_BY_NAME
-
-    mapping: Dict[str, str] = {}
-
     try:
-        base_dir = Path(__file__).resolve().parent
-        candidates = [
-            base_dir.parent / "agents.json",
-            base_dir / "agents.json",
-        ]
-        json_path = next((p for p in candidates if p.exists()), None)
-        if json_path is None:
-            _AGENT_TYPE_BY_NAME = mapping
-            return mapping
+        with open(_AGENTS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as exc:
+        raise RuntimeError(f"Failed to load agents catalog: {exc}") from exc
+    if isinstance(data, dict):
+        items = data.get("data") or data.get("items") or []
+    else:
+        items = data
+    catalog: Dict[str, str] = {}
+    if not isinstance(items, list):
+        items = []
+    for agent in items:
+        if not isinstance(agent, dict):
+            continue
+        name = agent.get("internalName")
+        agent_type = agent.get("agentType")
+        if name and agent_type:
+            catalog[name.lower()] = agent_type.upper()
+    _AGENT_TYPE_BY_NAME = catalog
+    return catalog
 
-        with json_path.open("r", encoding="utf-8") as fh:
-            raw = json.load(fh)
 
-        items = raw.get("data") if isinstance(raw, dict) else None
-        if not isinstance(items, list):
-            _AGENT_TYPE_BY_NAME = mapping
-            return mapping
-
-        for entry in items:
-            if not isinstance(entry, dict):
-                continue
-            name = entry.get("internalName")
-            kind = entry.get("type")
-            if not name or not kind:
-                continue
-            label = str(kind).strip().upper()
-            if not label:
-                continue
-            if label == "RDBMS":
-                normalized = "SQL"
-            else:
-                normalized = "NoSQL"
-            mapping[str(name).lower()] = normalized
-    except Exception:  # pylint: disable=broad-except
-        logger.exception("Failed to load agents.json catalog for type inference")
-        mapping = {}
-
-    _AGENT_TYPE_BY_NAME = mapping
-    return mapping
+def _normalize_conductor_url(conductor_url: str) -> str:
+    """Ensure conductor URL points to the API root (adds /api if missing)."""
+    if not conductor_url:
+        return conductor_url
+    normal = conductor_url.rstrip("/")
+    if not normal.endswith("/api"):
+        normal = f"{normal}/api"
+    return normal
 
 
 def authenticate(
@@ -1393,6 +1398,573 @@ def import_pipeline_config_only(
 
     logger.info("Imported config-only pipeline %s (%s)", pipeline_name, pipeline_id)
     return {"pipelineId": pipeline_id, "pipelineName": pipeline_name}
+
+
+def duplicate_pipeline(
+    *,
+    token: str,
+    base_url: str,
+    pipeline_id: str,
+    new_pipeline_name: Optional[str],
+    source_agent_tag: str,
+    target_agent_tag: str,
+    source_agent_password: str,
+    target_agent_password: str,
+    clone_entities: bool,
+    use_ssl: Optional[bool],
+    skip_verify: Optional[bool],
+    conductor_url: Optional[str] = None,
+    cancel_checker: Optional[Callable[[], bool]] = None,
+) -> Dict[str, Any]:
+    """Duplicate a pipeline with new source and target agent tags (keeping same agent types).
+
+    This function:
+    1. Gets the original pipeline's agent types from CoreHub
+    2. Exports the YAML configuration of the original pipeline
+    3. Creates a new pipeline with the same agent types but new tags
+    4. If agents don't exist, can deploy them via conductor APIs
+    5. Imports the YAML configuration to the new pipeline
+
+    Args:
+        token: CoreHub authentication token
+        base_url: CoreHub base URL
+        pipeline_id: Original pipeline ID to duplicate
+        new_pipeline_name: Name for the new duplicated pipeline
+        source_agent_tag: New agent tag for the source (same type as original)
+        target_agent_tag: New agent tag for the target (same type as original)
+        use_ssl: Whether to use SSL for CoreHub connection
+        skip_verify: Whether to skip SSL verification
+        conductor_url: Optional conductor URL override for agent deployment
+
+    Returns:
+        Dict containing the new pipeline information and any deployment details
+    """
+
+    def _raise_if_cancelled():
+        if cancel_checker and cancel_checker():
+            logger.info("Duplicate pipeline request cancelled by user")
+            raise DuplicateCancelledError("Duplicate pipeline cancelled by user")
+
+    _raise_if_cancelled()
+
+    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+
+    # Step 1: Get the original pipeline's agent configuration
+    try:
+        pipeline_config = fetch_core_hub(f"/pipelines/{pipeline_id}/config", token=token)
+        if not isinstance(pipeline_config, dict):
+            raise RuntimeError("Failed to retrieve pipeline configuration")
+
+        agents = pipeline_config.get("agents") or []
+        if not isinstance(agents, list) or len(agents) < 2:
+            raise RuntimeError("Pipeline must have at least 2 agents (source and target)")
+
+        # Find source and target agents
+        source_agent = next((agent for agent in agents if isinstance(agent, dict) and agent.get("agentType") == "SOURCE"), None)
+        target_agent = next((agent for agent in agents if isinstance(agent, dict) and agent.get("agentType") == "TARGET"), None)
+
+        if not source_agent or not target_agent:
+            raise RuntimeError("Pipeline must have both SOURCE and TARGET agents")
+
+        source_agent_type = source_agent.get("agentType")
+        target_agent_type = target_agent.get("agentType")
+
+        if not source_agent_type or not target_agent_type:
+            raise RuntimeError("Agent types not found in pipeline configuration")
+
+        logger.info("Original pipeline agents: source=%s, target=%s", source_agent_type, target_agent_type)
+        _raise_if_cancelled()
+
+    except Exception as exc:
+        logger.exception("Failed to retrieve original pipeline agent configuration: %s", exc)
+        raise RuntimeError(f"Failed to retrieve pipeline agent configuration: {exc}") from exc
+
+    original_pipeline_name = (
+        pipeline_config.get("pipelineName")
+        or pipeline_config.get("pipeline", {}).get("name")
+        or f"Pipeline {pipeline_id}"
+    )
+    if not new_pipeline_name:
+        new_pipeline_name = f"{original_pipeline_name} (copy)"
+
+    logger.info("Starting pipeline duplication: %s -> %s", pipeline_id, new_pipeline_name)
+    _raise_if_cancelled()
+
+    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+
+    logger.info("Starting pipeline duplication: %s -> %s", pipeline_id, new_pipeline_name)
+
+    # Step 1: Export the original pipeline configuration
+    try:
+        yaml_config = export_pipeline_yaml(
+            token=token,
+            base_url=base_url,
+            pipeline_id=pipeline_id,
+            use_ssl=use_ssl,
+            skip_verify=skip_verify,
+        )
+    except Exception as exc:
+        logger.exception("Failed to export pipeline %s configuration: %s", pipeline_id, exc)
+        raise RuntimeError(f"Failed to export pipeline configuration: {exc}") from exc
+
+    # Step 2: Parse the YAML to modify agent configuration
+    try:
+        config_dict = yaml.safe_load(yaml_config)
+    except Exception as exc:
+        logger.exception("Failed to parse YAML configuration: %s", exc)
+        raise RuntimeError(f"Failed to parse pipeline configuration: {exc}") from exc
+
+    _raise_if_cancelled()
+
+    # Step 3: Check if the required agents exist
+    agents_available = _check_agents_available(
+        token=token,
+        base_url=base_url,
+        source_agent_type=source_agent_type,
+        source_agent_tag=source_agent_tag,
+        target_agent_type=target_agent_type,
+        target_agent_tag=target_agent_tag,
+        use_ssl=use_ssl,
+        skip_verify=skip_verify,
+    )
+
+    _raise_if_cancelled()
+
+    # Step 4: If agents don't exist and conductor is available, deploy them
+    deployed_agents = []
+    if not agents_available:
+        unassigned_agents = _get_unassigned_agents(
+            token=token,
+            base_url=base_url,
+            use_ssl=use_ssl,
+            skip_verify=skip_verify,
+        )
+
+        logger.info("Current unassigned agents before deployment attempt:")
+        _log_unassigned_snapshot(
+            token=token,
+            base_url=base_url,
+            use_ssl=use_ssl,
+            skip_verify=skip_verify,
+            context="pre-deploy",
+        )
+
+        def _has_unassigned(agent_type: str, agent_tag: str) -> bool:
+            return any(
+                isinstance(agent, dict)
+                and agent.get("agentType") == agent_type
+                and agent.get("agentTag") == agent_tag
+                for agent in unassigned_agents
+            )
+
+        source_needed = not _has_unassigned(source_agent_type, source_agent_tag)
+        target_needed = not _has_unassigned(target_agent_type, target_agent_tag)
+
+        if not source_needed and not target_needed:
+            logger.info(
+                "Required agents already available in unassigned list; skipping conductor deployment"
+            )
+            agents_available = True
+        else:
+            verify_conductor_ssl = True
+            if skip_verify is True:
+                verify_conductor_ssl = False
+        if conductor_url:
+            conductor_url = _normalize_conductor_url(conductor_url)
+        if not conductor_url:
+            try:
+                from urllib.parse import urljoin
+                conductor_url = _normalize_conductor_url(urljoin(base_url.rstrip('/'), '/conductor'))
+                logger.info("Using corehub-derived conductor URL for duplication: %s", conductor_url)
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning("Failed to derive conductor URL from corehub: %s", exc)
+                conductor_url = None
+
+            if conductor_url:
+                logger.info("Required agents not available, attempting deployment via conductor")
+                deployed_agents = _deploy_agents_via_conductor(
+                    conductor_url=conductor_url,
+                    source_agent_type=source_agent_type,
+                    source_agent_tag=source_agent_tag,
+                    target_agent_type=target_agent_type,
+                    target_agent_tag=target_agent_tag,
+                    deploy_source_agent=source_needed,
+                    deploy_target_agent=target_needed,
+                    verify_ssl=verify_conductor_ssl,
+                    ssl_enabled_for_agents=bool(use_ssl),
+                )
+
+                if deployed_agents:
+                    attempt = 0
+                    while True:
+                        _raise_if_cancelled()
+                        attempt += 1
+                        logger.info(
+                            "Waiting for conductor-deployed agents to become available (attempt %s)",
+                            attempt,
+                        )
+                        time.sleep(5)
+                        time.sleep(5)
+                        _raise_if_cancelled()
+                        if _check_agents_available(
+                            token=token,
+                            base_url=base_url,
+                            source_agent_type=source_agent_type,
+                            source_agent_tag=source_agent_tag,
+                            target_agent_type=target_agent_type,
+                            target_agent_tag=target_agent_tag,
+                            use_ssl=use_ssl,
+                            skip_verify=skip_verify,
+                        ):
+                            agents_available = True
+                            logger.info(
+                                "Conductor-deployed agents are now available after %s attempts",
+                                attempt,
+                            )
+                            break
+                        _log_unassigned_snapshot(
+                            token=token,
+                            base_url=base_url,
+                            use_ssl=use_ssl,
+                            skip_verify=skip_verify,
+                            context=f"attempt-{attempt}",
+                        )
+                else:
+                    logger.warning("Conductor deployment did not return any service names")
+
+            if not agents_available:
+                raise RuntimeError(
+                    "Required agents are not available. Provide a conductorUrl override or ensure "
+                    "the agents are deployed manually before duplicating."
+                )
+
+        _raise_if_cancelled()
+
+    # Step 5: Modify the configuration for the new pipeline
+    # Update pipeline name
+    if "pipelineName" in config_dict:
+        config_dict["pipelineName"] = new_pipeline_name
+
+    def _convert_agent_payload(agent_template: dict, new_tag: str, password: str, label: str) -> dict:
+        if not password:
+            raise RuntimeError(f"{label} agent password is required to duplicate the pipeline.")
+        payload = {
+            "agentType": agent_template.get("agentType"),
+            "agentTag": new_tag,
+            "hostCredentials": {
+                **(agent_template.get("hostCredentials") or {}),
+                "password": password,
+            },
+            "customHostCredentials": agent_template.get("customHostCredentials")
+            or agent_template.get("hostCredentialsCustomProperties")
+            or {},
+            "specificConfiguration": agent_template.get("specificConfiguration") or {},
+        }
+        return payload
+
+    config_dict["agents"] = [
+        _convert_agent_payload(source_agent, source_agent_tag, source_agent_password, "Source"),
+        _convert_agent_payload(target_agent, target_agent_tag, target_agent_password, "Target"),
+    ]
+
+    # If we deployed agents, update the configuration with their details
+    if deployed_agents:
+        # This would need to be implemented based on the conductor response
+        pass
+
+    # Step 6: Import the modified configuration to create the new pipeline
+    try:
+        _raise_if_cancelled()
+        import_payload = {
+            "pipelineName": new_pipeline_name,
+            "agents": config_dict["agents"],
+        }
+
+        result = import_pipeline_config_only(
+            token=token,
+            base_url=base_url,
+            use_ssl=use_ssl,
+            skip_verify=skip_verify,
+            config=import_payload,
+        )
+    except Exception as exc:
+        logger.exception("Failed to create duplicated pipeline: %s", exc)
+        raise RuntimeError(f"Failed to create duplicated pipeline: {exc}") from exc
+
+    new_pipeline_id = result.get("pipelineId")
+    entity_clone_status = "skipped"
+    entity_clone_errors: list[str] = []
+    if clone_entities:
+        try:
+            _raise_if_cancelled()
+            snapshot_path = _write_temp_yaml(yaml_config)
+            try:
+                schema_pairs = extract_all_schemas_from_yaml(snapshot_path)
+                source_type_hint, target_type_hint = extract_schema_types_from_yaml(snapshot_path)
+                source_type_hint = source_type_hint or "SQL"
+                target_type_hint = target_type_hint or "SQL"
+                entity_clone_status = "completed"
+                if not schema_pairs:
+                    entity_clone_status = "empty"
+                for source_schema, target_schema in schema_pairs:
+                    _raise_if_cancelled()
+                    result = run_create_entities(
+                        token=token,
+                        base_url=base_url,
+                        pipeline_id=new_pipeline_id,
+                        source_schema=source_schema,
+                        target_schema=target_schema,
+                        source_type=source_type_hint,
+                        target_type=target_type_hint,
+                        yaml_file=snapshot_path,
+                        skip_errors=True,
+                        chunk_size=50,
+                        enable_scheduling=False,
+                        create_tables=False,
+                        use_ssl=use_ssl,
+                        skip_verify=skip_verify,
+                    )
+                    if not result.get("success"):
+                        entity_clone_status = "failed"
+                        error_msg = result.get("error") or "Unknown error during entity creation"
+                        entity_clone_errors.append(f"{source_schema}->{target_schema}: {error_msg}")
+                        logger.warning("Entity creation failed for %s -> %s: %s", source_schema, target_schema, error_msg)
+            finally:
+                os.unlink(snapshot_path)
+        except DuplicateCancelledError:
+            raise
+        except Exception as exc:  # pylint: disable=broad-except
+            entity_clone_status = "failed"
+            entity_clone_errors.append(str(exc))
+            logger.exception("Failed to clone entities for pipeline %s: %s", pipeline_id, exc)
+
+    try:
+        fetch_core_hub(
+            f"/pipelines/{new_pipeline_id}",
+            method="PUT",
+            token=token,
+            body={"configurationCompleted": True, "name": new_pipeline_name},
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("Failed to mark pipeline %s as configuration completed: %s", new_pipeline_id, exc)
+
+    logger.info("Successfully duplicated pipeline %s to %s (%s)", pipeline_id, new_pipeline_name, new_pipeline_id)
+
+    return {
+        "originalPipelineId": pipeline_id,
+        "newPipelineId": new_pipeline_id,
+        "newPipelineName": new_pipeline_name,
+        "agentsAvailable": agents_available,
+        "deployedAgents": deployed_agents,
+        "sourceAgent": {"type": source_agent_type, "tag": source_agent_tag},
+        "targetAgent": {"type": target_agent_type, "tag": target_agent_tag},
+        "entityCloneStatus": entity_clone_status,
+        "entityCloneErrors": entity_clone_errors or None,
+    }
+
+
+def _check_agents_available(
+    *,
+    token: str,
+    base_url: str,
+    source_agent_type: str,
+    source_agent_tag: str,
+    target_agent_type: str,
+    target_agent_tag: str,
+    use_ssl: Optional[bool],
+    skip_verify: Optional[bool],
+) -> bool:
+    """Check if the required source and target agents are available (unassigned or assignable)."""
+
+    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+
+    # Get unassigned agents
+    unassigned = fetch_core_hub("/unassigned-agents", token=token)
+    if not isinstance(unassigned, list):
+        logger.warning("Failed to retrieve unassigned agents")
+        return False
+
+    # Check for source agent
+    source_found = any(
+        isinstance(agent, dict) and
+        agent.get("agentType") == source_agent_type and
+        agent.get("agentTag") == source_agent_tag
+        for agent in unassigned
+    )
+
+    # Check for target agent
+    target_found = any(
+        isinstance(agent, dict) and
+        agent.get("agentType") == target_agent_type and
+        agent.get("agentTag") == target_agent_tag
+        for agent in unassigned
+    )
+
+    logger.info("Agent availability check: source=%s, target=%s", source_found, target_found)
+    return source_found and target_found
+
+
+def _get_unassigned_agents(
+    *,
+    token: str,
+    base_url: str,
+    use_ssl: Optional[bool],
+    skip_verify: Optional[bool],
+) -> list:
+    """Return the list of unassigned agents from CoreHub (or empty list on error)."""
+
+    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+    try:
+        unassigned = fetch_core_hub("/unassigned-agents", token=token)
+        if isinstance(unassigned, list):
+            return unassigned
+        logger.warning("Unexpected response when fetching unassigned agents: %s", type(unassigned))
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Failed to fetch unassigned agents: %s", exc)
+    return []
+
+
+def _log_unassigned_snapshot(
+    *,
+    token: str,
+    base_url: str,
+    use_ssl: Optional[bool],
+    skip_verify: Optional[bool],
+    context: str = "",
+) -> None:
+    """Log a snapshot of the current unassigned agent inventory for debugging."""
+
+    agents = _get_unassigned_agents(
+        token=token,
+        base_url=base_url,
+        use_ssl=use_ssl,
+        skip_verify=skip_verify,
+    )
+    if not agents:
+        logger.info("Unassigned snapshot%s: (empty)", f" [{context}]" if context else "")
+        return
+
+    summary: Dict[str, int] = {}
+    details = []
+    for agent in agents:
+        if not isinstance(agent, dict):
+            continue
+        key = f"{agent.get('agentType')}/{agent.get('agentTag')}"
+        summary[key] = summary.get(key, 0) + 1
+        if len(details) < 10:
+            details.append(f"{key}:{agent.get('agentId')}")
+
+    counts = ", ".join(f"{k} x{v}" for k, v in summary.items())
+    logger.info(
+        "Unassigned snapshot%s: %s",
+        f" [{context}]" if context else "",
+        counts or "(none)",
+    )
+    if details:
+        logger.debug("Unassigned details%s: %s", f" [{context}]" if context else "", details)
+
+
+def _deploy_agents_via_conductor(
+    *,
+    conductor_url: str,
+    source_agent_type: str,
+    source_agent_tag: str,
+    target_agent_type: str,
+    target_agent_tag: str,
+    deploy_source_agent: bool,
+    deploy_target_agent: bool,
+    verify_ssl: bool = True,
+    ssl_enabled_for_agents: bool = True,
+) -> list:
+    """Deploy agents via conductor APIs if they are not available."""
+
+    logger.info("Deploying agents via conductor: source %s/%s, target %s/%s",
+                source_agent_type, source_agent_tag, target_agent_type, target_agent_tag)
+
+    # Import the conductor function from the parent directory
+    import sys
+    import os
+    parent_dir = os.path.dirname(os.path.dirname(__file__))
+    sys.path.insert(0, parent_dir)
+    from add_agents_with_conductor import add_agents_with_conductor
+
+    # Create a temporary config.json for the agents
+    ssl_env_value = "true" if ssl_enabled_for_agents else "false"
+
+    def _agent_entry(agent_type: str, agent_tag: str) -> dict:
+        return {
+            "agentTag": agent_tag,
+            "agentType": agent_type.lower(),
+            "environment": {
+                "TYPE": agent_type.lower(),
+                "SSL_ENABLED": ssl_env_value,
+            },
+        }
+
+    agent_entries = []
+    if deploy_source_agent:
+        agent_entries.append(_agent_entry(source_agent_type, source_agent_tag))
+    if deploy_target_agent:
+        agent_entries.append(_agent_entry(target_agent_type, target_agent_tag))
+
+    if not agent_entries:
+        logger.info("No new agents requested for conductor deployment")
+        return []
+
+    config_data = {
+        "globals": {
+            "testName": f"duplicated_pipeline_{source_agent_tag}_{target_agent_tag}",
+            "jobId": "duplication_job"
+        },
+        "agents": agent_entries,
+    }
+    logger.info(
+        "Conductor deployment payload: test=%s, agents=%s",
+        config_data["globals"]["testName"],
+        [f"{a['agentType']}:{a['agentTag']}" for a in agent_entries],
+    )
+
+    # Write temporary config file
+    import tempfile
+    import json
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        json.dump(config_data, f)
+        config_path = f.name
+
+    try:
+        # Call the conductor function
+        result = add_agents_with_conductor(
+            config_path=config_path,
+            conductor_url=_normalize_conductor_url(conductor_url),
+            verify_ssl=verify_ssl,
+        )
+
+        if result.get("error"):
+            logger.error("Conductor deployment failed: %s", result["error"])
+            return []
+
+        service_names = result.get("service_names", [])
+        logger.info(
+            "Conductor services response: services=%s, containers_started=%s",
+            service_names,
+            result.get("containers_started"),
+        )
+        if "start_error" in result:
+            logger.warning("Conductor start error: %s", result["start_error"])
+        if "start_response" in result:
+            logger.debug("Conductor start response: %s", result["start_response"])
+        return service_names
+
+    except ImportError as exc:
+        logger.warning("Could not import conductor functions: %s", exc)
+        return []
+    except Exception as exc:
+        logger.exception("Failed to deploy agents via conductor: %s", exc)
+        return []
+
+    finally:
+        # Clean up temporary file
+        os.unlink(config_path)
 
 
 def validate_token(token: str) -> bool:
