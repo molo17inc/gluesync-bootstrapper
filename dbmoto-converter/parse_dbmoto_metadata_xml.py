@@ -19,12 +19,20 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-import xml.etree.ElementTree as ET
-import os
-import yaml
 import argparse
-import sys
+import base64
+import gzip
+import json
+import os
 import re
+import sys
+import tempfile
+import xml.etree.ElementTree as ET
+from collections import defaultdict
+from datetime import datetime
+from decimal import Decimal
+from typing import Dict, List, Optional
+import yaml
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Parse DbMoto metadata XML and generate YAML configurations.')
@@ -77,6 +85,7 @@ conversion_stats = {
     'start_time': None,
     'end_time': None,
     'connections': {'source': 0, 'target': 0, 'total': 0},
+    'connections_details': [],
     'schemas': 0,
     'tables': {'total': 0, 'with_fields': 0, 'with_primary_keys': 0},
     'fields': 0,
@@ -95,6 +104,23 @@ conversion_stats = {
 TYPE_ALIASES = {
     "TIMESTMP": "TIMESTAMP",
 }
+
+
+def parse_connect_params(params_text: str) -> Dict[str, str]:
+    """Parse the semicolon-separated ConnectParams string into a dict with lowercase keys."""
+    parsed: Dict[str, str] = {}
+    if not params_text:
+        return parsed
+    for part in params_text.split(';'):
+        part = part.strip()
+        if not part:
+            continue
+        if '=' in part:
+            key, value = part.split('=', 1)
+            parsed[key.strip().lower()] = value.strip()
+        else:
+            parsed[part.lower()] = ""
+    return parsed
 
 
 def _is_allowed_xml_char(codepoint: int) -> bool:
@@ -207,6 +233,9 @@ def parse_xml():
     tree = ET.parse(xml_path)
     root = tree.getroot()
     
+    # Reset per-run stats
+    conversion_stats['connections_details'] = []
+    
     # First, extract groups information
     print("Extracting groups and chains...")
     groups = {}
@@ -279,21 +308,45 @@ def parse_xml():
         
         # Check if this is a source or target connection
         is_source = conn_elem.findtext("IsSource", "N").upper() == "Y"
+        connect_params_raw = conn_elem.findtext("ConnectParams", "")
+        connect_params = parse_connect_params(connect_params_raw)
+        db_version = connect_params.get("dbversion") or ""
+        data_source_name = connect_params.get("datasourcename") or ""
+        connection_type = connect_params.get("connectiontype") or ""
+        database_type = data_source_name or connection_type or conn_elem.findtext("Type") or ""
         
         if conn_id:
             connections[conn_id] = {
                 "id": conn_id,
                 "name": conn_name,
                 "is_source": is_source,
-                "schemas": {}
+                "schemas": {},
+                "db_version": db_version,
+                "data_source_name": data_source_name,
+                "connection_type": connection_type,
+                "database_type": database_type,
+                "connect_params": connect_params,
             }
+            
+            conversion_stats['connections_details'].append({
+                "id": conn_id,
+                "name": conn_name,
+                "role": "SOURCE" if is_source else "TARGET",
+                "database_type": database_type,
+                "db_version": db_version,
+                "data_source_name": data_source_name,
+                "connection_type": connection_type,
+            })
+            
+            role_label = "SOURCE" if is_source else "TARGET"
+            type_label = database_type or "Unknown database"
+            version_label = db_version or "unknown version"
+            print(f"  Found {role_label} connection: {conn_name} (ID: {conn_id}) -> {type_label} ({version_label})")
             
             if is_source:
                 source_connections.add(conn_id)
-                print(f"  Found SOURCE connection: {conn_name} (ID: {conn_id})")
             else:
                 target_connections.add(conn_id)
-                print(f"  Found TARGET connection: {conn_name} (ID: {conn_id})")
     
     print(f"Found {len(connections)} database connections ({len(source_connections)} source, {len(target_connections)} target)")
     
@@ -851,6 +904,22 @@ def write_conversion_report(output_dir=None):
         f.write(f"Total Fields: {conversion_stats['fields']}\n")
         f.write(f"Total Primary Keys: {conversion_stats['primary_keys']}\n")
         f.write("\n")
+        
+        # Connection details
+        if conversion_stats['connections_details']:
+            f.write("CONNECTION DETAILS\n")
+            f.write("-" * 80 + "\n")
+            for conn in conversion_stats['connections_details']:
+                f.write(f"{conn['role']}: {conn['name']} (ID: {conn['id']})\n")
+                f.write(f"  Database Type: {conn.get('database_type') or 'N/A'}\n")
+                f.write(f"  Data Source Name: {conn.get('data_source_name') or 'N/A'}\n")
+                f.write(f"  Connection Type: {conn.get('connection_type') or 'N/A'}\n")
+                f.write(f"  DB Version: {conn.get('db_version') or 'N/A'}\n")
+                f.write("\n")
+        else:
+            f.write("CONNECTION DETAILS\n")
+            f.write("-" * 80 + "\n")
+            f.write("No connection metadata recorded.\n\n")
         
         # Replication configuration
         f.write("REPLICATION CONFIGURATION\n")
