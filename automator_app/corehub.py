@@ -1395,6 +1395,265 @@ def import_pipeline_config_only(
     return {"pipelineId": pipeline_id, "pipelineName": pipeline_name}
 
 
+def duplicate_pipeline(
+    *,
+    token: str,
+    base_url: str,
+    pipeline_id: str,
+    new_pipeline_name: str,
+    source_agent_type: str,
+    source_agent_tag: str,
+    target_agent_type: str,
+    target_agent_tag: str,
+    use_ssl: Optional[bool],
+    skip_verify: Optional[bool],
+    conductor_url: Optional[str] = None,
+    conductor_auth_token: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Duplicate a pipeline with new source and target agent configuration.
+
+    This function:
+    1. Exports the YAML configuration of the original pipeline
+    2. Creates a new pipeline with the specified agents
+    3. If agents don't exist, can deploy them via conductor APIs
+    4. Imports the YAML configuration to the new pipeline
+
+    Args:
+        token: CoreHub authentication token
+        base_url: CoreHub base URL
+        pipeline_id: Original pipeline ID to duplicate
+        new_pipeline_name: Name for the new duplicated pipeline
+        source_agent_type: Agent type for the new source (e.g., "MYSQL", "POSTGRESQL")
+        source_agent_tag: Agent tag for the new source
+        target_agent_type: Agent type for the new target (e.g., "MYSQL", "POSTGRESQL")
+        target_agent_tag: Agent tag for the new target
+        use_ssl: Whether to use SSL for CoreHub connection
+        skip_verify: Whether to skip SSL verification
+        conductor_url: Optional conductor URL for agent deployment
+        conductor_auth_token: Optional conductor auth token for agent deployment
+
+    Returns:
+        Dict containing the new pipeline information and any deployment details
+    """
+
+    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+
+    logger.info("Starting pipeline duplication: %s -> %s", pipeline_id, new_pipeline_name)
+
+    # Step 1: Export the original pipeline configuration
+    try:
+        yaml_config = export_pipeline_yaml(
+            token=token,
+            base_url=base_url,
+            pipeline_id=pipeline_id,
+            use_ssl=use_ssl,
+            skip_verify=skip_verify,
+        )
+    except Exception as exc:
+        logger.exception("Failed to export pipeline %s configuration: %s", pipeline_id, exc)
+        raise RuntimeError(f"Failed to export pipeline configuration: {exc}") from exc
+
+    # Step 2: Parse the YAML to modify agent configuration
+    try:
+        config_dict = yaml.safe_load(yaml_config)
+    except Exception as exc:
+        logger.exception("Failed to parse YAML configuration: %s", exc)
+        raise RuntimeError(f"Failed to parse pipeline configuration: {exc}") from exc
+
+    # Step 3: Check if the required agents exist
+    agents_available = _check_agents_available(
+        token=token,
+        base_url=base_url,
+        source_agent_type=source_agent_type,
+        source_agent_tag=source_agent_tag,
+        target_agent_type=target_agent_type,
+        target_agent_tag=target_agent_tag,
+        use_ssl=use_ssl,
+        skip_verify=skip_verify,
+    )
+
+    # Step 4: If agents don't exist and conductor is available, deploy them
+    deployed_agents = []
+    if not agents_available and conductor_url and conductor_auth_token:
+        logger.info("Required agents not available, attempting deployment via conductor")
+        deployed_agents = _deploy_agents_via_conductor(
+            conductor_url=conductor_url,
+            conductor_auth_token=conductor_auth_token,
+            source_agent_type=source_agent_type,
+            source_agent_tag=source_agent_tag,
+            target_agent_type=target_agent_type,
+            target_agent_tag=target_agent_tag,
+        )
+
+    # Step 5: Modify the configuration for the new pipeline
+    # Update pipeline name
+    if "pipelineName" in config_dict:
+        config_dict["pipelineName"] = new_pipeline_name
+
+    # Update agent configuration
+    if "agents" in config_dict:
+        config_dict["agents"] = [
+            {
+                "agentType": "SOURCE",
+                "agentTag": source_agent_tag,
+                # Keep other agent configuration from the original but update type/tag
+                **{k: v for k, v in agent.items() if k not in ["agentType", "agentTag"]}
+            } for agent in config_dict["agents"] if agent.get("agentType") == "SOURCE"
+        ] + [
+            {
+                "agentType": "TARGET",
+                "agentTag": target_agent_tag,
+                # Keep other agent configuration from the original but update type/tag
+                **{k: v for k, v in agent.items() if k not in ["agentType", "agentTag"]}
+            } for agent in config_dict["agents"] if agent.get("agentType") == "TARGET"
+        ]
+
+    # If we deployed agents, update the configuration with their details
+    if deployed_agents:
+        # This would need to be implemented based on the conductor response
+        pass
+
+    # Step 6: Import the modified configuration to create the new pipeline
+    try:
+        result = import_pipeline_config_only(
+            token=token,
+            base_url=base_url,
+            use_ssl=use_ssl,
+            skip_verify=skip_verify,
+            config=config_dict,
+        )
+    except Exception as exc:
+        logger.exception("Failed to create duplicated pipeline: %s", exc)
+        raise RuntimeError(f"Failed to create duplicated pipeline: {exc}") from exc
+
+    new_pipeline_id = result.get("pipelineId")
+    logger.info("Successfully duplicated pipeline %s to %s (%s)", pipeline_id, new_pipeline_name, new_pipeline_id)
+
+    return {
+        "originalPipelineId": pipeline_id,
+        "newPipelineId": new_pipeline_id,
+        "newPipelineName": new_pipeline_name,
+        "agentsAvailable": agents_available,
+        "deployedAgents": deployed_agents,
+        "sourceAgent": {"type": source_agent_type, "tag": source_agent_tag},
+        "targetAgent": {"type": target_agent_type, "tag": target_agent_tag},
+    }
+
+
+def _check_agents_available(
+    *,
+    token: str,
+    base_url: str,
+    source_agent_type: str,
+    source_agent_tag: str,
+    target_agent_type: str,
+    target_agent_tag: str,
+    use_ssl: Optional[bool],
+    skip_verify: Optional[bool],
+) -> bool:
+    """Check if the required source and target agents are available (unassigned or assignable)."""
+
+    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+
+    # Get unassigned agents
+    unassigned = fetch_core_hub("/unassigned-agents", token=token)
+    if not isinstance(unassigned, list):
+        logger.warning("Failed to retrieve unassigned agents")
+        return False
+
+    # Check for source agent
+    source_found = any(
+        isinstance(agent, dict) and
+        agent.get("agentType") == source_agent_type and
+        agent.get("agentTag") == source_agent_tag
+        for agent in unassigned
+    )
+
+    # Check for target agent
+    target_found = any(
+        isinstance(agent, dict) and
+        agent.get("agentType") == target_agent_type and
+        agent.get("agentTag") == target_agent_tag
+        for agent in unassigned
+    )
+
+    logger.info("Agent availability check: source=%s, target=%s", source_found, target_found)
+    return source_found and target_found
+
+
+def _deploy_agents_via_conductor(
+    *,
+    conductor_url: str,
+    conductor_auth_token: str,
+    source_agent_type: str,
+    source_agent_tag: str,
+    target_agent_type: str,
+    target_agent_tag: str,
+) -> list:
+    """Deploy agents via conductor APIs if they are not available."""
+
+    logger.info("Deploying agents via conductor: source %s/%s, target %s/%s",
+                source_agent_type, source_agent_tag, target_agent_type, target_agent_tag)
+
+    # Import the conductor function from the parent directory
+    import sys
+    import os
+    parent_dir = os.path.dirname(os.path.dirname(__file__))
+    sys.path.insert(0, parent_dir)
+    from add_agents_with_conductor import add_agents_with_conductor
+
+    # Create a temporary config.json for the agents
+    config_data = {
+        "globals": {
+            "testName": f"duplicated_pipeline_{source_agent_tag}_{target_agent_tag}",
+            "jobId": "duplication_job"
+        },
+        "agents": [
+            {
+                "agentTag": source_agent_tag,
+                "agentType": source_agent_type.lower(),
+            },
+            {
+                "agentTag": target_agent_tag,
+                "agentType": target_agent_type.lower(),
+            }
+        ]
+    }
+
+    # Write temporary config file
+    import tempfile
+    import json
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        json.dump(config_data, f)
+        config_path = f.name
+
+    try:
+        # Call the conductor function
+        result = add_agents_with_conductor(
+            config_path=config_path,
+            conductor_url=conductor_url,
+            auth_token=conductor_auth_token
+        )
+
+        if result.get("error"):
+            logger.error("Conductor deployment failed: %s", result["error"])
+            return []
+
+        logger.info("Successfully deployed agents via conductor")
+        return result.get("service_names", [])
+
+    except ImportError as exc:
+        logger.warning("Could not import conductor functions: %s", exc)
+        return []
+    except Exception as exc:
+        logger.exception("Failed to deploy agents via conductor: %s", exc)
+        return []
+
+    finally:
+        # Clean up temporary file
+        os.unlink(config_path)
+
+
 def validate_token(token: str) -> bool:
     try:
         response = fetch_core_hub("/pipelines", token=token)

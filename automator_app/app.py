@@ -181,6 +181,32 @@ class BulkCreateRequest(BaseModel):
         allow_population_by_field_name = True
 
 
+class DuplicatePipelineRequest(BaseModel):
+    new_pipeline_name: str = Field(..., alias="newPipelineName")
+    source_agent_type: str = Field(..., alias="sourceAgentType")
+    source_agent_tag: str = Field(..., alias="sourceAgentTag")
+    target_agent_type: str = Field(..., alias="targetAgentType")
+    target_agent_tag: str = Field(..., alias="targetAgentTag")
+    conductor_url: Optional[str] = Field(None, alias="conductorUrl")
+    conductor_auth_token: Optional[str] = Field(None, alias="conductorAuthToken")
+
+    class Config:
+        allow_population_by_field_name = True
+
+
+class DuplicatePipelineResponse(BaseModel):
+    original_pipeline_id: str = Field(..., alias="originalPipelineId")
+    new_pipeline_id: str = Field(..., alias="newPipelineId")
+    new_pipeline_name: str = Field(..., alias="newPipelineName")
+    agents_available: bool = Field(..., alias="agentsAvailable")
+    deployed_agents: list[str] = Field(..., alias="deployedAgents")
+    source_agent: dict = Field(..., alias="sourceAgent")
+    target_agent: dict = Field(..., alias="targetAgent")
+
+    class Config:
+        allow_population_by_field_name = True
+
+
 def _ensure_static_assets() -> None:
     static_directory = _static_dir()
     if not static_directory.exists():
@@ -666,6 +692,47 @@ def create_app() -> FastAPI:
                 "Content-Disposition": f'attachment; filename="{filename}"',
             },
         )
+
+    @app.post("/api/duplicate/pipeline/{pipeline_id}", response_model=DuplicatePipelineResponse)
+    async def duplicate_pipeline(pipeline_id: str, request: DuplicatePipelineRequest):
+        """Duplicate a pipeline with new source and target agent configuration.
+
+        This endpoint allows users to clone an existing pipeline with different agents.
+        If the specified agents are not available, they can be deployed via conductor APIs.
+        """
+
+        if not state.token or not state.base_url:
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+        if not request.new_pipeline_name:
+            raise HTTPException(status_code=400, detail="newPipelineName is required")
+
+        if not request.source_agent_type or not request.source_agent_tag:
+            raise HTTPException(status_code=400, detail="sourceAgentType and sourceAgentTag are required")
+
+        if not request.target_agent_type or not request.target_agent_tag:
+            raise HTTPException(status_code=400, detail="targetAgentType and targetAgentTag are required")
+
+        try:
+            result = corehub.duplicate_pipeline(
+                token=state.token,
+                base_url=state.base_url,
+                pipeline_id=pipeline_id,
+                new_pipeline_name=request.new_pipeline_name,
+                source_agent_type=request.source_agent_type,
+                source_agent_tag=request.source_agent_tag,
+                target_agent_type=request.target_agent_type,
+                target_agent_tag=request.target_agent_tag,
+                use_ssl=state.use_ssl,
+                skip_verify=state.skip_verify,
+                conductor_url=request.conductor_url,
+                conductor_auth_token=request.conductor_auth_token,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Failed to duplicate pipeline %s", pipeline_id)
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        return DuplicatePipelineResponse(**result)
 
     @app.post("/api/import/config", response_model=ApiMessage)
     async def import_config(file: UploadFile = File(...)) -> ApiMessage:
