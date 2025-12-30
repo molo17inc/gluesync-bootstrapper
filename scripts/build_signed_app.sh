@@ -28,7 +28,9 @@ APP_AUTOMATOR_PAYLOAD="${APP_RESOURCES}/automator"
 APP_VERSION_FILE="${APP_VERSION_FILE:-${ROOT_DIR}/automator_app/VERSION}"
 MAIN_BINARY_NAME="${MAIN_BINARY_NAME:-gluesync-automator-macos}"
 ICON_SOURCE="${ICON_SOURCE:-${ROOT_DIR}/automator_app/static/web-app-manifest-512x512.png}"
+ICON_SOURCE_SVG="${ICON_SOURCE_SVG:-${ROOT_DIR}/automator_app/static/gluesync-bootstrapper.svg}"
 ICON_BASENAME="${ICON_BASENAME:-GluesyncAutomator}"
+ICON_BASE_SIZE="${ICON_BASE_SIZE:-1024}"
 
 SIGN_IDENTITY="${SIGN_IDENTITY:-}"
 ENTITLEMENTS_FILE="${ENTITLEMENTS_FILE:-}"
@@ -57,6 +59,24 @@ INFO_PLIST_TEMPLATE='<?xml version="1.0" encoding="UTF-8"?>
 	<string>%s</string>
 	<key>CFBundleIconFile</key>
 	<string>%s</string>
+	<key>CFBundleIconName</key>
+	<string>%s</string>
+	<key>CFBundleIconFiles</key>
+	<array>
+		<string>%s</string>
+	</array>
+	<key>CFBundleIcons</key>
+	<dict>
+		<key>CFBundlePrimaryIcon</key>
+		<dict>
+			<key>CFBundleIconName</key>
+			<string>%s</string>
+			<key>CFBundleIconFiles</key>
+			<array>
+				<string>%s</string>
+			</array>
+		</dict>
+	</dict>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>LSMinimumSystemVersion</key>
@@ -101,7 +121,7 @@ fi
 
 log "Building PyInstaller bundle using ${PYINSTALLER_SPEC}"
 pushd "${ROOT_DIR}" >/dev/null
-pyinstaller "${PYINSTALLER_SPEC}"
+pyinstaller --noconfirm "${PYINSTALLER_SPEC}"
 popd >/dev/null
 
 if [[ -d "${PYINSTALLER_OUTPUT}" ]]; then
@@ -111,6 +131,22 @@ elif [[ -f "${PYINSTALLER_OUTPUT}" ]]; then
 else
   echo "Error: expected PyInstaller output at ${PYINSTALLER_OUTPUT}" >&2
   exit 1
+fi
+
+if [[ -n "${SIGN_IDENTITY}" && "${PYINSTALLER_OUTPUT_KIND}" == "dir" ]]; then
+  log "Codesigning PyInstaller payload contents in ${PYINSTALLER_OUTPUT}"
+  mapfile -t _pyinst_files_to_sign < <(
+    find "${PYINSTALLER_OUTPUT}" -type f \( -perm -111 -o -name '*.dylib' -o -name '*.so' -o -name 'Python' \)
+  )
+  if [[ "${#_pyinst_files_to_sign[@]}" -gt 0 ]]; then
+    prebundle_codesign_args=(--force --timestamp --options runtime --sign "${SIGN_IDENTITY}")
+    for file in "${_pyinst_files_to_sign[@]}"; do
+      codesign "${prebundle_codesign_args[@]}" "${file}"
+    done
+  else
+    log "No executable artifacts found under ${PYINSTALLER_OUTPUT} for codesigning"
+  fi
+  unset _pyinst_files_to_sign
 fi
 
 log "Preparing app bundle structure at ${APP_BUNDLE}"
@@ -147,24 +183,48 @@ chmod +x "${launcher_path}"
 
 log "Generating Info.plist"
 bundle_identifier_stub="$(echo "${APP_NAME}" | tr '[:upper:] ' '[:lower:]_' | tr -cd '[:alnum:]_')"
-plist_icon_value=""
-if [[ -f "${ICON_SOURCE}" ]]; then
-  log "Generating .icns icon from ${ICON_SOURCE}"
-  iconset_dir="$(mktemp -d "${TMPDIR:-/tmp}/gluesync-icon.XXXXXX")"
+plist_icon_name=""
+plist_icon_file=""
+icon_temp_png=""
+icon_input_path=""
+if [[ -f "${ICON_SOURCE_SVG}" ]]; then
+  log "Rendering SVG icon ${ICON_SOURCE_SVG} to ${ICON_BASE_SIZE}px PNG"
+  icon_temp_png="$(mktemp "${TMPDIR:-/tmp}/gluesync-svg.XXXXXX.png")"
+  SVG_INPUT="${ICON_SOURCE_SVG}" PNG_OUTPUT="${icon_temp_png}" ICON_PX="${ICON_BASE_SIZE}" python3 <<'PY'
+import os
+from cairosvg import svg2png
+
+svg_path = os.environ["SVG_INPUT"]
+png_path = os.environ["PNG_OUTPUT"]
+size = int(os.environ["ICON_PX"])
+svg2png(url=svg_path, write_to=png_path, output_width=size, output_height=size)
+PY
+  icon_input_path="${icon_temp_png}"
+elif [[ -f "${ICON_SOURCE}" ]]; then
+  icon_input_path="${ICON_SOURCE}"
+fi
+
+if [[ -n "${icon_input_path}" ]]; then
+  log "Generating .icns icon from ${icon_input_path}"
+  iconset_dir="$(mktemp -d "${TMPDIR:-/tmp}/gluesync-icon.XXXXXX.iconset")"
   declare -a base_sizes=(16 32 64 128 256 512)
   for size in "${base_sizes[@]}"; do
     target="${iconset_dir}/icon_${size}x${size}.png"
-    sips -z "${size}" "${size}" "${ICON_SOURCE}" --out "${target}" >/dev/null
+    sips -s format png -z "${size}" "${size}" "${icon_input_path}" --out "${target}" >/dev/null
     retina_size=$((size * 2))
     retina_target="${iconset_dir}/icon_${size}x${size}@2x.png"
-    sips -z "${retina_size}" "${retina_size}" "${ICON_SOURCE}" --out "${retina_target}" >/dev/null
+    sips -s format png -z "${retina_size}" "${retina_size}" "${icon_input_path}" --out "${retina_target}" >/dev/null
   done
   ICON_FILE="${APP_RESOURCES}/${ICON_BASENAME}.icns"
   iconutil -c icns -o "${ICON_FILE}" "${iconset_dir}" >/dev/null
   rm -rf "${iconset_dir}"
-  plist_icon_value="${ICON_BASENAME}"
+  plist_icon_name="${ICON_BASENAME}"
+  plist_icon_file="${ICON_BASENAME}.icns"
+  if [[ -n "${icon_temp_png}" && -f "${icon_temp_png}" ]]; then
+    rm -f "${icon_temp_png}"
+  fi
 else
-  log "Icon source ${ICON_SOURCE} not found; skipping icon generation"
+  log "Icon sources ${ICON_SOURCE_SVG} / ${ICON_SOURCE} not found; skipping icon generation"
 fi
 printf "${INFO_PLIST_TEMPLATE}" \
   "${APP_NAME}" \
@@ -173,7 +233,11 @@ printf "${INFO_PLIST_TEMPLATE}" \
   "${APP_VERSION}" \
   "${APP_VERSION}" \
   "${APP_EXECUTABLE_NAME}" \
-  "${plist_icon_value}" \
+  "${plist_icon_file}" \
+  "${plist_icon_name}" \
+  "${plist_icon_name}" \
+  "${plist_icon_name}" \
+  "${plist_icon_name}" \
   > "${APP_CONTENTS}/Info.plist"
 
 if [[ -n "${SIGN_IDENTITY}" ]]; then
@@ -189,6 +253,11 @@ if [[ -n "${SIGN_IDENTITY}" ]]; then
 else
   log "Skipping codesign step (SIGN_IDENTITY not set)"
 fi
+
+log "Clearing extended attributes and registering bundle locally"
+xattr -cr "${APP_BUNDLE}" || true
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "${APP_BUNDLE}" >/dev/null 2>&1 || true
+touch "${APP_BUNDLE}"
 
 if [[ "${NOTARIZE}" == "1" ]]; then
   ZIP_PATH="${DIST_DIR}/$(echo "${APP_NAME}" | tr ' ' '-').zip"
