@@ -290,7 +290,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         }
 
     def extract_computed_partitions(response):
-        """Normalize compute-logical-partitions API responses into GlueSync partition lists."""
+        """Normalize compute-logical-partitions API responses into Gluesync partition lists."""
 
         partitions = []
         if not isinstance(response, dict):

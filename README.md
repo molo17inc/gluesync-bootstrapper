@@ -883,7 +883,7 @@ ARTICLES:
 
 ### Overview
 
-Logical partitions allow GlueSync to break very large tables into deterministic ranges during snapshot operations. When enabled, the bootstrapper automatically asks CoreHub to compute optimal ranges for the specified column and patches the entity configuration with those ranges so that snapshots can execute in parallel.
+Logical partitions allow Gluesync to break very large tables into deterministic ranges during snapshot operations. When enabled, the bootstrapper automatically asks CoreHub to compute optimal ranges for the specified column and patches the entity configuration with those ranges so that snapshots can execute in parallel.
 
 ### Configuration
 
@@ -944,7 +944,7 @@ PUT /pipelines/{pipelineId}/config/entities
 
 - Only single-table entities support logical partitions at the moment.
 - The partition column must exist in the discovery metadata; otherwise the bootstrapper logs a warning and skips the feature for that table.
-- Computed ranges are stored in GlueSync so that subsequent snapshots reuse the same configuration without recomputation.
+- Computed ranges are stored in Gluesync so that subsequent snapshots reuse the same configuration without recomputation.
 
 ## Support
 

@@ -770,7 +770,7 @@ def build_yaml_structure(
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Export an existing GlueSync pipeline configuration from CoreHub/Chronos "
+            "Export an existing Gluesync pipeline configuration from CoreHub/Chronos "
             "into a table-list-style YAML template (backup)."
         )
     )

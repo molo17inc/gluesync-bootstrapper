@@ -125,7 +125,7 @@ def export_single_pipeline(token: str, pipeline_id: str, output_dir: str | None 
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Export all GlueSync pipelines from CoreHub into per-pipeline "
+            "Export all Gluesync pipelines from CoreHub into per-pipeline "
             "table-list-style YAML templates (backups)."
         )
     )
