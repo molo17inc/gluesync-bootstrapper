@@ -19,7 +19,7 @@ PYINSTALLER_SPEC="${PYINSTALLER_SPEC:-automator-macos.spec}"
 PYINSTALLER_OUTPUT="${PYINSTALLER_OUTPUT:-${DIST_DIR}/gluesync-automator-macos}"
 
 APP_NAME="${APP_NAME:-Gluesync Automator}"
-APP_EXECUTABLE_NAME="${APP_EXECUTABLE_NAME:-GluesyncAutomator}"
+APP_EXECUTABLE_NAME="${APP_EXECUTABLE_NAME:-gluesync-automator-macos}"
 APP_BUNDLE="${DIST_DIR}/${APP_NAME}.app"
 APP_CONTENTS="${APP_BUNDLE}/Contents"
 APP_MACOS="${APP_CONTENTS}/MacOS"
@@ -33,7 +33,7 @@ ICON_BASENAME="${ICON_BASENAME:-GluesyncAutomator}"
 ICON_BASE_SIZE="${ICON_BASE_SIZE:-1024}"
 
 SIGN_IDENTITY="${SIGN_IDENTITY:-}"
-ENTITLEMENTS_FILE="${ENTITLEMENTS_FILE:-}"
+ENTITLEMENTS_FILE="${ENTITLEMENTS_FILE:-${ROOT_DIR}/scripts/entitlements.plist}"
 SKIP_PIP="${SKIP_PIP:-0}"
 NOTARIZE="${NOTARIZE:-0}"
 APPLE_ID="${APPLE_ID:-}"
@@ -139,7 +139,7 @@ if [[ -n "${SIGN_IDENTITY}" && "${PYINSTALLER_OUTPUT_KIND}" == "dir" ]]; then
     find "${PYINSTALLER_OUTPUT}" -type f \( -perm -111 -o -name '*.dylib' -o -name '*.so' -o -name 'Python' \)
   )
   if [[ "${#_pyinst_files_to_sign[@]}" -gt 0 ]]; then
-    prebundle_codesign_args=(--force --timestamp --options runtime --sign "${SIGN_IDENTITY}")
+    prebundle_codesign_args=(--force --options runtime --sign "${SIGN_IDENTITY}")
     for file in "${_pyinst_files_to_sign[@]}"; do
       codesign "${prebundle_codesign_args[@]}" "${file}"
     done
@@ -161,25 +161,27 @@ else
   cp "${PYINSTALLER_OUTPUT}" "${APP_AUTOMATOR_PAYLOAD}/"
 fi
 PAYLOAD_ENTRY="${APP_AUTOMATOR_PAYLOAD}/${MAIN_BINARY_NAME}"
+APP_EXECUTABLE_PATH="${APP_MACOS}/${MAIN_BINARY_NAME}"
+cp "${PAYLOAD_ENTRY}" "${APP_EXECUTABLE_PATH}"
+rm -rf "${APP_MACOS}/_internal"
+ln -s "../Resources/automator/_internal" "${APP_MACOS}/_internal"
+ln -sf "../Resources/automator/_internal/base_library.zip" "${APP_MACOS}/base_library.zip"
+APP_FRAMEWORKS="${APP_CONTENTS}/Frameworks"
+rm -rf "${APP_FRAMEWORKS}"
+mkdir -p "${APP_FRAMEWORKS}"
+ln -s "../Resources/automator/_internal/Python.framework" "${APP_FRAMEWORKS}/Python.framework"
+ln -s "Python.framework/Versions/Current/Python" "${APP_FRAMEWORKS}/Python"
 
-if [[ -n "${SIGN_IDENTITY}" && -f "${PAYLOAD_ENTRY}" ]]; then
-  log "Codesigning payload binary ${PAYLOAD_ENTRY}"
-  payload_codesign_args=(--force --options runtime --timestamp --sign "${SIGN_IDENTITY}")
-  codesign "${payload_codesign_args[@]}" "${PAYLOAD_ENTRY}"
+if [[ -n "${SIGN_IDENTITY}" && -f "${APP_EXECUTABLE_PATH}" ]]; then
+  log "Codesigning app executable ${APP_EXECUTABLE_PATH}"
+  exe_codesign_args=(--force --options runtime --timestamp --sign "${SIGN_IDENTITY}")
+  if [[ -n "${ENTITLEMENTS_FILE}" ]]; then
+    exe_codesign_args+=(--entitlements "${ENTITLEMENTS_FILE}")
+  fi
+  codesign "${exe_codesign_args[@]}" "${APP_EXECUTABLE_PATH}"
 else
-  log "Skipping payload binary codesign (either SIGN_IDENTITY unset or ${PAYLOAD_ENTRY} missing)"
+  log "Skipping executable codesign (either SIGN_IDENTITY unset or ${APP_EXECUTABLE_PATH} missing)"
 fi
-
-log "Writing launcher script"
-launcher_path="${APP_MACOS}/${APP_EXECUTABLE_NAME}"
-cat >"${launcher_path}" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-THIS_DIR="$(cd "$(dirname "$0")" && pwd)"
-PAYLOAD_DIR="${THIS_DIR}/../Resources/automator"
-exec "${PAYLOAD_DIR}/gluesync-automator-macos" "$@"
-EOF
-chmod +x "${launcher_path}"
 
 log "Generating Info.plist"
 bundle_identifier_stub="$(echo "${APP_NAME}" | tr '[:upper:] ' '[:lower:]_' | tr -cd '[:alnum:]_')"
@@ -189,7 +191,7 @@ icon_temp_png=""
 icon_input_path=""
 if [[ -f "${ICON_SOURCE_SVG}" ]]; then
   log "Rendering SVG icon ${ICON_SOURCE_SVG} to ${ICON_BASE_SIZE}px PNG"
-  icon_temp_png="$(mktemp "${TMPDIR:-/tmp}/gluesync-svg.XXXXXX.png")"
+  icon_temp_png="$(mktemp "${TMPDIR:-/tmp}/gluesync-svg-$$.XXXXXX.png")"
   SVG_INPUT="${ICON_SOURCE_SVG}" PNG_OUTPUT="${icon_temp_png}" ICON_PX="${ICON_BASE_SIZE}" python3 <<'PY'
 import os
 from cairosvg import svg2png
@@ -241,15 +243,14 @@ printf "${INFO_PLIST_TEMPLATE}" \
   > "${APP_CONTENTS}/Info.plist"
 
 if [[ -n "${SIGN_IDENTITY}" ]]; then
-  log "Codesigning with identity: ${SIGN_IDENTITY}"
-  codesign_args=(--deep --force --options runtime --timestamp --sign "${SIGN_IDENTITY}")
+  log "Codesigning app bundle with identity: ${SIGN_IDENTITY}"
+  codesign_args=(--force --options runtime --timestamp --sign "${SIGN_IDENTITY}")
   if [[ -n "${ENTITLEMENTS_FILE}" ]]; then
     codesign_args+=(--entitlements "${ENTITLEMENTS_FILE}")
   fi
   codesign "${codesign_args[@]}" "${APP_BUNDLE}"
   log "Verifying code signature"
-  codesign --verify --deep --strict --verbose "${APP_BUNDLE}"
-  spctl --assess --verbose "${APP_BUNDLE}" || true
+  codesign --verify --strict --verbose=2 "${APP_BUNDLE}"
 else
   log "Skipping codesign step (SIGN_IDENTITY not set)"
 fi
@@ -281,7 +282,6 @@ if [[ "${NOTARIZE}" == "1" ]]; then
 
   log "Stapling notarization ticket"
   xcrun stapler staple "${APP_BUNDLE}"
-  spctl --assess --verbose "${APP_BUNDLE}" || true
 else
   log "Skipping notarization (NOTARIZE != 1)"
 fi

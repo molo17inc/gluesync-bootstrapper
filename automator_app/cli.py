@@ -91,8 +91,43 @@ def main(argv: list[str] | None = None) -> None:
     )
     server = uvicorn.Server(config)
 
+    url = f"http://{args.host}:{args.port}"
+
+    # Create tray icon for macOS to show the app is running
+    if sys.platform == 'darwin':
+        try:
+            from AppKit import NSStatusBar, NSVariableStatusItemLength, NSMenu, NSMenuItem
+            from Foundation import NSObject
+            from objc import selector as objc_selector
+
+            class MenuDelegate(NSObject):
+                def initWithURL_(self, url):
+                    self = super().init()
+                    self.url = url
+                    return self
+
+                @objc_selector('openURL:')
+                def openURL_(self, sender):
+                    webbrowser.open(self.url)
+
+            status_bar = NSStatusBar.systemStatusBar()
+            status_item = status_bar.statusItemWithLength_(NSVariableStatusItemLength)
+            status_item.setTitle_("Gluesync")
+            menu = NSMenu.alloc().init()
+
+            delegate = MenuDelegate.alloc().initWithURL_(url)
+            open_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("Open", "openURL:", "")
+            open_item.setTarget_(delegate)
+            menu.addItem_(open_item)
+
+            quit_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("Quit", "terminate:", "")
+            menu.addItem_(quit_item)
+            status_item.setMenu_(menu)
+            LOGGER.info("Tray icon created for macOS")
+        except ImportError as e:
+            LOGGER.warning("PyObjC not available for tray icon: %s", e)
+
     if args.open_browser:
-        url = f"http://{args.host}:{args.port}"
         LOGGER.info("Opening browser at %s", url)
         webbrowser.open(url)
 
