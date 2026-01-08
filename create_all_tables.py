@@ -409,6 +409,7 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                         col_numeric_precision = 0  # Default numeric precision
                         col_numeric_scale = 0  # Default numeric scale
                         col_is_nullable = False  # Default nullable
+                        has_authoritative_type = False
                     else:
                         # Object format with user-defined properties
                         col_name = target_col.get('name')
@@ -417,9 +418,10 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                         col_numeric_precision = target_col.get('numericPrecision', 0)  # Default numeric precision
                         col_numeric_scale = target_col.get('numericScale', 0)  # Default numeric scale
                         col_is_nullable = target_col.get('isNullable', False)  # Default nullable
+                        has_authoritative_type = bool(target_col.get('type'))
                     
-                    # Map the column type to target node type
-                    mapped_type = map_data_type(col_type, source_node_info, target_node_info)
+                    # Map the column type to target node type only when type is not explicitly defined
+                    mapped_type = col_type if has_authoritative_type else map_data_type(col_type, source_node_info, target_node_info)
                     
                     column_dtos.append(ColumnDto(
                         name=col_name,
