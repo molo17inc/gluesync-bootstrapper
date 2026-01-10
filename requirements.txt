@@ -8,4 +8,7 @@ fastapi
 uvicorn[standard]
 python-multipart
 cairosvg
+pyobjc-core
+pyobjc-framework-Cocoa
+pyobjc-framework-WebKit
 # The gluesync_sdk dependency is installed directly in the Dockerfile

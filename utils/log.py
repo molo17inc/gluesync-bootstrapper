@@ -165,7 +165,16 @@ def create_log_file(log_dir=None):
     """
     if not log_dir:
         # Check for LOG_DIR environment variable first
-        log_dir = os.environ.get('LOG_DIR', os.path.join(os.getcwd(), 'logs'))
+        default_log_dir = os.environ.get('LOG_DIR')
+        if not default_log_dir:
+            # Use appropriate default based on platform
+            if os.path.exists('/logs'):
+                # Docker environment
+                default_log_dir = '/logs'
+            else:
+                # Local/macOS environment - use user's home directory
+                default_log_dir = os.path.join(os.path.expanduser('~'), 'Library', 'Logs', 'GluesyncAutomator')
+        log_dir = default_log_dir
         
     # Ensure log directory exists
     if not os.path.exists(log_dir):

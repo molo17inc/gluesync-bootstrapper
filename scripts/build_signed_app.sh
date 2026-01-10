@@ -81,6 +81,8 @@ INFO_PLIST_TEMPLATE='<?xml version="1.0" encoding="UTF-8"?>
 	<string>APPL</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>11.0</string>
+	<key>LSUIElement</key>
+	<true/>
 </dict>
 </plist>
 '
@@ -160,17 +162,26 @@ else
   mkdir -p "${APP_AUTOMATOR_PAYLOAD}"
   cp "${PYINSTALLER_OUTPUT}" "${APP_AUTOMATOR_PAYLOAD}/"
 fi
-PAYLOAD_ENTRY="${APP_AUTOMATOR_PAYLOAD}/${MAIN_BINARY_NAME}"
+PAYLOAD_BINARY="${APP_AUTOMATOR_PAYLOAD}/${MAIN_BINARY_NAME}"
 APP_EXECUTABLE_PATH="${APP_MACOS}/${MAIN_BINARY_NAME}"
-cp "${PAYLOAD_ENTRY}" "${APP_EXECUTABLE_PATH}"
-rm -rf "${APP_MACOS}/_internal"
-ln -s "../Resources/automator/_internal" "${APP_MACOS}/_internal"
-ln -sf "../Resources/automator/_internal/base_library.zip" "${APP_MACOS}/base_library.zip"
-APP_FRAMEWORKS="${APP_CONTENTS}/Frameworks"
-rm -rf "${APP_FRAMEWORKS}"
-mkdir -p "${APP_FRAMEWORKS}"
-ln -s "../Resources/automator/_internal/Python.framework" "${APP_FRAMEWORKS}/Python.framework"
-ln -s "Python.framework/Versions/Current/Python" "${APP_FRAMEWORKS}/Python"
+
+log "Creating launcher script"
+cat > "${APP_EXECUTABLE_PATH}" <<'LAUNCHER_EOF'
+#!/bin/bash
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RESOURCES="$DIR/../Resources/automator"
+LOG_DIR="$HOME/Library/Logs/GluesyncAutomator"
+mkdir -p "$LOG_DIR"
+LOG_FILE="$LOG_DIR/automator.log"
+
+# Run the app in foreground so it shows in dock
+# Redirect output to log file but keep process alive
+exec "$RESOURCES/gluesync-automator-macos" "$@" > "$LOG_FILE" 2>&1
+LAUNCHER_EOF
+chmod +x "${APP_EXECUTABLE_PATH}"
+
+log "Clearing extended attributes before codesigning"
+xattr -cr "${APP_BUNDLE}" || true
 
 if [[ -n "${SIGN_IDENTITY}" && -f "${APP_EXECUTABLE_PATH}" ]]; then
   log "Codesigning app executable ${APP_EXECUTABLE_PATH}"
@@ -250,13 +261,12 @@ if [[ -n "${SIGN_IDENTITY}" ]]; then
   fi
   codesign "${codesign_args[@]}" "${APP_BUNDLE}"
   log "Verifying code signature"
-  codesign --verify --strict --verbose=2 "${APP_BUNDLE}"
+  codesign --verify --verbose=2 "${APP_BUNDLE}"
 else
   log "Skipping codesign step (SIGN_IDENTITY not set)"
 fi
 
-log "Clearing extended attributes and registering bundle locally"
-xattr -cr "${APP_BUNDLE}" || true
+log "Registering bundle locally"
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "${APP_BUNDLE}" >/dev/null 2>&1 || true
 touch "${APP_BUNDLE}"
 

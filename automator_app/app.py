@@ -810,49 +810,6 @@ def create_app() -> FastAPI:
             targetAgentTag=target_agent.get("agentTag") if target_agent else None,
         )
 
-    @app.get("/api/export/pipeline/{pipeline_id}/full")
-    async def export_pipeline_full_backup(pipeline_id: str):
-        """Export a full backup (YAML + agents-config + UDFs) for a single pipeline."""
-
-        if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
-
-        try:
-            zip_data = corehub.export_pipeline_full_backup(
-                token=state.token,
-                base_url=state.base_url,
-                pipeline_id=pipeline_id,
-                use_ssl=state.use_ssl,
-                skip_verify=state.skip_verify,
-            )
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.exception("Failed to export full backup for pipeline %s", pipeline_id)
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-        # Derive a human-friendly filename aligned with the internal YAML name:
-        # backup_<safePipelineName>_<pipelineId>.zip
-        safe_name = pipeline_id
-        try:
-            details = corehub.fetch_core_hub(f"/pipelines/{pipeline_id}", token=state.token)
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.warning("Failed to fetch pipeline %s metadata for filename: %s", pipeline_id, exc)
-            details = None
-        if isinstance(details, dict):
-            name = details.get("name")
-            if isinstance(name, str) and name:
-                cleaned = "".join(c for c in name if c.isalnum() or c in (" ", "-", "_")).rstrip()
-                if cleaned:
-                    safe_name = cleaned
-
-        filename = f"backup_{safe_name}_{pipeline_id}.zip"
-        return StreamingResponse(
-            io.BytesIO(zip_data),
-            media_type="application/zip",
-            headers={
-                "Content-Disposition": f'attachment; filename="{filename}"',
-            },
-        )
-
     @app.post("/api/import/all", response_model=ApiMessage)
     async def import_all(
         file: UploadFile = File(...),

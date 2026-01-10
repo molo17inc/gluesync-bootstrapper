@@ -26,6 +26,7 @@ import argparse
 import logging
 import socket
 import sys
+import threading
 import webbrowser
 
 import uvicorn
@@ -33,6 +34,23 @@ import uvicorn
 from .app import create_app
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _show_error_dialog(title: str, message: str) -> None:
+    """Show a native macOS error dialog."""
+    if sys.platform == 'darwin':
+        try:
+            from AppKit import NSAlert, NSAlertStyleCritical, NSApp, NSApplication
+            NSApplication.sharedApplication()
+            alert = NSAlert.alloc().init()
+            alert.setMessageText_(title)
+            alert.setInformativeText_(message)
+            alert.setAlertStyle_(NSAlertStyleCritical)
+            alert.runModal()
+        except ImportError:
+            LOGGER.error("%s: %s", title, message)
+    else:
+        LOGGER.error("%s: %s", title, message)
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -73,69 +91,91 @@ def _is_port_in_use(host: str, port: int) -> bool:
         return sock.connect_ex((host, port)) == 0
 
 
+def _find_available_port(host: str, start_port: int, max_attempts: int = 100) -> int:
+    """Find an available port starting from start_port."""
+    import random
+    
+    # Try the requested port first
+    if not _is_port_in_use(host, start_port):
+        return start_port
+    
+    # Try random ports in the range 8000-9000
+    for _ in range(max_attempts):
+        port = random.randint(8000, 9000)
+        if not _is_port_in_use(host, port):
+            LOGGER.info("Port %d was in use, using port %d instead", start_port, port)
+            return port
+    
+    # Fallback: let the OS assign a port
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind((host, 0))
+        port = sock.getsockname()[1]
+        LOGGER.info("Using OS-assigned port %d", port)
+        return port
+
+
 def main(argv: list[str] | None = None) -> None:
     args = _parse_args(argv)
 
-    if _is_port_in_use(args.host, args.port):
-        LOGGER.error("Port %s:%s is already in use", args.host, args.port)
-        raise SystemExit(2)
-
-    app = create_app()
-    config = uvicorn.Config(
-        app,
-        host=args.host,
-        port=args.port,
-        log_level=args.log_level,
-        reload=args.reload,
-        lifespan="on",
-    )
-    server = uvicorn.Server(config)
-
-    url = f"http://{args.host}:{args.port}"
-
-    # Create tray icon for macOS to show the app is running
-    if sys.platform == 'darwin':
-        try:
-            from AppKit import NSStatusBar, NSVariableStatusItemLength, NSMenu, NSMenuItem
-            from Foundation import NSObject
-            from objc import selector as objc_selector
-
-            class MenuDelegate(NSObject):
-                def initWithURL_(self, url):
-                    self = super().init()
-                    self.url = url
-                    return self
-
-                @objc_selector('openURL:')
-                def openURL_(self, sender):
-                    webbrowser.open(self.url)
-
-            status_bar = NSStatusBar.systemStatusBar()
-            status_item = status_bar.statusItemWithLength_(NSVariableStatusItemLength)
-            status_item.setTitle_("Gluesync")
-            menu = NSMenu.alloc().init()
-
-            delegate = MenuDelegate.alloc().initWithURL_(url)
-            open_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("Open", "openURL:", "")
-            open_item.setTarget_(delegate)
-            menu.addItem_(open_item)
-
-            quit_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("Quit", "terminate:", "")
-            menu.addItem_(quit_item)
-            status_item.setMenu_(menu)
-            LOGGER.info("Tray icon created for macOS")
-        except ImportError as e:
-            LOGGER.warning("PyObjC not available for tray icon: %s", e)
-
-    if args.open_browser:
-        LOGGER.info("Opening browser at %s", url)
-        webbrowser.open(url)
-
     try:
-        server.run()
-    except KeyboardInterrupt:  # pragma: no cover - interactive use only
-        LOGGER.info("Gluesync Automator interrupted by user")
-        raise SystemExit(130) from None
+        # Find an available port instead of failing
+        port = _find_available_port(args.host, args.port)
+        if port != args.port:
+            LOGGER.info("Requested port %d was in use, using port %d", args.port, port)
+        args.port = port
+
+        app = create_app()
+        config = uvicorn.Config(
+            app,
+            host=args.host,
+            port=args.port,
+            log_level=args.log_level,
+            reload=args.reload,
+            lifespan="on",
+        )
+        server = uvicorn.Server(config)
+
+        url = f"http://{args.host}:{args.port}"
+
+        # Run server in background thread so GUI can run in main thread
+        server_thread = threading.Thread(target=server.run, daemon=True)
+        server_thread.start()
+
+        # Wait for server to start
+        import time
+        max_wait = 10
+        for _ in range(max_wait * 10):
+            if _is_port_in_use(args.host, args.port):
+                break
+            time.sleep(0.1)
+        else:
+            error_msg = "Server failed to start within timeout"
+            LOGGER.error(error_msg)
+            _show_error_dialog("Gluesync Automator - Startup Error", error_msg)
+            raise SystemExit(1)
+
+        # Open browser
+        LOGGER.info("Opening browser at %s", url)
+        import subprocess
+        try:
+            subprocess.run(['open', url], check=True)
+        except Exception as e:
+            LOGGER.warning("Failed to open with 'open' command: %s", e)
+            webbrowser.open(url)
+        
+        # Keep server running
+        LOGGER.info("Server running at %s", url)
+        try:
+            server_thread.join()
+        except KeyboardInterrupt:
+            LOGGER.info("Gluesync Automator interrupted by user")
+            raise SystemExit(130) from None
+                
+    except Exception as e:
+        error_msg = f"Failed to start Gluesync Automator: {str(e)}"
+        LOGGER.exception(error_msg)
+        _show_error_dialog("Gluesync Automator - Error", error_msg)
+        raise SystemExit(1) from e
 
 
 if __name__ == "__main__":  # pragma: no cover
