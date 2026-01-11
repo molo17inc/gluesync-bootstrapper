@@ -67,7 +67,17 @@ class DuplicateCancelledError(RuntimeError):
     """Raised when a duplicate pipeline request is cancelled by the user."""
 
 _AGENT_TYPE_BY_NAME: Dict[str, str] | None = None
-_AGENTS_FILE = "agents.json"
+
+def _get_agents_file_path() -> str:
+    """Resolve path to agents.json in both dev and PyInstaller bundle."""
+    import sys
+    if getattr(sys, 'frozen', False):
+        # Running in PyInstaller bundle
+        base_path = sys._MEIPASS
+    else:
+        # Running in development
+        base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base_path, "agents.json")
 
 def _write_temp_yaml(contents: str) -> str:
     """Persist YAML text to a temporary file and return its path."""
@@ -83,7 +93,8 @@ def _load_agent_type_catalog() -> Dict[str, str]:
     if _AGENT_TYPE_BY_NAME is not None:
         return _AGENT_TYPE_BY_NAME
     try:
-        with open(_AGENTS_FILE, "r", encoding="utf-8") as f:
+        agents_file = _get_agents_file_path()
+        with open(agents_file, "r", encoding="utf-8") as f:
             data = json.load(f)
     except Exception as exc:
         raise RuntimeError(f"Failed to load agents catalog: {exc}") from exc
