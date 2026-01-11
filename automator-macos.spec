@@ -17,35 +17,23 @@ def _write_version_file() -> None:
 
     Falls back silently if git is unavailable or no matching tag exists.
     """
-
     try:
-        # Prefer annotated tags; fallback to any matching tag
-        tag = (
-            subprocess.check_output(
-                ['git', 'describe', '--tags', '--match', 'automator-*', '--abbrev=0'],
-                stderr=subprocess.STDOUT,
-            )
-            .decode('utf-8')
-            .strip()
+        # Try to get version from git
+        result = subprocess.run(
+            ['git', 'describe', '--tags', '--always'],
+            capture_output=True,
+            text=True,
+            check=False
         )
+        if result.returncode == 0:
+            version = result.stdout.strip()
+        else:
+            version = 'unknown'
     except Exception:
-        tag = ''
-
-    if not tag:
-        return
-
-    # Strip leading pattern: automator-
-    version = tag
-    if version.startswith('automator-'):
-        version = version[len('automator-') :]
-
-    version = version.strip()
-    if not version:
-        return
-
-    version_path = os.path.join(current_dir, 'automator_app', 'VERSION')
+        version = 'unknown'
+    
     try:
-        os.makedirs(os.path.dirname(version_path), exist_ok=True)
+        version_path.parent.mkdir(parents=True, exist_ok=True)
         with open(version_path, 'w', encoding='utf-8') as fh:  # noqa: PTH123
             fh.write(version + '\n')
     except Exception:
@@ -56,6 +44,7 @@ def _write_version_file() -> None:
 _write_version_file()
 
 datas = [
+    ('automator_app', 'automator_app'),
     ('automator_app/static', 'static'),
     ('automator_app/VERSION', 'automator_app'),
 ]
@@ -83,6 +72,14 @@ hiddenimports = [
     'Foundation',
     'WebKit',
     'objc',
+    'PyQt6',
+    'PyQt6.QtCore',
+    'PyQt6.QtGui',
+    'PyQt6.QtWidgets',
+    'PyQt6.QtWebEngineCore',
+    'PyQt6.QtWebEngineWidgets',
+    'PyQt6.QtWebEngineQuick',
+    'automator_app',
     'automator_app.app',
     'automator_app.cli',
     'automator_app.corehub',
@@ -117,7 +114,7 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=runtime_tmpdir,
-    console=True,
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import socket
 import sys
 import threading
@@ -114,8 +115,185 @@ def _find_available_port(host: str, start_port: int, max_attempts: int = 100) ->
         return port
 
 
+def _run_server_only(args):
+    """Run only the uvicorn server in a separate process."""
+    app = create_app()
+    config = uvicorn.Config(
+        app,
+        host=args.host,
+        port=args.port,
+        log_level=args.log_level,
+        reload=args.reload,
+        lifespan="on",
+    )
+    server = uvicorn.Server(config)
+    server.run()
+
+
+def _run_server(args):
+    """Run the uvicorn server in a separate process."""
+    app = create_app()
+    config = uvicorn.Config(
+        app,
+        host=args.host,
+        port=args.port,
+        log_level=args.log_level,
+        reload=args.reload,
+        lifespan="on",
+    )
+    server = uvicorn.Server(config)
+    server.run()
+
+def _wait_for_server_ready(host: str, port: int, timeout: int = 10) -> bool:
+    """Wait until host:port is reachable or timeout expires."""
+    import time
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if _is_port_in_use(host, port):
+            LOGGER.info("Server reachable at %s:%d", host, port)
+            return True
+        time.sleep(0.1)
+    LOGGER.error("Timed out waiting for server at %s:%d", host, port)
+    return False
+
+
+def _open_browser(url: str) -> None:
+    LOGGER.info("Opening browser/webview at %s", url)
+    import subprocess
+
+    if sys.platform == "darwin":
+        try:
+            subprocess.run(['open', url], check=True)
+            return
+        except Exception as err:  # noqa: BLE001
+            LOGGER.warning("Failed to open with 'open' command: %s", err)
+    webbrowser.open(url)
+
+
+def _resolve_icon_path() -> str | None:
+    """Return absolute path to the tray icon, handling PyInstaller bundles."""
+    icon_rel = os.path.join('automator_app', 'static', 'favicon.ico')
+    base_path = getattr(sys, '_MEIPASS', os.path.abspath(os.path.dirname(__file__)))
+    candidate = os.path.join(base_path, icon_rel)
+    if os.path.exists(candidate):
+        return candidate
+
+    repo_candidate = os.path.join(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')), 'static', 'favicon.ico')
+    if os.path.exists(repo_candidate):
+        return repo_candidate
+
+    LOGGER.warning("Tray icon not found at %s or %s", candidate, repo_candidate)
+    return None
+
+
+def _start_uvicorn_thread(args: argparse.Namespace) -> threading.Thread:
+    """Start uvicorn server in a background thread and wait until it's reachable."""
+    server_thread = threading.Thread(target=_run_server, args=(args,), daemon=True)
+    server_thread.start()
+    LOGGER.info("Server thread started, waiting for port to be reachable...")
+    if not _wait_for_server_ready(args.host, args.port):
+        error_msg = "Server failed to start within timeout"
+        LOGGER.error(error_msg)
+        _show_error_dialog("Gluesync Automator - Startup Error", error_msg)
+        raise SystemExit(1)
+    return server_thread
+
+
+class GluesyncTrayApp:
+    """PyQt6 system tray icon that opens the web UI in the default browser."""
+
+    def __init__(self, server_args: argparse.Namespace, server_url: str):
+        LOGGER.info("Initializing PyQt6 tray app")
+
+        LOGGER.info("Importing PyQt6 modules...")
+        from PyQt6 import QtCore, QtGui, QtWidgets
+
+        LOGGER.info("Creating QApplication instance...")
+        self.qt_app = QtWidgets.QApplication(sys.argv or [])
+        self.qt_app.setQuitOnLastWindowClosed(False)
+        self.server_args = server_args
+        self.server_url = server_url
+
+        LOGGER.info("Resolving icon path...")
+        icon_path = _resolve_icon_path()
+        icon = QtGui.QIcon(icon_path) if icon_path else QtGui.QIcon()
+        LOGGER.info("Icon loaded: %s (null=%s)", icon_path, icon.isNull())
+
+        # Tray setup
+        LOGGER.info("Creating system tray icon...")
+        self.tray_icon = QtWidgets.QSystemTrayIcon(icon if not icon.isNull() else None, self.qt_app)
+        self.tray_icon.setToolTip("Gluesync Automator")
+        menu = QtWidgets.QMenu()
+
+        open_action = menu.addAction("Open Gluesync Automator")
+        open_action.triggered.connect(self.show_window)
+
+        menu.addSeparator()
+        quit_action = menu.addAction("Quit")
+        quit_action.triggered.connect(self.quit_app)
+
+        self.tray_icon.setContextMenu(menu)
+        LOGGER.info("Showing tray icon...")
+        self.tray_icon.show()
+        self.tray_icon.activated.connect(self._handle_activation)
+        LOGGER.info("Tray icon initialized and visible")
+
+        # Auto-open window on start if requested
+        if self.server_args.open_browser:
+            LOGGER.info("Auto-opening window (--open-browser flag set)")
+            self.show_window()
+
+    def show_window(self):
+        LOGGER.info("Opening browser window")
+        _open_browser(self.server_url)
+
+    def quit_app(self):
+        LOGGER.info("Quit requested from tray menu")
+        self.tray_icon.hide()
+        self.qt_app.quit()
+
+    def run(self) -> int:
+        LOGGER.info("Starting PyQt6 event loop")
+        return self.qt_app.exec()
+
+    def _handle_activation(self, reason):
+        """Open the window on single click."""
+        from PyQt6 import QtWidgets
+
+        if reason == QtWidgets.QSystemTrayIcon.ActivationReason.Trigger:
+            LOGGER.info("Tray icon activated via click")
+            self.show_window()
+
+
 def main(argv: list[str] | None = None) -> None:
-    args = _parse_args(argv)
+    # Filter out multiprocessing fork arguments that shouldn't be parsed
+    if argv is None:
+        argv = sys.argv[1:]
+    
+    # Remove multiprocessing-specific arguments - be more aggressive
+    filtered_argv = []
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        
+        # Skip multiprocessing-related arguments
+        if (arg.startswith('--multiprocessing-fork') or 
+            arg in ['-B', '-S', '-I', '-c'] or
+            arg.startswith('tracker_fd=') or 
+            arg.startswith('pipe_handle=') or
+            'multiprocessing.resource_tracker' in arg or
+            'from multiprocessing' in arg):
+            # Skip this argument and possibly the next one if it's a parameter
+            i += 1
+            if i < len(argv) and not argv[i].startswith('-'):
+                i += 1
+            continue
+            
+        filtered_argv.append(arg)
+        i += 1
+    
+    args = _parse_args(filtered_argv)
 
     try:
         # Find an available port instead of failing
@@ -124,59 +302,29 @@ def main(argv: list[str] | None = None) -> None:
             LOGGER.info("Requested port %d was in use, using port %d", args.port, port)
         args.port = port
 
-        app = create_app()
-        config = uvicorn.Config(
-            app,
-            host=args.host,
-            port=args.port,
-            log_level=args.log_level,
-            reload=args.reload,
-            lifespan="on",
-        )
-        server = uvicorn.Server(config)
-
         url = f"http://{args.host}:{args.port}"
 
-        # Run server in background thread so GUI can run in main thread
-        server_thread = threading.Thread(target=server.run, daemon=True)
-        server_thread.start()
+        # Start uvicorn server in background thread
+        server_thread = _start_uvicorn_thread(args)
 
-        # Wait for server to start
-        import time
-        max_wait = 10
-        for _ in range(max_wait * 10):
-            if _is_port_in_use(args.host, args.port):
-                break
-            time.sleep(0.1)
-        else:
-            error_msg = "Server failed to start within timeout"
-            LOGGER.error(error_msg)
-            _show_error_dialog("Gluesync Automator - Startup Error", error_msg)
-            raise SystemExit(1)
+        # Attempt to start PyQt tray app
+        try:
+            LOGGER.info("Launching PyQt6 tray/webview shell")
+            tray_app = GluesyncTrayApp(args, url)
+            tray_app.run()
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.exception("PyQt6 tray failed (%s). Falling back to headless mode.", exc)
+            if args.open_browser:
+                _open_browser(url)
+            LOGGER.info("Server running headless at %s. Press Ctrl+C to exit.", url)
+            try:
+                server_thread.join()
+            except KeyboardInterrupt:
+                LOGGER.info("Gluesync Automator interrupted by user")
+                raise SystemExit(130) from None
+            return
 
-        # Open browser
-        LOGGER.info("Opening browser at %s", url)
-        import subprocess
-        try:
-            subprocess.run(['open', url], check=True)
-        except Exception as e:
-            LOGGER.warning("Failed to open with 'open' command: %s", e)
-            webbrowser.open(url)
-        
-        # Keep server running
-        LOGGER.info("Server running at %s", url)
-        try:
-            server_thread.join()
-        except KeyboardInterrupt:
-            LOGGER.info("Gluesync Automator interrupted by user")
-            raise SystemExit(130) from None
-                
     except Exception as e:
-        error_msg = f"Failed to start Gluesync Automator: {str(e)}"
-        LOGGER.exception(error_msg)
-        _show_error_dialog("Gluesync Automator - Error", error_msg)
+        LOGGER.error("Failed to start Gluesync Automator: %s", e, exc_info=True)
+        _show_error_dialog("Gluesync Automator - Startup Error", f"Failed to start: {e}")
         raise SystemExit(1) from e
-
-
-if __name__ == "__main__":  # pragma: no cover
-    main(sys.argv[1:])
