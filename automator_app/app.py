@@ -305,7 +305,12 @@ def create_app() -> FastAPI:
 
     @app.get("/api/version", response_model=VersionResponse)
     async def version() -> VersionResponse:
-        return VersionResponse(version=get_version())
+        try:
+            version = get_version()
+        except Exception as exc:
+            logger.exception("Failed to get version: %s", exc)
+            version = "unknown"
+        return VersionResponse(version=version)
 
     @app.get("/api/state", response_model=StateResponse)
     async def get_state() -> StateResponse:

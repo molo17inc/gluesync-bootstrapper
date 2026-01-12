@@ -636,6 +636,25 @@ async function checkAutomatorVersion() {
   }
 }
 
+function updateImportButtonsVisibility() {
+  const importConfigInput = document.getElementById('import-config-file');
+  const importConfigBtnEl = document.getElementById('import-config-btn');
+  const importAllInput = document.getElementById('import-all-file');
+  const importAllBtnEl = document.getElementById('import-all-btn');
+  const validateAllBtnEl = document.getElementById('validate-all-btn');
+
+  // Import config button: visible only when a config file is selected
+  if (importConfigBtnEl) {
+    const hasConfigFile = !!(importConfigInput && importConfigInput.files && importConfigInput.files[0]);
+    importConfigBtnEl.disabled = !hasConfigFile;
+  }
+
+  // Validate / Import All buttons: visible only when a ZIP file is selected
+  const hasZipFile = !!(importAllInput && importAllInput.files && importAllInput.files[0]);
+  if (validateAllBtnEl) validateAllBtnEl.disabled = !hasZipFile;
+  if (importAllBtnEl) importAllBtnEl.disabled = !hasZipFile;
+}
+
 function bindEvents() {
   const loginForm = document.getElementById('login-form');
   const configForm = document.getElementById('config-form');
@@ -666,23 +685,6 @@ function bindEvents() {
   let bulkTablesState = [];
   let bulkSourceType = 'SQL';
   let bulkTargetType = 'SQL';
-
-  function updateImportButtonsVisibility() {
-    // Import config button: visible only when a config file is selected
-    if (importConfigBtnEl) {
-      const hasConfigFile = !!(importConfigInput && importConfigInput.files && importConfigInput.files[0]);
-      importConfigBtnEl.disabled = !hasConfigFile;
-    }
-
-    // Validate / Import All buttons: visible only when a ZIP file is selected
-    const hasZipFile = !!(importAllInput && importAllInput.files && importAllInput.files[0]);
-    if (validateAllBtnEl) {
-      validateAllBtnEl.disabled = !hasZipFile;
-    }
-    if (importAllBtnEl) {
-      importAllBtnEl.disabled = !hasZipFile;
-    }
-  }
 
   function updateSchemaVisibility() {
     if (!customSchemasCheckbox) return;
@@ -1619,4 +1621,5 @@ async function loadPipelines() {
 }
 
 bindEvents();
+updateImportButtonsVisibility();
 initialize();

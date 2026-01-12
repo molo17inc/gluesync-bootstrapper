@@ -81,7 +81,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--open-browser",
         action="store_true",
-        help="Open the Automator UI in the default browser after startup",
+        default=True,
+        help="Open the Automator UI in the default browser after startup (default: True)",
+    )
+    parser.add_argument(
+        "--no-open-browser",
+        dest="open_browser",
+        action="store_false",
+        help="Don't open browser on startup",
     )
     return parser.parse_args(argv)
 
