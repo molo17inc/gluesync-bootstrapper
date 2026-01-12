@@ -133,9 +133,22 @@ const api = {
     }
     return res.json();
   },
-  async importAll(file) {
+  async importAll(file, autoDeployAgents = true) {
     const form = new FormData();
     form.append('file', file);
+    form.append('auto_deploy_agents', autoDeployAgents ? 'true' : 'false');
+    
+    // Get current CoreHub URL from state and derive Conductor URL
+    const stateRes = await fetch('/api/state');
+    if (stateRes.ok) {
+      const state = await stateRes.json();
+      if (state.baseUrl) {
+        // Derive conductor URL: same base URL + /conductor path
+        const conductorUrl = state.baseUrl.replace(/\/+$/, '') + '/conductor';
+        form.append('conductor_url', conductorUrl);
+      }
+    }
+    
     const res = await fetch('/api/import/all', {
       method: 'POST',
       body: form,
@@ -1043,19 +1056,48 @@ function bindEvents() {
       createTables: document.getElementById('create-tables').checked,
     };
 
-    try {
-      await api.login(payload);
-      ui.setAuthMessage('Authentication successful', 'success');
-      logActivity('Auth', 'Authentication successful');
-      const snapshot = await api.getState();
-      stateManager.updateFromState(snapshot);
-      ui.lockAuthFields(true);
-      await loadPipelines();
-    } catch (err) {
-      ui.setAuthMessage(err.message, 'error');
-      ui.setAuthEnabled(false);
-      logActivity('Auth', `Authentication failed: ${err.message}`);
+    // Retry logic for transient network errors
+    const maxRetries = 2;
+    let lastError = null;
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        if (attempt > 1) {
+          // Add a small delay before retry
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          ui.setAuthMessage(`Retrying authentication (attempt ${attempt}/${maxRetries})…`);
+          logActivity('Auth', `Retrying authentication (attempt ${attempt}/${maxRetries})…`);
+        }
+        
+        await api.login(payload);
+        ui.setAuthMessage('Authentication successful', 'success');
+        logActivity('Auth', 'Authentication successful');
+        const snapshot = await api.getState();
+        stateManager.updateFromState(snapshot);
+        ui.lockAuthFields(true);
+        await loadPipelines();
+        return; // Success, exit
+      } catch (err) {
+        lastError = err;
+        // Only retry on network errors, not on authentication failures
+        const isNetworkError = err.message.includes('Failed to fetch') || 
+                               err.message.includes('No route to host') ||
+                               err.message.includes('Connection') ||
+                               err.message.includes('Network');
+        
+        if (!isNetworkError || attempt === maxRetries) {
+          // Don't retry - either it's an auth error or we're out of retries
+          break;
+        }
+        
+        logActivity('Auth', `Network error on attempt ${attempt}, will retry...`);
+      }
     }
+    
+    // All retries failed
+    ui.setAuthMessage(lastError.message, 'error');
+    ui.setAuthEnabled(false);
+    logActivity('Auth', `Authentication failed: ${lastError.message}`);
   });
 
   ui.logoutBtn.addEventListener('click', async () => {
@@ -1290,10 +1332,14 @@ function bindEvents() {
         return;
       }
 
+      // Get auto-deploy checkbox value
+      const autoDeployCheckbox = document.getElementById('auto-deploy-agents');
+      const autoDeployAgents = autoDeployCheckbox ? autoDeployCheckbox.checked : true;
+
       ui.setConfigMessage('Importing full backup…');
       logActivity('Config', `Importing full backup ${file.name}…`);
       try {
-        const result = await api.importAll(file);
+        const result = await api.importAll(file, autoDeployAgents);
         ui.setConfigMessage(result.message || 'Backup imported successfully', 'success');
         logActivity('Config', result.message || 'Full backup import completed');
       } catch (err) {

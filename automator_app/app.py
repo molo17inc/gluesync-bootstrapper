@@ -38,7 +38,7 @@ import requests
 import yaml
 import create_user_defined_functions
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -818,8 +818,9 @@ def create_app() -> FastAPI:
     @app.post("/api/import/all", response_model=ApiMessage)
     async def import_all(
         file: UploadFile = File(...),
-        conductor_url: Optional[str] = None,
-        conductor_auth_token: Optional[str] = None
+        conductor_url: Optional[str] = Form(None),
+        conductor_auth_token: Optional[str] = Form(None),
+        auto_deploy_agents: str = Form("true")
     ) -> ApiMessage:
         """Validate a full backup ZIP (pipelines + agents-config).
 
@@ -926,24 +927,58 @@ def create_app() -> FastAPI:
         # Check agent availability and attempt deployment if needed
         deployed_agents = []
         missing_agents = []
+        errors: list[str] = []
+        
+        # Parse auto_deploy_agents flag
+        should_auto_deploy = auto_deploy_agents.lower() == "true"
 
+        # Fetch unassigned agents for import
         try:
             unassigned = corehub.fetch_core_hub("/unassigned-agents", token=state.token)
+            logger.info(f"Fetched {len(unassigned) if isinstance(unassigned, list) else 0} unassigned agents from CoreHub")
         except Exception as exc:  # pylint: disable=broad-except
             logger.exception("Failed to fetch unassigned agents during import-all")
             errors.append(f"Failed to fetch unassigned agents: {exc}")
             unassigned = []
 
+        # Log detailed info about unassigned agents for debugging
+        if isinstance(unassigned, list):
+            unassigned_info = []
+            for item in unassigned:
+                if isinstance(item, dict):
+                    unassigned_info.append(f"{item.get('agentType', 'N/A')}/{item.get('agentTag', 'N/A')}")
+            debug_msg = f"📋 Unassigned agents available: {', '.join(unassigned_info) if unassigned_info else 'none'}"
+            logger.info(debug_msg)
+            errors.append(debug_msg)
+
         def _has_unassigned(agent_type: str, agent_tag: str) -> bool:
+            """Check if agent is available (unassigned)"""
             if not isinstance(unassigned, list):
                 return False
             for item in unassigned:
                 if not isinstance(item, dict):
                     continue
-                if item.get("agentType") == agent_type and item.get("agentTag") == agent_tag:
+                # Case-insensitive comparison for agentType
+                item_type = item.get("agentType", "")
+                item_tag = item.get("agentTag", "")
+                if item_type.upper() == agent_type.upper() and item_tag == agent_tag:
                     return True
             return False
 
+        # Log what we're looking for from agents-config.yaml
+        required_agents_info = []
+        for cfg in agents_list:
+            if isinstance(cfg, dict):
+                a_type = cfg.get("agentType")
+                a_tag = cfg.get("agentTag")
+                if a_type and a_tag:
+                    required_agents_info.append(f"{a_type}/{a_tag}")
+        
+        required_msg = f"🔍 Required agents from backup: {', '.join(required_agents_info) if required_agents_info else 'none'}"
+        logger.info(required_msg)
+        errors.append(required_msg)
+
+        # Check each required agent
         for cfg in agents_list:
             if not isinstance(cfg, dict):
                 continue
@@ -952,11 +987,20 @@ def create_app() -> FastAPI:
             if not a_type or not a_tag:
                 errors.append("One agent definition is missing agentType/agentTag.")
                 continue
-            if not _has_unassigned(a_type, a_tag):
+            
+            # Check if unassigned agent is available
+            if _has_unassigned(a_type, a_tag):
+                match_msg = f"✓ Found unassigned agent: {a_type}/{a_tag}"
+                logger.info(match_msg)
+                errors.append(match_msg)
+            else:
+                missing_msg = f"✗ Missing unassigned agent: {a_type}/{a_tag}"
+                logger.info(missing_msg)
+                errors.append(missing_msg)
                 missing_agents.append((a_type, a_tag))
 
-        # If agents are missing and conductor is available, attempt deployment
-        if missing_agents:
+        # If agents are missing and auto-deploy is enabled, attempt deployment
+        if missing_agents and should_auto_deploy:
             # Use corehub URL as default for conductor if not specified
             if conductor_url is None:
                 # Build conductor URL from corehub URL: same host/protocol/port + /conductor path
@@ -968,7 +1012,8 @@ def create_app() -> FastAPI:
                     logger.warning(f"Failed to derive conductor URL from corehub: {exc}")
                     conductor_url = None
 
-            if conductor_url and conductor_auth_token:
+            # Conductor doesn't require authentication, auth_token is optional
+            if conductor_url:
                 logger.info(f"Found {len(missing_agents)} missing agents, attempting deployment via conductor for import...")
                 try:
                     deployed_agents = _deploy_agents_for_import(
@@ -978,11 +1023,47 @@ def create_app() -> FastAPI:
                     )
                     if deployed_agents:
                         logger.info(f"Successfully deployed {len(deployed_agents)} agents via conductor for import")
-                        # Refresh unassigned agents list after deployment
-                        try:
-                            unassigned = corehub.fetch_core_hub("/unassigned-agents", token=state.token)
-                        except Exception as exc:  # pylint: disable=broad-except
-                            logger.warning("Failed to refresh unassigned agents after deployment: %s", exc)
+                        # Poll for deployed agents to appear in unassigned pool
+                        import time
+                        poll_interval = 5
+                        max_wait_seconds = 90  # Timeout to prevent HTTP request timeout
+                        elapsed = 0
+                        agents_ready = False
+                        
+                        # Log to both logger and errors list (which gets shown in UI)
+                        poll_msg = f"⏳ Waiting for {len(missing_agents)} deployed agents to become available (checking every {poll_interval}s, max {max_wait_seconds}s)..."
+                        logger.info(poll_msg)
+                        errors.append(poll_msg)
+                        
+                        while elapsed < max_wait_seconds:
+                            try:
+                                unassigned = corehub.fetch_core_hub("/unassigned-agents", token=state.token)
+                                # Check if all deployed agents are now available
+                                all_found = True
+                                missing_list = []
+                                for a_type, a_tag in missing_agents:
+                                    if not _has_unassigned(a_type, a_tag):
+                                        all_found = False
+                                        missing_list.append(f"{a_type}/{a_tag}")
+                                
+                                if all_found:
+                                    success_msg = f"✓ All deployed agents are now available after {elapsed}s"
+                                    logger.info(success_msg)
+                                    errors.append(success_msg)
+                                    agents_ready = True
+                                    break
+                                else:
+                                    # Log progress every 10 seconds
+                                    if elapsed % 10 == 0:
+                                        progress_msg = f"⏳ Still waiting for agents: {', '.join(missing_list)} ({elapsed}s elapsed)"
+                                        logger.info(progress_msg)
+                                        errors.append(progress_msg)
+                                    
+                            except Exception as exc:  # pylint: disable=broad-except
+                                logger.warning("Failed to fetch unassigned agents during polling: %s", exc)
+                            
+                            time.sleep(poll_interval)
+                            elapsed += poll_interval
                     else:
                         errors.append("Failed to deploy missing agents via conductor")
                         raise HTTPException(status_code=400, detail="Failed to deploy required agents via conductor")
@@ -991,13 +1072,14 @@ def create_app() -> FastAPI:
                     errors.append(f"Failed to deploy agents via conductor: {exc}")
                     raise HTTPException(status_code=400, detail=f"Failed to deploy required agents: {exc}")
             else:
-                # Report missing agents as errors if no conductor deployment attempted
+                # No conductor URL available
                 for a_type, a_tag in missing_agents:
-                    errors.append(
-                        f"No unassigned agent available for agentType={a_type!r}, agentTag={a_tag!r}. "
-                        "Import requires matching agents to be available first."
-                    )
-                raise HTTPException(status_code=400, detail="Required agents are not available for import")
+                    errors.append(f"Agent {a_type}/{a_tag} does not exist and conductor URL is not available")
+                raise HTTPException(status_code=400, detail="Required agents are missing and conductor is not available")
+        elif missing_agents and not should_auto_deploy:
+            # Auto-deploy is disabled, report missing agents as errors
+            errors.append("❌ Auto-deploy is disabled. Please deploy agents manually or enable auto-deploy.")
+            raise HTTPException(status_code=400, detail="Required agents are missing and auto-deploy is disabled")
 
         # Build lookup for original pipeline metadata, if present
         pipelines_meta = agents_config.get("pipelines") or []
@@ -1011,7 +1093,6 @@ def create_app() -> FastAPI:
                     meta_by_old_id[str(old_id)] = item
 
         created_pipelines: list[dict] = []
-        errors: list[str] = []
 
         # Second pass: process each per-pipeline YAML and recreate pipeline + entities
         try:
@@ -1699,10 +1780,15 @@ def _deploy_agents_for_import(
 
         try:
             # Call the conductor function
+            # Use the same SSL verification setting as CoreHub
+            from .state import state as app_state
+            verify_ssl = not app_state.skip_verify
+            
             result = add_agents_with_conductor(
                 config_path=config_path,
                 conductor_url=conductor_url,
-                auth_token=conductor_auth_token
+                auth_token=conductor_auth_token,
+                verify_ssl=verify_ssl
             )
 
             if result.get("error"):

@@ -42,7 +42,12 @@
           >Support</a
         >
         <div id="status-indicator" class="status status-idle">Idle</div>
-        <button type="button" id="logout-btn" class="secondary topbar-logout-btn" disabled>
+        <button
+          type="button"
+          id="logout-btn"
+          class="secondary topbar-logout-btn"
+          disabled
+        >
           Sign out
         </button>
       </div>
@@ -276,6 +281,10 @@
               schedules and UDFs
               <input type="file" id="import-all-file" accept=".zip" />
             </label>
+            <label class="checkbox">
+              <input type="checkbox" id="auto-deploy-agents" checked />
+              Automatically deploy missing agents via Conductor
+            </label>
             <div class="button-group">
               <button
                 type="button"
@@ -396,10 +405,14 @@
                 <input type="checkbox" id="customize-agents" />
                 Customize new source/target agents (Danger zone)
               </label>
-              <div id="agent-customization-fields" style="display: none;">
+              <div id="agent-customization-fields" style="display: none">
                 <label>
                   Current source agent tag
-                  <input type="text" id="duplicate-current-source-tag" readonly />
+                  <input
+                    type="text"
+                    id="duplicate-current-source-tag"
+                    readonly
+                  />
                 </label>
                 <label>
                   New source agent tag
@@ -413,7 +426,11 @@
                 </label>
                 <label>
                   Current target agent tag
-                  <input type="text" id="duplicate-current-target-tag" readonly />
+                  <input
+                    type="text"
+                    id="duplicate-current-target-tag"
+                    readonly
+                  />
                 </label>
                 <label>
                   New target agent tag
@@ -435,7 +452,7 @@
               <input type="checkbox" id="customize-conductor" />
               Customize Conductor settings
             </label>
-            <div id="conductor-fields" style="display: none;">
+            <div id="conductor-fields" style="display: none">
               <label>
                 Conductor URL (optional)
                 <input
