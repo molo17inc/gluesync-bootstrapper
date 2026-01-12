@@ -1329,6 +1329,18 @@ def create_app() -> FastAPI:
                             new_pipeline_id,
                             name,
                         )
+                    else:
+                        # Mark pipeline as configuration completed to remove from draft status
+                        try:
+                            corehub.fetch_core_hub(
+                                f"/pipelines/{new_pipeline_id}",
+                                method="PUT",
+                                token=state.token,
+                                body={"configurationCompleted": True, "name": new_pipeline_name},
+                            )
+                            logger.info("Marked pipeline %s (%s) as configuration completed", new_pipeline_name, new_pipeline_id)
+                        except Exception as exc:  # pylint: disable=broad-except
+                            logger.warning("Failed to mark pipeline %s as configuration completed: %s", new_pipeline_id, exc)
         except HTTPException:
             raise
         except Exception as exc:  # pylint: disable=broad-except
@@ -1350,7 +1362,7 @@ def create_app() -> FastAPI:
             error_msg = " Some items encountered errors: " + "; ".join(errors)
             base_msg += error_msg
 
-        return ApiMessage(message=base_msg)
+        return ApiMessage(message=base_msg, logs=errors if errors else None)
 
     @app.post("/api/import/validate-all", response_model=ApiMessage)
     async def validate_all(

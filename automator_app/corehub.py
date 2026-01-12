@@ -109,7 +109,7 @@ def _load_agent_type_catalog() -> Dict[str, str]:
         if not isinstance(agent, dict):
             continue
         name = agent.get("internalName")
-        agent_type = agent.get("agentType")
+        agent_type = agent.get("type")  # Field is 'type' not 'agentType' in agents.json
         if name and agent_type:
             catalog[name.lower()] = agent_type.upper()
     _AGENT_TYPE_BY_NAME = catalog
