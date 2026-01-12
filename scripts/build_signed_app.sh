@@ -81,8 +81,6 @@ INFO_PLIST_TEMPLATE='<?xml version="1.0" encoding="UTF-8"?>
 	<string>APPL</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>11.0</string>
-	<key>LSUIElement</key>
-	<true/>
 </dict>
 </plist>
 '
