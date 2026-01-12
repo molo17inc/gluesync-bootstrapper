@@ -1340,8 +1340,19 @@ function bindEvents() {
       logActivity('Config', `Importing full backup ${file.name}…`);
       try {
         const result = await api.importAll(file, autoDeployAgents);
-        ui.setConfigMessage(result.message || 'Backup imported successfully', 'success');
-        logActivity('Config', result.message || 'Full backup import completed');
+        
+        // Display logs if present
+        if (result.logs && Array.isArray(result.logs)) {
+          result.logs.forEach(log => logActivity('Config', log));
+        }
+        
+        if (result.success === false) {
+          ui.setConfigMessage(result.message || 'Import failed', 'error');
+          logActivity('Config', `Full backup import failed: ${result.message}`);
+        } else {
+          ui.setConfigMessage(result.message || 'Backup imported successfully', 'success');
+          logActivity('Config', result.message || 'Full backup import completed');
+        }
       } catch (err) {
         ui.setConfigMessage(err.message, 'error');
         logActivity('Config', `Full backup import failed: ${err.message}`);

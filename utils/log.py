@@ -205,7 +205,9 @@ def log_fatal(logger, message):
 
 def create_lockfile_dir():
     """Create the logs directory if it doesn't exist"""
-    logs_dir = os.path.join(os.getcwd(), "logs")
+    # Use user's Library/Logs directory instead of current working directory
+    # to avoid read-only filesystem issues in macOS app bundles
+    logs_dir = os.path.join(os.path.expanduser("~"), "Library", "Logs", "GluesyncAutomator", "locks")
     os.makedirs(logs_dir, exist_ok=True)
     return logs_dir
 

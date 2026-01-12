@@ -140,6 +140,7 @@ class RunSnapshot(BaseModel):
 class ApiMessage(BaseModel):
     success: bool = True
     message: Optional[str] = None
+    logs: Optional[list[str]] = None
 
 
 class PipelineInfo(BaseModel):
@@ -1064,22 +1065,29 @@ def create_app() -> FastAPI:
                             
                             time.sleep(poll_interval)
                             elapsed += poll_interval
+                        
+                        # Check if agents became ready
+                        if not agents_ready:
+                            timeout_msg = f"⏱️ Timeout: Agents did not become available within {max_wait_seconds}s. Please check Conductor logs and try again."
+                            logger.warning(timeout_msg)
+                            errors.append(timeout_msg)
+                            return ApiMessage(success=False, message=f"Agents did not become available within {max_wait_seconds} seconds", logs=errors)
                     else:
                         errors.append("Failed to deploy missing agents via conductor")
-                        raise HTTPException(status_code=400, detail="Failed to deploy required agents via conductor")
+                        return ApiMessage(success=False, message="Failed to deploy required agents via conductor", logs=errors)
                 except Exception as exc:  # pylint: disable=broad-except
                     logger.exception("Failed to deploy agents via conductor during import")
                     errors.append(f"Failed to deploy agents via conductor: {exc}")
-                    raise HTTPException(status_code=400, detail=f"Failed to deploy required agents: {exc}")
+                    return ApiMessage(success=False, message=f"Failed to deploy required agents: {exc}", logs=errors)
             else:
                 # No conductor URL available
                 for a_type, a_tag in missing_agents:
                     errors.append(f"Agent {a_type}/{a_tag} does not exist and conductor URL is not available")
-                raise HTTPException(status_code=400, detail="Required agents are missing and conductor is not available")
+                return ApiMessage(success=False, message="Required agents are missing and conductor is not available", logs=errors)
         elif missing_agents and not should_auto_deploy:
             # Auto-deploy is disabled, report missing agents as errors
             errors.append("❌ Auto-deploy is disabled. Please deploy agents manually or enable auto-deploy.")
-            raise HTTPException(status_code=400, detail="Required agents are missing and auto-deploy is disabled")
+            return ApiMessage(success=False, message="Required agents are missing and auto-deploy is disabled", logs=errors)
 
         # Build lookup for original pipeline metadata, if present
         pipelines_meta = agents_config.get("pipelines") or []
@@ -1757,7 +1765,12 @@ def _deploy_agents_for_import(
     try:
         from add_agents_with_conductor import add_agents_with_conductor
 
-        # Create a temporary config.json for the agents
+        # Get CoreHub connection details from state
+        from .state import state as app_state
+        use_ssl = app_state.base_url.startswith("https://") if app_state.base_url else True
+        
+        # Create a temporary config.json for the agents with proper environment variables
+        # Only include non-optional variables from agents.json supportedEnvironmentVariables
         config_data = {
             "globals": {
                 "testName": f"backup_import_{len(missing_agents)}_agents",
@@ -1767,6 +1780,11 @@ def _deploy_agents_for_import(
                 {
                     "agentTag": agent_tag,
                     "agentType": agent_type.lower(),
+                    "environment": {
+                        "TYPE": agent_type.lower(),
+                        "SSL_ENABLED": "true" if use_ssl else "false",
+                        "LOG_CONFIG_FILE": "/opt/gluesync/data/logback.xml"
+                    }
                 } for agent_type, agent_tag in missing_agents
             ]
         }
