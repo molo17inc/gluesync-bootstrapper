@@ -643,6 +643,12 @@ function updateImportButtonsVisibility() {
   const importAllBtnEl = document.getElementById('import-all-btn');
   const validateAllBtnEl = document.getElementById('validate-all-btn');
 
+  console.log('updateImportButtonsVisibility called');
+  console.log('importAllInput:', importAllInput);
+  console.log('importAllInput?.files:', importAllInput?.files);
+  console.log('validateAllBtnEl:', validateAllBtnEl);
+  console.log('importAllBtnEl:', importAllBtnEl);
+
   // Import config button: visible only when a config file is selected
   if (importConfigBtnEl) {
     const hasConfigFile = !!(importConfigInput && importConfigInput.files && importConfigInput.files[0]);
@@ -651,8 +657,18 @@ function updateImportButtonsVisibility() {
 
   // Validate / Import All buttons: visible only when a ZIP file is selected
   const hasZipFile = !!(importAllInput && importAllInput.files && importAllInput.files[0]);
-  if (validateAllBtnEl) validateAllBtnEl.disabled = !hasZipFile;
-  if (importAllBtnEl) importAllBtnEl.disabled = !hasZipFile;
+  console.log('hasZipFile:', hasZipFile);
+  console.log('Setting validateAllBtnEl.disabled =', !hasZipFile);
+  console.log('Setting importAllBtnEl.disabled =', !hasZipFile);
+  
+  if (validateAllBtnEl) {
+    validateAllBtnEl.disabled = !hasZipFile;
+    validateAllBtnEl.style.display = hasZipFile ? '' : 'none';
+  }
+  if (importAllBtnEl) {
+    importAllBtnEl.disabled = !hasZipFile;
+    importAllBtnEl.style.display = hasZipFile ? '' : 'none';
+  }
 }
 
 function bindEvents() {
