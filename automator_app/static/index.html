@@ -463,6 +463,50 @@
                 />
               </label>
             </div>
+            <div class="dual-field-group">
+              <label>
+                Source host address (optional)
+                <input
+                  type="text"
+                  id="duplicate-source-host"
+                  name="sourceHost"
+                  placeholder="Leave blank to reuse current source host"
+                />
+              </label>
+              <label>
+                Target host address (optional)
+                <input
+                  type="text"
+                  id="duplicate-target-host"
+                  name="targetHost"
+                  placeholder="Leave blank to reuse current target host"
+                />
+              </label>
+            </div>
+            <label class="checkbox">
+              <input type="checkbox" id="customize-schemas" />
+              Override source &amp; target schemas
+            </label>
+            <div id="schema-override-fields" hidden style="display: none">
+              <label>
+                Source schema override (optional)
+                <input
+                  type="text"
+                  id="duplicate-source-schema"
+                  name="overrideSourceSchema"
+                  placeholder="Leave blank to reuse detected source schema"
+                />
+              </label>
+              <label>
+                Target schema override (optional)
+                <input
+                  type="text"
+                  id="duplicate-target-schema"
+                  name="overrideTargetSchema"
+                  placeholder="Leave blank to reuse detected target schema"
+                />
+              </label>
+            </div>
             <button type="submit" class="primary" disabled id="duplicate-btn">
               Duplicate Pipeline
             </button>

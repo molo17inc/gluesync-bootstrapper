@@ -1406,6 +1406,11 @@ function bindEvents() {
       'duplicate-target-tag',
       'customize-conductor',
       'duplicate-conductor-url',
+      'duplicate-source-host',
+      'duplicate-target-host',
+      'customize-schemas',
+      'duplicate-source-schema',
+      'duplicate-target-schema',
     ];
     controlIds.forEach((id) => {
       const el = document.getElementById(id);
@@ -1520,6 +1525,35 @@ function bindEvents() {
         logActivity('duplicate', 'Using CoreHub-derived Conductor URL');
       }
 
+      const sourceHostInput = document.getElementById('duplicate-source-host');
+      const targetHostInput = document.getElementById('duplicate-target-host');
+      const sourceHostValue = sourceHostInput ? sourceHostInput.value.trim() : '';
+      const targetHostValue = targetHostInput ? targetHostInput.value.trim() : '';
+      if (sourceHostValue) {
+        payload.sourceHost = sourceHostValue;
+        logActivity('duplicate', `Overriding source host to ${sourceHostValue}`);
+      }
+      if (targetHostValue) {
+        payload.targetHost = targetHostValue;
+        logActivity('duplicate', `Overriding target host to ${targetHostValue}`);
+      }
+
+      const customizeSchemasToggle = document.getElementById('customize-schemas');
+      if (customizeSchemasToggle && customizeSchemasToggle.checked) {
+        const sourceSchemaInput = document.getElementById('duplicate-source-schema');
+        const targetSchemaInput = document.getElementById('duplicate-target-schema');
+        const sourceSchemaValue = sourceSchemaInput ? sourceSchemaInput.value.trim() : '';
+        const targetSchemaValue = targetSchemaInput ? targetSchemaInput.value.trim() : '';
+        if (!sourceSchemaValue || !targetSchemaValue) {
+          ui.setDuplicateMessage('Provide both source and target schema overrides or disable schema customization.', 'error');
+          return;
+        }
+        payload.overrideSchemas = true;
+        payload.overrideSourceSchema = sourceSchemaValue;
+        payload.overrideTargetSchema = targetSchemaValue;
+        logActivity('duplicate', `Overriding schemas ${sourceSchemaValue} -> ${targetSchemaValue}`);
+      }
+
       duplicateRequestController = new AbortController();
       setDuplicateControlsDisabled(true);
       setDuplicateBusy(true);
@@ -1607,6 +1641,8 @@ function bindEvents() {
   const agentCustomizationFields = document.getElementById('agent-customization-fields');
   const customizeConductorCheckbox = document.getElementById('customize-conductor');
   const conductorFields = document.getElementById('conductor-fields');
+  const customizeSchemasCheckbox = document.getElementById('customize-schemas');
+  const schemaOverrideFields = document.getElementById('schema-override-fields');
 
   function updateAgentCustomizationVisibility() {
     if (!customizeAgentsCheckbox || !agentCustomizationFields) return;
@@ -1634,6 +1670,31 @@ function bindEvents() {
     conductorFields.style.display = enabled ? '' : 'none';
   }
 
+  function updateSchemaOverrideVisibility() {
+    if (!customizeSchemasCheckbox || !schemaOverrideFields) return;
+    const enabled = customizeSchemasCheckbox.checked;
+    schemaOverrideFields.style.display = enabled ? '' : 'none';
+    if (enabled) {
+      schemaOverrideFields.removeAttribute('hidden');
+    } else if (!schemaOverrideFields.hasAttribute('hidden')) {
+      schemaOverrideFields.setAttribute('hidden', '');
+    }
+    const inputs = [
+      document.getElementById('duplicate-source-schema'),
+      document.getElementById('duplicate-target-schema'),
+    ];
+    inputs.forEach((input) => {
+      if (!input) return;
+      input.disabled = !enabled;
+      if (enabled) {
+        input.setAttribute('required', 'required');
+      } else {
+        input.removeAttribute('required');
+        input.value = '';
+      }
+    });
+  }
+
   if (customizeAgentsCheckbox) {
     updateAgentCustomizationVisibility();
     customizeAgentsCheckbox.addEventListener('change', updateAgentCustomizationVisibility);
@@ -1641,6 +1702,10 @@ function bindEvents() {
   if (customizeConductorCheckbox) {
     updateConductorVisibility();
     customizeConductorCheckbox.addEventListener('change', updateConductorVisibility);
+  }
+  if (customizeSchemasCheckbox) {
+    updateSchemaOverrideVisibility();
+    customizeSchemasCheckbox.addEventListener('change', updateSchemaOverrideVisibility);
   }
 }
 

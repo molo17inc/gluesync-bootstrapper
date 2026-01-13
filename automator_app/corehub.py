@@ -1425,6 +1425,11 @@ def duplicate_pipeline(
     use_ssl: Optional[bool],
     skip_verify: Optional[bool],
     conductor_url: Optional[str] = None,
+    source_host_override: Optional[str] = None,
+    target_host_override: Optional[str] = None,
+    override_schemas: bool = False,
+    override_source_schema: Optional[str] = None,
+    override_target_schema: Optional[str] = None,
     cancel_checker: Optional[Callable[[], bool]] = None,
 ) -> Dict[str, Any]:
     """Duplicate a pipeline with new source and target agent tags (keeping same agent types).
@@ -1656,14 +1661,24 @@ def duplicate_pipeline(
     if "pipelineName" in config_dict:
         config_dict["pipelineName"] = new_pipeline_name
 
-    def _convert_agent_payload(agent_template: dict, new_tag: str, password: str, label: str) -> dict:
+    def _convert_agent_payload(
+        agent_template: dict,
+        new_tag: str,
+        password: str,
+        label: str,
+        host_override: Optional[str],
+    ) -> dict:
         if not password:
             raise RuntimeError(f"{label} agent password is required to duplicate the pipeline.")
+        base_host_credentials = (agent_template.get("hostCredentials") or {}).copy()
+        if host_override:
+            logger.info("Overriding %s host to %s", label.lower(), host_override)
+            base_host_credentials["host"] = host_override
         payload = {
             "agentType": agent_template.get("agentType"),
             "agentTag": new_tag,
             "hostCredentials": {
-                **(agent_template.get("hostCredentials") or {}),
+                **base_host_credentials,
                 "password": password,
             },
             "customHostCredentials": agent_template.get("customHostCredentials")
@@ -1674,8 +1689,20 @@ def duplicate_pipeline(
         return payload
 
     config_dict["agents"] = [
-        _convert_agent_payload(source_agent, source_agent_tag, source_agent_password, "Source"),
-        _convert_agent_payload(target_agent, target_agent_tag, target_agent_password, "Target"),
+        _convert_agent_payload(
+            source_agent,
+            source_agent_tag,
+            source_agent_password,
+            "Source",
+            source_host_override,
+        ),
+        _convert_agent_payload(
+            target_agent,
+            target_agent_tag,
+            target_agent_password,
+            "Target",
+            target_host_override,
+        ),
     ]
 
     # If we deployed agents, update the configuration with their details
@@ -1711,6 +1738,13 @@ def duplicate_pipeline(
             snapshot_path = _write_temp_yaml(yaml_config)
             try:
                 schema_pairs = extract_all_schemas_from_yaml(snapshot_path)
+                if override_schemas and override_source_schema and override_target_schema:
+                    logger.info(
+                        "Overriding schema pairs to %s -> %s for duplicated pipeline",
+                        override_source_schema,
+                        override_target_schema,
+                    )
+                    schema_pairs = [(override_source_schema, override_target_schema)]
                 source_type_hint, target_type_hint = extract_schema_types_from_yaml(snapshot_path)
                 source_type_hint = source_type_hint or "SQL"
                 target_type_hint = target_type_hint or "SQL"

@@ -191,6 +191,11 @@ class DuplicatePipelineRequest(BaseModel):
     target_agent_password: str = Field(..., alias="targetAgentPassword")
     conductor_url: Optional[str] = Field(None, alias="conductorUrl")
     clone_entities: bool = Field(True, alias="cloneEntities")
+    source_host_override: Optional[str] = Field(None, alias="sourceHost")
+    target_host_override: Optional[str] = Field(None, alias="targetHost")
+    override_schemas: bool = Field(False, alias="overrideSchemas")
+    override_source_schema: Optional[str] = Field(None, alias="overrideSourceSchema")
+    override_target_schema: Optional[str] = Field(None, alias="overrideTargetSchema")
 
     class Config:
         allow_population_by_field_name = True
@@ -731,6 +736,13 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail="sourceAgentPassword is required")
         if not request.target_agent_password:
             raise HTTPException(status_code=400, detail="targetAgentPassword is required")
+        if request.override_schemas and (
+            not request.override_source_schema or not request.override_target_schema
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="overrideSourceSchema and overrideTargetSchema are required when overrideSchemas is enabled",
+            )
 
         try:
             state.begin_duplicate()
@@ -753,6 +765,11 @@ def create_app() -> FastAPI:
                 use_ssl=state.use_ssl,
                 skip_verify=state.skip_verify,
                 conductor_url=request.conductor_url,
+                source_host_override=request.source_host_override,
+                target_host_override=request.target_host_override,
+                override_schemas=request.override_schemas,
+                override_source_schema=request.override_source_schema,
+                override_target_schema=request.override_target_schema,
                 cancel_checker=state.is_duplicate_cancelled,
             )
         except corehub.DuplicateCancelledError as exc:
