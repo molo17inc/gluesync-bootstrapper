@@ -14,6 +14,7 @@ runtime_tmpdir = 'C:\\Windows\\Temp'
 datas = [
     ('automator_app\\static', 'static'),
     ('automator_app\\VERSION', 'automator_app'),
+    ('agents.json', '.'),
 ]
 binaries = []
 hiddenimports = [
