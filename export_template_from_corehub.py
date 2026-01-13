@@ -379,6 +379,7 @@ def _process_single_entity(
 
     # Table name (target name / collection)
     table_cfg["name"] = target_table_name
+    table_cfg["entityName"] = entity_name
 
     # Group mapping
     group_id = ent.get("groupId")
