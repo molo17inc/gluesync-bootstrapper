@@ -395,15 +395,30 @@ def _process_single_entity(
     if keys:
         table_cfg["keys"] = keys
 
-    # Columns mapping (source -> alias)
-    column_mappings: List[Dict[str, str]] = []
-    for col in source_ae.get("columns", []) or []:
-        name = col.get("name")
-        alias = col.get("alias") or name
-        if name and alias and alias != name:
-            column_mappings.append({name: alias})
-    if column_mappings:
-        table_cfg["columns"] = column_mappings
+    # Columns mapping (source -> alias). Preserve discovery order (ordinal/id).
+    column_payload = source_ae.get("columns", []) or []
+    if column_payload:
+        def _column_sort_key(col: Dict[str, Any], idx: int) -> int:
+            raw_id = col.get("ordinalPosition") or col.get("id")
+            try:
+                return int(raw_id)
+            except (TypeError, ValueError):
+                return idx
+
+        ordered_columns = sorted(
+            enumerate(column_payload, start=1),
+            key=lambda pair: _column_sort_key(pair[1], pair[0]),
+        )
+        column_mappings: List[Dict[str, str]] = []
+        for _, col in ordered_columns:
+            name = col.get("name")
+            alias = col.get("alias") or name
+            if not name or not alias:
+                continue
+            column_mappings.append({str(name): str(alias)})
+
+        if column_mappings:
+            table_cfg["columns"] = column_mappings
 
     # Filters on target entityType
     target_et = target_ae.get("entityType", {}) or {}
