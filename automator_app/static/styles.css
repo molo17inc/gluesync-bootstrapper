@@ -128,6 +128,19 @@ body.is-authenticated .requires-auth {
   text-decoration: underline;
 }
 
+.connection-info {
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.7);
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-top: 0.25rem;
+}
+
+.connection-info span {
+  display: block;
+}
+
 .version-changelog {
   position: fixed;
   right: clamp(1.25rem, 4vw, 3rem);

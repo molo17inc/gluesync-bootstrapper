@@ -469,9 +469,12 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             logger.warning(f"Partition column '{normalized_column}' not found in discovery for {schema_name}.{table_name}. Skipping partitionSettings.")
             return None
 
-        column_id = matched_column.get('ordinalPosition', matched_column.get('id'))
+        # Use the id field from CoreHub API as the column ID
+        column_id = matched_column.get('id')
         if column_id is None:
-            column_id = next((idx for idx, col in enumerate(table_columns, 1) if col == matched_column), 1)
+            error_msg = f"CRITICAL ERROR: Column '{normalized_column}' in table {schema_name}.{table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
+            logger.error(error_msg)
+            raise ValueError(error_msg)
 
         partition_settings = {
             "column": {
@@ -589,11 +592,12 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     column_id = None
                     for col in columns["columns"]:
                         if col.get('name') == key_name:
-                            # Use ordinalPosition from API if available
-                            column_id = col.get('ordinalPosition', col.get('id'))
+                            # Use the id field from CoreHub API as the column ID
+                            column_id = col.get('id')
                             if column_id is None:
-                                # Fallback to finding position if not provided
-                                column_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
+                                error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
+                                logger.error(error_msg)
+                                raise ValueError(error_msg)
                             break
 
                     if column_id is not None:
@@ -617,11 +621,12 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             # fall back to the discovery-based behavior below when no mappings are
             # resolved.
             for col in columns["columns"]:
-                # Use ordinalPosition from API if available
-                col_id = col.get('ordinalPosition', col.get('id'))
+                # Use the id field from CoreHub API as the column ID
+                col_id = col.get('id')
                 if col_id is None:
-                    # Fallback to finding position if not provided
-                    col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
+                    error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
 
                 for column_map in custom_config.get('columns', []):
                     # Simple mapping entries look like {SOURCE_NAME: TARGET_NAME}.
@@ -641,11 +646,12 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         if not custom_config.get('columns') or not columns_def:
             columns_def = []
             for col in columns["columns"]:
-                # Use ordinalPosition from API if available
-                col_id = col.get('ordinalPosition', col.get('id'))
+                # Use the id field from CoreHub API as the column ID
+                col_id = col.get('id')
                 if col_id is None:
-                    # Fallback to finding position if not provided
-                    col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
+                    error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
 
                 columns_def.append({
                     "id": col_id,  # Use actual ordinal position from database
@@ -665,11 +671,12 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             if custom_config.get('columns'):
                 # Use column mappings for keys
                 for col in columns["columns"]:
-                    # Use ordinalPosition from API if available
-                    col_id = col.get('ordinalPosition', col.get('id'))
+                    # Use the id field from CoreHub API as the column ID
+                    col_id = col.get('id')
                     if col_id is None:
-                        # Fallback to finding position if not provided
-                        col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
+                        error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
+                        logger.error(error_msg)
+                        raise ValueError(error_msg)
                         
                     for column_map in custom_config['columns']:
                         for source_name, target_name in column_map.items():
@@ -686,11 +693,12 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     # Find the column and its index
                     for col in columns["columns"]:
                         if col["name"] == key_name:
-                            # Use ordinalPosition from API if available
-                            col_id = col.get('ordinalPosition', col.get('id'))
+                            # Use the id field from CoreHub API as the column ID
+                            col_id = col.get('id')
                             if col_id is None:
-                                # Fallback to finding position if not provided
-                                col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
+                                error_msg = f"CRITICAL ERROR: Column '{key_name}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
+                                logger.error(error_msg)
+                                raise ValueError(error_msg)
                                 
                             keys.append({
                                 "id": col_id,  # Use actual ordinal position from database
@@ -707,11 +715,12 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             keys = []
             for col in columns["columns"]:
                 if col.get("isPrimaryKey"):
-                    # Use ordinalPosition from API if available
-                    col_id = col.get('ordinalPosition', col.get('id'))
+                    # Use the id field from CoreHub API as the column ID
+                    col_id = col.get('id')
                     if col_id is None:
-                        # Fallback to finding position if not provided
-                        col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
+                        error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
+                        logger.error(error_msg)
+                        raise ValueError(error_msg)
                         
                     keys.append({
                         "id": col_id,  # Use actual ordinal position from database
@@ -846,11 +855,12 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             max_target_col_id = 0
             if 'columns' in columns and isinstance(columns['columns'], list):
                 for col in columns['columns']:
-                    # Use ordinalPosition from API if available
-                    source_col_id = col.get('ordinalPosition', col.get('id'))
+                    # Use the id field from CoreHub API as the column ID
+                    source_col_id = col.get('id')
                     if source_col_id is None:
-                        # Fallback to finding position if not provided
-                        source_col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
+                        error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
+                        logger.error(error_msg)
+                        raise ValueError(error_msg)
                     
                     # For target column ID, it's the same as source unless there's a mapping
                     target_col_id = source_col_id
@@ -900,11 +910,12 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         if custom_config.get('columns'):
             # Custom column mappings for target
             for col in columns["columns"]:
-                # Use ordinalPosition from API if available
-                col_id = col.get('ordinalPosition', col.get('id'))
+                # Use the id field from CoreHub API as the column ID
+                col_id = col.get('id')
                 if col_id is None:
-                    # Fallback to finding position if not provided
-                    col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
+                    error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
                 
                 max_target_col_id = max(max_target_col_id, col_id)
                 
@@ -927,11 +938,12 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         else:
             # No column mappings - use columns as-is with mapped types
             for col in columns["columns"]:
-                # Use ordinalPosition from API if available
-                col_id = col.get('ordinalPosition', col.get('id'))
+                # Use the id field from CoreHub API as the column ID
+                col_id = col.get('id')
                 if col_id is None:
-                    # Fallback to finding position if not provided
-                    col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
+                    error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
                 
                 max_target_col_id = max(max_target_col_id, col_id)
 
@@ -1042,11 +1054,12 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             if custom_config.get('columns'):
                 # Use column mappings for keys - map source key names to target key names
                 for col in columns["columns"]:
-                    # Use ordinalPosition from API if available
-                    col_id = col.get('ordinalPosition', col.get('id'))
+                    # Use the id field from CoreHub API as the column ID
+                    col_id = col.get('id')
                     if col_id is None:
-                        # Fallback to finding position if not provided
-                        col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
+                        error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
+                        logger.error(error_msg)
+                        raise ValueError(error_msg)
 
                     for column_map in custom_config.get('columns', []):
                         for source_name, target_name in column_map.items():
@@ -1071,11 +1084,12 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     # Find the column and its ID
                     for col in columns["columns"]:
                         if col["name"] == key_name:
-                            # Use ordinalPosition from API if available
-                            col_id = col.get('ordinalPosition', col.get('id'))
+                            # Use the id field from CoreHub API as the column ID
+                            col_id = col.get('id')
                             if col_id is None:
-                                # Fallback to finding position if not provided
-                                col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
+                                error_msg = f"CRITICAL ERROR: Column '{key_name}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
+                                logger.error(error_msg)
+                                raise ValueError(error_msg)
 
                             discovered_target_col = target_discovered_columns_by_name.get(key_name)
                             resolved_target_type = None
@@ -1097,11 +1111,12 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             target_keys = []
             for col in columns["columns"]:
                 if col.get("isPrimaryKey"):
-                    # Use ordinalPosition from API if available
-                    col_id = col.get('ordinalPosition', col.get('id'))
+                    # Use the id field from CoreHub API as the column ID
+                    col_id = col.get('id')
                     if col_id is None:
-                        # Fallback to finding position if not provided
-                        col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
+                        error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
+                        logger.error(error_msg)
+                        raise ValueError(error_msg)
                         
                     target_keys.append({
                         "id": col_id,  # Use actual ordinal position from database
@@ -1245,11 +1260,12 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             # Process columns
             table_columns = []
             for col in columns["columns"]:
-                # Use ordinalPosition from API if available
-                col_id = col.get('ordinalPosition', col.get('id'))
+                # Use the id field from CoreHub API as the column ID
+                col_id = col.get('id')
                 if col_id is None:
-                    # Fallback to finding position if not provided
-                    col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
+                    error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
 
                 table_columns.append({
                     "id": col_id,
@@ -1292,11 +1308,12 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     # Try to find the key in the columns to get its type and ID if not specified
                     for col in columns["columns"]:
                         if col["name"] == key_name:
-                            # Use ordinalPosition from API if available
-                            col_id = col.get('ordinalPosition', col.get('id'))
+                            # Use the id field from CoreHub API as the column ID
+                            col_id = col.get('id')
                             if col_id is None:
-                                # Fallback to finding position if not provided
-                                col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
+                                error_msg = f"CRITICAL ERROR: Column '{key_name}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
+                                logger.error(error_msg)
+                                raise ValueError(error_msg)
                                 
                             keys.append({
                                 "id": col_id,  # Use actual ordinal position from database
@@ -1316,11 +1333,12 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 keys = []
                 for col in columns["columns"]:
                     if col.get("isPrimaryKey"):
-                        # Use ordinalPosition from API if available
-                        col_id = col.get('ordinalPosition', col.get('id'))
+                        # Use the id field from CoreHub API as the column ID
+                        col_id = col.get('id')
                         if col_id is None:
-                            # Fallback to finding position if not provided
-                            col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
+                            error_msg = f"CRITICAL ERROR: Primary key column '{col.get('name')}' in table {table_key} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
+                            logger.error(error_msg)
+                            raise ValueError(error_msg)
                             
                         keys.append({
                             "id": col_id,  # Use actual ordinal position from database
@@ -1394,11 +1412,12 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             
             # First add all source columns mapped to target with their actual ordinal positions
             for col in columns["columns"]:
-                # Use ordinalPosition from API if available
-                col_id = col.get('ordinalPosition', col.get('id'))
+                # Use the id field from CoreHub API as the column ID
+                col_id = col.get('id')
                 if col_id is None:
-                    # Fallback to finding position if not provided
-                    col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
+                    error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
                     
                 max_target_col_id = max(max_target_col_id, col_id)
                 target_table_columns.append({
@@ -1509,11 +1528,12 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     # Try to find the key in the columns to get its type and ID
                     for col in columns["columns"]:
                         if col["name"] == key_name:
-                            # Use ordinalPosition from API if available
-                            col_id = col.get('ordinalPosition', col.get('id'))
+                            # Use the id field from CoreHub API as the column ID
+                            col_id = col.get('id')
                             if col_id is None:
-                                # Fallback to finding position if not provided
-                                col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
+                                error_msg = f"CRITICAL ERROR: Column '{key_name}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
+                                logger.error(error_msg)
+                                raise ValueError(error_msg)
                                 
                             keys.append({
                                 "id": col_id,  # Use actual ordinal position from database
@@ -1565,11 +1585,12 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             columns = get_table_columns(token, pipeline_id, source_agent_id, source_schema, table_key)
             if columns and 'columns' in columns:
                 for col in columns['columns']:
-                    # Use ordinalPosition from API if available, otherwise use id, then fallback to position
-                    col_id = col.get('ordinalPosition', col.get('id'))
+                    # Use the id field from CoreHub API as the column ID
+                    col_id = col.get('id')
                     if col_id is None:
-                        # Fallback to finding position if not provided
-                        col_id = next((i for i, c in enumerate(columns['columns'], 1) if c == col), 1)
+                        error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_key} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
+                        logger.error(error_msg)
+                        raise ValueError(error_msg)
                     columns_mapping_matrix.append({
                         "sourceTableObjectId": source_table_id,
                         "targetTableObjectId": target_table_id,

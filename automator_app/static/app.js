@@ -276,6 +276,22 @@ const ui = (() => {
     versionLabel.textContent = message;
   }
 
+  function setConnectionInfo(corehubUrl, pipelineCount) {
+    const connectionInfoEl = document.getElementById('connection-info');
+    const corehubInstanceEl = document.getElementById('corehub-instance');
+    const pipelineCountEl = document.getElementById('pipeline-count');
+    
+    if (connectionInfoEl && corehubInstanceEl && pipelineCountEl) {
+      if (corehubUrl && pipelineCount !== undefined) {
+        corehubInstanceEl.textContent = `Connected to: ${corehubUrl}`;
+        pipelineCountEl.textContent = `Pipelines: ${pipelineCount}`;
+        connectionInfoEl.style.display = '';
+      } else {
+        connectionInfoEl.style.display = 'none';
+      }
+    }
+  }
+
   function setAuthFieldsLocked(locked) {
     if (corehubUrlInput) corehubUrlInput.disabled = locked;
     if (usernameInput) usernameInput.disabled = locked;
@@ -350,6 +366,7 @@ const ui = (() => {
     appendLogLine,
     lockAuthFields: setAuthFieldsLocked,
     setVersion: setVersionLabel,
+    setConnectionInfo,
     runBtn,
     logoutBtn,
     exportAllBtn,
@@ -1108,6 +1125,7 @@ function bindEvents() {
       logActivity('Auth', 'Logged out successfully');
       ui.setAuthEnabled(false);
       ui.setStatus('idle', 'Not authenticated');
+      ui.setConnectionInfo(null, null);
       ui.lockAuthFields(false);
       document.body.classList.remove('is-authenticated');
       const authCard = document.getElementById('auth-card');
@@ -1719,6 +1737,10 @@ async function loadPipelines() {
   try {
     const data = await api.listPipelines();
     const pipelines = data.pipelines || [];
+
+    // Update connection info in header
+    const corehubUrl = document.getElementById('corehub-url')?.value || '';
+    ui.setConnectionInfo(corehubUrl, pipelines.length);
 
     // Sort pipelines by name, then by ID if names are the same
     pipelines.sort((a, b) => {
