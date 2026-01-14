@@ -615,6 +615,8 @@ def _process_multitable_entity(
 
         # Basic naming: keep same name for target unless already set
         table_cfg.setdefault("name", table_name)
+        # MultiTable entities share one entity name; persist it per table so import can reuse it
+        table_cfg["entityName"] = entity_name
         table_cfg["chainId"] = chain_id
         if group_name:
             table_cfg["groupId"] = group_name

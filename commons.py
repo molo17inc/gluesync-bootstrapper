@@ -107,10 +107,29 @@ def fetch_core_hub(path, method='GET', token=None, body=None, params=None):
         response = core_hub_client.request(path, method, token, body, params)
         duration = time.time() - start_time
 
-        # Log response
+        # Log response (dump full JSON when possible, otherwise capture long strings)
         logger.debug(f"Request completed in {duration:.3f}s")
         logger.debug(f"[RESPONSE] {method.upper()} {path}")
-        logger.debug(f"Response (first 1000 chars): {str(response)[:1000]}")
+
+        try:
+            if isinstance(response, (dict, list)):
+                response_text = json.dumps(response, indent=2, ensure_ascii=False)
+            else:
+                response_text = str(response)
+        except Exception as exc:  # pragma: no cover - defensive
+            response_text = f"<unable to serialize response: {exc}>"
+
+        max_preview_chars = 10000
+        if len(response_text) > max_preview_chars:
+            logger.debug(
+                "Response (trimmed to %d of %d chars): %s…",
+                max_preview_chars,
+                len(response_text),
+                response_text[:max_preview_chars],
+            )
+        else:
+            logger.debug("Response: %s", response_text)
+
         logger.debug("=" * 80 + "\n")
 
         return response

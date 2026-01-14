@@ -1214,9 +1214,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             logger.info(f"  {idx+1}. Table {table_key}")
 
 
-        # We'll use the first table's name as the entity name prefix
+        # We'll reuse the entity name captured during export if available
         first_table_key, first_table_data = tables_list[0]
-        entity_name = f"{source_schema}.{first_table_key}"
+        entity_name = first_table_data.get("entityName") or f"{source_schema}.{first_table_key}"
 
         # Initialize tables, columns, and keys for the MultiTable entity
         multi_tables = []
