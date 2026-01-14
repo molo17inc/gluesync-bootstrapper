@@ -83,6 +83,10 @@ def get_allowed_operations(target_custom_properties):
     return default_ops
 
 def create_entities(token, pipeline_id, source_schema, target_schema, tables, source_agent_id, target_agent_id, source_type, target_type, yaml_config, skip_errors=True, chunk_size=50):
+    # Debug logging to see what source_type and target_type values are received
+    logger.debug(f"create_entities called with: source_type='{source_type}', target_type='{target_type}'")
+    logger.debug(f"source_type type: {type(source_type)}, target_type type: {type(target_type)}")
+    
     # Log CREATE_TABLE_IF_NOT_EXISTS status for debugging
     if CREATE_TABLE_IF_NOT_EXISTS:
         logger.info("CREATE_TABLE_IF_NOT_EXISTS is enabled - will create missing tables during entity discovery")
@@ -789,8 +793,14 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
         source_entity_type = {**source_custom_properties, "type": "Source"}
 
+        # Determine source entity type based on source_type
+        # Check if source_type indicates NoSQL (case-insensitive)
+        is_source_nosql = source_type and "nosql" in source_type.lower()
+        source_entity_type_name = "NoSqlEntity" if is_source_nosql else "SingleTable"
+        logger.debug(f"Source entity type determination: source_type='{source_type}', is_source_nosql={is_source_nosql}, selected type='{source_entity_type_name}'")
+
         source_entity = {
-            "type": "NoSqlEntity" if source_type.lower() == "nosql" else "SingleTable",
+            "type": source_entity_type_name,
             "entityType": source_entity_type,
             "agentId": source_agent_id,
             "entityObject": {
@@ -1126,8 +1136,14 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     })
             logger.debug(f"Using primary target keys for {table_name}: {target_keys}")
 
+        # Determine target entity type based on target_type
+        # Check if target_type indicates NoSQL (case-insensitive)
+        is_target_nosql = target_type and "nosql" in target_type.lower()
+        target_entity_type_name = "NoSqlEntity" if is_target_nosql else "SingleTable"
+        logger.debug(f"Target entity type determination: target_type='{target_type}', is_target_nosql={is_target_nosql}, selected type='{target_entity_type_name}'")
+
         target_entity = {
-            "type": "NoSqlEntity" if target_type.lower() == "nosql" else "SingleTable",
+            "type": target_entity_type_name,
             "entityType": target_entity_type,
             "agentId": target_agent_id,
             "entityObject": {
@@ -1175,8 +1191,10 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             logger.debug("Using default group as no specific group was requested")
         
         # Create the entity
+        # Use custom entityName from YAML if provided, otherwise fall back to schema.table format
+        custom_entity_name = custom_config.get('entityName', f"{source_schema}.{table_name}")
         entity = {
-            "entityName": f"{source_schema}.{table_name}",
+            "entityName": custom_entity_name,
             "agentEntities": [source_entity, target_entity]
         }
         
@@ -1979,6 +1997,9 @@ def main(pipeline_id, source_schema, target_schema, source_type, target_type, ya
             log_failure(logger, error_msg)
             lockfile_failure()
             raise Exception(error_msg)
+
+        # Debug logging before calling create_entities
+        logger.debug(f"main() about to call create_entities with: source_type='{source_type}', target_type='{target_type}'")
 
         # Create entities
         result = create_entities(

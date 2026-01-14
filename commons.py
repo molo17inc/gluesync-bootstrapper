@@ -731,8 +731,10 @@ def extract_schema_types_from_yaml(yaml_file_path):
                     continue
                 if 'target' not in value and 'tables' not in value:
                     continue
+                logger.debug(f"Processing schema '{key}': sourceType={value.get('sourceType')}, targetType={value.get('targetType')}")
                 st = _normalize(value.get('sourceType'))
                 tt = _normalize(value.get('targetType'))
+                logger.debug(f"After normalization for schema '{key}': sourceType={st}, targetType={tt}")
                 if st:
                     source_types.add(st)
                 if tt:

@@ -98,8 +98,8 @@ class RunRequest(BaseModel):
     pipeline_id: str = Field(..., alias="pipelineId")
     source_schema: str = Field(..., alias="sourceSchema")
     target_schema: str = Field(..., alias="targetSchema")
-    source_type: str = Field(..., alias="sourceType")
-    target_type: str = Field(..., alias="targetType")
+    source_type: str = Field("", alias="sourceType")
+    target_type: str = Field("", alias="targetType")
     yaml_file_id: str = Field(..., alias="yamlFileId")
     skip_errors: bool = Field(False, alias="skipErrors")
     chunk_size: int = Field(50, alias="chunkSize", ge=1, le=500)
@@ -171,8 +171,8 @@ class BulkCreateRequest(BaseModel):
     pipeline_id: str = Field(..., alias="pipelineId")
     source_schema: str = Field(..., alias="sourceSchema")
     target_schema: str = Field(..., alias="targetSchema")
-    source_type: str = Field(..., alias="sourceType")
-    target_type: str = Field(..., alias="targetType")
+    source_type: str = Field("", alias="sourceType")
+    target_type: str = Field("", alias="targetType")
     table_names: list[str] = Field(..., alias="tableNames")
     chunk_size: int = Field(50, alias="chunkSize", ge=1, le=500)
     skip_errors: bool = Field(True, alias="skipErrors")
@@ -488,6 +488,35 @@ def create_app() -> FastAPI:
         if create_tables is None:
             create_tables = prefs["createTables"]
 
+        # If source_type or target_type are empty strings, try to extract from pipeline's YAML
+        source_type = request.source_type
+        target_type = request.target_type
+        
+        if not source_type or not target_type:
+            logger.info(f"source_type or target_type empty (source='{source_type}', target='{target_type}'), attempting to extract from pipeline YAML")
+            try:
+                # Try to get the pipeline's YAML configuration
+                yaml_path = state.get_pipeline_yaml_path(request.pipeline_id)
+                if yaml_path and yaml_path.exists():
+                    from commons import extract_schema_types_from_yaml
+                    src_hint, tgt_hint = extract_schema_types_from_yaml(str(yaml_path))
+                    if not source_type and src_hint:
+                        source_type = src_hint
+                        logger.info(f"Extracted source_type from YAML: {source_type}")
+                    if not target_type and tgt_hint:
+                        target_type = tgt_hint
+                        logger.info(f"Extracted target_type from YAML: {target_type}")
+            except Exception as e:
+                logger.warning(f"Could not extract types from YAML: {e}")
+        
+        # Final fallback to SQL if still empty
+        if not source_type:
+            source_type = "SQL"
+            logger.info(f"Using fallback source_type: {source_type}")
+        if not target_type:
+            target_type = "SQL"
+            logger.info(f"Using fallback target_type: {target_type}")
+
         try:
             result = corehub.run_create_entities_for_tables(
                 token=state.token,
@@ -495,8 +524,8 @@ def create_app() -> FastAPI:
                 pipeline_id=request.pipeline_id,
                 source_schema=request.source_schema,
                 target_schema=request.target_schema,
-                source_type=request.source_type,
-                target_type=request.target_type,
+                source_type=source_type,
+                target_type=target_type,
                 table_names=request.table_names,
                 skip_errors=request.skip_errors,
                 chunk_size=request.chunk_size,
@@ -1679,6 +1708,24 @@ def create_app() -> FastAPI:
 
         def _run_sync() -> dict:
             yaml_file_path = str(yaml_path)
+            
+            # Extract source_type and target_type from YAML if they're empty
+            source_type = request.source_type
+            target_type = request.target_type
+            
+            if not source_type or not target_type:
+                from commons import extract_schema_types_from_yaml
+                src_hint, tgt_hint = extract_schema_types_from_yaml(yaml_file_path)
+                if not source_type and src_hint:
+                    source_type = src_hint
+                if not target_type and tgt_hint:
+                    target_type = tgt_hint
+            
+            # Final fallback to SQL if still empty
+            if not source_type:
+                source_type = "SQL"
+            if not target_type:
+                target_type = "SQL"
 
             if request.auto_schemas:
                 schema_pairs = extract_all_schemas_from_yaml(yaml_file_path)
@@ -1704,8 +1751,8 @@ def create_app() -> FastAPI:
                         pipeline_id=request.pipeline_id,
                         source_schema=src_schema,
                         target_schema=tgt_schema,
-                        source_type=request.source_type,
-                        target_type=request.target_type,
+                        source_type=source_type,
+                        target_type=target_type,
                         yaml_file=yaml_file_path,
                         skip_errors=request.skip_errors,
                         chunk_size=request.chunk_size,
@@ -1734,8 +1781,8 @@ def create_app() -> FastAPI:
                 pipeline_id=request.pipeline_id,
                 source_schema=request.source_schema,
                 target_schema=request.target_schema,
-                source_type=request.source_type,
-                target_type=request.target_type,
+                source_type=source_type,
+                target_type=target_type,
                 yaml_file=yaml_file_path,
                 skip_errors=request.skip_errors,
                 chunk_size=request.chunk_size,
