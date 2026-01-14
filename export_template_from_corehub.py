@@ -579,7 +579,28 @@ def _process_multitable_entity(
 
     custom_tables: Dict[str, Any] = schema_cfg["tables"]["custom"]
 
-    # For each table in the chain, assign chainId and groupId
+    # Helper to decode alternating [table, [items]] structure used by MultiTable payloads
+    def _group_entries(entries: Any) -> Dict[str, List[Dict[str, Any]]]:
+        grouped: Dict[str, List[Dict[str, Any]]] = {}
+        if not isinstance(entries, list):
+            return grouped
+        idx = 0
+        while idx < len(entries):
+            header = entries[idx]
+            body = entries[idx + 1] if idx + 1 < len(entries) else []
+            idx += 2
+            if not isinstance(header, dict) or not isinstance(body, list):
+                continue
+            table_name = header.get("name")
+            if not table_name:
+                continue
+            grouped[str(table_name)] = [item for item in body if isinstance(item, dict)]
+        return grouped
+
+    column_groups = _group_entries(source_ae.get("columns"))
+    key_groups = _group_entries(source_ae.get("keys"))
+
+    # For each table in the chain, assign chain metadata and restore columns/keys
     for tbl in tables:
         table_name = tbl.get("name")
         if not table_name:
@@ -592,11 +613,32 @@ def _process_multitable_entity(
             table_cfg = {}
             custom_tables[table_name] = table_cfg
 
-        # Basic naming: keep same name for target
-        table_cfg["name"] = table_name
+        # Basic naming: keep same name for target unless already set
+        table_cfg.setdefault("name", table_name)
         table_cfg["chainId"] = chain_id
         if group_name:
             table_cfg["groupId"] = group_name
+
+        # Restore column mappings if missing
+        if table_name in column_groups and "columns" not in table_cfg:
+            cols = []
+            for col in column_groups[table_name]:
+                name = col.get("name")
+                alias = col.get("alias") or name
+                if name and alias:
+                    cols.append({str(name): str(alias)})
+            if cols:
+                table_cfg["columns"] = cols
+
+        # Restore key names if missing
+        if table_name in key_groups and "keys" not in table_cfg:
+            key_names: List[str] = []
+            for key in key_groups[table_name]:
+                name = key.get("name")
+                if name and name not in key_names:
+                    key_names.append(str(name))
+            if key_names:
+                table_cfg["keys"] = key_names
 
 
 def attach_schedules_from_jobs(
