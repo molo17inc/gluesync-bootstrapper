@@ -787,13 +787,17 @@ def process_filter_clauses(filter_config, columns_info):
         
         # Find the column ID from columns_info
         column_id = None
+        column_type = clause.get('type', 'string')
         if columns_info and 'columns' in columns_info:
-            for idx, col in enumerate(columns_info['columns'], start=1):
+            for col in columns_info['columns']:
                 if col.get('name') == column_name:
-                    column_id = idx
+                    # Use the id field from the column object
+                    column_id = col.get('id')
+                    # Also get the actual column type from discovery
+                    column_type = col.get('type', column_type)
                     break
         
-        # If column ID not found, use a default or skip
+        # If column ID not found, use a default
         if column_id is None:
             print(f"Warning: Column '{column_name}' not found in table columns, using index 1 as default")
             column_id = 1
@@ -803,7 +807,7 @@ def process_filter_clauses(filter_config, columns_info):
             "column": {
                 "id": column_id,
                 "name": column_name,
-                "type": clause.get('type', 'string')
+                "type": column_type  # Use discovered type from database
             },
             "operation": {
                 "type": operation_type

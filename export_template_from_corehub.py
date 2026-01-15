@@ -345,6 +345,9 @@ def _process_single_entity(
 
     source_table = source_ae.get("table", {}) or {}
     target_table = target_ae.get("table", {}) or {}
+    
+    # For NoSQL entities, also check entityObject which contains collection name
+    target_entity_object = target_ae.get("entityObject", {}) or {}
 
     source_schema = source_table.get("schema")
     source_table_name = source_table.get("name")
@@ -360,8 +363,10 @@ def _process_single_entity(
         logger.warning(f"Unable to determine source schema/table for entity {entity_name}. Skipping.")
         return
 
-    target_schema = target_table.get("schema") or source_schema
-    target_table_name = target_table.get("name") or source_table_name
+    # Extract target schema and table name, checking both table and entityObject
+    target_schema = target_table.get("schema") or target_entity_object.get("scope") or source_schema
+    # For NoSQL, collection name is in entityObject.collection, for SQL it's in table.name
+    target_table_name = target_table.get("name") or target_entity_object.get("collection") or source_table_name
 
     schema_cfg = schemas.get(source_schema)
     if not schema_cfg:
@@ -599,6 +604,15 @@ def _process_multitable_entity(
 
     column_groups = _group_entries(source_ae.get("columns"))
     key_groups = _group_entries(source_ae.get("keys"))
+    
+    # Build a mapping from source table names to target table names
+    source_to_target_name = {}
+    if target_tables and len(target_tables) == len(tables):
+        for src_tbl, tgt_tbl in zip(tables, target_tables):
+            src_name = src_tbl.get("name")
+            tgt_name = tgt_tbl.get("name")
+            if src_name and tgt_name:
+                source_to_target_name[src_name] = tgt_name
 
     # For each table in the chain, assign chain metadata and restore columns/keys
     for tbl in tables:
@@ -613,8 +627,9 @@ def _process_multitable_entity(
             table_cfg = {}
             custom_tables[table_name] = table_cfg
 
-        # Basic naming: keep same name for target unless already set
-        table_cfg.setdefault("name", table_name)
+        # Use the actual target table name if available, otherwise use source table name
+        target_table_name = source_to_target_name.get(table_name, table_name)
+        table_cfg.setdefault("name", target_table_name)
         # MultiTable entities share one entity name; persist it per table so import can reuse it
         table_cfg["entityName"] = entity_name
         table_cfg["chainId"] = chain_id
