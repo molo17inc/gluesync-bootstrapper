@@ -765,12 +765,12 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail="sourceAgentPassword is required")
         if not request.target_agent_password:
             raise HTTPException(status_code=400, detail="targetAgentPassword is required")
-        if request.override_schemas and (
-            not request.override_source_schema or not request.override_target_schema
+        if request.override_schemas and not (
+            request.override_source_schema or request.override_target_schema
         ):
             raise HTTPException(
                 status_code=400,
-                detail="overrideSourceSchema and overrideTargetSchema are required when overrideSchemas is enabled",
+                detail="At least one of overrideSourceSchema or overrideTargetSchema must be provided when overrideSchemas is enabled",
             )
 
         try:
@@ -780,6 +780,8 @@ def create_app() -> FastAPI:
 
         duplicate_started = True
 
+        logger.info("Duplicate request: clone_entities=%s", request.clone_entities)
+        
         try:
             result = corehub.duplicate_pipeline(
                 token=state.token,

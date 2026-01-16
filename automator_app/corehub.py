@@ -22,10 +22,12 @@
 
 from __future__ import annotations
 
+import base64
 import io
 import json
 import logging
 import os
+import shutil
 import zipfile
 import tempfile
 from contextlib import redirect_stdout
@@ -1732,19 +1734,41 @@ def duplicate_pipeline(
     new_pipeline_id = result.get("pipelineId")
     entity_clone_status = "skipped"
     entity_clone_errors: list[str] = []
+    udf_clone_status = "skipped"
+    udf_clone_errors: list[str] = []
+    
+    logger.info("clone_entities parameter value: %s", clone_entities)
     if clone_entities:
+        logger.info("ENTERING clone_entities block - will clone entities and UDFs")
         try:
             _raise_if_cancelled()
             snapshot_path = _write_temp_yaml(yaml_config)
             try:
                 schema_pairs = extract_all_schemas_from_yaml(snapshot_path)
-                if override_schemas and override_source_schema and override_target_schema:
-                    logger.info(
-                        "Overriding schema pairs to %s -> %s for duplicated pipeline",
-                        override_source_schema,
-                        override_target_schema,
-                    )
-                    schema_pairs = [(override_source_schema, override_target_schema)]
+                if override_schemas:
+                    if override_source_schema and override_target_schema:
+                        logger.info(
+                            "Overriding schema pairs to %s -> %s for duplicated pipeline",
+                            override_source_schema,
+                            override_target_schema,
+                        )
+                        schema_pairs = [(override_source_schema, override_target_schema)]
+                    elif override_source_schema:
+                        logger.info(
+                            "Overriding source schema to %s for all entity clones",
+                            override_source_schema,
+                        )
+                        schema_pairs = [
+                            (override_source_schema, tgt) for (_, tgt) in schema_pairs or [("", "")]
+                        ]
+                    elif override_target_schema:
+                        logger.info(
+                            "Overriding target schema to %s for all entity clones",
+                            override_target_schema,
+                        )
+                        schema_pairs = [
+                            (src, override_target_schema) for (src, _) in schema_pairs or [("", "")]
+                        ]
                 source_type_hint, target_type_hint = extract_schema_types_from_yaml(snapshot_path)
                 source_type_hint = source_type_hint or "SQL"
                 target_type_hint = target_type_hint or "SQL"
@@ -1774,6 +1798,220 @@ def duplicate_pipeline(
                         error_msg = result.get("error") or "Unknown error during entity creation"
                         entity_clone_errors.append(f"{source_schema}->{target_schema}: {error_msg}")
                         logger.warning("Entity creation failed for %s -> %s: %s", source_schema, target_schema, error_msg)
+                
+                # After ALL entities are created, discover and compile UDFs
+                logger.info("=== STARTING UDF DISCOVERY FOR PIPELINE %s ===", new_pipeline_id)
+                logger.info("Discovering UDFs for duplicated pipeline %s", new_pipeline_id)
+                udf_clone_status = "skipped"
+                udf_clone_errors: list[str] = []
+                try:
+                    entities = fetch_pipeline_entities(token, pipeline_id)
+                    udfs_to_export: Dict[str, Dict[str, Any]] = {}
+                    
+                    if isinstance(entities, list):
+                        for ent in entities:
+                            if not isinstance(ent, dict):
+                                continue
+                            
+                            target_ae: Optional[Dict[str, Any]] = None
+                            for ae in ent.get("agentEntities", []) or []:
+                                et = ae.get("entityType") or {}
+                                if et.get("type") == "Target":
+                                    target_ae = ae
+                                    break
+                            if not target_ae:
+                                continue
+                            
+                            target_et = target_ae.get("entityType") or {}
+                            mf_info = target_et.get("mappingFunctionInfo")
+                            if isinstance(mf_info, dict):
+                                udf_name = mf_info.get("name")
+                                if udf_name:
+                                    key = str(udf_name)
+                                    if key not in udfs_to_export:
+                                        raw_agent_id = target_ae.get("agentId") or target_ae.get("id")
+                                        # Get entity name for later matching
+                                        entity_name = ent.get("entityName") or ""
+                                        udfs_to_export[key] = {
+                                            "name": str(udf_name),
+                                            "type": mf_info.get("type"),
+                                            "agentId": str(raw_agent_id) if raw_agent_id is not None else None,
+                                            "entityName": entity_name,
+                                            "mappingFunctionInfo": mf_info,
+                                        }
+                    
+                    if udfs_to_export:
+                        logger.info("Found %d UDF(s) to clone: %s", len(udfs_to_export), list(udfs_to_export.keys()))
+                        udf_root = Path(tempfile.gettempdir()) / f"gluesync_duplicate_udfs_{new_pipeline_id}"
+                        if udf_root.exists():
+                            shutil.rmtree(udf_root)
+                        udf_root.mkdir(parents=True, exist_ok=True)
+                        
+                        try:
+                            for udf_name, meta in udfs_to_export.items():
+                                try:
+                                    response = fetch_core_hub(
+                                        f"/pipelines/{pipeline_id}/config/entities/mapping-functions/{udf_name}",
+                                        token=token,
+                                    )
+                                    
+                                    if not isinstance(response, dict):
+                                        logger.warning("Unexpected response for UDF %s: %r", udf_name, response)
+                                        continue
+                                    
+                                    code = response.get("code")
+                                    mf_type = response.get("type") or meta.get("type")
+                                    if not isinstance(code, str) or not code:
+                                        logger.warning("UDF %s has no code to export", udf_name)
+                                        continue
+                                    
+                                    ext = ".java"
+                                    if isinstance(mf_type, str):
+                                        t = mf_type.lower()
+                                        if t == "java":
+                                            ext = ".java"
+                                        elif t == "kotlin":
+                                            ext = ".kt"
+                                        elif t == "python":
+                                            ext = ".py"
+                                        elif t == "javascript":
+                                            ext = ".js"
+                                        elif t == "ruby":
+                                            ext = ".rb"
+                                    
+                                    safe_udf_name = "".join(c for c in str(udf_name) if c.isalnum() or c in ("_", "-")) or "udf"
+                                    agent_id = meta.get("agentId")
+                                    if agent_id is not None:
+                                        safe_agent_id = "".join(c for c in str(agent_id) if c.isalnum() or c in ("_", "-")) or "unknown"
+                                        folder = udf_root / f"udf-{safe_agent_id}"
+                                    else:
+                                        folder = udf_root / "udf-unknown"
+                                    
+                                    folder.mkdir(parents=True, exist_ok=True)
+                                    udf_file = folder / f"{safe_udf_name}{ext}"
+                                    udf_file.write_text(code, encoding="utf-8")
+                                    logger.info("Exported UDF %s to %s", udf_name, udf_file)
+                                    
+                                except Exception as exc_udf:  # pylint: disable=broad-except
+                                    logger.exception("Failed to export UDF %s: %s", udf_name, exc_udf)
+                                    udf_clone_errors.append(f"Failed to export UDF {udf_name}: {exc_udf}")
+                            
+                            # Now compile the UDFs for the new pipeline using direct API calls
+                            logger.info("Compiling UDFs for new pipeline %s", new_pipeline_id)
+                            
+                            for udf_name, meta in udfs_to_export.items():
+                                try:
+                                    # Find the UDF file we just saved
+                                    udf_type = meta.get("type") or "Java"
+                                    ext = ".java"
+                                    t = udf_type.lower() if isinstance(udf_type, str) else "java"
+                                    if t == "kotlin":
+                                        ext = ".kt"
+                                    elif t == "python":
+                                        ext = ".py"
+                                    elif t == "javascript":
+                                        ext = ".js"
+                                    elif t == "ruby":
+                                        ext = ".rb"
+                                    
+                                    safe_udf_name = "".join(c for c in str(udf_name) if c.isalnum() or c in ("_", "-")) or "udf"
+                                    agent_id = meta.get("agentId")
+                                    if agent_id is not None:
+                                        safe_agent_id = "".join(c for c in str(agent_id) if c.isalnum() or c in ("_", "-")) or "unknown"
+                                        udf_file = udf_root / f"udf-{safe_agent_id}" / f"{safe_udf_name}{ext}"
+                                    else:
+                                        udf_file = udf_root / "udf-unknown" / f"{safe_udf_name}{ext}"
+                                    
+                                    if not udf_file.exists():
+                                        logger.warning("UDF file not found: %s", udf_file)
+                                        continue
+                                    
+                                    # Read and encode the UDF code
+                                    udf_code = udf_file.read_text(encoding="utf-8")
+                                    b64_code = base64.b64encode(udf_code.encode("utf-8")).decode("utf-8")
+                                    
+                                    # Compile the UDF directly via API
+                                    compile_payload = {
+                                        "code": b64_code,
+                                        "type": udf_type,
+                                        "udfName": udf_name,
+                                    }
+                                    
+                                    fetch_core_hub(
+                                        f"/pipelines/{new_pipeline_id}/config/entities/mapping-functions/compile-mapping-function",
+                                        method="POST",
+                                        token=token,
+                                        body=compile_payload,
+                                    )
+                                    logger.info("Successfully compiled UDF %s for new pipeline", udf_name)
+                                    
+                                except Exception as exc_compile:  # pylint: disable=broad-except
+                                    logger.exception("Failed to compile UDF %s: %s", udf_name, exc_compile)
+                                    udf_clone_errors.append(f"Failed to compile UDF {udf_name}: {exc_compile}")
+                            
+                            # Now update entities in the new pipeline to link them to the compiled UDFs
+                            logger.info("Linking UDFs to entities in new pipeline %s", new_pipeline_id)
+                            try:
+                                new_entities = fetch_pipeline_entities(token, new_pipeline_id)
+                                if isinstance(new_entities, list):
+                                    for new_ent in new_entities:
+                                        if not isinstance(new_ent, dict):
+                                            continue
+                                        
+                                        # Find the target agent entity
+                                        for ae in new_ent.get("agentEntities", []) or []:
+                                            et = ae.get("entityType") or {}
+                                            if et.get("type") != "Target":
+                                                continue
+                                            
+                                            # Check if this entity should have a UDF
+                                            # Match by table name (last part of entity name)
+                                            new_entity_name = new_ent.get("entityName") or ""
+                                            new_table_name = new_entity_name.split(".")[-1] if "." in new_entity_name else new_entity_name
+                                            
+                                            for udf_name, udf_meta in udfs_to_export.items():
+                                                orig_entity_name = udf_meta.get("entityName") or ""
+                                                orig_table_name = orig_entity_name.split(".")[-1] if "." in orig_entity_name else orig_entity_name
+                                                
+                                                if new_table_name and orig_table_name and new_table_name == orig_table_name:
+                                                    # This entity should have this UDF
+                                                    mf_info = udf_meta.get("mappingFunctionInfo")
+                                                    if mf_info:
+                                                        et["mappingFunctionInfo"] = mf_info
+                                                        et["udf"] = [mf_info]
+                                                        logger.info("Linked UDF %s to entity %s", udf_name, new_entity_name)
+                                                    break
+                                        
+                                        # Update the entity
+                                        try:
+                                            fetch_core_hub(
+                                                f"/pipelines/{new_pipeline_id}/config/entities",
+                                                method="PUT",
+                                                token=token,
+                                                body={"entities": [new_ent]},
+                                            )
+                                        except Exception as exc_update:  # pylint: disable=broad-except
+                                            logger.warning("Failed to update entity %s with UDF: %s", new_ent.get("entityName"), exc_update)
+                                            
+                            except Exception as exc_link:  # pylint: disable=broad-except
+                                logger.exception("Failed to link UDFs to entities: %s", exc_link)
+                                udf_clone_errors.append(f"Failed to link UDFs to entities: {exc_link}")
+                            
+                            udf_clone_status = "completed" if not udf_clone_errors else "partial"
+                            
+                        finally:
+                            if udf_root.exists():
+                                shutil.rmtree(udf_root)
+                                logger.info("Cleaned up temporary UDF directory")
+                    else:
+                        logger.info("No UDFs found to clone")
+                        udf_clone_status = "none"
+                        
+                except Exception as exc_udf_discovery:  # pylint: disable=broad-except
+                    logger.exception("Failed to discover/clone UDFs: %s", exc_udf_discovery)
+                    udf_clone_status = "failed"
+                    udf_clone_errors.append(str(exc_udf_discovery))
+                    
             finally:
                 os.unlink(snapshot_path)
         except DuplicateCancelledError:
@@ -1805,6 +2043,8 @@ def duplicate_pipeline(
         "targetAgent": {"type": target_agent_type, "tag": target_agent_tag},
         "entityCloneStatus": entity_clone_status,
         "entityCloneErrors": entity_clone_errors or None,
+        "udfCloneStatus": udf_clone_status,
+        "udfCloneErrors": udf_clone_errors or None,
     }
 
 

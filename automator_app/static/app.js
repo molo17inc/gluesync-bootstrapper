@@ -1562,14 +1562,22 @@ function bindEvents() {
         const targetSchemaInput = document.getElementById('duplicate-target-schema');
         const sourceSchemaValue = sourceSchemaInput ? sourceSchemaInput.value.trim() : '';
         const targetSchemaValue = targetSchemaInput ? targetSchemaInput.value.trim() : '';
-        if (!sourceSchemaValue || !targetSchemaValue) {
-          ui.setDuplicateMessage('Provide both source and target schema overrides or disable schema customization.', 'error');
-          return;
+        
+        // Allow overriding either or both schemas independently
+        if (sourceSchemaValue || targetSchemaValue) {
+          payload.overrideSchemas = true;
+          if (sourceSchemaValue) {
+            payload.overrideSourceSchema = sourceSchemaValue;
+          }
+          if (targetSchemaValue) {
+            payload.overrideTargetSchema = targetSchemaValue;
+          }
+          const overrideMsg = [
+            sourceSchemaValue ? `source: ${sourceSchemaValue}` : null,
+            targetSchemaValue ? `target: ${targetSchemaValue}` : null
+          ].filter(Boolean).join(', ');
+          logActivity('duplicate', `Overriding schemas (${overrideMsg})`);
         }
-        payload.overrideSchemas = true;
-        payload.overrideSourceSchema = sourceSchemaValue;
-        payload.overrideTargetSchema = targetSchemaValue;
-        logActivity('duplicate', `Overriding schemas ${sourceSchemaValue} -> ${targetSchemaValue}`);
       }
 
       duplicateRequestController = new AbortController();
@@ -1704,10 +1712,7 @@ function bindEvents() {
     inputs.forEach((input) => {
       if (!input) return;
       input.disabled = !enabled;
-      if (enabled) {
-        input.setAttribute('required', 'required');
-      } else {
-        input.removeAttribute('required');
+      if (!enabled) {
         input.value = '';
       }
     });
