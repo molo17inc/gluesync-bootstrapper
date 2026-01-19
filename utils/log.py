@@ -169,10 +169,17 @@ def create_log_file(log_dir=None):
         if not default_log_dir:
             # Use appropriate default based on platform
             if os.path.exists('/logs'):
-                # Docker environment
+                # Docker/Linux environment
                 default_log_dir = '/logs'
+            elif sys.platform.startswith('win'):
+                # Windows - prefer LOCALAPPDATA when available
+                local_appdata = os.environ.get('LOCALAPPDATA')
+                if local_appdata:
+                    default_log_dir = os.path.join(local_appdata, 'GluesyncAutomator', 'Logs')
+                else:
+                    default_log_dir = os.path.join(os.path.expanduser('~'), 'AppData', 'Local', 'GluesyncAutomator', 'Logs')
             else:
-                # Local/macOS environment - use user's home directory
+                # macOS / other Unix-like environments - use user's Library/Logs
                 default_log_dir = os.path.join(os.path.expanduser('~'), 'Library', 'Logs', 'GluesyncAutomator')
         log_dir = default_log_dir
         
