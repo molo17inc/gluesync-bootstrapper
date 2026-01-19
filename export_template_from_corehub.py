@@ -517,6 +517,15 @@ def _process_single_entity(
     if isinstance(snapshot_conc, int) and snapshot_conc != 1:
         target_cp["snapshotWritingConcurrency"] = snapshot_conc
 
+    # Bulk operations flags (default False) - include only when enabled
+    bulk_cdc = target_et.get("useBulkOperationsDuringCDC")
+    if isinstance(bulk_cdc, bool) and bulk_cdc:
+        target_cp["useBulkOperationsDuringCDC"] = bulk_cdc
+
+    bulk_snapshot = target_et.get("useBulkOperationsWhileSnapshot")
+    if isinstance(bulk_snapshot, bool) and bulk_snapshot:
+        target_cp["useBulkOperationsWhileSnapshot"] = bulk_snapshot
+
     # allowedOperations: expose effective operations when different from default
     allowed_ops = target_et.get("allowedOperations")
     default_ops = ["INSERT", "DELETE", "UPDATE", "TRUNCATE"]
