@@ -324,3 +324,6 @@ dbo:
               pollingIntervalMilliseconds: 100
             target:
               ttlValue: 0
+              # Bulk operations settings (both default to false)
+              useBulkOperationsDuringCDC: false
+              useBulkOperationsWhileSnapshot: false

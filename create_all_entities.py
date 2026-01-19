@@ -822,11 +822,13 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         # Get allowed operations for the target entity
         allowed_operations = get_allowed_operations(target_custom_properties)
 
-        # Create target entity type with allowedOperations
+        # Create target entity type with allowedOperations and bulk operations settings
         target_entity_type = {
             "type": "Target",
             "allowedOperations": allowed_operations,
-            "snapshotWritingConcurrency": target_custom_properties.get('snapshotWritingConcurrency', 1)
+            "snapshotWritingConcurrency": target_custom_properties.get('snapshotWritingConcurrency', 1),
+            "useBulkOperationsDuringCDC": target_custom_properties.get('useBulkOperationsDuringCDC', False),
+            "useBulkOperationsWhileSnapshot": target_custom_properties.get('useBulkOperationsWhileSnapshot', False)
         }
 
         # Add filters if they exist
