@@ -374,6 +374,34 @@ const ui = (() => {
   };
 })();
 
+function initTabs() {
+  const tabsRoot = document.getElementById('action-tabs');
+  if (!tabsRoot) return;
+
+  const tabButtons = Array.from(tabsRoot.querySelectorAll('.tab-button'));
+  const tabPanels = Array.from(tabsRoot.querySelectorAll('.tab-panel'));
+
+  const activateTab = (tabName) => {
+    if (!tabName) return;
+    tabButtons.forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.tab === tabName);
+    });
+    tabPanels.forEach((panel) => {
+      panel.classList.toggle('active', panel.dataset.tabPanel === tabName);
+    });
+  };
+
+  tabButtons.forEach((button) => {
+    button.addEventListener('click', () => {
+      activateTab(button.dataset.tab);
+    });
+  });
+
+  const initialTab = tabButtons.find((btn) => btn.classList.contains('active'))?.dataset.tab
+    || tabButtons[0]?.dataset.tab;
+  activateTab(initialTab);
+}
+
 function logActivity(scope, message) {
   if (!message) return;
   const timestamp = new Date().toLocaleTimeString();
@@ -1785,6 +1813,7 @@ async function loadPipelines() {
   }
 }
 
+initTabs();
 bindEvents();
 updateImportButtonsVisibility();
 initialize();

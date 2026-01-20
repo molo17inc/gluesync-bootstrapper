@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
@@ -25,7 +25,11 @@
         <span id="version-label" class="version-label"
           >Automator version: loading…</span
         >
-        <span id="connection-info" class="connection-info" style="display: none;">
+        <span
+          id="connection-info"
+          class="connection-info"
+          style="display: none"
+        >
           <span id="corehub-instance"></span>
           <span id="pipeline-count"></span>
         </span>
@@ -101,425 +105,481 @@
         <div id="auth-message" class="message"></div>
       </section>
 
-      <section class="card" id="bulk-card">
-        <h2>Bulk operations</h2>
-        <form id="bulk-form" class="form-grid">
-          <fieldset class="fieldset">
-            <legend>Create entities from source tables</legend>
-            <label>
-              Pipeline
-              <select id="bulk-pipeline-id" name="bulkPipelineId">
-                <option value="">Select a pipeline…</option>
-              </select>
-            </label>
-            <button
-              type="button"
-              class="secondary"
-              id="bulk-load-schemas-btn"
-              disabled
-            >
-              Load source schemas
+      <div class="tab-container requires-auth" id="action-tabs">
+        <div class="tab-header">
+          <div class="tabs" role="tablist">
+            <button type="button" class="tab-button active" data-tab="backup">
+              Backup &amp; export
             </button>
-            <label>
-              Source schema
-              <select id="bulk-source-schema" name="bulkSourceSchema" disabled>
-                <option value="">Select a schema…</option>
-              </select>
-            </label>
-            <label>
-              Target schema (optional)
-              <input
-                type="text"
-                id="bulk-target-schema"
-                name="bulkTargetSchema"
-                placeholder="Defaults to same as source schema"
-              />
-            </label>
-            <div id="bulk-tables-container">
-              <div id="bulk-tables-summary" class="hint-text">
-                Select a schema to load tables.
-              </div>
-              <div id="bulk-tables-list" class="bulk-tables-list"></div>
-            </div>
-            <div class="button-group">
-              <button
-                type="button"
-                class="secondary"
-                id="bulk-toggle-all-btn"
-                disabled
-              >
-                Toggle all
-              </button>
-              <button
-                type="button"
-                class="secondary"
-                id="bulk-download-yaml-btn"
-                disabled
-              >
-                Get YAML template
-              </button>
-              <button
-                type="button"
-                class="primary"
-                id="bulk-create-btn"
-                disabled
-              >
-                Create all entities (0)
-              </button>
-            </div>
-          </fieldset>
-        </form>
-        <div id="bulk-message" class="message"></div>
-      </section>
-
-      <section class="card" id="advanced-card">
-        <h2>Advanced options</h2>
-        <form id="advanced-form" class="form-grid">
-          <fieldset class="fieldset">
-            <legend>Global settings</legend>
-            <label>
-              Chunk size
-              <input
-                type="number"
-                id="chunk-size"
-                name="chunkSize"
-                value="50"
-                min="1"
-                max="500"
-              />
-            </label>
-            <label class="checkbox">
-              <input type="checkbox" id="skip-errors" />
-              Skip errors
-            </label>
-            <label class="checkbox">
-              <input type="checkbox" id="create-tables" checked />
-              Create missing tables automatically
-            </label>
-            <label class="checkbox">
-              <input type="checkbox" id="enable-scheduling" checked />
-              Enable scheduling for created entities
-            </label>
-          </fieldset>
-        </form>
-      </section>
-
-      <section class="card" id="config-card">
-        <h2>Import pipelines, agents and entities</h2>
-        <form id="config-form" class="form-grid">
-          <fieldset class="fieldset">
-            <legend>Create entities from YAML (single pipeline)</legend>
-            <label>
-              Pipeline
-              <select id="pipeline-id" name="pipelineId" required>
-                <option value="">Select a pipeline…</option>
-              </select>
-            </label>
-            <label class="checkbox">
-              <input type="checkbox" id="custom-schemas" />
-              Customize source/target schemas (override YAML)
-            </label>
-            <div id="schema-fields">
-              <label>
-                Source schema
-                <input type="text" id="source-schema" name="sourceSchema" />
-              </label>
-              <label>
-                Target schema
-                <input type="text" id="target-schema" name="targetSchema" />
-              </label>
-            </div>
-            <div id="type-fields">
-              <label>
-                Source type
-                <select id="source-type" name="sourceType" required>
-                  <option value="">Select source type…</option>
-                  <option value="SQL">RDBMS (SQL)</option>
-                  <option value="NoSQL">Anything else</option>
-                </select>
-              </label>
-              <label>
-                Target type
-                <select id="target-type" name="targetType" required>
-                  <option value="">Select target type…</option>
-                  <option value="SQL">RDBMS (SQL)</option>
-                  <option value="NoSQL">Anything else</option>
-                </select>
-              </label>
-            </div>
-            <label>
-              YAML configuration
-              <input type="file" id="yaml-file" accept=".yaml,.yml" />
-            </label>
-            <button type="submit" class="primary" disabled id="run-btn">
-              Start entity creation
+            <button type="button" class="tab-button" data-tab="import">
+              Import &amp; clone
             </button>
-          </fieldset>
-
-          <fieldset class="fieldset">
-            <legend>Import pipeline settings (config only)</legend>
-            <label>
-              Config file
-              <input
-                type="file"
-                id="import-config-file"
-                accept=".yaml,.yml,.json"
-              />
-            </label>
-            <div class="button-group">
-              <button
-                type="button"
-                class="secondary"
-                id="import-config-btn"
-                disabled
-              >
-                Import config
-              </button>
-            </div>
-          </fieldset>
-
-          <fieldset class="fieldset">
-            <legend>Import a full backup</legend>
-            <label>
-              Backup archive (ZIP) containing pipeline(s), agents, entities,
-              schedules and UDFs
-              <input type="file" id="import-all-file" accept=".zip" />
-            </label>
-            <label class="checkbox">
-              <input type="checkbox" id="auto-deploy-agents" checked />
-              Automatically deploy missing agents via Conductor
-            </label>
-            <div class="button-group">
-              <button
-                type="button"
-                class="secondary"
-                id="validate-all-btn"
-                disabled
-              >
-                Validate
-              </button>
-              <button
-                type="button"
-                class="secondary"
-                id="import-all-btn"
-                disabled
-              >
-                Import All
-              </button>
-            </div>
-          </fieldset>
-        </form>
-        <div id="config-message" class="message"></div>
-      </section>
-
-      <section class="card" id="export-card">
-        <h2>Export (backup pipeline configuration)</h2>
-        <form id="export-form" class="form-grid">
-          <fieldset class="fieldset">
-            <legend>Export a single pipeline</legend>
-            <label>
-              Pipeline
-              <select id="export-pipeline-id" name="pipelineId">
-                <option value="">Select a pipeline…</option>
-              </select>
-            </label>
-            <div class="button-group">
-              <button type="submit" class="secondary" id="export-btn" disabled>
-                Export entities
-              </button>
-              <button
-                type="button"
-                class="secondary"
-                id="export-pipeline-full-btn"
-                disabled
-              >
-                Pipeline backup
-              </button>
-            </div>
-          </fieldset>
-
-          <fieldset class="fieldset">
-            <legend>Export all</legend>
-            <div class="button-group">
-              <label>
-                Export includes pipelines, agents, entities, schedules and UDFs
-                <button
-                  type="button"
-                  class="secondary"
-                  id="export-all-btn"
-                  disabled
-                >
-                  Full backup
-                </button>
-              </label>
-            </div>
-          </fieldset>
-        </form>
-        <div id="export-message" class="message"></div>
-      </section>
-
-      <section class="card requires-auth" id="duplicate-card">
-        <h2>Duplicate pipeline (w/ agents)</h2>
-        <form id="duplicate-form" class="form-grid">
-          <fieldset class="fieldset">
-            <legend>Duplicate an existing pipeline</legend>
-            <label>
-              Source pipeline
-              <select id="duplicate-pipeline-id" name="pipelineId" required>
-                <option value="">Select a pipeline to duplicate…</option>
-              </select>
-            </label>
-            <label>
-              New pipeline name
-              <input
-                type="text"
-                id="duplicate-new-name"
-                name="newPipelineName"
-                placeholder="Enter name for duplicated pipeline"
-                required
-              />
-            </label>
-            <label>
-              Source host password
-              <input
-                type="password"
-                id="duplicate-source-password"
-                name="sourceAgentPassword"
-                placeholder="Enter password for the source host"
-                autocomplete="new-password"
-                required
-              />
-            </label>
-            <label>
-              Target host password
-              <input
-                type="password"
-                id="duplicate-target-password"
-                name="targetAgentPassword"
-                placeholder="Enter password for the target host"
-                autocomplete="new-password"
-                required
-              />
-            </label>
-            <div class="danger-zone">
-              <label
-                class="checkbox danger-toggle"
-                title="Danger zone: override agent tags only if you're sure the destination agents exist or can be deployed."
-              >
-                <input type="checkbox" id="customize-agents" />
-                Customize new source/target agents (Danger zone)
-              </label>
-              <div id="agent-customization-fields" style="display: none">
-                <label>
-                  Current source agent tag
-                  <input
-                    type="text"
-                    id="duplicate-current-source-tag"
-                    readonly
-                  />
-                </label>
-                <label>
-                  New source agent tag
-                  <input
-                    type="text"
-                    id="duplicate-source-tag"
-                    name="sourceAgentTag"
-                    placeholder="e.g., mysql-dev"
-                    required
-                  />
-                </label>
-                <label>
-                  Current target agent tag
-                  <input
-                    type="text"
-                    id="duplicate-current-target-tag"
-                    readonly
-                  />
-                </label>
-                <label>
-                  New target agent tag
-                  <input
-                    type="text"
-                    id="duplicate-target-tag"
-                    name="targetAgentTag"
-                    placeholder="e.g., postgres-dev"
-                    required
-                  />
-                </label>
-              </div>
-            </div>
-            <label class="checkbox">
-              <input type="checkbox" id="duplicate-clone-entities" checked />
-              Clone entities, schemas, and schedules from the original pipeline
-            </label>
-            <label class="checkbox">
-              <input type="checkbox" id="customize-conductor" />
-              Customize Conductor settings
-            </label>
-            <div id="conductor-fields" style="display: none">
-              <label>
-                Conductor URL (optional)
-                <input
-                  type="text"
-                  id="duplicate-conductor-url"
-                  name="conductorUrl"
-                  placeholder="Leave empty to use default from CoreHub"
-                />
-              </label>
-            </div>
-            <div class="dual-field-group">
-              <label>
-                Source host address (optional)
-                <input
-                  type="text"
-                  id="duplicate-source-host"
-                  name="sourceHost"
-                  placeholder="Leave blank to reuse current source host"
-                />
-              </label>
-              <label>
-                Target host address (optional)
-                <input
-                  type="text"
-                  id="duplicate-target-host"
-                  name="targetHost"
-                  placeholder="Leave blank to reuse current target host"
-                />
-              </label>
-            </div>
-            <label class="checkbox">
-              <input type="checkbox" id="customize-schemas" />
-              Override source &amp; target schemas
-            </label>
-            <div id="schema-override-fields" hidden style="display: none">
-              <label>
-                Source schema override (optional)
-                <input
-                  type="text"
-                  id="duplicate-source-schema"
-                  name="overrideSourceSchema"
-                  placeholder="Leave blank to reuse detected source schema"
-                />
-              </label>
-              <label>
-                Target schema override (optional)
-                <input
-                  type="text"
-                  id="duplicate-target-schema"
-                  name="overrideTargetSchema"
-                  placeholder="Leave blank to reuse detected target schema"
-                />
-              </label>
-            </div>
-            <button type="submit" class="primary" disabled id="duplicate-btn">
-              Duplicate Pipeline
+            <button type="button" class="tab-button" data-tab="extras">
+              Extras
             </button>
-          </fieldset>
-        </form>
-        <div id="duplicate-message" class="message"></div>
-      </section>
+          </div>
+        </div>
 
-      <section class="card log-card">
+        <div class="tab-panels">
+          <div class="tab-panel active" data-tab-panel="backup">
+            <section class="card requires-auth" id="export-card">
+              <h2>Export (backup pipeline configuration)</h2>
+              <form id="export-form" class="form-grid">
+                <fieldset class="fieldset">
+                  <legend>Export a single pipeline</legend>
+                  <label>
+                    Pipeline
+                    <select id="export-pipeline-id" name="pipelineId">
+                      <option value="">Select a pipeline…</option>
+                    </select>
+                  </label>
+                  <div class="button-group">
+                    <button
+                      type="submit"
+                      class="secondary"
+                      id="export-btn"
+                      disabled
+                    >
+                      Export entities
+                    </button>
+                    <button
+                      type="button"
+                      class="secondary"
+                      id="export-pipeline-full-btn"
+                      disabled
+                    >
+                      Pipeline backup
+                    </button>
+                  </div>
+                </fieldset>
+
+                <fieldset class="fieldset">
+                  <legend>Export all</legend>
+                  <div class="button-group">
+                    <label>
+                      Export includes pipelines, agents, entities, schedules and
+                      UDFs
+                      <button
+                        type="button"
+                        class="secondary"
+                        id="export-all-btn"
+                        disabled
+                      >
+                        Full backup
+                      </button>
+                    </label>
+                  </div>
+                </fieldset>
+              </form>
+              <div id="export-message" class="message"></div>
+            </section>
+          </div>
+
+          <div class="tab-panel" data-tab-panel="import">
+            <section class="card requires-auth" id="config-card">
+              <h2>Import pipelines, agents and entities</h2>
+              <form id="config-form" class="form-grid">
+                <fieldset class="fieldset">
+                  <legend>Create entities from YAML (single pipeline)</legend>
+                  <label>
+                    Pipeline
+                    <select id="pipeline-id" name="pipelineId" required>
+                      <option value="">Select a pipeline…</option>
+                    </select>
+                  </label>
+                  <label class="checkbox">
+                    <input type="checkbox" id="custom-schemas" />
+                    Customize source/target schemas (override YAML)
+                  </label>
+                  <div id="schema-fields">
+                    <label>
+                      Source schema
+                      <input
+                        type="text"
+                        id="source-schema"
+                        name="sourceSchema"
+                      />
+                    </label>
+                    <label>
+                      Target schema
+                      <input
+                        type="text"
+                        id="target-schema"
+                        name="targetSchema"
+                      />
+                    </label>
+                  </div>
+                  <div id="type-fields">
+                    <label>
+                      Source type
+                      <select id="source-type" name="sourceType" required>
+                        <option value="">Select source type…</option>
+                        <option value="SQL">RDBMS (SQL)</option>
+                        <option value="NoSQL">Anything else</option>
+                      </select>
+                    </label>
+                    <label>
+                      Target type
+                      <select id="target-type" name="targetType" required>
+                        <option value="">Select target type…</option>
+                        <option value="SQL">RDBMS (SQL)</option>
+                        <option value="NoSQL">Anything else</option>
+                      </select>
+                    </label>
+                  </div>
+                  <label>
+                    YAML configuration
+                    <input type="file" id="yaml-file" accept=".yaml,.yml" />
+                  </label>
+                  <button type="submit" class="primary" disabled id="run-btn">
+                    Start entity creation
+                  </button>
+                </fieldset>
+
+                <fieldset class="fieldset">
+                  <legend>Import pipeline settings (config only)</legend>
+                  <label>
+                    Config file
+                    <input
+                      type="file"
+                      id="import-config-file"
+                      accept=".yaml,.yml,.json"
+                    />
+                  </label>
+                  <div class="button-group">
+                    <button
+                      type="button"
+                      class="secondary"
+                      id="import-config-btn"
+                      disabled
+                    >
+                      Import config
+                    </button>
+                  </div>
+                </fieldset>
+
+                <fieldset class="fieldset">
+                  <legend>Import a full backup</legend>
+                  <label>
+                    Backup archive (ZIP) containing pipeline(s), agents,
+                    entities, schedules and UDFs
+                    <input type="file" id="import-all-file" accept=".zip" />
+                  </label>
+                  <label class="checkbox">
+                    <input type="checkbox" id="auto-deploy-agents" checked />
+                    Automatically deploy missing agents via Conductor
+                  </label>
+                  <div class="button-group">
+                    <button
+                      type="button"
+                      class="secondary"
+                      id="validate-all-btn"
+                      disabled
+                    >
+                      Validate
+                    </button>
+                    <button
+                      type="button"
+                      class="secondary"
+                      id="import-all-btn"
+                      disabled
+                    >
+                      Import All
+                    </button>
+                  </div>
+                </fieldset>
+              </form>
+              <div id="config-message" class="message"></div>
+            </section>
+
+            <section class="card requires-auth" id="duplicate-card">
+              <h2>Duplicate pipeline (w/ agents)</h2>
+              <form id="duplicate-form" class="form-grid">
+                <fieldset class="fieldset">
+                  <legend>Duplicate an existing pipeline</legend>
+                  <label>
+                    Source pipeline
+                    <select
+                      id="duplicate-pipeline-id"
+                      name="pipelineId"
+                      required
+                    >
+                      <option value="">Select a pipeline to duplicate…</option>
+                    </select>
+                  </label>
+                  <label>
+                    New pipeline name
+                    <input
+                      type="text"
+                      id="duplicate-new-name"
+                      name="newPipelineName"
+                      placeholder="Enter name for duplicated pipeline"
+                      required
+                    />
+                  </label>
+                  <label>
+                    Source host password
+                    <input
+                      type="password"
+                      id="duplicate-source-password"
+                      name="sourceAgentPassword"
+                      placeholder="Enter password for the source host"
+                      autocomplete="new-password"
+                      required
+                    />
+                  </label>
+                  <label>
+                    Target host password
+                    <input
+                      type="password"
+                      id="duplicate-target-password"
+                      name="targetAgentPassword"
+                      placeholder="Enter password for the target host"
+                      autocomplete="new-password"
+                      required
+                    />
+                  </label>
+                  <div class="danger-zone">
+                    <label
+                      class="checkbox danger-toggle"
+                      title="Danger zone: override agent tags only if you're sure the destination agents exist or can be deployed."
+                    >
+                      <input type="checkbox" id="customize-agents" />
+                      Customize new source/target agents (Danger zone)
+                    </label>
+                    <div id="agent-customization-fields" style="display: none">
+                      <label>
+                        Current source agent tag
+                        <input
+                          type="text"
+                          id="duplicate-current-source-tag"
+                          readonly
+                        />
+                      </label>
+                      <label>
+                        New source agent tag
+                        <input
+                          type="text"
+                          id="duplicate-source-tag"
+                          name="sourceAgentTag"
+                          placeholder="e.g., mysql-dev"
+                          required
+                        />
+                      </label>
+                      <label>
+                        Current target agent tag
+                        <input
+                          type="text"
+                          id="duplicate-current-target-tag"
+                          readonly
+                        />
+                      </label>
+                      <label>
+                        New target agent tag
+                        <input
+                          type="text"
+                          id="duplicate-target-tag"
+                          name="targetAgentTag"
+                          placeholder="e.g., postgres-dev"
+                          required
+                        />
+                      </label>
+                    </div>
+                  </div>
+                  <label class="checkbox">
+                    <input
+                      type="checkbox"
+                      id="duplicate-clone-entities"
+                      checked
+                    />
+                    Clone entities, schemas, and schedules from the original
+                    pipeline
+                  </label>
+                  <label class="checkbox">
+                    <input type="checkbox" id="customize-conductor" />
+                    Customize Conductor settings
+                  </label>
+                  <div id="conductor-fields" style="display: none">
+                    <label>
+                      Conductor URL (optional)
+                      <input
+                        type="text"
+                        id="duplicate-conductor-url"
+                        name="conductorUrl"
+                        placeholder="Leave empty to use default from CoreHub"
+                      />
+                    </label>
+                  </div>
+                  <div class="dual-field-group">
+                    <label>
+                      Source host address (optional)
+                      <input
+                        type="text"
+                        id="duplicate-source-host"
+                        name="sourceHost"
+                        placeholder="Leave blank to reuse current source host"
+                      />
+                    </label>
+                    <label>
+                      Target host address (optional)
+                      <input
+                        type="text"
+                        id="duplicate-target-host"
+                        name="targetHost"
+                        placeholder="Leave blank to reuse current target host"
+                      />
+                    </label>
+                  </div>
+                  <label class="checkbox">
+                    <input type="checkbox" id="customize-schemas" />
+                    Override source &amp; target schemas
+                  </label>
+                  <div id="schema-override-fields" hidden style="display: none">
+                    <label>
+                      Source schema override (optional)
+                      <input
+                        type="text"
+                        id="duplicate-source-schema"
+                        name="overrideSourceSchema"
+                        placeholder="Leave blank to reuse detected source schema"
+                      />
+                    </label>
+                    <label>
+                      Target schema override (optional)
+                      <input
+                        type="text"
+                        id="duplicate-target-schema"
+                        name="overrideTargetSchema"
+                        placeholder="Leave blank to reuse detected target schema"
+                      />
+                    </label>
+                  </div>
+                  <button
+                    type="submit"
+                    class="primary"
+                    disabled
+                    id="duplicate-btn"
+                  >
+                    Duplicate Pipeline
+                  </button>
+                </fieldset>
+              </form>
+              <div id="duplicate-message" class="message"></div>
+            </section>
+          </div>
+
+          <div class="tab-panel" data-tab-panel="extras">
+            <section class="card requires-auth" id="bulk-card">
+              <h2>Bulk operations</h2>
+              <form id="bulk-form" class="form-grid">
+                <fieldset class="fieldset">
+                  <legend>Create entities from source tables</legend>
+                  <label>
+                    Pipeline
+                    <select id="bulk-pipeline-id" name="bulkPipelineId">
+                      <option value="">Select a pipeline…</option>
+                    </select>
+                  </label>
+                  <button
+                    type="button"
+                    class="secondary"
+                    id="bulk-load-schemas-btn"
+                    disabled
+                  >
+                    Load source schemas
+                  </button>
+                  <label>
+                    Source schema
+                    <select
+                      id="bulk-source-schema"
+                      name="bulkSourceSchema"
+                      disabled
+                    >
+                      <option value="">Select a schema…</option>
+                    </select>
+                  </label>
+                  <label>
+                    Target schema (optional)
+                    <input
+                      type="text"
+                      id="bulk-target-schema"
+                      name="bulkTargetSchema"
+                      placeholder="Defaults to same as source schema"
+                    />
+                  </label>
+                  <div id="bulk-tables-container">
+                    <div id="bulk-tables-summary" class="hint-text">
+                      Select a schema to load tables.
+                    </div>
+                    <div id="bulk-tables-list" class="bulk-tables-list"></div>
+                  </div>
+                  <div class="button-group">
+                    <button
+                      type="button"
+                      class="secondary"
+                      id="bulk-toggle-all-btn"
+                      disabled
+                    >
+                      Toggle all
+                    </button>
+                    <button
+                      type="button"
+                      class="secondary"
+                      id="bulk-download-yaml-btn"
+                      disabled
+                    >
+                      Get YAML template
+                    </button>
+                    <button
+                      type="button"
+                      class="primary"
+                      id="bulk-create-btn"
+                      disabled
+                    >
+                      Create all entities (0)
+                    </button>
+                  </div>
+                </fieldset>
+              </form>
+              <div id="bulk-message" class="message"></div>
+            </section>
+
+            <section class="card requires-auth" id="advanced-card">
+              <h2>Advanced options</h2>
+              <form id="advanced-form" class="form-grid">
+                <fieldset class="fieldset">
+                  <legend>Global settings</legend>
+                  <label>
+                    Chunk size
+                    <input
+                      type="number"
+                      id="chunk-size"
+                      name="chunkSize"
+                      value="50"
+                      min="1"
+                      max="500"
+                    />
+                  </label>
+                  <label class="checkbox">
+                    <input type="checkbox" id="skip-errors" />
+                    Skip errors
+                  </label>
+                  <label class="checkbox">
+                    <input type="checkbox" id="create-tables" checked />
+                    Create missing tables automatically
+                  </label>
+                  <label class="checkbox">
+                    <input type="checkbox" id="enable-scheduling" checked />
+                    Enable scheduling for created entities
+                  </label>
+                </fieldset>
+              </form>
+            </section>
+          </div>
+        </div>
+      </div>
+
+      <section class="card log-card requires-auth">
         <h2>Execution log</h2>
         <div id="log-output" class="log-output"></div>
       </section>

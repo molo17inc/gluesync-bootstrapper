@@ -28,6 +28,7 @@ html {
   font-size: 1.0625em;
   height: 100%;
   scroll-behavior: smooth;
+  overflow-x: hidden;
 }
 
 body {
@@ -39,6 +40,7 @@ body {
   display: flex;
   flex-direction: column;
   line-height: 1.6;
+  overflow-x: hidden;
 }
 
 .topbar {
@@ -103,11 +105,79 @@ body.is-authenticated .topbar-logout-btn {
 }
 
 .requires-auth {
-  display: none;
+  display: none !important;
 }
 
 body.is-authenticated .requires-auth {
-  display: block;
+  display: block !important;
+}
+
+.tab-container {
+  margin-top: 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  grid-column: 1 / -1;
+  align-items: center;
+}
+
+.tab-header {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  margin-bottom: 1.5rem;
+}
+
+.tabs {
+  display: inline-flex;
+  gap: 0.35rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.35rem;
+  margin: 0 auto;
+  box-shadow: 0 10px 20px rgba(20, 30, 47, 0.05);
+}
+
+.tab-panels {
+  width: 100%;
+}
+
+.tab-button {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 600;
+  padding: 0.45rem 1.4rem;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.2s ease, color 0.2s ease;
+}
+
+.tab-button:hover {
+  color: var(--primary);
+}
+
+.tab-button.active {
+  background: var(--primary);
+  color: #000;
+  box-shadow: 0 8px 18px rgba(95, 99, 255, 0.35);
+}
+
+.tab-panels {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.tab-panel {
+  display: none;
+  gap: 1.5rem;
+}
+
+.tab-panel.active {
+  display: flex;
+  flex-direction: column;
 }
 
 .version-label {
@@ -443,20 +513,6 @@ button:disabled {
 }
 
 /* Import/export panels are only visible once authenticated */
-#config-card,
-#export-card,
-#advanced-card,
-#bulk-card {
-  display: none;
-}
-
-body.is-authenticated #config-card,
-body.is-authenticated #export-card,
-body.is-authenticated #advanced-card,
-body.is-authenticated #bulk-card {
-  display: block;
-}
-
 body.is-authenticated #auth-card {
   display: none;
 }

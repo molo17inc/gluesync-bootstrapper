@@ -229,7 +229,10 @@ class GluesyncTrayApp:
 
         # Tray setup
         LOGGER.info("Creating system tray icon...")
-        self.tray_icon = QtWidgets.QSystemTrayIcon(icon if not icon.isNull() else None, self.qt_app)
+        if not icon.isNull():
+            self.tray_icon = QtWidgets.QSystemTrayIcon(icon, self.qt_app)
+        else:
+            self.tray_icon = QtWidgets.QSystemTrayIcon(self.qt_app)
         self.tray_icon.setToolTip("Gluesync Automator")
         menu = QtWidgets.QMenu()
 
