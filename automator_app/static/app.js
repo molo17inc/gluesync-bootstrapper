@@ -4,6 +4,15 @@ const api = {
     if (!res.ok) throw new Error(`State request failed: ${res.status}`);
     return res.json();
   },
+  async getCorehubOverview() {
+    const res = await fetch('/api/corehub/overview');
+    if (res.status === 401) return null;
+    if (!res.ok) {
+      const detail = await res.json().catch(() => ({}));
+      throw new Error(detail.detail || 'Failed to load CoreHub overview');
+    }
+    return res.json();
+  },
   async exportPipelineFull(pipelineId) {
     const response = await fetch(`/api/export/pipeline/${encodeURIComponent(pipelineId)}/full`);
     if (!response.ok) {
@@ -276,6 +285,16 @@ const ui = (() => {
     versionLabel.textContent = message;
   }
 
+  function formatAddress(url) {
+    if (!url) return '';
+    try {
+      const parsed = new URL(url);
+      return parsed.host + parsed.pathname.replace(/\/$/, '');
+    } catch (err) {
+      return url.replace(/^[a-zA-Z]+:\/\//, '');
+    }
+  }
+
   function setConnectionInfo(corehubUrl, pipelineCount) {
     const connectionInfoEl = document.getElementById('connection-info');
     const corehubInstanceEl = document.getElementById('corehub-instance');
@@ -283,8 +302,9 @@ const ui = (() => {
     
     if (connectionInfoEl && corehubInstanceEl && pipelineCountEl) {
       if (corehubUrl && pipelineCount !== undefined) {
-        corehubInstanceEl.textContent = `Connected to: ${corehubUrl}`;
-        pipelineCountEl.textContent = `Pipelines: ${pipelineCount}`;
+        const displayAddress = formatAddress(corehubUrl);
+        corehubInstanceEl.textContent = `Connected to: ${displayAddress}`;
+        pipelineCountEl.textContent = `${pipelineCount} pipelines`;
         connectionInfoEl.style.display = '';
       } else {
         connectionInfoEl.style.display = 'none';
@@ -374,12 +394,180 @@ const ui = (() => {
   };
 })();
 
+const corehubUI = (() => {
+  const summaryEl = document.getElementById('corehub-summary-message');
+  const baseUrlEl = document.getElementById('corehub-base-url');
+  const tlsEl = document.getElementById('corehub-ssl');
+  const verifyEl = document.getElementById('corehub-verify');
+  const schedulingEl = document.getElementById('corehub-scheduling');
+  const createTablesEl = document.getElementById('corehub-create-tables');
+  const pipelineTotalEl = document.getElementById('corehub-pipeline-count');
+  const agentTotalEl = document.getElementById('corehub-agent-count');
+  const entityTotalEl = document.getElementById('corehub-entity-count');
+  const pipelinesListEl = document.getElementById('corehub-pipelines-list');
+  const envMetricsEl = document.getElementById('corehub-environment-metrics');
+  const totalsMetricsEl = document.getElementById('corehub-total-metrics');
+
+  if (!summaryEl || !pipelinesListEl) {
+    return {
+      updateEnvironment: () => {},
+      showLoading: () => {},
+      showSignedOut: () => {},
+      showError: () => {},
+      renderOverview: () => {},
+    };
+  }
+
+  const setSummary = (message, type = 'info') => {
+    summaryEl.textContent = message;
+    summaryEl.className = message ? `message ${type}` : 'message';
+  };
+
+  const setText = (el, value) => {
+    if (el) {
+      el.textContent = value;
+    }
+  };
+
+  const formatToggle = (value, labels = ['Disabled', 'Enabled']) => {
+    if (value === null || value === undefined) return '—';
+    return value ? labels[1] : labels[0];
+  };
+
+  const setMetricsLoading = (isLoading) => {
+    [envMetricsEl, totalsMetricsEl].forEach((el) => {
+      if (!el) return;
+      el.classList.toggle('is-loading', isLoading);
+    });
+  };
+
+  const renderPipelines = (pipelines = []) => {
+    pipelinesListEl.innerHTML = '';
+    if (!pipelines.length) {
+      const empty = document.createElement('li');
+      empty.className = 'corehub-empty';
+      empty.textContent = 'No pipelines detected.';
+      pipelinesListEl.appendChild(empty);
+      return;
+    }
+
+    pipelines.forEach((pipeline) => {
+      const li = document.createElement('li');
+      li.className = 'corehub-pipeline';
+
+      const header = document.createElement('div');
+      header.className = 'corehub-pipeline-header';
+
+      const title = document.createElement('h4');
+      const pipelineId = pipeline.pipelineId || pipeline.id || pipeline.pipeline_id || '';
+      const pipelineName = pipeline.name || pipelineId || 'Unnamed pipeline';
+      title.textContent = pipelineId ? `${pipelineName} (${pipelineId})` : pipelineName;
+      header.appendChild(title);
+
+      const counts = document.createElement('span');
+      counts.className = 'corehub-pipeline-meta';
+      counts.textContent = `Agents: ${pipeline.agentCount || 0} · Entities: ${pipeline.entityCount || 0}`;
+      header.appendChild(counts);
+
+      li.appendChild(header);
+
+      if (pipeline.description) {
+        const desc = document.createElement('p');
+        desc.className = 'corehub-pipeline-meta';
+        desc.textContent = pipeline.description;
+        li.appendChild(desc);
+      }
+
+      const agents = Array.isArray(pipeline.agents) ? pipeline.agents : [];
+      if (agents.length) {
+        const agentRow = document.createElement('div');
+        agentRow.className = 'corehub-pipeline-meta';
+        agents.forEach((agent) => {
+          const pill = document.createElement('span');
+          pill.className = 'corehub-agent-pill';
+          const tag = agent.tag || 'unknown';
+          const type = agent.type || '?';
+          pill.textContent = `${type}: ${tag}`;
+          agentRow.appendChild(pill);
+        });
+        li.appendChild(agentRow);
+      }
+
+      pipelinesListEl.appendChild(li);
+    });
+  };
+
+  return {
+    updateEnvironment(state) {
+      if (!state) {
+        return;
+      }
+      setText(baseUrlEl, state.baseUrl || '—');
+      setText(tlsEl, formatToggle(state.useSsl));
+      setText(verifyEl, formatToggle(state.skipVerify, ['Enforced', 'Skipped']));
+      setText(schedulingEl, formatToggle(state.enableScheduling));
+      setText(createTablesEl, formatToggle(state.createTables));
+      const urlText = state.baseUrl || 'unknown Core Hub';
+      const tlsText = formatToggle(state.useSsl);
+      setSummary(`Connected to ${urlText} · TLS ${tlsText}`, 'success');
+    },
+    showLoading(message = 'Loading Core Hub data…') {
+      if (!document.body.classList.contains('is-authenticated')) return;
+      setSummary(message, 'info');
+      pipelinesListEl.innerHTML = '';
+      setMetricsLoading(true);
+    },
+    showSignedOut() {
+      setSummary('Sign in to load Core Hub environment details.', 'info');
+      setText(baseUrlEl, '—');
+      setText(tlsEl, '—');
+      setText(verifyEl, '—');
+      setText(schedulingEl, '—');
+      setText(createTablesEl, '—');
+      setText(pipelineTotalEl, '0');
+      setText(agentTotalEl, '0');
+      setText(entityTotalEl, '0');
+      pipelinesListEl.innerHTML = '';
+      const empty = document.createElement('li');
+      empty.className = 'corehub-empty';
+      empty.textContent = 'No data available.';
+      pipelinesListEl.appendChild(empty);
+      setMetricsLoading(false);
+    },
+    showError(message) {
+      setSummary(message, 'error');
+    },
+    renderOverview(data) {
+      if (!data) {
+        this.showError('No overview data returned.');
+        return;
+      }
+      const env = data.environment || {};
+      this.updateEnvironment({
+        baseUrl: env.baseUrl,
+        useSsl: env.useSsl,
+        skipVerify: env.skipVerify,
+        enableScheduling: env.enableScheduling,
+        createTables: env.createTables,
+      });
+      const totals = data.totals || {};
+      setText(pipelineTotalEl, String(totals.pipelines ?? 0));
+      setText(agentTotalEl, String(totals.agents ?? 0));
+      setText(entityTotalEl, String(totals.entities ?? 0));
+      setSummary('Core Hub statistics updated.', 'success');
+      renderPipelines(data.pipelines || []);
+      setMetricsLoading(false);
+    },
+  };
+})();
+
 function initTabs() {
   const tabsRoot = document.getElementById('action-tabs');
   if (!tabsRoot) return;
 
   const tabButtons = Array.from(tabsRoot.querySelectorAll('.tab-button'));
   const tabPanels = Array.from(tabsRoot.querySelectorAll('.tab-panel'));
+  const logCard = document.querySelector('.log-card');
 
   const activateTab = (tabName) => {
     if (!tabName) return;
@@ -389,6 +577,10 @@ function initTabs() {
     tabPanels.forEach((panel) => {
       panel.classList.toggle('active', panel.dataset.tabPanel === tabName);
     });
+    if (logCard) {
+      const shouldHide = tabName === 'corehub' || tabName === 'settings';
+      logCard.classList.toggle('is-hidden', shouldHide);
+    }
   };
 
   tabButtons.forEach((button) => {
@@ -409,10 +601,37 @@ function logActivity(scope, message) {
   ui.appendLogLine(`${timestamp} ${prefix} ${message}`.trim());
 }
 
+let isRefreshingCorehub = false;
+
+async function refreshCorehubOverview() {
+  if (!document.body.classList.contains('is-authenticated')) {
+    corehubUI.showSignedOut();
+    return;
+  }
+  if (isRefreshingCorehub) return;
+  isRefreshingCorehub = true;
+  corehubUI.showLoading();
+  try {
+    const overview = await api.getCorehubOverview();
+    if (!overview) {
+      corehubUI.showError('Authentication required to view Core Hub overview.');
+      return;
+    }
+    stateManager.corehubSnapshot = overview;
+    corehubUI.renderOverview(overview);
+  } catch (err) {
+    console.error('Failed to refresh Core Hub overview', err);
+    corehubUI.showError(err.message || 'Failed to load Core Hub overview.');
+  } finally {
+    isRefreshingCorehub = false;
+  }
+}
+
 const stateManager = {
   yamlFileId: null,
   pollHandle: null,
   lastStatus: 'idle',
+  corehubSnapshot: null,
 
   updateFromState(data) {
     // Toggle global authenticated state for layout/visibility
@@ -428,11 +647,21 @@ const stateManager = {
     document.getElementById('enable-scheduling').checked = data.enableScheduling;
     document.getElementById('create-tables').checked = data.createTables;
 
+    if (data.corehubOverview) {
+      this.corehubSnapshot = data.corehubOverview;
+      corehubUI.renderOverview(data.corehubOverview);
+    } else if (this.corehubSnapshot) {
+      corehubUI.renderOverview(this.corehubSnapshot);
+    } else if (data.tokenPresent) {
+      corehubUI.showLoading('Waiting for Core Hub overview…');
+    }
+
     ui.setAuthEnabled(data.tokenPresent);
     if (!data.tokenPresent) {
       ui.setStatus('idle', 'Not authenticated');
       ui.renderLogs();
       this.setYamlFile(null);
+      corehubUI.showSignedOut();
       return;
     }
 
@@ -477,6 +706,12 @@ const stateManager = {
     ui.renderLogs(run.logs);
     ui.setStatus(run.status, run.status.toUpperCase());
     this.lastStatus = run.status;
+    if (run.corehubOverview) {
+      this.corehubSnapshot = run.corehubOverview;
+      corehubUI.renderOverview(run.corehubOverview);
+    } else if (this.corehubSnapshot) {
+      corehubUI.renderOverview(this.corehubSnapshot);
+    }
     if (run.status !== 'running') {
       this.stopPolling();
       ui.setAuthEnabled(true);
@@ -490,9 +725,13 @@ async function initialize() {
     stateManager.updateFromState(snapshot);
     if (snapshot.tokenPresent) {
       ui.lockAuthFields(true);
-      await loadPipelines();
+      await Promise.all([
+        loadPipelines(),
+        refreshCorehubOverview(),
+      ]);
     } else {
       ui.lockAuthFields(false);
+      corehubUI.showSignedOut();
     }
     await checkAutomatorVersion();
   } catch (err) {
@@ -755,11 +994,13 @@ function bindEvents() {
   const typeFields = document.getElementById('type-fields');
   const sourceTypeSelect = document.getElementById('source-type');
   const targetTypeSelect = document.getElementById('target-type');
+  const corehubRefreshBtn = document.getElementById('corehub-refresh-btn');
 
   let bulkTablesState = [];
   let bulkSourceType = 'SQL';
   let bulkTargetType = 'SQL';
 
+  // ...
   function updateSchemaVisibility() {
     if (!customSchemasCheckbox) return;
     const enabled = customSchemasCheckbox.checked;
@@ -823,6 +1064,12 @@ function bindEvents() {
   if (customSchemasCheckbox && schemaFields) {
     updateSchemaVisibility();
     customSchemasCheckbox.addEventListener('change', updateSchemaVisibility);
+  }
+
+  if (corehubRefreshBtn) {
+    corehubRefreshBtn.addEventListener('click', () => {
+      refreshCorehubOverview();
+    });
   }
 
   if (bulkPipelineSelect) {
@@ -1120,7 +1367,10 @@ function bindEvents() {
         const snapshot = await api.getState();
         stateManager.updateFromState(snapshot);
         ui.lockAuthFields(true);
-        await loadPipelines();
+        await Promise.all([
+          loadPipelines(),
+          refreshCorehubOverview(),
+        ]);
         return; // Success, exit
       } catch (err) {
         lastError = err;

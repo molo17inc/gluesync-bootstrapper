@@ -21,10 +21,12 @@
           alt="Gluesync Automator"
           class="brand-logo"
         />
-        <span>Gluesync Automator</span>
-        <span id="version-label" class="version-label"
-          >Automator version: loading…</span
-        >
+        <div class="brand-text-container">
+          <span>Gluesync Automator</span>
+          <span id="version-label" class="version-label"
+            >Automator version: loading…</span
+          >
+        </div>
         <span
           id="connection-info"
           class="connection-info"
@@ -108,20 +110,88 @@
       <div class="tab-container requires-auth" id="action-tabs">
         <div class="tab-header">
           <div class="tabs" role="tablist">
-            <button type="button" class="tab-button active" data-tab="backup">
+            <button type="button" class="tab-button active" data-tab="corehub">
+              Core hub
+            </button>
+            <button type="button" class="tab-button" data-tab="backup">
               Backup &amp; export
             </button>
             <button type="button" class="tab-button" data-tab="import">
               Import &amp; clone
             </button>
-            <button type="button" class="tab-button" data-tab="extras">
-              Extras
+            <button type="button" class="tab-button" data-tab="bulk">
+              Bulk
+            </button>
+            <button type="button" class="tab-button" data-tab="settings">
+              Settings
             </button>
           </div>
         </div>
 
         <div class="tab-panels">
-          <div class="tab-panel active" data-tab-panel="backup">
+          <div class="tab-panel active" data-tab-panel="corehub">
+            <section class="card requires-auth" id="corehub-card">
+              <h2>Core hub overview</h2>
+              <div class="message info" id="corehub-summary-message">
+                Sign in to load Core Hub environment details.
+              </div>
+              <div class="corehub-grid">
+                <div class="corehub-section" id="corehub-environment-section">
+                  <h3>Environment</h3>
+                  <dl class="corehub-metrics" id="corehub-environment-metrics">
+                    <div>
+                      <dt>CoreHub URL</dt>
+                      <dd id="corehub-base-url">—</dd>
+                    </div>
+                    <div>
+                      <dt>TLS</dt>
+                      <dd id="corehub-ssl">—</dd>
+                    </div>
+                    <div>
+                      <dt>Skip verification</dt>
+                      <dd id="corehub-verify">—</dd>
+                    </div>
+                    <div>
+                      <dt>Scheduling</dt>
+                      <dd id="corehub-scheduling">—</dd>
+                    </div>
+                    <div>
+                      <dt>Create tables</dt>
+                      <dd id="corehub-create-tables">—</dd>
+                    </div>
+                  </dl>
+                </div>
+                <div class="corehub-section" id="corehub-totals-section">
+                  <h3>Totals</h3>
+                  <dl class="corehub-metrics" id="corehub-total-metrics">
+                    <div>
+                      <dt>Pipelines</dt>
+                      <dd id="corehub-pipeline-count">0</dd>
+                    </div>
+                    <div>
+                      <dt>Agents</dt>
+                      <dd id="corehub-agent-count">0</dd>
+                    </div>
+                    <div>
+                      <dt>Entities</dt>
+                      <dd id="corehub-entity-count">0</dd>
+                    </div>
+                  </dl>
+                </div>
+              </div>
+              <div class="corehub-section">
+                <div class="corehub-section-header">
+                  <h3>Pipelines</h3>
+                  <button type="button" class="secondary" id="corehub-refresh-btn">Refresh</button>
+                </div>
+                <ul class="corehub-pipelines" id="corehub-pipelines-list">
+                  <li class="corehub-empty">No data available.</li>
+                </ul>
+              </div>
+            </section>
+          </div>
+
+          <div class="tab-panel" data-tab-panel="backup">
             <section class="card requires-auth" id="export-card">
               <h2>Export (backup pipeline configuration)</h2>
               <form id="export-form" class="form-grid">
@@ -468,7 +538,7 @@
             </section>
           </div>
 
-          <div class="tab-panel" data-tab-panel="extras">
+          <div class="tab-panel" data-tab-panel="bulk">
             <section class="card requires-auth" id="bulk-card">
               <h2>Bulk operations</h2>
               <form id="bulk-form" class="form-grid">
@@ -543,7 +613,9 @@
               </form>
               <div id="bulk-message" class="message"></div>
             </section>
+          </div>
 
+          <div class="tab-panel" data-tab-panel="settings">
             <section class="card requires-auth" id="advanced-card">
               <h2>Advanced options</h2>
               <form id="advanced-form" class="form-grid">

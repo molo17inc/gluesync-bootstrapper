@@ -60,6 +60,7 @@ class AutomatorState:
         self.current_run: Optional[RunStatus] = None
         self._duplicate_in_progress: bool = False
         self._duplicate_cancel_requested: bool = False
+        self._corehub_overview: Optional[Dict[str, Any]] = None
 
     # Authentication -----------------------------------------------------
     def set_auth(
@@ -79,6 +80,7 @@ class AutomatorState:
     def clear_auth(self) -> None:
         with self._lock:
             self._token = None
+            self._corehub_overview = None
 
     # Upload management --------------------------------------------------
     def register_upload(self, file_path: Path, name: str) -> str:
@@ -152,6 +154,15 @@ class AutomatorState:
                 "createTables": self._create_tables,
             }
 
+    # Core Hub overview --------------------------------------------------
+    def set_corehub_overview(self, overview: Optional[Dict[str, Any]]) -> None:
+        with self._lock:
+            self._corehub_overview = overview
+
+    def corehub_overview(self) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            return self._corehub_overview
+
     # Duplicate pipeline coordination -----------------------------------
     def begin_duplicate(self) -> None:
         with self._lock:
@@ -213,6 +224,7 @@ class AutomatorState:
                 "skipVerify": self._skip_verify,
                 "enableScheduling": self._enable_scheduling,
                 "createTables": self._create_tables,
+                "corehubOverview": self._corehub_overview,
                 "duplicate": {
                     "inProgress": self._duplicate_in_progress,
                     "cancelRequested": self._duplicate_cancel_requested,

@@ -673,6 +673,90 @@ def list_pipelines(
     return pipelines
 
 
+def get_environment_summary(
+    *,
+    token: str,
+    base_url: str,
+    use_ssl: Optional[bool],
+    skip_verify: Optional[bool],
+) -> Dict[str, Any]:
+    """Return aggregated CoreHub information for the overview tab."""
+
+    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+
+    pipelines = list_pipelines(
+        token=token,
+        base_url=base_url,
+        use_ssl=use_ssl,
+        skip_verify=skip_verify,
+    )
+
+    totals = {
+        "pipelines": len(pipelines),
+        "agents": 0,
+        "entities": 0,
+    }
+    pipeline_details: list[Dict[str, Any]] = []
+
+    for pipeline in pipelines:
+        pipeline_id = pipeline.get("id")
+        if not pipeline_id:
+            continue
+
+        summary: Dict[str, Any] = {
+            "id": pipeline_id,
+            "name": pipeline.get("name"),
+            "description": pipeline.get("description"),
+            "agentCount": 0,
+            "entityCount": 0,
+            "agents": [],
+        }
+
+        # Collect agent information from pipeline config
+        try:
+            pipeline_config = fetch_core_hub(
+                f"/pipelines/{pipeline_id}/config",
+                token=token,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Failed to fetch pipeline config for overview (pipeline=%s): %s", pipeline_id, exc)
+            pipeline_config = None
+
+        if isinstance(pipeline_config, dict):
+            agents = []
+            for agent in pipeline_config.get("agents") or []:
+                if not isinstance(agent, dict):
+                    continue
+                agents.append(
+                    {
+                        "tag": agent.get("agentTag"),
+                        "type": agent.get("agentType"),
+                        "status": agent.get("status"),
+                    }
+                )
+            summary["agents"] = agents
+            summary["agentCount"] = len(agents)
+            totals["agents"] += len(agents)
+
+        # Count entities for the pipeline
+        try:
+            entities = fetch_pipeline_entities(token, pipeline_id)
+            entity_count = len(entities) if isinstance(entities, list) else 0
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Failed to fetch entities for overview (pipeline=%s): %s", pipeline_id, exc)
+            entity_count = 0
+
+        summary["entityCount"] = entity_count
+        totals["entities"] += entity_count
+
+        pipeline_details.append(summary)
+
+    return {
+        "totals": totals,
+        "pipelines": pipeline_details,
+    }
+
+
 def export_pipeline_yaml(
     *,
     token: str,

@@ -127,6 +127,7 @@ class StateResponse(BaseModel):
     create_tables: bool = Field(..., alias="createTables")
     run: Optional[dict]
     duplicate: Optional[dict] = None
+    corehub_overview: Optional[dict] = Field(None, alias="corehubOverview")
 
 
 class RunSnapshot(BaseModel):
@@ -826,6 +827,34 @@ def create_app() -> FastAPI:
         if not requested:
             return ApiMessage(success=False, message="No duplicate pipeline is currently running")
         return ApiMessage(success=True, message="Duplicate cancellation requested")
+
+    @app.get("/api/corehub/overview")
+    async def get_corehub_overview() -> dict:
+        if not state.token or not state.base_url:
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+        try:
+            summary = corehub.get_environment_summary(
+                token=state.token,
+                base_url=state.base_url,
+                use_ssl=state.use_ssl,
+                skip_verify=state.skip_verify,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Failed to gather CoreHub overview")
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        prefs = state.preferences()
+        summary["environment"] = {
+            "baseUrl": state.base_url,
+            "useSsl": state.use_ssl,
+            "skipVerify": state.skip_verify,
+            "enableScheduling": prefs.get("enableScheduling"),
+            "createTables": prefs.get("createTables"),
+        }
+
+        state.set_corehub_overview(summary)
+        return summary
 
     @app.get("/api/pipeline/{pipeline_id}/agents", response_model=PipelineAgentsResponse)
     async def get_pipeline_agents(pipeline_id: str) -> PipelineAgentsResponse:
