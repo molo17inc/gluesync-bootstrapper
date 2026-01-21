@@ -33,7 +33,9 @@ import tempfile
 from contextlib import redirect_stdout
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
+from urllib.parse import urljoin
 
+import requests
 from commons import (
     configure_core_hub,
     set_scheduling_enabled,
@@ -126,6 +128,104 @@ def _normalize_conductor_url(conductor_url: str) -> str:
     if not normal.endswith("/api"):
         normal = f"{normal}/api"
     return normal
+
+
+def _build_service_url(base_url: Optional[str], suffix: str) -> Optional[str]:
+    if not base_url:
+        return None
+    return urljoin(base_url.rstrip('/') + '/', suffix.lstrip('/'))
+
+
+def _should_verify(service_url: Optional[str], skip_verify: Optional[bool]) -> bool:
+    if not service_url:
+        return True
+    if service_url.lower().startswith('https://') and skip_verify:
+        return False
+    return True
+
+
+def _fetch_chronos_stats(
+    base_url: Optional[str],
+    *,
+    skip_verify: Optional[bool],
+) -> Dict[str, Any]:
+    stats = {
+        "available": False,
+        "totalJobs": 0,
+        "enabledJobs": 0,
+    }
+    chronos_url = _build_service_url(base_url, 'chronos')
+    if not chronos_url:
+        return stats
+
+    api_url = f"{chronos_url.rstrip('/')}/api/jobs/"
+    verify = _should_verify(chronos_url, skip_verify)
+    try:
+        response = requests.get(api_url, timeout=5, verify=verify)
+        response.raise_for_status()
+        payload = response.json()
+
+        jobs_payload: Any = None
+        if isinstance(payload, list):
+            jobs_payload = payload
+        elif isinstance(payload, dict):
+            # Chronos Scheduler returns {"items": [...], "total": N}
+            if isinstance(payload.get("items"), list):
+                jobs_payload = payload["items"]
+                if isinstance(payload.get("total"), int):
+                    stats["totalJobs"] = payload["total"]
+            elif isinstance(payload.get("data"), list):
+                jobs_payload = payload["data"]
+
+        if isinstance(jobs_payload, list):
+            stats["available"] = True
+            if stats["totalJobs"] == 0:
+                stats["totalJobs"] = len(jobs_payload)
+            stats["enabledJobs"] = sum(1 for job in jobs_payload if job.get("enabled", True))
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("Failed to fetch Chronos jobs: %s", exc)
+    return stats
+
+
+def _fetch_conductor_stats(
+    base_url: Optional[str],
+    *,
+    skip_verify: Optional[bool],
+) -> Dict[str, Any]:
+    stats = {
+        "available": False,
+        "runningContainers": 0,
+        "totalContainers": 0,
+    }
+    conductor_url = _build_service_url(base_url, 'conductor')
+    if not conductor_url:
+        return stats
+
+    api_url = f"{conductor_url.rstrip('/')}/api/containers"
+    verify = _should_verify(conductor_url, skip_verify)
+    try:
+        response = requests.get(api_url, timeout=5, verify=verify)
+        response.raise_for_status()
+        payload = response.json()
+        containers = []
+        if isinstance(payload, dict):
+            if payload.get("success") and isinstance(payload.get("data"), dict):
+                containers = payload["data"].get("containers") or []
+            elif isinstance(payload.get("containers"), list):
+                containers = payload["containers"]
+
+        stats["available"] = True
+        stats["totalContainers"] = len(containers)
+        stats["runningContainers"] = sum(
+            1
+            for container in containers
+            if isinstance(container, dict)
+            and isinstance(container.get("info"), dict)
+            and container["info"].get("state") == "running"
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("Failed to fetch Conductor containers: %s", exc)
+    return stats
 
 
 def authenticate(
@@ -751,9 +851,18 @@ def get_environment_summary(
 
         pipeline_details.append(summary)
 
+    chronos_stats = _fetch_chronos_stats(base_url, skip_verify=skip_verify)
+    conductor_stats = _fetch_conductor_stats(base_url, skip_verify=skip_verify)
+    totals["schedules"] = chronos_stats.get("enabledJobs", 0)
+    totals["runningContainers"] = conductor_stats.get("runningContainers", 0)
+
     return {
         "totals": totals,
         "pipelines": pipeline_details,
+        "services": {
+            "chronos": chronos_stats,
+            "conductor": conductor_stats,
+        },
     }
 
 

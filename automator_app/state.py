@@ -215,9 +215,18 @@ class AutomatorState:
         with self._lock:
             return self._skip_verify
 
-    def snapshot(self) -> Dict[str, Optional[str]]:
+    def snapshot(self) -> dict:
         with self._lock:
-            return {
+            run_snapshot = None
+            if self.current_run is not None:
+                run_snapshot = {
+                    "id": self.current_run.run_id,
+                    "status": self.current_run.status,
+                    "logs": list(self.current_run.logs),
+                    "error": self.current_run.error,
+                }
+
+            data = {
                 "tokenPresent": self._token is not None,
                 "baseUrl": self._base_url,
                 "useSsl": self._use_ssl,
@@ -225,19 +234,9 @@ class AutomatorState:
                 "enableScheduling": self._enable_scheduling,
                 "createTables": self._create_tables,
                 "corehubOverview": self._corehub_overview,
-                "duplicate": {
-                    "inProgress": self._duplicate_in_progress,
-                    "cancelRequested": self._duplicate_cancel_requested,
-                },
-                "run": None
-                if not self.current_run
-                else {
-                    "id": self.current_run.run_id,
-                    "status": self.current_run.status,
-                    "logCount": len(self.current_run.logs),
-                    "error": self.current_run.error,
-                },
+                "run": run_snapshot,
             }
+            return data
 
 
 state = AutomatorState()

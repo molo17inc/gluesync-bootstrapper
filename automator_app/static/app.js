@@ -399,11 +399,13 @@ const corehubUI = (() => {
   const baseUrlEl = document.getElementById('corehub-base-url');
   const tlsEl = document.getElementById('corehub-ssl');
   const verifyEl = document.getElementById('corehub-verify');
-  const schedulingEl = document.getElementById('corehub-scheduling');
-  const createTablesEl = document.getElementById('corehub-create-tables');
+  const chronosStatusEl = document.getElementById('corehub-chronos-status');
+  const conductorStatusEl = document.getElementById('corehub-conductor-status');
   const pipelineTotalEl = document.getElementById('corehub-pipeline-count');
   const agentTotalEl = document.getElementById('corehub-agent-count');
   const entityTotalEl = document.getElementById('corehub-entity-count');
+  const scheduleTotalEl = document.getElementById('corehub-schedule-count');
+  const runningContainerTotalEl = document.getElementById('corehub-running-container-count');
   const pipelinesListEl = document.getElementById('corehub-pipelines-list');
   const envMetricsEl = document.getElementById('corehub-environment-metrics');
   const totalsMetricsEl = document.getElementById('corehub-total-metrics');
@@ -432,6 +434,34 @@ const corehubUI = (() => {
   const formatToggle = (value, labels = ['Disabled', 'Enabled']) => {
     if (value === null || value === undefined) return '—';
     return value ? labels[1] : labels[0];
+  };
+
+  const getChronosJobStats = (service = {}) => {
+    const enabled = Number.isFinite(service.enabledJobs) ? service.enabledJobs : 0;
+    let total = Number.isFinite(service.totalJobs) ? service.totalJobs : enabled;
+    if (total < enabled) {
+      total = enabled;
+    }
+    return { enabled, total };
+  };
+
+  const formatChronosStatus = (service = {}) => {
+    if (!service.available) return 'Unavailable';
+    return 'Available';
+  };
+
+  const formatChronosScheduleMetric = (service = {}) => {
+    if (!service.available) return 'Unavailable';
+    const { enabled, total } = getChronosJobStats(service);
+    if (total === 0) return '0 jobs';
+    return `${enabled}/${total} jobs enabled`;
+  };
+
+  const formatConductorStatus = (service = {}) => {
+    if (!service.available) return 'Unavailable';
+    const running = service.runningContainers ?? 0;
+    if (running === 0) return 'Available (no containers running)';
+    return 'Available';
   };
 
   const setMetricsLoading = (isLoading) => {
@@ -505,8 +535,9 @@ const corehubUI = (() => {
       setText(baseUrlEl, state.baseUrl || '—');
       setText(tlsEl, formatToggle(state.useSsl));
       setText(verifyEl, formatToggle(state.skipVerify, ['Enforced', 'Skipped']));
-      setText(schedulingEl, formatToggle(state.enableScheduling));
-      setText(createTablesEl, formatToggle(state.createTables));
+      const services = state.services || {};
+      setText(chronosStatusEl, formatChronosStatus(services.chronos));
+      setText(conductorStatusEl, formatConductorStatus(services.conductor));
       const urlText = state.baseUrl || 'unknown Core Hub';
       const tlsText = formatToggle(state.useSsl);
       setSummary(`Connected to ${urlText} · TLS ${tlsText}`, 'success');
@@ -522,11 +553,13 @@ const corehubUI = (() => {
       setText(baseUrlEl, '—');
       setText(tlsEl, '—');
       setText(verifyEl, '—');
-      setText(schedulingEl, '—');
-      setText(createTablesEl, '—');
+      setText(chronosStatusEl, '—');
+      setText(conductorStatusEl, '—');
       setText(pipelineTotalEl, '0');
       setText(agentTotalEl, '0');
       setText(entityTotalEl, '0');
+      setText(scheduleTotalEl, '0 jobs');
+      setText(runningContainerTotalEl, '0');
       pipelinesListEl.innerHTML = '';
       const empty = document.createElement('li');
       empty.className = 'corehub-empty';
@@ -549,11 +582,19 @@ const corehubUI = (() => {
         skipVerify: env.skipVerify,
         enableScheduling: env.enableScheduling,
         createTables: env.createTables,
+        services: data.services,
       });
       const totals = data.totals || {};
+      const services = data.services || {};
       setText(pipelineTotalEl, String(totals.pipelines ?? 0));
       setText(agentTotalEl, String(totals.agents ?? 0));
       setText(entityTotalEl, String(totals.entities ?? 0));
+      if (services.chronos) {
+        setText(scheduleTotalEl, formatChronosScheduleMetric(services.chronos));
+      } else {
+        setText(scheduleTotalEl, String(totals.schedules ?? 0));
+      }
+      setText(runningContainerTotalEl, String(totals.runningContainers ?? 0));
       setSummary('Core Hub statistics updated.', 'success');
       renderPipelines(data.pipelines || []);
       setMetricsLoading(false);
