@@ -32,13 +32,15 @@ import sys
 import tempfile
 import zipfile
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Dict, Optional
+import hashlib
+import re
 
 import requests
 import yaml
 import create_user_defined_functions
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -66,6 +68,56 @@ def _resource_path(*parts: str) -> Path:
 
 def _static_dir() -> Path:
     return _resource_path("static")
+
+
+_FINGERPRINT_TARGETS = ("styles.css", "app.js")
+_FINGERPRINT_PATTERN = re.compile(r"^(?P<name>.+)\.[0-9a-f]{8,}\.(?P<suffix>[^.]+)$")
+
+
+def _fingerprint_static_assets() -> Dict[str, str]:
+    """Generate hashed filenames for key static assets to enable cache busting."""
+
+    static_directory = _static_dir()
+    rewrites: Dict[str, str] = {}
+
+    if not static_directory.exists():
+        return rewrites
+
+    for filename in _FINGERPRINT_TARGETS:
+        source_path = static_directory / filename
+        if not source_path.exists():
+            continue
+
+        contents = source_path.read_bytes()
+        digest = hashlib.sha256(contents).hexdigest()[:12]
+        fingerprint_name = f"{source_path.stem}.{digest}{source_path.suffix}"
+        fingerprint_path = source_path.with_name(fingerprint_name)
+
+        # Only write the fingerprinted file if missing or outdated
+        if not fingerprint_path.exists() or fingerprint_path.read_bytes() != contents:
+            fingerprint_path.write_bytes(contents)
+
+        _cleanup_old_fingerprints(static_directory, source_path.name, fingerprint_path.name)
+
+        rewrites[f"/static/{filename}"] = f"/static/{fingerprint_name}"
+
+    return rewrites
+
+
+def _cleanup_old_fingerprints(static_dir: Path, original_name: str, keep_name: str) -> None:
+    base_stem = original_name.split('.')[0]
+    suffix = original_name.split('.')[-1]
+    pattern = re.compile(rf"^{re.escape(base_stem)}\.[0-9a-f]{{8,}}\.{re.escape(suffix)}$")
+
+    for candidate in static_dir.glob(f"{base_stem}.*.{suffix}"):
+        name = candidate.name
+        if name in {original_name, keep_name}:
+            continue
+        if pattern.match(name):
+            try:
+                candidate.unlink()
+            except OSError:
+                pass
 
 
 class LoginRequest(BaseModel):
@@ -286,6 +338,7 @@ def _has_masked_password(value: Any) -> bool:
 
 def create_app() -> FastAPI:
     _ensure_static_assets()
+    asset_rewrites = _fingerprint_static_assets()
 
     app = FastAPI(title="Gluesync Automator", version="1.0.0")
 
@@ -300,11 +353,16 @@ def create_app() -> FastAPI:
     app.mount("/static", StaticFiles(directory=_static_dir()), name="static")
 
     @app.get("/")
-    async def root() -> FileResponse:
+    async def root() -> Response:
         index_path = _static_dir() / "index.html"
         if not index_path.exists():
             raise HTTPException(status_code=500, detail="UI assets missing")
-        return FileResponse(index_path)
+
+        content = index_path.read_text(encoding="utf-8")
+        for original, hashed in asset_rewrites.items():
+            content = content.replace(original, hashed)
+
+        return Response(content=content, media_type="text/html")
 
     @app.get("/api/healthz")
     async def healthcheck() -> dict:

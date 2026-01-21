@@ -42,3 +42,9 @@ ENV/
 *~
 .DS_Store
 metadata.xml
+
+# Generated hashed UI assets
+automator_app/static/app.*.js
+!automator_app/static/app.js
+automator_app/static/styles.*.css
+!automator_app/static/styles.css
