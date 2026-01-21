@@ -568,6 +568,7 @@ function initTabs() {
   const tabButtons = Array.from(tabsRoot.querySelectorAll('.tab-button'));
   const tabPanels = Array.from(tabsRoot.querySelectorAll('.tab-panel'));
   const logCard = document.querySelector('.log-card');
+  const layout = document.querySelector('.layout');
 
   const activateTab = (tabName) => {
     if (!tabName) return;
@@ -580,6 +581,9 @@ function initTabs() {
     if (logCard) {
       const shouldHide = tabName === 'corehub' || tabName === 'settings';
       logCard.classList.toggle('is-hidden', shouldHide);
+    }
+    if (layout) {
+      layout.dataset.activeTab = tabName;
     }
   };
 

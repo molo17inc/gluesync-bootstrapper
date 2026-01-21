@@ -674,6 +674,11 @@ button:disabled {
   gap: 1rem;
 }
 
+.layout[data-active-tab="corehub"] .log-card,
+.layout[data-active-tab="settings"] .log-card {
+  display: none !important;
+}
+
 .is-hidden {
   display: none !important;
 }
