@@ -11,4 +11,4 @@ cairosvg
 schedule
 PyQt6; sys_platform == 'darwin'
 PyQt6-WebEngine; sys_platform == 'darwin'
-# The gluesync_sdk dependency is installed directly in the Dockerfile
+gluesync-sdk==0.0.16
