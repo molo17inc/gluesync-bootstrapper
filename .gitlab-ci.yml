@@ -167,6 +167,55 @@ automator_publish:
         echo "table-list-template.yaml not found in project root"
       fi
 
+automator_docker_deploy:
+  stage: deploy
+  image: docker:latest
+  services:
+    - name: docker:dind
+      variables:
+        DOCKER_TLS_CERTDIR: ""
+  script:
+    - echo "Building Automator container..."
+    - apk add --no-cache bash
+    - |
+      TAGPART=$(echo "$CI_COMMIT_TAG" | grep -oE '[0-9]+\.[0-9]+\.[0-9](.*)')
+      DEFAULT_NAME=${DOCKER_REGISTRY}/${APP_NAME}
+      VERSION_TAG="${DEFAULT_NAME}:${TAGPART}"
+    - docker login -u danieleangeli -p "$CI_REGISTRY_PASSWORD"
+    - |
+      if [[ $CI_COMMIT_TAG == release-* ]]; then
+        echo "Building multi-arch Automator release with latest tag"
+        docker run --privileged --rm tonistiigi/binfmt --install all
+        docker buildx create --name automator-builder --use || docker buildx use automator-builder
+        docker buildx inspect --bootstrap
+        docker buildx build --platform linux/amd64,linux/arm64 \
+          --no-cache \
+          -f docker/automator.Dockerfile \
+          --tag $DEFAULT_NAME:latest \
+          --tag "$VERSION_TAG" \
+          --push .
+      elif [[ $CI_COMMIT_TAG == beta-* ]]; then
+        echo "Building multi-arch Automator beta"
+        docker run --privileged --rm tonistiigi/binfmt --install all
+        docker buildx create --name automator-builder --use || docker buildx use automator-builder
+        docker buildx inspect --bootstrap
+        docker buildx build --platform linux/amd64,linux/arm64 \
+          --no-cache \
+          -f docker/automator.Dockerfile \
+          --tag $DEFAULT_NAME:beta \
+          --tag "$VERSION_TAG" \
+          --push .
+      elif [[ $CI_COMMIT_TAG == tag-* ]]; then
+        echo "Building Automator alpha (amd64 only)"
+        docker build --no-cache -f docker/automator.Dockerfile --tag "$VERSION_TAG" .
+        docker push "$VERSION_TAG"
+      else
+        echo "Unknown tag format: $CI_COMMIT_TAG"
+        exit 1
+      fi
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^(release|beta|tag)-/'
+
 deploy:
   stage: deploy
   image: docker:latest
@@ -557,6 +606,8 @@ update_budibase_version:
   needs:
     - job: automator_publish
       optional: true
+    - job: automator_docker_deploy
+      optional: true
     - job: deploy
       optional: true
   script:
@@ -570,22 +621,25 @@ update_budibase_version:
       fi
 
       MODULE_VERSION=$(echo "$CI_COMMIT_TAG" | grep -oE '[0-9]+\.[0-9]+\.[0-9](.*)' || true)
-
       if [ -z "$MODULE_VERSION" ]; then
         echo "[ERROR] Unable to extract version from tag: $CI_COMMIT_TAG"
         exit 1
       fi
 
-      case "$CI_COMMIT_TAG" in
-        automator-*)
-          BUILD_TAG="automator"
-          ;;
-        *)
-          BUILD_TAG="bootstrapper"
-          ;;
-      esac
+      if [[ "$CI_COMMIT_TAG" == release-* ]]; then
+        RELEASE_TYPE="GA"
+      elif [[ "$CI_COMMIT_TAG" == beta-* ]]; then
+        RELEASE_TYPE="BETA"
+      elif [[ "$CI_COMMIT_TAG" == tag-* ]]; then
+        RELEASE_TYPE="ALPHA"
+      else
+        echo "[ERROR] Unknown tag format"
+        exit 1
+      fi
 
-      echo "[INFO] Updating Budibase version: BUILD_TAG=$BUILD_TAG, MODULE_VERSION=$MODULE_VERSION"
+      BUILD_TAG="automator"
+
+      echo "[INFO] Updating Budibase version: BUILD_TAG=$BUILD_TAG, MODULE_VERSION=$MODULE_VERSION, RELEASE_TYPE=$RELEASE_TYPE"
       
       SEARCH_PAYLOAD="{
         \"query\": {
@@ -622,11 +676,13 @@ update_budibase_version:
         exit 1
       fi
 
-      UPDATE_PAYLOAD="{
-        \"latestVersionAlpha\": \"$MODULE_VERSION\",
-        \"latestVersionBeta\": \"$MODULE_VERSION\",
-        \"latestVersionGA\": \"$MODULE_VERSION\"
-      }"
+      if [ "$RELEASE_TYPE" = "ALPHA" ]; then
+        UPDATE_PAYLOAD="{\"latestVersionAlpha\": \"$MODULE_VERSION\"}"
+      elif [ "$RELEASE_TYPE" = "BETA" ]; then
+        UPDATE_PAYLOAD="{\"latestVersionBeta\": \"$MODULE_VERSION\"}"
+      else
+        UPDATE_PAYLOAD="{\"latestVersionGA\": \"$MODULE_VERSION\"}"
+      fi
 
       UPDATE_RESPONSE=$(curl -s -w "\n%{http_code}" -X PUT \
         -H "x-budibase-app-id: $BUDIBASE_APP_ID" \
@@ -649,7 +705,4 @@ update_budibase_version:
           exit 1
       fi
   rules:
-    - if: '$CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/'
-    - if: '$CI_COMMIT_TAG =~ /^release-/'
-    - if: '$CI_COMMIT_TAG =~ /^beta-/'
-    - if: '$CI_COMMIT_TAG =~ /^tag-/'
+    - if: '$CI_COMMIT_TAG =~ /^(release|beta|tag)-/'

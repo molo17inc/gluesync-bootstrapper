@@ -1,364 +1,435 @@
-# This program is part of Gluesync.
-#
-# Bootstrapper is dual-licensed under the following licenses:
-#
-# 1. GNU General Public License (GPL) Version 3
-#    You may use, modify, and distribute this software under the terms of the GPL v3.
-#    See the LICENSE-GPL file or <http://www.gnu.org/licenses/gpl-3.0.html> for details.
-#    This option is available at no cost, but any derivative works must also be licensed under GPL v3.
-#
-# 2. MOLO17 Commercial License
-#    Alternatively, you may use this software under the MOLO17 Commercial License,
-#    which includes a warranty and permits proprietary use. Contact MOLO17 at info@molo17.com
-#    for licensing terms and conditions.
-#
-# You must choose one of these licenses to use this software. Using this software implies
-# acceptance of one of these licenses. See the accompanying LICENSE files or contact
-# MOLO17 for more information.
-#
-# Copyright (C) 2025 MOLO17. All rights reserved.
+#!/usr/bin/env python3
+"""
+ * This file is part of Gluesync Bootstrapper.
+ *
+ * Gluesync Bootstrapper is dual-licensed under the following licenses:
+ *
+ * 1. GNU General Public License (GPL) Version 3
+ *    You may use, modify, and distribute this software under the terms of the GPL v3.
+ *    See the LICENSE-GPL file or <http://www.gnu.org/licenses/gpl-3.0.html> for details.
+ *    This option is available at no cost, but any derivative works must also be licensed under GPL v3.
+ *
+ * 2. MOLO17 Commercial License
+ *    Alternatively, you may use this software under the MOLO17 Commercial License,
+ *    which includes a warranty and permits proprietary use. Contact MOLO17 at info@molo17.com
+ *    for licensing terms and conditions.
+ *
+ * You must choose one of these licenses to use this software. Using this software implies
+ * acceptance of one of these licenses. See the accompanying LICENSE files or contact
+ * MOLO17 for more information.
+ *
+ * Copyright (C) 2025 MOLO17. All rights reserved.
+"""
 
-import os
-import json
-import sys
+import asyncio
 import logging
-import schedule
-import time
+import os
+from typing import Optional
+from urllib.parse import urlparse
+
+from gluesync_sdk import (
+    GluesyncClient,
+    GluesyncError,
+    GluesyncConnectionError,
+    GluesyncAuthenticationError,
+    GluesyncLicenseError
+)
 
 logger = logging.getLogger(__name__)
 
-# Singleton client instance
-_gluesync_client = None
+DEFAULT_COREHUB_PORT = 1717
 
-# Check if SDK should be used
-use_sdk = os.getenv('USE_SDK', 'False').lower() in ['true', '1', 't', 'y', 'yes']
-
-# Only attempt to load security config if SDK is enabled
-security_config = {}
-if use_sdk:
-    try:
-        security_config_path = os.getenv('GLUESYNC_SECURITY_CONFIG', '/opt/gluesync/data/security-config.json')
-        if os.path.exists(security_config_path):
-            with open(security_config_path) as f:
-                security_config = json.load(f)
-                logger.info(f"Loaded security config from {security_config_path}")
-        else:
-            logger.warning(f"Security config not found at {security_config_path}")
-    except Exception as e:
-        logger.error(f"Error loading security config: {str(e)}")
-
-def initialize_gluesync_sdk():
-    global _gluesync_client
+def resolve_gluesync_file(env_var_name, default_filename):
+    """Resolve gluesync file path with fallback to shared directory"""
+    # Check environment variable first
+    env_path = os.getenv(env_var_name)
+    if env_path and os.path.exists(env_path):
+        return env_path, True
     
-    # Check if SDK is enabled
-    if not use_sdk:
-        logger.info("SDK initialization skipped as USE_SDK is set to false")
-        return
+    # Check shared directory
+    shared_path = f'/opt/gluesync/shared/{default_filename}'
+    if os.path.exists(shared_path):
+        return shared_path, True
+    
+    # Check data directory
+    data_path = f'/opt/gluesync/data/{default_filename}'
+    if os.path.exists(data_path):
+        return data_path, True
+    
+    # Return default path even if not exists
+    return env_path or shared_path, False
+
+def normalize_corehub_host(host_value, ssl_enabled, default_port):
+    """Normalize CoreHub host value to extract host, port, and build URL"""
+    if not host_value:
+        return None, None, None
+    
+    # Parse the URL
+    if not host_value.startswith(('http://', 'https://')):
+        host_value = f"{'https' if ssl_enabled else 'http'}://{host_value}"
+    
+    parsed = urlparse(host_value)
+    host = parsed.hostname
+    port = parsed.port or default_port
+    
+    scheme = 'https' if ssl_enabled else 'http'
+    normalized_url = f"{scheme}://{host}:{port}"
+    
+    return host, port, normalized_url
+
+class GluesyncSDKClient:
+    """Singleton class for managing the Gluesync SDK client connection"""
+    
+    _instance = None
+    _token = None
+    _client = None
+    _is_initialized = False
+    
+    @classmethod
+    def get_instance(cls):
+        """Get the singleton instance"""
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+    
+    @property
+    def token(self) -> Optional[str]:
+        """Get the current JWT token"""
+        return self._token
+    
+    @property
+    def client(self) -> Optional[GluesyncClient]:
+        """Get the Gluesync client instance"""
+        return self._client
+    
+    @property
+    def is_initialized(self) -> bool:
+        """Check if the client is initialized"""
+        return self._is_initialized
         
-    # Only import SDK when needed
-    try:
-        from gluesync_sdk import GluesyncSDK
-    except ModuleNotFoundError as e:
-        logger.error(f"Failed to import GluesyncSDK module: {str(e)}")
-        return
+    @property
+    def corehub_url(self) -> str:
+        """Get the CoreHub URL after discovery"""
+        if not self._client or not self._is_initialized:
+            return None
+            
+        # Get the host and port from the client
+        host = self._client.host
+        port = self._client.port
+        
+        # Use the helper method to build the URL
+        return self._build_corehub_url(host, port)
+        
+    def _build_corehub_url(self, host, port):
+        """Build a proper CoreHub URL with the given host, port and SSL setting
+        
+        Args:
+            host (str): The host name or IP address
+            port (int): The port number
+            
+        Returns:
+            str: The formatted CoreHub URL
+        """
+        if not host:
+            return None
+            
+        # Use default port if None
+        if port is None:
+            port = 1717
+            
+        scheme = "https" if os.getenv('SSL_ENABLED', 'False').lower() in ('true', '1', 't') else "http"
+        return f"{scheme}://{host}:{port}"
     
-    if _gluesync_client is None:
-        try:
-            license_file = os.getenv('GLUESYNC_LICENSE_FILE', '/opt/gluesync/data/gs-license.dat')
-            module_tag = os.getenv('GLUESYNC_MODULE_TAG', 'automator')
-            use_ssl = os.getenv('SSL_ENABLED', 'False').lower() == 'true'
-            ssl_skip_verify = os.getenv('SSL_SKIP_VERIFY', 'False').lower() == 'true'
-            
-            # Get keystore info from security config if available
-            keystore_path = None
-            keystore_password = None
-            if security_config and 'ssl' in security_config:
-                keystore_path = security_config['ssl'].get('sslCertificatePath')
-                keystore_password = security_config['ssl'].get('certificatePassword')
-            
-            logger.info(f"Initializing Gluesync SDK with module_tag={module_tag}, use_ssl={use_ssl}")
-            
-            # Determine host from CORE_HUB_URL if available
-            core_hub_url = os.getenv('CORE_HUB_URL', 'http://gluesync-core-hub:1717')
-            logger.debug(f"Using CoreHub URL: {core_hub_url}")
-            
-            from urllib.parse import urlparse
-            parsed_url = urlparse(core_hub_url)
-            host = parsed_url.hostname
-            port = parsed_url.port or 1717
-            logger.debug(f"Parsed host: {host}, port: {port}")
-            
-            # Check if license file exists
-            if not os.path.exists(license_file):
-                logger.error(f"License file not found at {license_file}")
+    async def initialize(self):
+        """Initialize the Gluesync client with indefinite retries and exponential backoff
+        
+        The method will retry indefinitely with exponential backoff starting at 1 second,
+        doubling each time up to 30 seconds, then resetting back to 1 second.
+        """
+        if self._is_initialized and self._token:
+            logger.info("Gluesync SDK client already initialized with valid token")
+            return
+        elif self._is_initialized and not self._token:
+            logger.warning("SDK client marked as initialized but no token available - reinitializing")
+            self._is_initialized = False
+        
+        # Determine SSL settings early for URL normalization
+        ssl_enabled = os.getenv('SSL_ENABLED', 'False').lower() in ('true', '1', 't')
+        ssl_skip_verify = os.getenv('SSL_SKIP_VERIFY', 'False').lower() in ('true', '1', 't')
+        logger.info(f"SSL is {'enabled' if ssl_enabled else 'disabled'}")
+
+        # Parse host and port from CORE_HUB_URL if provided
+        host = None
+        port = None
+        core_hub_url = os.getenv('CORE_HUB_URL', '')
+        if core_hub_url:
+            logger.info(f"CORE_HUB_URL environment variable set to: {core_hub_url}")
+            normalized_host, normalized_port, normalized_url = normalize_corehub_host(
+                core_hub_url,
+                ssl_enabled,
+                DEFAULT_COREHUB_PORT,
+            )
+
+            if normalized_host:
+                host = normalized_host
+                port = normalized_port
+                if normalized_url and normalized_url != core_hub_url:
+                    os.environ['CORE_HUB_URL'] = normalized_url
+                    logger.info(f"Normalized CORE_HUB_URL to: {normalized_url}")
             else:
-                logger.debug(f"License file found at {license_file}")
-                
-            # Log SDK class information
-            logger.debug(f"SDK class: {GluesyncSDK.__name__}, module: {GluesyncSDK.__module__}")
-            
-            # Initialize the SDK with debug logging
-            logger.debug("Creating SDK client instance...")
-            logger.debug(f"Initialization parameters:")
-            logger.debug(f"  - host: {host}")
-            logger.debug(f"  - port: {port}")
-            logger.debug(f"  - license_file_path: {license_file}")
-            logger.debug(f"  - module_tag: {module_tag}")
-            logger.debug(f"  - ssl: {use_ssl}")
-            logger.debug(f"  - security_config: {json.dumps(security_config) if security_config else None}")
-            
-            try:
-                # Pass the path to the security config file, not the dictionary
-                security_config_path = os.getenv('GLUESYNC_SECURITY_CONFIG', '/opt/gluesync/data/security-config.json')
-                
-                # Log SSL configuration
-                logger.info(f"SSL Configuration: enabled={use_ssl}, skip_verify={ssl_skip_verify}")
-                
-                _gluesync_client = GluesyncSDK(
-                    host=host,
-                    port=port,
-                    license_file_path=license_file,
-                    module_tag=module_tag,
-                    use_ssl=use_ssl,
-                    security_config=security_config_path,
-                    verify_ssl=not ssl_skip_verify
+                logger.warning("Unable to parse CORE_HUB_URL value, falling back to discovery")
+        else:
+            logger.info("No CoreHub URL provided, will use UDP discovery instead")
+
+        # Get license file path with fallback resolution
+        license_file_path, license_exists = resolve_gluesync_file(
+            'GLUESYNC_LICENSE_FILE', 'gs-license.dat'
+        )
+        if not license_exists:
+            logger.warning(
+                "License file not found at %s (including legacy fallbacks), will attempt to proceed without it",
+                license_file_path,
+            )
+
+        # Security configuration
+        security_config = None
+        config_path, config_exists = resolve_gluesync_file(
+            'GLUESYNC_SECURITY_CONFIG', 'security-config.json'
+        )
+        if ssl_enabled:  # Only process security config if SSL is enabled
+            if config_exists:
+                logger.info(f"Using security config from: {config_path}")
+                security_config = config_path
+            else:
+                logger.warning(
+                    "Security config file not found at %s (including legacy fallbacks), will use default settings",
+                    config_path,
                 )
-                logger.debug("SDK client instance created successfully")
-                
-                # Check if the client needs to be connected
-                if hasattr(_gluesync_client, 'connect') and hasattr(_gluesync_client, 'is_connected'):
-                    # Check if is_connected is a method or a property
-                    if callable(getattr(_gluesync_client, 'is_connected')):
-                        # It's a method
-                        if not _gluesync_client.is_connected():
-                            logger.debug("Client is not connected. Attempting to connect...")
-                            try:
-                                # Check if connect is a coroutine function
-                                import inspect
-                                if inspect.iscoroutinefunction(_gluesync_client.connect):
-                                    logger.debug("Connect is a coroutine, using asyncio to connect")
-                                    import asyncio
-                                    # Create an event loop if one doesn't exist
-                                    try:
-                                        loop = asyncio.get_event_loop()
-                                    except RuntimeError:
-                                        loop = asyncio.new_event_loop()
-                                        asyncio.set_event_loop(loop)
-                                    # Run the connect coroutine
-                                    loop.run_until_complete(_gluesync_client.connect())
-                                else:
-                                    _gluesync_client.connect()
-                                logger.debug("Client connection successful")
-                            except Exception as e:
-                                logger.error(f"Failed to connect client: {str(e)}")
-                        else:
-                            logger.debug("Client is already connected")
+        elif config_exists:
+            # SSL is disabled, so don't use security config even if it exists
+            logger.info(
+                "Security config found at %s but SSL is disabled - ignoring security config",
+                config_path,
+            )
+            
+        # Determine the protocol based on ssl_enabled
+        protocol = 'https' if ssl_enabled else 'http'
+        
+        # Log final configuration before creating client
+        logger.info(f"Creating GluesyncClient with:")
+        logger.info(f"  - host: {host}")
+        logger.info(f"  - port: {port if port is not None else DEFAULT_COREHUB_PORT}")
+        logger.info(f"  - protocol: {protocol}")
+        logger.info(f"  - use_ssl: {ssl_enabled}")
+        logger.info(f"  - verify_ssl: {not ssl_skip_verify}")
+        logger.info(f"  - security_config: {security_config}")
+        logger.info(f"  - module_tag: {os.getenv('GLUESYNC_MODULE_TAG', 'automator')}")
+        
+        # Prepare the client arguments
+        client_args = {
+            'host': host,  # None will trigger UDP discovery
+            'port': port if port is not None else 1717,  # Default port 1717 if None
+            'license_file_path': license_file_path,
+            'module_tag': os.getenv('GLUESYNC_MODULE_TAG', 'automator'),
+            'use_ssl': ssl_enabled,
+            'security_config': security_config,
+            'verify_ssl': not ssl_skip_verify,
+            # Add other default parameters as needed
+            'ping_interval': 5.0,
+            'timeout': 10.0,
+            'discovery_start_port': 1717,
+            'discovery_port_range': 10
+        }
+        
+        # Log the arguments (without sensitive data)
+        safe_args = client_args.copy()
+        if 'security_config' in safe_args and safe_args['security_config']:
+            safe_args['security_config'] = '[REDACTED]'
+        logger.info(f"Initializing GluesyncClient with args: {safe_args}")
+        
+        # Create the client
+        self._client = GluesyncClient(**client_args)
+        
+        # Set up event handlers
+        self._client.on_connected = self._on_connected
+        self._client.on_disconnected = self._on_disconnected
+        self._client.on_error = self._on_error
+        # Note: on_reconnecting, on_reconnected, and on_token_updated are not supported by the current SDK
+        
+        # Connect to CoreHub with indefinite retry logic for both CORE_HUB_URL and UDP discovery
+        retry_count = 0
+        backoff_delay = 1  # Start with 1 second delay
+        max_backoff = 30  # Maximum backoff of 30 seconds
+        cycle_count = 0   # Count full cycles of backoff
+
+        while True:  # Retry indefinitely for both CORE_HUB_URL and UDP discovery
+            try:
+                if host and port:
+                    if retry_count == 0:
+                        logger.info(f"Connecting to CoreHub at {protocol}://{host}:{port}...")
                     else:
-                        # It's a property
-                        if not _gluesync_client.is_connected:
-                            logger.debug("Client is not connected (property). Attempting to connect...")
-                            try:
-                                # Check if connect is a coroutine function
-                                import inspect
-                                if inspect.iscoroutinefunction(_gluesync_client.connect):
-                                    logger.debug("Connect is a coroutine, using asyncio to connect")
-                                    import asyncio
-                                    # Create an event loop if one doesn't exist
-                                    try:
-                                        loop = asyncio.get_event_loop()
-                                    except RuntimeError:
-                                        loop = asyncio.new_event_loop()
-                                        asyncio.set_event_loop(loop)
-                                    # Run the connect coroutine
-                                    loop.run_until_complete(_gluesync_client.connect())
-                                else:
-                                    _gluesync_client.connect()
-                                logger.debug("Client connection successful")
-                            except Exception as e:
-                                logger.error(f"Failed to connect client: {str(e)}")
-                        else:
-                            logger.debug("Client is already connected (property)")
-            except Exception as e:
-                logger.error(f"Exception during SDK client creation: {str(e)}")
-                logger.error(f"Exception type: {type(e).__name__}")
-                import traceback
-                logger.error(f"Stack trace: {traceback.format_exc()}")
-                raise
-            
-            # Check if initialization was successful and inspect the client
-            if _gluesync_client is None:
-                logger.error("SDK client is None after initialization")
-            else:
-                logger.debug(f"SDK client type: {type(_gluesync_client).__name__}")
-                logger.debug(f"SDK client attributes: {dir(_gluesync_client)}")
-                
-                # Check if _token attribute exists
-                if hasattr(_gluesync_client, '_token'):
-                    token_value = _gluesync_client._token
-                    logger.debug(f"Token exists: {token_value is not None}")
-                    if token_value is None:
-                        logger.warning("Token is None after initialization")
+                        logger.info(f"Retry {retry_count} (cycle {cycle_count}) connecting to CoreHub at {protocol}://{host}:{port}...")
+                    await self._client.connect()
+                    break  # Connection successful
                 else:
-                    logger.error("_token attribute not found on SDK client")
-                    # Try to find any token-related attributes
-                    token_attrs = [attr for attr in dir(_gluesync_client) if 'token' in attr.lower()]
-                    if token_attrs:
-                        logger.debug(f"Found token-related attributes: {token_attrs}")
-            
-            logger.info("Gluesync SDK initialized successfully")
+                    # UDP discovery mode
+                    if retry_count > 0:
+                        logger.info(f"Retry {retry_count} (cycle {cycle_count}) for UDP discovery...")
+                    else:
+                        logger.info("Starting UDP discovery to find CoreHub...")
+
+                    await self._client.connect()
+
+                    # After connect, check if we have a host (discovery worked)
+                    if self._client.host:
+                        logger.info(f"UDP discovery successful! Found CoreHub at {self._client.host}:{self._client.port}")
+                        # Update the discovered host/port for future use
+                        host = self._client.host
+                        port = self._client.port
+                        corehub_url = self._build_corehub_url(host, port)
+                        logger.info(f"Updated CoreHub URL to {corehub_url}")
+                        break  # Connection successful
+                    else:
+                        # If no host was discovered, raise an error to trigger retry
+                        raise GluesyncConnectionError("UDP discovery did not find a CoreHub")
+
+            except GluesyncConnectionError as e:
+                retry_count += 1
+                logger.warning(f"Connection attempt {retry_count} failed: {e}")
+
+                # Calculate backoff with exponential increase
+                logger.info(f"Waiting {backoff_delay} seconds before next retry...")
+                await asyncio.sleep(backoff_delay)
+
+                # Double the backoff for next time, up to the maximum
+                backoff_delay = min(backoff_delay * 2, max_backoff)
+
+                # If we've reached max backoff, reset on the next failure
+                if backoff_delay >= max_backoff:
+                    backoff_delay = 1  # Reset to 1 second
+                    cycle_count += 1   # Increment cycle count
+                    logger.info(f"Completed backoff cycle {cycle_count}, resetting delay to 1 second")
+
+            except (GluesyncLicenseError, GluesyncAuthenticationError) as e:
+                # Don't retry for these errors
+                logger.error(f"{type(e).__name__}: {e}")
+                raise
+        
+        # Verify we have a token after connection
+        connection_timeout = 10  # seconds
+        token_check_interval = 0.5  # seconds
+        total_wait = 0
+        
+        while total_wait < connection_timeout and not self._token:
+            await asyncio.sleep(token_check_interval)
+            total_wait += token_check_interval
+            logger.debug(f"Waiting for token... ({total_wait}s/{connection_timeout}s)")
+        
+        if self._token:
+            self._is_initialized = True
+            logger.info("Gluesync SDK client initialized successfully with token")
+        else:
+            self._is_initialized = False
+            logger.error("SDK client connected but no token received within timeout")
+            raise GluesyncAuthenticationError("No authentication token received after connection")
+    
+    async def shutdown(self):
+        """Shutdown the Gluesync client"""
+        if self._client and self._client.is_connected:
+            logger.info("Disconnecting from CoreHub...")
+            await self._client.disconnect()
+            self._is_initialized = False
+            self._token = None
+    
+    async def _on_connected(self, token):
+        """
+        Handle the connected event.
+        
+        Args:
+            token: The JWT token received from the server
+        """
+        if token:
+            self._token = token
+            self._is_initialized = True  # Mark as initialized when connected
+            logger.info(f"Connected to CoreHub successfully! Token received and stored.")
+            logger.debug(f"Token length: {len(token) if token else 0} characters")
+        else:
+            logger.error("Connected to CoreHub but no token provided in callback")
+            self._token = None
+            self._is_initialized = False
+    
+    async def _on_disconnected(self, reason):
+        """
+        Handle the disconnected event.
+        
+        Args:
+            reason: The reason for disconnection
+        """
+        logger.warning(f"Disconnected from CoreHub: {reason}")
+        
+        # Clear authentication state
+        old_token = self._token
+        self._token = None
+        self._is_initialized = False
+        
+        if old_token:
+            logger.info("Previous authentication token invalidated")
+        
+        # Note: The SDK handles reconnection internally, so we don't need to start a reconnection task
+        logger.info("SDK will handle reconnection automatically")
+    
+    async def _on_error(self, error):
+        """
+        Handle the error event.
+        
+        Args:
+            error: The exception that occurred
+        """
+        logger.error(f"Error in connection: {error}")
+        
+        # Reset token and initialization state
+        self._token = None
+        self._is_initialized = False
+        
+        # Note: The SDK handles reconnection internally, so we don't need custom reconnection logic
+        logger.info("Connection error occurred - SDK will handle reconnection automatically")
+    
+    # Note: Callback methods for on_reconnecting, on_reconnected, and on_token_updated
+    # have been removed as they are not supported by the current SDK version.
+    # The SDK handles reconnection internally and updates tokens through the on_connected callback.
+        
+    # Note: Custom reconnection methods have been removed as the SDK handles
+    # reconnection internally. The SDK will automatically attempt to reconnect
+    # when the connection is lost and will call the on_connected callback
+    # when reconnection is successful.
+        
+# Create a global instance for easy import
+gluesync_sdk_client = GluesyncSDKClient.get_instance()
+
+
+# Legacy compatibility functions for bootstrapper
+def initialize_gluesync_sdk():
+    """Legacy synchronous wrapper - starts async initialization in background"""
+    import threading
+    
+    def run_async_init():
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(gluesync_sdk_client.initialize())
         except Exception as e:
-            logger.error(f"Failed to initialize Gluesync SDK: {str(e)}")
-            logger.error(f"Exception type: {type(e).__name__}")
-            import traceback
-            logger.error(f"Stack trace: {traceback.format_exc()}")
-            # No mock fallback - just raise the exception
-            raise RuntimeError(f"Failed to initialize Gluesync SDK: {str(e)}")
+            logger.error(f"SDK initialization failed: {e}")
+    
+    thread = threading.Thread(target=run_async_init, daemon=True)
+    thread.start()
+    logger.info("SDK initialization started in background")
 
 
 def get_token():
-    # If SDK is disabled, don't attempt to get a token
-    if not use_sdk:
-        logger.info("Token retrieval skipped as USE_SDK is set to false")
-        return None
-        
-    if _gluesync_client is None:
-        logger.error("Gluesync SDK is not initialized when trying to get token")
-        raise RuntimeError("Gluesync SDK is not initialized")
-    
-    logger.debug(f"Client type: {type(_gluesync_client).__name__}")
-    
-    # Ensure client is connected if it has connection methods
-    if hasattr(_gluesync_client, 'connect') and hasattr(_gluesync_client, 'is_connected'):
-        # Check if is_connected is a method or a property
-        if callable(getattr(_gluesync_client, 'is_connected')):
-            # It's a method
-            if not _gluesync_client.is_connected():
-                logger.debug("Client is not connected when trying to get token. Attempting to connect...")
-                try:
-                    # Check if connect is a coroutine function
-                    import inspect
-                    if inspect.iscoroutinefunction(_gluesync_client.connect):
-                        logger.debug("Connect is a coroutine, using asyncio to connect during token retrieval")
-                        import asyncio
-                        # Create an event loop if one doesn't exist
-                        try:
-                            loop = asyncio.get_event_loop()
-                        except RuntimeError:
-                            loop = asyncio.new_event_loop()
-                            asyncio.set_event_loop(loop)
-                        # Run the connect coroutine
-                        loop.run_until_complete(_gluesync_client.connect())
-                    else:
-                        _gluesync_client.connect()
-                    logger.debug("Client connection successful during token retrieval")
-                except Exception as e:
-                    logger.error(f"Failed to connect client during token retrieval: {str(e)}")
-        else:
-            # It's a property
-            if not _gluesync_client.is_connected:
-                logger.debug("Client is not connected (property) when trying to get token. Attempting to connect...")
-                try:
-                    # Check if connect is a coroutine function
-                    import inspect
-                    if inspect.iscoroutinefunction(_gluesync_client.connect):
-                        logger.debug("Connect is a coroutine, using asyncio to connect during token retrieval")
-                        import asyncio
-                        # Create an event loop if one doesn't exist
-                        try:
-                            loop = asyncio.get_event_loop()
-                        except RuntimeError:
-                            loop = asyncio.new_event_loop()
-                            asyncio.set_event_loop(loop)
-                        # Run the connect coroutine
-                        loop.run_until_complete(_gluesync_client.connect())
-                    else:
-                        _gluesync_client.connect()
-                    logger.debug("Client connection successful during token retrieval")
-                except Exception as e:
-                    logger.error(f"Failed to connect client during token retrieval: {str(e)}")
-    
-    # Try multiple ways to get the token
-    token = None
-    
-    # Method 1: Access the _token attribute
-    try:
-        token = getattr(_gluesync_client, '_token', None)
-        logger.debug(f"Method 1 (_token attribute): {token is not None}")
-    except Exception as e:
-        logger.error(f"Error accessing _token attribute: {str(e)}")
-    
-    # Method 2: Try token property if it exists
-    if token is None and hasattr(_gluesync_client, 'token'):
-        try:
-            # Check if token is a property with a getter that might be async
-            import inspect
-            token_property = getattr(type(_gluesync_client), 'token', None)
-            if token_property and isinstance(token_property, property) and inspect.iscoroutinefunction(token_property.fget):
-                logger.debug("token property getter is a coroutine, using asyncio to get token")
-                import asyncio
-                # Create an event loop if one doesn't exist
-                try:
-                    loop = asyncio.get_event_loop()
-                except RuntimeError:
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                # Run the token property getter coroutine
-                token = loop.run_until_complete(token_property.fget(_gluesync_client))
-            else:
-                token = _gluesync_client.token
-            logger.debug(f"Method 2 (token property): {token is not None}")
-        except Exception as e:
-            logger.error(f"Error accessing token property: {str(e)}")
-    
-    # Method 3: Try get_token method if it exists
-    if token is None and hasattr(_gluesync_client, 'get_token'):
-        try:
-            # Check if get_token is a coroutine function
-            import inspect
-            if inspect.iscoroutinefunction(_gluesync_client.get_token):
-                logger.debug("get_token is a coroutine, using asyncio to get token")
-                import asyncio
-                # Create an event loop if one doesn't exist
-                try:
-                    loop = asyncio.get_event_loop()
-                except RuntimeError:
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                # Run the get_token coroutine
-                token = loop.run_until_complete(_gluesync_client.get_token())
-            else:
-                token = _gluesync_client.get_token()
-            logger.debug(f"Method 3 (get_token method): {token is not None}")
-        except Exception as e:
-            logger.error(f"Error calling get_token method: {str(e)}")
-    
-    # Debug logging
-    if token is None:
-        logger.error(f"Token is None after all retrieval attempts")
-        logger.error(f"Client attributes: {dir(_gluesync_client)}")
-        
-        # Try to find any token-related attributes
-        token_attrs = [attr for attr in dir(_gluesync_client) if 'token' in attr.lower()]
-        if token_attrs:
-            logger.debug(f"Token-related attributes found: {token_attrs}")
-            for attr in token_attrs:
-                try:
-                    value = getattr(_gluesync_client, attr)
-                    logger.debug(f"Attribute '{attr}' value: {value}")
-                except Exception as e:
-                    logger.error(f"Error accessing attribute '{attr}': {str(e)}")
-    else:
-        logger.info(f"Successfully retrieved token from Gluesync SDK")
-    
-    return token
+    """Legacy function to get token"""
+    return gluesync_sdk_client.token
 
 
-def get_gluesync_client():
-    # If SDK is disabled, return None without raising an exception
-    if not use_sdk:
-        logger.debug("Returning None for gluesync_client as USE_SDK is set to false")
-        return None
-        
-    if _gluesync_client is None:
-        raise RuntimeError("Gluesync SDK is not initialized")
-    return _gluesync_client
+def get_corehub_url():
+    """Legacy function to get CoreHub URL"""
+    return gluesync_sdk_client.corehub_url

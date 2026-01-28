@@ -6,12 +6,13 @@ AUTOMATOR_PORT=${AUTOMATOR_PORT:-8080}
 
 export GLUESYNC_LICENSE_FILE=${GLUESYNC_LICENSE_FILE:-/opt/gluesync/data/gs-license.dat}
 export GLUESYNC_SECURITY_CONFIG=${GLUESYNC_SECURITY_CONFIG:-/opt/gluesync/data/security-config.json}
-export CORE_HUB_URL=${CORE_HUB_URL:-http://gluesync-core-hub:1717}
+export CORE_HUB_URL=${CORE_HUB_URL:-https://gluesync-core-hub:1717}
 export USE_SDK=${USE_SDK:-1}
-export SSL_ENABLED=${SSL_ENABLED:-False}
+export SSL_ENABLED=${SSL_ENABLED:-True}
 export SSL_SKIP_VERIFY=${SSL_SKIP_VERIFY:-True}
 export ENABLE_SCHEDULING=${ENABLE_SCHEDULING:-True}
 export CREATE_TABLE_IF_NOT_EXISTS=${CREATE_TABLE_IF_NOT_EXISTS:-True}
+export AUTOMATOR_HEADLESS=${AUTOMATOR_HEADLESS:-1}
 
 iframe_default=${AUTOMATOR_IFRAME_MODE:-1}
 export AUTOMATOR_IFRAME_MODE=${iframe_default}

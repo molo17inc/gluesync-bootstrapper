@@ -149,9 +149,10 @@ def _setup_sdk_auto_auth_if_enabled() -> None:
 
     try:
         from utils.gluesync_sdk_client import (  # type: ignore import-not-found
-            get_gluesync_client,
+            gluesync_sdk_client,
             get_token,
             initialize_gluesync_sdk,
+            get_corehub_url,
         )
     except ImportError as exc:  # pragma: no cover - defensive
         logger.error("Gluesync SDK helpers unavailable: %s", exc)
@@ -165,31 +166,38 @@ def _setup_sdk_auto_auth_if_enabled() -> None:
         state.set_ui_flags(autoAuthenticated=False)
         return
 
-    try:
-        token = get_token()
-    except Exception as exc:  # pylint: disable=broad-except
-        logger.exception("Failed to retrieve SDK token: %s", exc)
-        state.set_ui_flags(autoAuthenticated=False)
-        return
-
+    # Wait for SDK to initialize and obtain token (up to 30 seconds)
+    import time
+    max_wait = 30
+    wait_interval = 0.5
+    elapsed = 0
+    token = None
+    
+    logger.info("Waiting for SDK to initialize and obtain token...")
+    while elapsed < max_wait:
+        try:
+            token = get_token()
+            if token:
+                logger.info("SDK token obtained after %.1f seconds", elapsed)
+                break
+        except Exception:  # pylint: disable=broad-except
+            pass
+        
+        time.sleep(wait_interval)
+        elapsed += wait_interval
+    
     if not token:
-        logger.error("SDK token retrieval returned an empty value; skipping auto-auth.")
+        logger.error("SDK token not available after %d seconds; skipping auto-auth.", max_wait)
         state.set_ui_flags(autoAuthenticated=False)
         return
 
     core_hub_url = os.getenv("CORE_HUB_URL")
     if not core_hub_url:
         try:
-            sdk_client = get_gluesync_client()
+            core_hub_url = get_corehub_url()
         except Exception as exc:  # pylint: disable=broad-except
-            logger.warning("Unable to access Gluesync SDK client for CoreHub discovery: %s", exc)
-            sdk_client = None
-
-        if sdk_client and hasattr(sdk_client, "get_core_hub_url"):
-            try:
-                core_hub_url = sdk_client.get_core_hub_url()
-            except Exception as exc:  # pylint: disable=broad-except
-                logger.warning("SDK client failed to provide CoreHub URL: %s", exc)
+            logger.warning("Unable to get CoreHub URL from SDK: %s", exc)
+            core_hub_url = None
 
     if not core_hub_url:
         core_hub_url = "http://gluesync-core-hub:1717"
