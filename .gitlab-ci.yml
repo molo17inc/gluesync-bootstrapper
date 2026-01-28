@@ -315,7 +315,7 @@ automator_docker_deploy:
       VERSION_TAG="${DEFAULT_NAME}:${TAGPART}"
     - docker login -u danieleangeli -p "$CI_REGISTRY_PASSWORD"
     - |
-      if [[ $CI_COMMIT_TAG == release-* ]]; then
+      if [[ $CI_COMMIT_TAG == automator-docker-release-* ]]; then
         echo "Building multi-arch Automator release with latest tag"
         docker run --privileged --rm tonistiigi/binfmt --install all
         docker buildx create --name automator-builder --use || docker buildx use automator-builder
@@ -326,7 +326,7 @@ automator_docker_deploy:
           --tag $DEFAULT_NAME:latest \
           --tag "$VERSION_TAG" \
           --push .
-      elif [[ $CI_COMMIT_TAG == beta-* ]]; then
+      elif [[ $CI_COMMIT_TAG == automator-docker-beta-* ]]; then
         echo "Building multi-arch Automator beta"
         docker run --privileged --rm tonistiigi/binfmt --install all
         docker buildx create --name automator-builder --use || docker buildx use automator-builder
@@ -337,7 +337,7 @@ automator_docker_deploy:
           --tag $DEFAULT_NAME:beta \
           --tag "$VERSION_TAG" \
           --push .
-      elif [[ $CI_COMMIT_TAG == tag-* ]]; then
+      elif [[ $CI_COMMIT_TAG == automator-docker-* ]]; then
         echo "Building Automator alpha (amd64 only)"
         docker build --no-cache -f docker/automator.Dockerfile --tag "$VERSION_TAG" .
         docker push "$VERSION_TAG"
@@ -346,7 +346,7 @@ automator_docker_deploy:
         exit 1
       fi
   rules:
-    - if: '$CI_COMMIT_TAG =~ /^(release|beta|tag)-/'
+    - if: '$CI_COMMIT_TAG =~ /^automator-docker-/'
 
 deploy:
   stage: deploy
@@ -785,12 +785,27 @@ update_budibase_version:
         exit 1
       fi
 
-      if [[ "$CI_COMMIT_TAG" == release-* ]]; then
+      if [[ "$CI_COMMIT_TAG" == automator-docker-release-* ]]; then
         RELEASE_TYPE="GA"
+        BUILD_TAG="automator"
+      elif [[ "$CI_COMMIT_TAG" == automator-docker-beta-* ]]; then
+        RELEASE_TYPE="BETA"
+        BUILD_TAG="automator"
+      elif [[ "$CI_COMMIT_TAG" == automator-docker-* ]]; then
+        RELEASE_TYPE="ALPHA"
+        BUILD_TAG="automator"
+      elif [[ "$CI_COMMIT_TAG" == release-* ]]; then
+        RELEASE_TYPE="GA"
+        BUILD_TAG="automator"
       elif [[ "$CI_COMMIT_TAG" == beta-* ]]; then
         RELEASE_TYPE="BETA"
+        BUILD_TAG="automator"
       elif [[ "$CI_COMMIT_TAG" == tag-* ]]; then
         RELEASE_TYPE="ALPHA"
+        BUILD_TAG="automator"
+      elif [[ "$CI_COMMIT_TAG" =~ ^automator-[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+        RELEASE_TYPE="ALPHA"
+        BUILD_TAG="automator"
       else
         echo "[ERROR] Unknown tag format"
         exit 1
@@ -879,6 +894,7 @@ update_budibase_version:
           exit 1
       fi
   rules:
+    - if: '$CI_COMMIT_TAG =~ /^automator-docker-/'
     - if: '$CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/'
     - if: "$CI_COMMIT_TAG =~ /^release-/"
     - if: "$CI_COMMIT_TAG =~ /^beta-/"
