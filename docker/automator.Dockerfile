@@ -14,7 +14,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+
+ARG GITLAB_TOKEN
+RUN pip install --no-cache-dir \
+    --extra-index-url "https://oauth2:${GITLAB_TOKEN}@gitlab.com/api/v4/projects/68232363/packages/pypi/simple" \
+    -r requirements.txt
 
 RUN pip install --no-cache-dir \
     websockets==11.0.3 \
@@ -27,26 +31,12 @@ RUN pip install --no-cache-dir \
 
 COPY automator_app ./automator_app
 COPY utils ./utils
-COPY gluesync-client-sdk ./gluesync-client-sdk
 COPY commons.py create_all_entities.py create_all_tables.py create_user_defined_functions.py \
      add_agents_with_conductor.py export_all_pipelines.py export_template_from_corehub.py ./
 COPY agents.json table-list-template.yaml table-list-template-basic.yaml ./
 COPY run_automator.py ./
 COPY docker/automator-entrypoint.sh /usr/local/bin/automator-entrypoint.sh
 RUN chmod +x /usr/local/bin/automator-entrypoint.sh
-
-# Install SDK package contents into site-packages
-RUN python - <<'PY'
-import pathlib, site, shutil
-src = pathlib.Path('/opt/automator/gluesync-client-sdk/gluesync_sdk')
-if not src.exists():
-    raise SystemExit('gluesync-client-sdk submodule not found; ensure it is cloned')
-dst = pathlib.Path(site.getsitepackages()[0]) / 'gluesync_sdk'
-if dst.exists():
-    shutil.rmtree(dst)
-shutil.copytree(src, dst)
-(dst / '__init__.py').touch()
-PY
 
 RUN mkdir -p /opt/gluesync/shared
 
