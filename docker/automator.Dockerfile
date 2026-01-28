@@ -52,18 +52,19 @@ RUN mkdir -p /opt/gluesync/shared
 
 ENV GLUESYNC_LICENSE_FILE=/opt/gluesync/shared/gs-license.dat \
     GLUESYNC_SECURITY_CONFIG=/opt/gluesync/shared/security-config.json \
-    CORE_HUB_URL=http://gluesync-core-hub:1717 \
+    CORE_HUB_URL=https://gluesync-core-hub:1717 \
     USE_SDK=1 \
-    SSL_ENABLED=False \
+    SSL_ENABLED=True \
     SSL_SKIP_VERIFY=True \
     ENABLE_SCHEDULING=True \
     CREATE_TABLE_IF_NOT_EXISTS=True \
     AUTOMATOR_IFRAME_MODE=1 \
     AUTOMATOR_HIDE_HEADER=1 \
     AUTOMATOR_HIDE_COREHUB_INFO=1 \
+    AUTOMATOR_HEADLESS=1 \
     AUTOMATOR_HOST=0.0.0.0 \
-    AUTOMATOR_PORT=8080
+    AUTOMATOR_PORT=1717
 
-EXPOSE 8080
+EXPOSE 1717
 
 CMD ["automator-entrypoint.sh"]
