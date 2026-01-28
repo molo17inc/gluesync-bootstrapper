@@ -38,6 +38,12 @@ from .app import create_app
 LOGGER = logging.getLogger(__name__)
 
 
+def _ensure_logging_configured() -> None:
+    root = logging.getLogger()
+    if not root.handlers:
+        logging.basicConfig(level=logging.INFO)
+
+
 def _show_error_dialog(title: str, message: str) -> None:
     """Show a native macOS error dialog."""
     if sys.platform == 'darwin':
@@ -156,12 +162,25 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         dest="corehub_url",
         help="Override CoreHub base URL (also sets CORE_HUB_URL env)",
     )
+    parser.add_argument(
+        "--headless",
+        dest="headless",
+        action="store_true",
+        help="Run without PyQt tray/webview (useful in containers)",
+    )
+    parser.add_argument(
+        "--no-headless",
+        dest="headless",
+        action="store_false",
+        help="Force-enable tray/webview even if headless flag/env set",
+    )
     parser.set_defaults(
         iframe_mode=None,
         hide_header=None,
         hide_corehub_info=None,
         hide_corehub_tab=None,
         use_sdk=None,
+        headless=None,
     )
     return parser.parse_args(argv)
 
@@ -208,6 +227,23 @@ def _apply_env_overrides(args: argparse.Namespace) -> None:
     _set_flag("AUTOMATOR_HIDE_HEADER", getattr(args, "hide_header", None))
     _set_flag("AUTOMATOR_HIDE_COREHUB_INFO", getattr(args, "hide_corehub_info", None))
     _set_flag("USE_SDK", getattr(args, "use_sdk", None))
+    _set_flag("AUTOMATOR_HEADLESS", getattr(args, "headless", None))
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.lower() in {"1", "true", "yes", "on"}
+
+
+def _should_run_headless(args: argparse.Namespace) -> bool:
+    if getattr(args, "headless", None) is not None:
+        return args.headless
+    if "AUTOMATOR_HEADLESS" in os.environ:
+        return _env_flag("AUTOMATOR_HEADLESS")
+    # Default to headless when DISPLAY is missing (typical containers)
+    return not os.environ.get("DISPLAY")
 
 
 def _run_server_only(args):
@@ -365,6 +401,8 @@ class GluesyncTrayApp:
 
 
 def main(argv: Optional[list[str]] = None) -> None:
+    _ensure_logging_configured()
+
     # Filter out multiprocessing fork arguments that shouldn't be parsed
     if argv is None:
         argv = sys.argv[1:]
@@ -402,6 +440,18 @@ def main(argv: Optional[list[str]] = None) -> None:
             LOGGER.info("Requested port %d was in use, using port %d", args.port, port)
         args.port = port
 
+        headless = _should_run_headless(args)
+        LOGGER.info(
+            "Headless flag resolved to %s (AUTOMATOR_HEADLESS=%s, DISPLAY=%s)",
+            headless,
+            os.environ.get("AUTOMATOR_HEADLESS"),
+            os.environ.get("DISPLAY"),
+        )
+        if headless:
+            LOGGER.info("Running in headless mode (no PyQt tray)")
+            _run_server_only(args)
+            return
+
         url = f"http://{args.host}:{args.port}"
 
         # Start uvicorn server in background thread
@@ -428,3 +478,7 @@ def main(argv: Optional[list[str]] = None) -> None:
         LOGGER.error("Failed to start Gluesync Automator: %s", e, exc_info=True)
         _show_error_dialog("Gluesync Automator - Startup Error", f"Failed to start: {e}")
         raise SystemExit(1) from e
+
+
+if __name__ == '__main__':
+    main()
