@@ -22,6 +22,8 @@ import os
 import json
 import sys
 import logging
+import schedule
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +65,7 @@ def initialize_gluesync_sdk():
     if _gluesync_client is None:
         try:
             license_file = os.getenv('GLUESYNC_LICENSE_FILE', '/opt/gluesync/data/gs-license.dat')
-            module_tag = os.getenv('GLUESYNC_MODULE_TAG', 'gluesync-bootstrapper')
+            module_tag = os.getenv('GLUESYNC_MODULE_TAG', 'automator')
             use_ssl = os.getenv('SSL_ENABLED', 'False').lower() == 'true'
             ssl_skip_verify = os.getenv('SSL_SKIP_VERIFY', 'False').lower() == 'true'
             

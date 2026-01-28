@@ -43,6 +43,15 @@ body {
   overflow-x: hidden;
 }
 
+body.iframe-mode {
+  background: transparent;
+}
+
+body.hide-header .topbar,
+body.iframe-mode .topbar {
+  display: none;
+}
+
 .topbar {
   display: flex;
   align-items: center;
@@ -197,6 +206,10 @@ body.is-authenticated .requires-auth {
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 1.25rem;
   margin-bottom: 1.5rem;
+}
+
+body.hide-corehub-environment #corehub-environment-section {
+  display: none;
 }
 
 .corehub-section {
