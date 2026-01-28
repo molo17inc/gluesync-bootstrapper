@@ -61,6 +61,7 @@ class AutomatorState:
         self._duplicate_in_progress: bool = False
         self._duplicate_cancel_requested: bool = False
         self._corehub_overview: Optional[Dict[str, Any]] = None
+        self._ui_flags: Dict[str, Any] = {}
 
     # Authentication -----------------------------------------------------
     def set_auth(
@@ -194,6 +195,15 @@ class AutomatorState:
                 "cancelRequested": self._duplicate_cancel_requested,
             }
 
+    # UI flags --------------------------------------------------------------
+    def set_ui_flags(self, **flags: Any) -> None:
+        with self._lock:
+            self._ui_flags.update(flags)
+
+    def ui_flags(self) -> Dict[str, Any]:
+        with self._lock:
+            return dict(self._ui_flags)
+
     # Accessors ----------------------------------------------------------
     @property
     def token(self) -> Optional[str]:
@@ -235,6 +245,7 @@ class AutomatorState:
                 "createTables": self._create_tables,
                 "corehubOverview": self._corehub_overview,
                 "run": run_snapshot,
+                "ui": dict(self._ui_flags),
             }
             return data
 

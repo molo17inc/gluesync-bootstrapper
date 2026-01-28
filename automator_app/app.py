@@ -120,6 +120,92 @@ def _cleanup_old_fingerprints(static_dir: Path, original_name: str, keep_name: s
                 pass
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _configure_ui_flags_from_env() -> None:
+    iframe_mode = _env_flag("AUTOMATOR_IFRAME_MODE", False)
+    hide_header = _env_flag("AUTOMATOR_HIDE_HEADER", iframe_mode)
+    hide_environment = _env_flag("AUTOMATOR_HIDE_COREHUB_INFO", iframe_mode)
+    hide_corehub_tab = _env_flag("AUTOMATOR_HIDE_COREHUB_TAB", iframe_mode)
+    state.set_ui_flags(
+        iframeMode=iframe_mode,
+        hideHeader=hide_header,
+        hideEnvironment=hide_environment,
+        hideCorehubTab=hide_corehub_tab,
+    )
+
+
+def _setup_sdk_auto_auth_if_enabled() -> None:
+    use_sdk = _env_flag("USE_SDK", False)
+    if not use_sdk:
+        state.set_ui_flags(autoAuthenticated=False)
+        logger.info("SDK auto-auth disabled (USE_SDK not set).")
+        return
+
+    try:
+        from utils.gluesync_sdk_client import (  # type: ignore import-not-found
+            get_gluesync_client,
+            get_token,
+            initialize_gluesync_sdk,
+        )
+    except ImportError as exc:  # pragma: no cover - defensive
+        logger.error("Gluesync SDK helpers unavailable: %s", exc)
+        state.set_ui_flags(autoAuthenticated=False)
+        return
+
+    try:
+        initialize_gluesync_sdk()
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Failed to initialize Gluesync SDK: %s", exc)
+        state.set_ui_flags(autoAuthenticated=False)
+        return
+
+    try:
+        token = get_token()
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Failed to retrieve SDK token: %s", exc)
+        state.set_ui_flags(autoAuthenticated=False)
+        return
+
+    if not token:
+        logger.error("SDK token retrieval returned an empty value; skipping auto-auth.")
+        state.set_ui_flags(autoAuthenticated=False)
+        return
+
+    core_hub_url = os.getenv("CORE_HUB_URL")
+    if not core_hub_url:
+        try:
+            sdk_client = get_gluesync_client()
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("Unable to access Gluesync SDK client for CoreHub discovery: %s", exc)
+            sdk_client = None
+
+        if sdk_client and hasattr(sdk_client, "get_core_hub_url"):
+            try:
+                core_hub_url = sdk_client.get_core_hub_url()
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning("SDK client failed to provide CoreHub URL: %s", exc)
+
+    if not core_hub_url:
+        core_hub_url = "http://gluesync-core-hub:1717"
+        logger.info("Falling back to default CoreHub URL: %s", core_hub_url)
+
+    use_ssl = _env_flag("SSL_ENABLED", False)
+    skip_verify = _env_flag("SSL_SKIP_VERIFY", True)
+    state.set_auth(token, core_hub_url, use_ssl=use_ssl, skip_verify=skip_verify)
+    state.set_preferences(
+        enable_scheduling=_env_flag("ENABLE_SCHEDULING", True),
+        create_tables=_env_flag("CREATE_TABLE_IF_NOT_EXISTS", True),
+    )
+    state.set_ui_flags(autoAuthenticated=True)
+    logger.info("Gluesync SDK auto-authentication enabled for %s", core_hub_url)
+
+
 class LoginRequest(BaseModel):
     base_url: str = Field(..., alias="baseUrl")
     username: str
@@ -180,6 +266,7 @@ class StateResponse(BaseModel):
     run: Optional[dict]
     duplicate: Optional[dict] = None
     corehub_overview: Optional[dict] = Field(None, alias="corehubOverview")
+    ui: Dict[str, Any] = Field(default_factory=dict, alias="ui")
 
 
 class RunSnapshot(BaseModel):
@@ -339,6 +426,8 @@ def _has_masked_password(value: Any) -> bool:
 def create_app() -> FastAPI:
     _ensure_static_assets()
     asset_rewrites = _fingerprint_static_assets()
+    _configure_ui_flags_from_env()
+    _setup_sdk_auto_auth_if_enabled()
 
     app = FastAPI(title="Gluesync Automator", version="1.0.0")
 

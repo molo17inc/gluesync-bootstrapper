@@ -90,6 +90,78 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_false",
         help="Don't open browser on startup",
     )
+    parser.add_argument(
+        "--iframe-mode",
+        dest="iframe_mode",
+        action="store_true",
+        help="Hide Automator chrome for iframe embedding",
+    )
+    parser.add_argument(
+        "--no-iframe-mode",
+        dest="iframe_mode",
+        action="store_false",
+        help="Force-disable iframe embedding mode",
+    )
+    parser.add_argument(
+        "--hide-header",
+        dest="hide_header",
+        action="store_true",
+        help="Hide the Automator header regardless of iframe mode",
+    )
+    parser.add_argument(
+        "--show-header",
+        dest="hide_header",
+        action="store_false",
+        help="Force show header even when iframe flags are set",
+    )
+    parser.add_argument(
+        "--hide-corehub-info",
+        dest="hide_corehub_info",
+        action="store_true",
+        help="Hide CoreHub info tab content",
+    )
+    parser.add_argument(
+        "--show-corehub-info",
+        dest="hide_corehub_info",
+        action="store_false",
+        help="Force show CoreHub info tab content",
+    )
+    parser.add_argument(
+        "--hide-corehub-tab",
+        dest="hide_corehub_tab",
+        action="store_true",
+        help="Completely hide the CoreHub tab",
+    )
+    parser.add_argument(
+        "--show-corehub-tab",
+        dest="hide_corehub_tab",
+        action="store_false",
+        help="Force show the CoreHub tab",
+    )
+    parser.add_argument(
+        "--use-sdk",
+        dest="use_sdk",
+        action="store_true",
+        help="Enable Gluesync SDK auto-authentication",
+    )
+    parser.add_argument(
+        "--no-use-sdk",
+        dest="use_sdk",
+        action="store_false",
+        help="Disable Gluesync SDK auto-authentication",
+    )
+    parser.add_argument(
+        "--corehub-url",
+        dest="corehub_url",
+        help="Override CoreHub base URL (also sets CORE_HUB_URL env)",
+    )
+    parser.set_defaults(
+        iframe_mode=None,
+        hide_header=None,
+        hide_corehub_info=None,
+        hide_corehub_tab=None,
+        use_sdk=None,
+    )
     return parser.parse_args(argv)
 
 
@@ -120,6 +192,21 @@ def _find_available_port(host: str, start_port: int, max_attempts: int = 100) ->
         port = sock.getsockname()[1]
         LOGGER.info("Using OS-assigned port %d", port)
         return port
+
+
+def _apply_env_overrides(args: argparse.Namespace) -> None:
+    def _set_flag(name: str, value: bool | None) -> None:
+        if value is None:
+            return
+        os.environ[name] = "1" if value else "0"
+
+    if getattr(args, "corehub_url", None):
+        os.environ["CORE_HUB_URL"] = args.corehub_url
+
+    _set_flag("AUTOMATOR_IFRAME_MODE", getattr(args, "iframe_mode", None))
+    _set_flag("AUTOMATOR_HIDE_HEADER", getattr(args, "hide_header", None))
+    _set_flag("AUTOMATOR_HIDE_COREHUB_INFO", getattr(args, "hide_corehub_info", None))
+    _set_flag("USE_SDK", getattr(args, "use_sdk", None))
 
 
 def _run_server_only(args):
@@ -304,6 +391,8 @@ def main(argv: list[str] | None = None) -> None:
         i += 1
     
     args = _parse_args(filtered_argv)
+
+    _apply_env_overrides(args)
 
     try:
         # Find an available port instead of failing

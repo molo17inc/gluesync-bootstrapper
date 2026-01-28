@@ -200,13 +200,38 @@ const api = {
   },
   async cancelDuplicate() {
     const res = await fetch('/api/duplicate/cancel', { method: 'POST' });
-    const body = await res.json().catch(() => ({}));
     if (!res.ok) {
-      throw new Error(body.detail || body.message || 'Duplicate cancellation failed');
+      const detail = await res.json().catch(() => ({}));
+      throw new Error(detail.detail || 'Cancel duplicate failed');
     }
-    return body;
+    return res.json();
   },
 };
+
+const uiState = {
+  flags: {},
+};
+
+function applyUiFlags(flags = {}) {
+  uiState.flags = { ...flags };
+  const body = document.body;
+  if (!body) return;
+
+  const mapping = {
+    iframeMode: 'iframe-mode',
+    hideHeader: 'hide-header',
+    hideEnvironment: 'hide-corehub-environment',
+    hideCorehubTab: 'hide-corehub-tab',
+  };
+
+  Object.entries(mapping).forEach(([flag, className]) => {
+    body.classList.toggle(className, !!flags[flag]);
+  });
+
+  if (window.automatorTabs?.hideTab) {
+    window.automatorTabs.hideTab('corehub', !!flags.hideCorehubTab);
+  }
+}
 
 const ui = (() => {
   const statusEl = document.getElementById('status-indicator');
@@ -628,6 +653,20 @@ function initTabs() {
     }
   };
 
+  const hideTab = (tabName, hidden) => {
+    const button = tabButtons.find((btn) => btn.dataset.tab === tabName);
+    const panel = tabPanels.find((p) => p.dataset.tabPanel === tabName);
+    if (!button || !panel) return;
+    button.classList.toggle('is-hidden', hidden);
+    panel.classList.toggle('is-hidden', hidden);
+    if (hidden && button.classList.contains('active')) {
+      const fallback = tabButtons.find((btn) => !btn.classList.contains('is-hidden'));
+      if (fallback) {
+        activateTab(fallback.dataset.tab);
+      }
+    }
+  };
+
   tabButtons.forEach((button) => {
     button.addEventListener('click', () => {
       activateTab(button.dataset.tab);
@@ -637,6 +676,11 @@ function initTabs() {
   const initialTab = tabButtons.find((btn) => btn.classList.contains('active'))?.dataset.tab
     || tabButtons[0]?.dataset.tab;
   activateTab(initialTab);
+
+  window.automatorTabs = {
+    activateTab,
+    hideTab,
+  };
 }
 
 function logActivity(scope, message) {
@@ -679,6 +723,7 @@ const stateManager = {
   corehubSnapshot: null,
 
   updateFromState(data) {
+    applyUiFlags(data.ui || {});
     // Toggle global authenticated state for layout/visibility
     document.body.classList.toggle('is-authenticated', !!data.tokenPresent);
     const authCard = document.getElementById('auth-card');
