@@ -179,7 +179,7 @@ automator_docker_deploy:
     - apk add --no-cache bash
     - |
       TAGPART=$(echo "$CI_COMMIT_TAG" | grep -oE '[0-9]+\.[0-9]+\.[0-9](.*)')
-      DEFAULT_NAME=${DOCKER_REGISTRY}/${APP_NAME}
+      DEFAULT_NAME=${DOCKER_REGISTRY}/gluesync-automator
       VERSION_TAG="${DEFAULT_NAME}:${TAGPART}"
     - docker login -u danieleangeli -p "$CI_REGISTRY_PASSWORD"
     - |
