@@ -11,4 +11,4 @@ cairosvg
 schedule
 PyQt6; sys_platform == 'darwin'
 PyQt6-WebEngine; sys_platform == 'darwin'
-gluesync-sdk==0.0.16
+gluesync-sdk==0.0.17
