@@ -31,7 +31,6 @@ import shutil
 import sys
 import tempfile
 import zipfile
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 import hashlib
@@ -43,7 +42,7 @@ import create_user_defined_functions
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, validator
 
@@ -73,6 +72,20 @@ def _static_dir() -> Path:
 
 _FINGERPRINT_TARGETS = ("styles.css", "app.js")
 _FINGERPRINT_PATTERN = re.compile(r"^(?P<name>.+)\.[0-9a-f]{8,}\.(?P<suffix>[^.]+)$")
+_BASE_PATH_PLACEHOLDER = "__AUTOMATOR_BASE_PATH__"
+
+
+def _normalize_base_path(value: Optional[str]) -> str:
+    """Return a normalized base path suitable for proxy deployments."""
+
+    if not value:
+        return ""
+    path = value.strip()
+    if not path or path == "/":
+        return ""
+    if not path.startswith("/"):
+        path = f"/{path}"
+    return path.rstrip("/")
 
 
 def _fingerprint_static_assets() -> Dict[str, str]:
@@ -100,7 +113,9 @@ def _fingerprint_static_assets() -> Dict[str, str]:
 
         _cleanup_old_fingerprints(static_directory, source_path.name, fingerprint_path.name)
 
-        rewrites[f"/static/{filename}"] = f"/static/{fingerprint_name}"
+        original = f"{_BASE_PATH_PLACEHOLDER}/static/{filename}"
+        rewritten = f"{_BASE_PATH_PLACEHOLDER}/static/{fingerprint_name}"
+        rewrites[original] = rewritten
 
     return rewrites
 
@@ -219,7 +234,6 @@ class LoginRequest(BaseModel):
     base_url: str = Field(..., alias="baseUrl")
     username: str
     password: str
-    new_password: Optional[str] = Field(None, alias="newPassword")
     use_ssl: bool = Field(False, alias="useSsl")
     skip_verify: bool = Field(False, alias="skipVerify")
     enable_scheduling: bool = Field(True, alias="enableScheduling")
@@ -236,7 +250,6 @@ class LoginRequest(BaseModel):
 class BulkTemplateRequest(BaseModel):
     pipeline_id: str = Field(..., alias="pipelineId")
     source_schema: str = Field(..., alias="sourceSchema")
-    target_schema: str = Field(..., alias="targetSchema")
     table_names: list[str] = Field(..., alias="tableNames")
 
     class Config:
@@ -340,11 +353,10 @@ class DuplicatePipelineRequest(BaseModel):
     target_agent_tag: str = Field(..., alias="targetAgentTag")
     source_agent_password: str = Field(..., alias="sourceAgentPassword")
     target_agent_password: str = Field(..., alias="targetAgentPassword")
+    conductor_url: Optional[str] = Field(None, alias="conductorUrl")
     clone_entities: bool = Field(True, alias="cloneEntities")
     source_host_override: Optional[str] = Field(None, alias="sourceHost")
     target_host_override: Optional[str] = Field(None, alias="targetHost")
-    source_port_override: Optional[int] = Field(None, alias="sourcePort")
-    target_port_override: Optional[int] = Field(None, alias="targetPort")
     override_schemas: bool = Field(False, alias="overrideSchemas")
     override_source_schema: Optional[str] = Field(None, alias="overrideSourceSchema")
     override_target_schema: Optional[str] = Field(None, alias="overrideTargetSchema")
@@ -373,15 +385,6 @@ class PipelineAgentsResponse(BaseModel):
     source_agent_tag: Optional[str] = Field(None, alias="sourceAgentTag")
     target_agent_type: Optional[str] = Field(None, alias="targetAgentType")
     target_agent_tag: Optional[str] = Field(None, alias="targetAgentTag")
-
-    class Config:
-        allow_population_by_field_name = True
-
-
-class UploadCertificateRequest(BaseModel):
-    pipeline_id: str = Field(..., alias="pipelineId")
-    agent_id: str = Field(..., alias="agentId")
-    certificate_type: str = Field(..., alias="certificateType")
 
     class Config:
         allow_population_by_field_name = True
@@ -444,13 +447,13 @@ def _has_masked_password(value: Any) -> bool:
     return False
 
 
-def create_app() -> FastAPI:
-    _ensure_static_assets()
-    asset_rewrites = _fingerprint_static_assets()
-    _configure_ui_flags_from_env()
-    _setup_sdk_auto_auth_if_enabled()
+def _build_inner_app(*, base_path: str, client_base_path: str, asset_rewrites: Dict[str, str]) -> FastAPI:
+    """Create the core FastAPI app mounted either at / or under a base path."""
 
-    app = FastAPI(title="Gluesync Automator", version="1.0.0")
+    app = FastAPI(
+        title="Gluesync Automator",
+        version="1.0.0",
+    )
 
     app.add_middleware(
         CORSMiddleware,
@@ -472,27 +475,33 @@ def create_app() -> FastAPI:
         for original, hashed in asset_rewrites.items():
             content = content.replace(original, hashed)
 
+        # Replace JavaScript variable value first to avoid collision with variable name
+        content = content.replace("{{BASE_PATH_VALUE}}", client_base_path)
+        # Then replace all other occurrences of the placeholder
+        content = content.replace(_BASE_PATH_PLACEHOLDER, client_base_path)
+
         return Response(content=content, media_type="text/html")
 
-    @app.get("/api/healthz")
-    async def healthcheck() -> dict:
-        return {"status": "ok"}
+    return app
 
-    @app.get("/api/version", response_model=VersionResponse)
-    async def version() -> VersionResponse:
-        try:
-            version = get_version()
-        except Exception as exc:
-            logger.exception("Failed to get version: %s", exc)
-            version = "unknown"
-        return VersionResponse(version=version)
 
-    @app.get("/api/state", response_model=StateResponse)
+def create_app() -> FastAPI:
+    _ensure_static_assets()
+    asset_rewrites = _fingerprint_static_assets()
+    _configure_ui_flags_from_env()
+    _setup_sdk_auto_auth_if_enabled()
+
+    base_path = _normalize_base_path(os.getenv("AUTOMATOR_BASE_PATH"))
+    client_base_path = base_path or ""
+
+    inner_app = _build_inner_app(base_path=base_path, client_base_path=client_base_path, asset_rewrites=asset_rewrites)
+
+    @inner_app.get("/api/state", response_model=StateResponse)
     async def get_state() -> StateResponse:
         snapshot = state.snapshot()
         return StateResponse(**snapshot)
 
-    @app.get("/api/changelog/automator/{version}")
+    @inner_app.get("/api/changelog/automator/{version}")
     async def get_automator_changelog(version: str):
         url = f"{CHANGELOG_API_BASE_URL}/changelog/automator/{version}"
         try:
@@ -521,14 +530,13 @@ def create_app() -> FastAPI:
 
         return data
 
-    @app.post("/api/login", response_model=ApiMessage)
+    @inner_app.post("/api/login", response_model=ApiMessage)
     async def login(payload: LoginRequest) -> ApiMessage:
         try:
             token = corehub.authenticate(
                 base_url=payload.base_url,
                 username=payload.username,
                 password=payload.password,
-                new_password=payload.new_password,
                 use_ssl=payload.use_ssl,
                 skip_verify=payload.skip_verify,
             )
@@ -548,12 +556,12 @@ def create_app() -> FastAPI:
         )
         return ApiMessage(message="Authentication successful")
 
-    @app.post("/api/logout", response_model=ApiMessage)
+    @inner_app.post("/api/logout", response_model=ApiMessage)
     async def logout() -> ApiMessage:
         state.clear_auth()
         return ApiMessage(message="Logged out")
 
-    @app.post("/api/upload", response_model=UploadResponse)
+    @inner_app.post("/api/upload", response_model=UploadResponse)
     async def upload_yaml(file: UploadFile = File(...)) -> UploadResponse:
         if not file.filename.lower().endswith(('.yaml', '.yml')):
             raise HTTPException(status_code=400, detail="Only YAML files are supported")
@@ -569,7 +577,7 @@ def create_app() -> FastAPI:
         file_id = state.register_upload(temp_path, file.filename)
         return UploadResponse(fileId=file_id, filename=file.filename)
 
-    @app.get("/api/run/current")
+    @inner_app.get("/api/run/current")
     async def current_run(include_logs: bool = False):
         snapshot = state.current_run_snapshot()
         if not snapshot:
@@ -580,7 +588,7 @@ def create_app() -> FastAPI:
             response.logs = logs or []
         return response
 
-    @app.get("/api/pipelines", response_model=PipelinesResponse)
+    @inner_app.get("/api/pipelines", response_model=PipelinesResponse)
     async def list_pipelines() -> PipelinesResponse:
         if not state.token or not state.base_url:
             raise HTTPException(status_code=401, detail="Authentication required")
@@ -598,7 +606,7 @@ def create_app() -> FastAPI:
 
         return PipelinesResponse(pipelines=[PipelineInfo(**p) for p in pipelines])
 
-    @app.get("/api/bulk/schemas", response_model=BulkSchemasResponse)
+    @inner_app.get("/api/bulk/schemas", response_model=BulkSchemasResponse)
     async def bulk_list_schemas(pipelineId: str) -> BulkSchemasResponse:  # pylint: disable=invalid-name
         if not state.token or not state.base_url:
             raise HTTPException(status_code=401, detail="Authentication required")
@@ -625,7 +633,7 @@ def create_app() -> FastAPI:
 
         return BulkSchemasResponse(schemas=schemas, source_type=source_type, target_type=target_type)
 
-    @app.get("/api/bulk/tables", response_model=BulkTablesResponse)
+    @inner_app.get("/api/bulk/tables", response_model=BulkTablesResponse)
     async def bulk_list_tables(pipelineId: str, schema: str) -> BulkTablesResponse:  # pylint: disable=invalid-name
         if not state.token or not state.base_url:
             raise HTTPException(status_code=401, detail="Authentication required")
@@ -645,7 +653,7 @@ def create_app() -> FastAPI:
 
         return BulkTablesResponse(tables=tables)
 
-    @app.post("/api/bulk/create", response_model=ApiMessage)
+    @inner_app.post("/api/bulk/create", response_model=ApiMessage)
     async def bulk_create_entities(request: BulkCreateRequest) -> ApiMessage:
         if not state.token or not state.base_url:
             raise HTTPException(status_code=401, detail="Authentication required")
@@ -687,12 +695,6 @@ def create_app() -> FastAPI:
             target_type = "SQL"
             logger.info(f"Using fallback target_type: {target_type}")
 
-        # Disable table creation for NoSQL targets (same logic as duplicate pipeline)
-        effective_create_tables = bool(create_tables)
-        if target_type and target_type.upper() == 'NOSQL':
-            logger.info("Target is NoSQL - disabling table creation")
-            effective_create_tables = False
-
         try:
             result = corehub.run_create_entities_for_tables(
                 token=state.token,
@@ -706,7 +708,7 @@ def create_app() -> FastAPI:
                 skip_errors=request.skip_errors,
                 chunk_size=request.chunk_size,
                 enable_scheduling=bool(enable_scheduling),
-                create_tables=effective_create_tables,
+                create_tables=bool(create_tables),
                 use_ssl=state.use_ssl,
                 skip_verify=state.skip_verify,
             )
@@ -721,9 +723,9 @@ def create_app() -> FastAPI:
                 logger.info("[bulk-create] %s", line)
 
         msg = "Bulk entity creation completed successfully" if ok else result.get("error") or "Bulk entity creation failed"
-        return ApiMessage(success=ok, message=msg, logs=logs)
+        return ApiMessage(success=ok, message=msg)
 
-    @app.post("/api/bulk/template")
+    @inner_app.post("/api/bulk/template")
     async def bulk_export_template(request: BulkTemplateRequest):
         """Generate an on-the-fly table-list-style YAML for the selected tables.
 
@@ -738,15 +740,12 @@ def create_app() -> FastAPI:
 
         pipeline_id = request.pipeline_id
         source_schema = request.source_schema
-        target_schema = request.target_schema
         table_names = [name for name in request.table_names or [] if name]
 
         if not pipeline_id:
             raise HTTPException(status_code=400, detail="pipelineId is required")
         if not source_schema:
             raise HTTPException(status_code=400, detail="sourceSchema is required")
-        if not target_schema:
-            raise HTTPException(status_code=400, detail="targetSchema is required")
         if not table_names:
             raise HTTPException(status_code=400, detail="tableNames must contain at least one table")
 
@@ -824,7 +823,7 @@ def create_app() -> FastAPI:
             custom_cfg[name] = entry
 
         schema_cfg: dict[str, Any] = {
-            "target": target_schema,
+            "target": source_schema,
             "tables": {
                 "whitelist": unique_tables,
                 "custom": custom_cfg,
@@ -845,8 +844,7 @@ def create_app() -> FastAPI:
             allow_unicode=True,
         )
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"template_{pipeline_id}_{source_schema}_{timestamp}.yaml"
+        filename = f"template_{pipeline_id}_{source_schema}.yaml"
         return StreamingResponse(
             io.BytesIO(yaml_text.encode("utf-8")),
             media_type="application/x-yaml",
@@ -855,13 +853,9 @@ def create_app() -> FastAPI:
             },
         )
 
-    @app.get("/api/export/pipeline/{pipeline_id}")
+    @inner_app.get("/api/export/pipeline/{pipeline_id}")
     async def export_pipeline(pipeline_id: str):
-        """Export only the YAML metadata for a single pipeline.
-        
-        Duplicate source tables are handled by creating unique keys (e.g., table@@2, table@@3)
-        within the same YAML file to avoid key conflicts.
-        """
+        """Export only the YAML metadata for a single pipeline."""
 
         if not state.token or not state.base_url:
             raise HTTPException(status_code=401, detail="Authentication required")
@@ -878,8 +872,7 @@ def create_app() -> FastAPI:
             logger.exception("Failed to export pipeline %s", pipeline_id)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"backup_{pipeline_id}_{timestamp}.yaml"
+        filename = f"backup_{pipeline_id}.yaml"
         return StreamingResponse(
             io.BytesIO(yaml_text.encode("utf-8")),
             media_type="application/x-yaml",
@@ -888,7 +881,7 @@ def create_app() -> FastAPI:
             },
         )
 
-    @app.get("/api/export/pipeline/{pipeline_id}/full")
+    @inner_app.get("/api/export/pipeline/{pipeline_id}/full")
     async def export_pipeline_full_backup(pipeline_id: str):
         """Export a full backup (YAML + agents-config + UDFs) for a single pipeline."""
 
@@ -922,8 +915,7 @@ def create_app() -> FastAPI:
                 if cleaned:
                     safe_name = cleaned
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"backup_{safe_name}_{pipeline_id}_{timestamp}.zip"
+        filename = f"backup_{safe_name}_{pipeline_id}.zip"
         return StreamingResponse(
             io.BytesIO(zip_data),
             media_type="application/zip",
@@ -932,12 +924,12 @@ def create_app() -> FastAPI:
             },
         )
 
-    @app.post("/api/duplicate/pipeline/{pipeline_id}", response_model=DuplicatePipelineResponse)
+    @inner_app.post("/api/duplicate/pipeline/{pipeline_id}", response_model=DuplicatePipelineResponse)
     async def duplicate_pipeline(pipeline_id: str, request: DuplicatePipelineRequest):
         """Duplicate a pipeline with new source and target agent configuration.
 
         This endpoint allows users to clone an existing pipeline with different agents.
-        Agents are provisioned via CoreHub API during pipeline creation.
+        If the specified agents are not available, they can be deployed via conductor APIs.
         """
 
         if not state.token or not state.base_url:
@@ -981,10 +973,9 @@ def create_app() -> FastAPI:
                 clone_entities=request.clone_entities,
                 use_ssl=state.use_ssl,
                 skip_verify=state.skip_verify,
+                conductor_url=request.conductor_url,
                 source_host_override=request.source_host_override,
                 target_host_override=request.target_host_override,
-                source_port_override=request.source_port_override,
-                target_port_override=request.target_port_override,
                 override_schemas=request.override_schemas,
                 override_source_schema=request.override_source_schema,
                 override_target_schema=request.override_target_schema,
@@ -1002,7 +993,7 @@ def create_app() -> FastAPI:
 
         return DuplicatePipelineResponse(**result)
 
-    @app.post("/api/duplicate/cancel", response_model=ApiMessage)
+    @inner_app.post("/api/duplicate/cancel", response_model=ApiMessage)
     async def cancel_duplicate() -> ApiMessage:
         """Request cancellation of an in-flight duplicate pipeline operation."""
 
@@ -1014,7 +1005,7 @@ def create_app() -> FastAPI:
             return ApiMessage(success=False, message="No duplicate pipeline is currently running")
         return ApiMessage(success=True, message="Duplicate cancellation requested")
 
-    @app.get("/api/corehub/overview")
+    @inner_app.get("/api/corehub/overview")
     async def get_corehub_overview() -> dict:
         if not state.token or not state.base_url:
             raise HTTPException(status_code=401, detail="Authentication required")
@@ -1042,7 +1033,7 @@ def create_app() -> FastAPI:
         state.set_corehub_overview(summary)
         return summary
 
-    @app.get("/api/pipeline/{pipeline_id}/agents", response_model=PipelineAgentsResponse)
+    @inner_app.get("/api/pipeline/{pipeline_id}/agents", response_model=PipelineAgentsResponse)
     async def get_pipeline_agents(pipeline_id: str) -> PipelineAgentsResponse:
         """Get pipeline agent details for auto-populating duplicate form."""
 
@@ -1079,14 +1070,18 @@ def create_app() -> FastAPI:
             targetAgentTag=target_agent.get("agentTag") if target_agent else None,
         )
 
-    @app.post("/api/import/all", response_model=ApiMessage)
+    @inner_app.post("/api/import/all", response_model=ApiMessage)
     async def import_all(
-        file: UploadFile = File(...)
+        file: UploadFile = File(...),
+        conductor_url: Optional[str] = Form(None),
+        conductor_auth_token: Optional[str] = Form(None),
+        auto_deploy_agents: str = Form("true")
     ) -> ApiMessage:
         """Validate a full backup ZIP (pipelines + agents-config).
 
         The ZIP is expected to come from the Export All feature and contain
-        at least an agents-config.yaml file. Agents are provisioned via CoreHub API.
+        at least an agents-config.yaml file. As with /api/import/config, this
+        endpoint currently only validates and enforces password masking rules.
         """
 
         if not state.token or not state.base_url:
@@ -1184,7 +1179,169 @@ def create_app() -> FastAPI:
         if not isinstance(agents_list, list) or not agents_list:
             raise HTTPException(status_code=400, detail="agents-config.yaml does not contain a non-empty 'agents' list")
 
+        # Check agent availability and attempt deployment if needed
+        deployed_agents = []
+        missing_agents = []
         errors: list[str] = []
+        
+        # Parse auto_deploy_agents flag
+        should_auto_deploy = auto_deploy_agents.lower() == "true"
+
+        # Fetch unassigned agents for import
+        try:
+            unassigned = corehub.fetch_core_hub("/unassigned-agents", token=state.token)
+            logger.info(f"Fetched {len(unassigned) if isinstance(unassigned, list) else 0} unassigned agents from CoreHub")
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Failed to fetch unassigned agents during import-all")
+            errors.append(f"Failed to fetch unassigned agents: {exc}")
+            unassigned = []
+
+        # Log detailed info about unassigned agents for debugging
+        if isinstance(unassigned, list):
+            unassigned_info = []
+            for item in unassigned:
+                if isinstance(item, dict):
+                    unassigned_info.append(f"{item.get('agentType', 'N/A')}/{item.get('agentTag', 'N/A')}")
+            debug_msg = f"📋 Unassigned agents available: {', '.join(unassigned_info) if unassigned_info else 'none'}"
+            logger.info(debug_msg)
+            errors.append(debug_msg)
+
+        def _has_unassigned(agent_type: str, agent_tag: str) -> bool:
+            """Check if agent is available (unassigned)"""
+            if not isinstance(unassigned, list):
+                return False
+            for item in unassigned:
+                if not isinstance(item, dict):
+                    continue
+                # Case-insensitive comparison for agentType
+                item_type = item.get("agentType", "")
+                item_tag = item.get("agentTag", "")
+                if item_type.upper() == agent_type.upper() and item_tag == agent_tag:
+                    return True
+            return False
+
+        # Log what we're looking for from agents-config.yaml
+        required_agents_info = []
+        for cfg in agents_list:
+            if isinstance(cfg, dict):
+                a_type = cfg.get("agentType")
+                a_tag = cfg.get("agentTag")
+                if a_type and a_tag:
+                    required_agents_info.append(f"{a_type}/{a_tag}")
+        
+        required_msg = f"🔍 Required agents from backup: {', '.join(required_agents_info) if required_agents_info else 'none'}"
+        logger.info(required_msg)
+        errors.append(required_msg)
+
+        # Check each required agent
+        for cfg in agents_list:
+            if not isinstance(cfg, dict):
+                continue
+            a_type = cfg.get("agentType")
+            a_tag = cfg.get("agentTag")
+            if not a_type or not a_tag:
+                errors.append("One agent definition is missing agentType/agentTag.")
+                continue
+            
+            # Check if unassigned agent is available
+            if _has_unassigned(a_type, a_tag):
+                match_msg = f"✓ Found unassigned agent: {a_type}/{a_tag}"
+                logger.info(match_msg)
+                errors.append(match_msg)
+            else:
+                missing_msg = f"✗ Missing unassigned agent: {a_type}/{a_tag}"
+                logger.info(missing_msg)
+                errors.append(missing_msg)
+                missing_agents.append((a_type, a_tag))
+
+        # If agents are missing and auto-deploy is enabled, attempt deployment
+        if missing_agents and should_auto_deploy:
+            # Use corehub URL as default for conductor if not specified
+            if conductor_url is None:
+                # Build conductor URL from corehub URL: same host/protocol/port + /conductor path
+                try:
+                    from urllib.parse import urljoin
+                    conductor_url = urljoin(state.base_url.rstrip('/'), '/conductor')
+                    logger.info(f"Using corehub-derived conductor URL: {conductor_url}")
+                except Exception as exc:
+                    logger.warning(f"Failed to derive conductor URL from corehub: {exc}")
+                    conductor_url = None
+
+            # Conductor doesn't require authentication, auth_token is optional
+            if conductor_url:
+                logger.info(f"Found {len(missing_agents)} missing agents, attempting deployment via conductor for import...")
+                try:
+                    deployed_agents = _deploy_agents_for_import(
+                        conductor_url=conductor_url,
+                        conductor_auth_token=conductor_auth_token,
+                        missing_agents=missing_agents,
+                    )
+                    if deployed_agents:
+                        logger.info(f"Successfully deployed {len(deployed_agents)} agents via conductor for import")
+                        # Poll for deployed agents to appear in unassigned pool
+                        import time
+                        poll_interval = 5
+                        max_wait_seconds = 90  # Timeout to prevent HTTP request timeout
+                        elapsed = 0
+                        agents_ready = False
+                        
+                        # Log to both logger and errors list (which gets shown in UI)
+                        poll_msg = f"⏳ Waiting for {len(missing_agents)} deployed agents to become available (checking every {poll_interval}s, max {max_wait_seconds}s)..."
+                        logger.info(poll_msg)
+                        errors.append(poll_msg)
+                        
+                        while elapsed < max_wait_seconds:
+                            try:
+                                unassigned = corehub.fetch_core_hub("/unassigned-agents", token=state.token)
+                                # Check if all deployed agents are now available
+                                all_found = True
+                                missing_list = []
+                                for a_type, a_tag in missing_agents:
+                                    if not _has_unassigned(a_type, a_tag):
+                                        all_found = False
+                                        missing_list.append(f"{a_type}/{a_tag}")
+                                
+                                if all_found:
+                                    success_msg = f"✓ All deployed agents are now available after {elapsed}s"
+                                    logger.info(success_msg)
+                                    errors.append(success_msg)
+                                    agents_ready = True
+                                    break
+                                else:
+                                    # Log progress every 10 seconds
+                                    if elapsed % 10 == 0:
+                                        progress_msg = f"⏳ Still waiting for agents: {', '.join(missing_list)} ({elapsed}s elapsed)"
+                                        logger.info(progress_msg)
+                                        errors.append(progress_msg)
+                                    
+                            except Exception as exc:  # pylint: disable=broad-except
+                                logger.warning("Failed to fetch unassigned agents during polling: %s", exc)
+                            
+                            time.sleep(poll_interval)
+                            elapsed += poll_interval
+                        
+                        # Check if agents became ready
+                        if not agents_ready:
+                            timeout_msg = f"⏱️ Timeout: Agents did not become available within {max_wait_seconds}s. Please check Conductor logs and try again."
+                            logger.warning(timeout_msg)
+                            errors.append(timeout_msg)
+                            return ApiMessage(success=False, message=f"Agents did not become available within {max_wait_seconds} seconds", logs=errors)
+                    else:
+                        errors.append("Failed to deploy missing agents via conductor")
+                        return ApiMessage(success=False, message="Failed to deploy required agents via conductor", logs=errors)
+                except Exception as exc:  # pylint: disable=broad-except
+                    logger.exception("Failed to deploy agents via conductor during import")
+                    errors.append(f"Failed to deploy agents via conductor: {exc}")
+                    return ApiMessage(success=False, message=f"Failed to deploy required agents: {exc}", logs=errors)
+            else:
+                # No conductor URL available
+                for a_type, a_tag in missing_agents:
+                    errors.append(f"Agent {a_type}/{a_tag} does not exist and conductor URL is not available")
+                return ApiMessage(success=False, message="Required agents are missing and conductor is not available", logs=errors)
+        elif missing_agents and not should_auto_deploy:
+            # Auto-deploy is disabled, report missing agents as errors
+            errors.append("❌ Auto-deploy is disabled. Please deploy agents manually or enable auto-deploy.")
+            return ApiMessage(success=False, message="Required agents are missing and auto-deploy is disabled", logs=errors)
 
         # Build lookup for original pipeline metadata, if present
         pipelines_meta = agents_config.get("pipelines") or []
@@ -1328,107 +1485,6 @@ def create_app() -> FastAPI:
                     new_pipeline_name = result.get("pipelineName")
                     created_pipelines.append(result)
 
-                    # Upload certificates for agents if specified
-                    logger.debug(f"Checking {len(agents_for_pipeline)} agents for certificate uploads")
-                    for agent_cfg in agents_for_pipeline:
-                        cert_path = agent_cfg.get("_certificate_path")
-                        cert_type = agent_cfg.get("_certificate_type")
-                        agent_id = agent_cfg.get("_agent_id")
-                        
-                        if cert_path and cert_type and agent_id:
-                            logger.info(
-                                f"Processing certificate upload for agent {agent_id}: "
-                                f"path={cert_path}, type={cert_type}"
-                            )
-                            try:
-                                # Extract certificate from ZIP
-                                with zipfile.ZipFile(io.BytesIO(contents)) as zf_cert:
-                                    # Try to find the certificate file in the ZIP
-                                    # Support both absolute and relative paths
-                                    cert_filename = cert_path.lstrip("./")
-                                    logger.debug(f"Looking for certificate file: {cert_filename}")
-                                    logger.debug(f"Available files in ZIP: {zf_cert.namelist()}")
-                                    cert_data = None
-                                    
-                                    # Try exact match first
-                                    if cert_filename in zf_cert.namelist():
-                                        cert_data = zf_cert.read(cert_filename)
-                                        logger.debug(f"Found certificate via exact match: {cert_filename}")
-                                    else:
-                                        # Try with pipeline folder prefix (e.g., pipeline_xxx/certificate.txt)
-                                        # Extract pipeline folder from the YAML name
-                                        pipeline_folder = name.split('/')[0] if '/' in name else None
-                                        if pipeline_folder:
-                                            prefixed_path = f"{pipeline_folder}/{cert_filename}"
-                                            if prefixed_path in zf_cert.namelist():
-                                                cert_data = zf_cert.read(prefixed_path)
-                                                logger.debug(f"Found certificate with pipeline prefix: {prefixed_path}")
-                                        
-                                        # Try case-insensitive search as fallback
-                                        if not cert_data:
-                                            for zip_name in zf_cert.namelist():
-                                                # Match by filename only (ignore path)
-                                                if zip_name.lower().endswith(cert_filename.lower()):
-                                                    cert_data = zf_cert.read(zip_name)
-                                                    logger.debug(f"Found certificate via filename match: {zip_name}")
-                                                    break
-                                    
-                                    if not cert_data:
-                                        error_msg = f"{name}: Certificate file '{cert_path}' not found in ZIP for agent {agent_id}"
-                                        logger.error(error_msg)
-                                        logger.error(f"Searched for: {cert_filename}, {pipeline_folder}/{cert_filename if pipeline_folder else 'N/A'}")
-                                        errors.append(error_msg)
-                                        continue
-                                    
-                                    # Determine certificate extension
-                                    cert_ext = Path(cert_filename).suffix.lstrip('.').lower() or 'crt'
-                                    logger.debug(
-                                        f"Certificate extracted: {len(cert_data)} bytes, extension: {cert_ext}"
-                                    )
-                                    
-                                    # Upload certificate to CoreHub
-                                    corehub.upload_agent_certificate(
-                                        token=state.token,
-                                        pipeline_id=new_pipeline_id,
-                                        agent_id=agent_id,
-                                        certificate_type=cert_type,
-                                        certificate_data=cert_data,
-                                        certificate_ext=cert_ext,
-                                    )
-                                    logger.info(
-                                        f"Successfully uploaded {cert_type} certificate ({len(cert_data)} bytes) "
-                                        f"for agent {agent_id} in pipeline {new_pipeline_id}"
-                                    )
-                                    
-                                    # Now send credentials AFTER certificate upload
-                                    host_creds = agent_cfg.get("_host_credentials")
-                                    custom_host_creds = agent_cfg.get("_custom_host_credentials")
-                                    if host_creds is not None or custom_host_creds is not None:
-                                        logger.info(
-                                            f"Sending credentials for agent {agent_id} after certificate upload"
-                                        )
-                                        corehub.fetch_core_hub(
-                                            f"/pipelines/{new_pipeline_id}/agents/{agent_id}/config/credentials",
-                                            method="PUT",
-                                            token=state.token,
-                                            body={
-                                                "hostCredentials": host_creds or {},
-                                                "customHostCredentials": custom_host_creds or {},
-                                            },
-                                        )
-                                        logger.info(
-                                            f"Successfully sent credentials for agent {agent_id}"
-                                        )
-                            except Exception as cert_exc:  # pylint: disable=broad-except
-                                logger.exception(
-                                    "Failed to upload certificate for agent %s in pipeline %s",
-                                    agent_id,
-                                    new_pipeline_id,
-                                )
-                                errors.append(
-                                    f"{name}: Failed to upload certificate for agent {agent_id}: {cert_exc}"
-                                )
-
                     # Write YAML to a temporary file for schema extraction and entity creation
                     try:
                         temp_dir = Path(tempfile.gettempdir()) / "gluesync_automator_restore"
@@ -1562,9 +1618,11 @@ def create_app() -> FastAPI:
 
         return ApiMessage(message=base_msg, logs=errors if errors else None)
 
-    @app.post("/api/import/validate-all", response_model=ApiMessage)
+    @inner_app.post("/api/import/validate-all", response_model=ApiMessage)
     async def validate_all(
-        file: UploadFile = File(...)
+        file: UploadFile = File(...),
+        conductor_url: Optional[str] = None,
+        conductor_auth_token: Optional[str] = None
     ) -> ApiMessage:
         """Dry-run validation for an Export All ZIP archive.
 
@@ -1633,7 +1691,27 @@ def create_app() -> FastAPI:
 
         logs.append(f"agents-config.yaml defines {len(agents_list)} agent configuration(s).")
 
-        # Validate agent definitions in agents-config.yaml
+        # Check agent availability and attempt deployment if needed
+        deployed_agents = []
+        missing_agents = []
+
+        try:
+            unassigned = corehub.fetch_core_hub("/unassigned-agents", token=state.token)
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Failed to fetch unassigned agents during validate-all")
+            errors.append(f"Failed to fetch unassigned agents: {exc}")
+            unassigned = []
+
+        def _has_unassigned(agent_type: str, agent_tag: str) -> bool:
+            if not isinstance(unassigned, list):
+                return False
+            for item in unassigned:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("agentType") == agent_type and item.get("agentTag") == agent_tag:
+                    return True
+            return False
+
         for cfg in agents_list:
             if not isinstance(cfg, dict):
                 continue
@@ -1642,7 +1720,49 @@ def create_app() -> FastAPI:
             if not a_type or not a_tag:
                 errors.append("One agent definition is missing agentType/agentTag.")
                 continue
-            logs.append(f"Agent definition found: {a_type}/{a_tag}")
+            if not _has_unassigned(a_type, a_tag):
+                missing_agents.append((a_type, a_tag))
+
+        # If agents are missing and conductor is available, attempt deployment
+        if missing_agents:
+            # Use corehub URL as default for conductor if not specified
+            if conductor_url is None:
+                # Build conductor URL from corehub URL: same host/protocol/port + /conductor path
+                try:
+                    from urllib.parse import urljoin
+                    conductor_url = urljoin(state.base_url.rstrip('/'), '/conductor')
+                    logger.info(f"Using corehub-derived conductor URL: {conductor_url}")
+                except Exception as exc:
+                    logger.warning(f"Failed to derive conductor URL from corehub: {exc}")
+                    conductor_url = None
+
+            if conductor_url and conductor_auth_token:
+                logs.append(f"Found {len(missing_agents)} missing agents, attempting deployment via conductor...")
+                try:
+                    deployed_agents = _deploy_agents_for_import(
+                        conductor_url=conductor_url,
+                        conductor_auth_token=conductor_auth_token,
+                        missing_agents=missing_agents,
+                    )
+                    if deployed_agents:
+                        logs.append(f"Successfully deployed {len(deployed_agents)} agents via conductor")
+                        # Refresh unassigned agents list after deployment
+                        try:
+                            unassigned = corehub.fetch_core_hub("/unassigned-agents", token=state.token)
+                        except Exception as exc:  # pylint: disable=broad-except
+                            logger.warning("Failed to refresh unassigned agents after deployment: %s", exc)
+                    else:
+                        errors.append("Failed to deploy missing agents via conductor")
+                except Exception as exc:  # pylint: disable=broad-except
+                    logger.exception("Failed to deploy agents via conductor during validation")
+                    errors.append(f"Failed to deploy agents via conductor: {exc}")
+            else:
+                # Report missing agents as errors if no conductor deployment attempted
+                for a_type, a_tag in missing_agents:
+                    errors.append(
+                        f"No unassigned agent available for agentType={a_type!r}, agentTag={a_tag!r}. "
+                        "Import may fail unless matching agents are created first."
+                    )
 
         # Fetch existing pipelines to estimate final pipeline names that would be created
         existing_names: set[str] = set()
@@ -1746,7 +1866,7 @@ def create_app() -> FastAPI:
 
         return ApiMessage(success=success, message="\n".join(logs))
 
-    @app.get("/api/export/all-pipelines")
+    @inner_app.get("/api/export/all-pipelines")
     async def export_all_pipelines():
         if not state.token or not state.base_url:
             raise HTTPException(status_code=401, detail="Authentication required")
@@ -1762,8 +1882,7 @@ def create_app() -> FastAPI:
             logger.exception("Failed to export all pipelines")
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"pipeline_backups_{timestamp}.zip"
+        filename = "pipeline_backups.zip"
         return StreamingResponse(
             io.BytesIO(zip_data),
             media_type="application/zip",
@@ -1887,7 +2006,7 @@ def create_app() -> FastAPI:
         status = "completed" if result.get("success") else "failed"
         state.finalize_run(run_id, status, result.get("error"))
 
-    @app.post("/api/run", response_model=ApiMessage)
+    @inner_app.post("/api/run", response_model=ApiMessage)
     async def start_run(request: RunRequest) -> ApiMessage:
         if not state.token:
             raise HTTPException(status_code=401, detail="Authentication required")
@@ -1900,58 +2019,104 @@ def create_app() -> FastAPI:
         asyncio.create_task(_execute_run(run_status.run_id, request))
         return ApiMessage(message="Entity creation started")
 
-    @app.post("/api/agent/certificate/upload", response_model=ApiMessage)
-    async def upload_certificate(
-        pipeline_id: str = Form(..., alias="pipelineId"),
-        agent_id: str = Form(..., alias="agentId"),
-        certificate_type: str = Form(..., alias="certificateType"),
-        file: UploadFile = File(...)
-    ) -> ApiMessage:
-        """Upload a certificate file for an agent.
-        
-        Args:
-            pipeline_id: Pipeline ID
-            agent_id: Agent ID
-            certificate_type: Type of certificate (truststore, keystore, certificate)
-            file: Certificate file to upload
-        
-        Returns:
-            ApiMessage with success status
-        """
-        if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
+    if not base_path:
+        return inner_app
 
-        if not file.filename:
-            raise HTTPException(status_code=400, detail="No file provided")
+    outer_app = FastAPI()
 
-        # Extract file extension
-        certificate_ext = Path(file.filename).suffix.lstrip('.').lower() or 'crt'
+    @outer_app.get(base_path, include_in_schema=False)
+    async def base_entrypoint() -> RedirectResponse:
+        return RedirectResponse(url=f"{base_path}/", status_code=307)
+
+    outer_app.mount(base_path, inner_app)
+    return outer_app
+
+
+def _deploy_agents_for_import(
+    *,
+    conductor_url: str,
+    conductor_auth_token: str,
+    missing_agents: list[tuple[str, str]],
+) -> list[str]:
+    """Deploy missing agents via conductor APIs for backup import.
+
+    Args:
+        conductor_url: Conductor API base URL
+        conductor_auth_token: Authentication token for conductor
+        missing_agents: List of (agent_type, agent_tag) tuples for missing agents
+
+    Returns:
+        List of deployed agent service names
+    """
+    logger.info("Deploying %d missing agents via conductor for backup import", len(missing_agents))
+
+    # Import the conductor function here to avoid circular imports
+    import sys
+    import os
+    parent_dir = os.path.dirname(os.path.dirname(__file__))
+    sys.path.insert(0, parent_dir)
+
+    try:
+        from add_agents_with_conductor import add_agents_with_conductor
+
+        # Get CoreHub connection details from state
+        from .state import state as app_state
+        use_ssl = app_state.base_url.startswith("https://") if app_state.base_url else True
         
-        # Read file content
-        certificate_data = await file.read()
-        if not certificate_data:
-            raise HTTPException(status_code=400, detail="Certificate file is empty")
+        # Create a temporary config.json for the agents with proper environment variables
+        # Only include non-optional variables from agents.json supportedEnvironmentVariables
+        config_data = {
+            "globals": {
+                "testName": f"backup_import_{len(missing_agents)}_agents",
+                "jobId": "backup_import_job"
+            },
+            "agents": [
+                {
+                    "agentTag": agent_tag,
+                    "agentType": agent_type.lower(),
+                    "environment": {
+                        "TYPE": agent_type.lower(),
+                        "SSL_ENABLED": "true" if use_ssl else "false",
+                        "LOG_CONFIG_FILE": "/opt/gluesync/data/logback.xml"
+                    }
+                } for agent_type, agent_tag in missing_agents
+            ]
+        }
+
+        # Write temporary config file
+        import tempfile
+        import json
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            json.dump(config_data, f)
+            config_path = f.name
 
         try:
-            corehub.upload_agent_certificate(
-                token=state.token,
-                pipeline_id=pipeline_id,
-                agent_id=agent_id,
-                certificate_type=certificate_type,
-                certificate_data=certificate_data,
-                certificate_ext=certificate_ext,
-            )
+            # Call the conductor function
+            # Use the same SSL verification setting as CoreHub
+            from .state import state as app_state
+            verify_ssl = not app_state.skip_verify
             
-            return ApiMessage(
-                success=True,
-                message=f"Certificate uploaded successfully for agent {agent_id}"
+            result = add_agents_with_conductor(
+                config_path=config_path,
+                conductor_url=conductor_url,
+                auth_token=conductor_auth_token,
+                verify_ssl=verify_ssl
             )
-        except Exception as e:
-            logger.error(f"Failed to upload certificate: {e}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to upload certificate: {str(e)}"
-            ) from e
 
-    return app
+            if result.get("error"):
+                logger.error("Conductor deployment failed for backup import: %s", result["error"])
+                return []
 
+            logger.info("Successfully deployed agents via conductor for backup import")
+            return result.get("service_names", [])
+
+        finally:
+            # Clean up temporary file
+            os.unlink(config_path)
+
+    except ImportError as exc:
+        logger.warning("Could not import conductor functions for backup import: %s", exc)
+        return []
+    except Exception as exc:
+        logger.exception("Failed to deploy agents via conductor for backup import: %s", exc)
+        return []

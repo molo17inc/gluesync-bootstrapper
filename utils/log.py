@@ -95,12 +95,13 @@ def add_handlers(logger: logging.Logger, log_file=None):
         file_handler.setFormatter(file_formatter)
         logger.addHandler(file_handler)
 
-    # Check if running in Docker container
+    # Check if running in Docker container and if Logstash is explicitly enabled
     is_docker = os.path.exists('/.dockerenv')
+    logstash_enabled = os.environ.get('LOGSTASH_ENABLED', '0') == '1'
     
-    if is_docker:
+    if is_docker and logstash_enabled:
         try:
-            # Add Logstash handler only in Docker container
+            # Add Logstash handler only in Docker container when explicitly enabled
             logstash_host = '10.17.3.107'
             logstash_port = 5000
             
@@ -148,7 +149,10 @@ def add_handlers(logger: logging.Logger, log_file=None):
             logger.warning(f"Failed to initialize Logstash logging: {str(e)}. Continuing without Logstash logging.")
             logger.debug("Logstash connection error details:", exc_info=True)
     else:
-        logger.debug("Logstash logging disabled (not running in Docker container)")
+        if is_docker:
+            logger.debug("Logstash logging disabled (LOGSTASH_ENABLED not set to '1')")
+        else:
+            logger.debug("Logstash logging disabled (not running in Docker container)")
 
 
 def create_log_file(log_dir=None):

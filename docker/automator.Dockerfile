@@ -52,8 +52,11 @@ ENV GLUESYNC_LICENSE_FILE=/opt/gluesync/shared/gs-license.dat \
     AUTOMATOR_HIDE_HEADER=1 \
     AUTOMATOR_HIDE_COREHUB_INFO=1 \
     AUTOMATOR_HEADLESS=1 \
+    AUTOMATOR_BASE_PATH=/automator \
     AUTOMATOR_HOST=0.0.0.0 \
-    AUTOMATOR_PORT=1717
+    AUTOMATOR_PORT=1717 \
+    AUTOMATOR_SSL_CERTFILE=/opt/gluesync/shared/gluesync-cert.pem \
+    AUTOMATOR_SSL_KEYFILE=/opt/gluesync/shared/gluesync-key.pem
 
 EXPOSE 1717
 
