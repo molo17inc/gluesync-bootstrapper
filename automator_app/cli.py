@@ -173,6 +173,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_false",
         help="Force-enable tray/webview even if headless flag/env set",
     )
+    parser.add_argument(
+        "--ssl-certfile",
+        dest="ssl_certfile",
+        help="Path to SSL certificate file for HTTPS",
+    )
+    parser.add_argument(
+        "--ssl-keyfile",
+        dest="ssl_keyfile",
+        help="Path to SSL private key file for HTTPS",
+    )
     parser.set_defaults(
         iframe_mode=None,
         hide_header=None,
@@ -180,6 +190,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         hide_corehub_tab=None,
         use_sdk=None,
         headless=None,
+        ssl_certfile=None,
+        ssl_keyfile=None,
     )
     return parser.parse_args(argv)
 
@@ -248,6 +260,10 @@ def _should_run_headless(args: argparse.Namespace) -> bool:
 def _run_server_only(args):
     """Run only the uvicorn server in a separate process."""
     app = create_app()
+    
+    ssl_certfile = getattr(args, "ssl_certfile", None)
+    ssl_keyfile = getattr(args, "ssl_keyfile", None)
+    
     config = uvicorn.Config(
         app,
         host=args.host,
@@ -255,6 +271,8 @@ def _run_server_only(args):
         log_level=args.log_level,
         reload=args.reload,
         lifespan="on",
+        ssl_certfile=ssl_certfile,
+        ssl_keyfile=ssl_keyfile,
     )
     server = uvicorn.Server(config)
     server.run()
@@ -263,6 +281,10 @@ def _run_server_only(args):
 def _run_server(args):
     """Run the uvicorn server in a separate process."""
     app = create_app()
+    
+    ssl_certfile = getattr(args, "ssl_certfile", None)
+    ssl_keyfile = getattr(args, "ssl_keyfile", None)
+    
     config = uvicorn.Config(
         app,
         host=args.host,
@@ -270,6 +292,8 @@ def _run_server(args):
         log_level=args.log_level,
         reload=args.reload,
         lifespan="on",
+        ssl_certfile=ssl_certfile,
+        ssl_keyfile=ssl_keyfile,
     )
     server = uvicorn.Server(config)
     server.run()

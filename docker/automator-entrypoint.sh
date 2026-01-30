@@ -3,6 +3,8 @@ set -euo pipefail
 
 AUTOMATOR_HOST=${AUTOMATOR_HOST:-0.0.0.0}
 AUTOMATOR_PORT=${AUTOMATOR_PORT:-8080}
+AUTOMATOR_SSL_CERTFILE=${AUTOMATOR_SSL_CERTFILE:-}
+AUTOMATOR_SSL_KEYFILE=${AUTOMATOR_SSL_KEYFILE:-}
 
 export GLUESYNC_LICENSE_FILE=${GLUESYNC_LICENSE_FILE:-/opt/gluesync/data/gs-license.dat}
 export GLUESYNC_SECURITY_CONFIG=${GLUESYNC_SECURITY_CONFIG:-/opt/gluesync/data/security-config.json}
@@ -27,4 +29,12 @@ if [[ ! -f "${GLUESYNC_SECURITY_CONFIG}" ]]; then
   echo "[automator-entrypoint] Warning: security config not found at ${GLUESYNC_SECURITY_CONFIG}" >&2
 fi
 
-exec python -m automator_app.cli --host "${AUTOMATOR_HOST}" --port "${AUTOMATOR_PORT}" --no-open-browser
+SSL_ARGS=()
+if [[ -n "${AUTOMATOR_SSL_CERTFILE}" && -f "${AUTOMATOR_SSL_CERTFILE}" ]]; then
+  SSL_ARGS+=(--ssl-certfile "${AUTOMATOR_SSL_CERTFILE}")
+fi
+if [[ -n "${AUTOMATOR_SSL_KEYFILE}" && -f "${AUTOMATOR_SSL_KEYFILE}" ]]; then
+  SSL_ARGS+=(--ssl-keyfile "${AUTOMATOR_SSL_KEYFILE}")
+fi
+
+exec python -m automator_app.cli --host "${AUTOMATOR_HOST}" --port "${AUTOMATOR_PORT}" --no-open-browser "${SSL_ARGS[@]}"

@@ -42,7 +42,7 @@ import create_user_defined_functions
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, validator
 
@@ -72,6 +72,20 @@ def _static_dir() -> Path:
 
 _FINGERPRINT_TARGETS = ("styles.css", "app.js")
 _FINGERPRINT_PATTERN = re.compile(r"^(?P<name>.+)\.[0-9a-f]{8,}\.(?P<suffix>[^.]+)$")
+_BASE_PATH_PLACEHOLDER = "__AUTOMATOR_BASE_PATH__"
+
+
+def _normalize_base_path(value: Optional[str]) -> str:
+    """Return a normalized base path suitable for proxy deployments."""
+
+    if not value:
+        return ""
+    path = value.strip()
+    if not path or path == "/":
+        return ""
+    if not path.startswith("/"):
+        path = f"/{path}"
+    return path.rstrip("/")
 
 
 def _fingerprint_static_assets() -> Dict[str, str]:
@@ -99,7 +113,9 @@ def _fingerprint_static_assets() -> Dict[str, str]:
 
         _cleanup_old_fingerprints(static_directory, source_path.name, fingerprint_path.name)
 
-        rewrites[f"/static/{filename}"] = f"/static/{fingerprint_name}"
+        original = f"{_BASE_PATH_PLACEHOLDER}/static/{filename}"
+        rewritten = f"{_BASE_PATH_PLACEHOLDER}/static/{fingerprint_name}"
+        rewrites[original] = rewritten
 
     return rewrites
 
@@ -431,13 +447,13 @@ def _has_masked_password(value: Any) -> bool:
     return False
 
 
-def create_app() -> FastAPI:
-    _ensure_static_assets()
-    asset_rewrites = _fingerprint_static_assets()
-    _configure_ui_flags_from_env()
-    _setup_sdk_auto_auth_if_enabled()
+def _build_inner_app(*, base_path: str, client_base_path: str, asset_rewrites: Dict[str, str]) -> FastAPI:
+    """Create the core FastAPI app mounted either at / or under a base path."""
 
-    app = FastAPI(title="Gluesync Automator", version="1.0.0")
+    app = FastAPI(
+        title="Gluesync Automator",
+        version="1.0.0",
+    )
 
     app.add_middleware(
         CORSMiddleware,
@@ -459,27 +475,33 @@ def create_app() -> FastAPI:
         for original, hashed in asset_rewrites.items():
             content = content.replace(original, hashed)
 
+        # Replace JavaScript variable value first to avoid collision with variable name
+        content = content.replace("{{BASE_PATH_VALUE}}", client_base_path)
+        # Then replace all other occurrences of the placeholder
+        content = content.replace(_BASE_PATH_PLACEHOLDER, client_base_path)
+
         return Response(content=content, media_type="text/html")
 
-    @app.get("/api/healthz")
-    async def healthcheck() -> dict:
-        return {"status": "ok"}
+    return app
 
-    @app.get("/api/version", response_model=VersionResponse)
-    async def version() -> VersionResponse:
-        try:
-            version = get_version()
-        except Exception as exc:
-            logger.exception("Failed to get version: %s", exc)
-            version = "unknown"
-        return VersionResponse(version=version)
 
-    @app.get("/api/state", response_model=StateResponse)
+def create_app() -> FastAPI:
+    _ensure_static_assets()
+    asset_rewrites = _fingerprint_static_assets()
+    _configure_ui_flags_from_env()
+    _setup_sdk_auto_auth_if_enabled()
+
+    base_path = _normalize_base_path(os.getenv("AUTOMATOR_BASE_PATH"))
+    client_base_path = base_path or ""
+
+    inner_app = _build_inner_app(base_path=base_path, client_base_path=client_base_path, asset_rewrites=asset_rewrites)
+
+    @inner_app.get("/api/state", response_model=StateResponse)
     async def get_state() -> StateResponse:
         snapshot = state.snapshot()
         return StateResponse(**snapshot)
 
-    @app.get("/api/changelog/automator/{version}")
+    @inner_app.get("/api/changelog/automator/{version}")
     async def get_automator_changelog(version: str):
         url = f"{CHANGELOG_API_BASE_URL}/changelog/automator/{version}"
         try:
@@ -508,7 +530,7 @@ def create_app() -> FastAPI:
 
         return data
 
-    @app.post("/api/login", response_model=ApiMessage)
+    @inner_app.post("/api/login", response_model=ApiMessage)
     async def login(payload: LoginRequest) -> ApiMessage:
         try:
             token = corehub.authenticate(
@@ -534,12 +556,12 @@ def create_app() -> FastAPI:
         )
         return ApiMessage(message="Authentication successful")
 
-    @app.post("/api/logout", response_model=ApiMessage)
+    @inner_app.post("/api/logout", response_model=ApiMessage)
     async def logout() -> ApiMessage:
         state.clear_auth()
         return ApiMessage(message="Logged out")
 
-    @app.post("/api/upload", response_model=UploadResponse)
+    @inner_app.post("/api/upload", response_model=UploadResponse)
     async def upload_yaml(file: UploadFile = File(...)) -> UploadResponse:
         if not file.filename.lower().endswith(('.yaml', '.yml')):
             raise HTTPException(status_code=400, detail="Only YAML files are supported")
@@ -555,7 +577,7 @@ def create_app() -> FastAPI:
         file_id = state.register_upload(temp_path, file.filename)
         return UploadResponse(fileId=file_id, filename=file.filename)
 
-    @app.get("/api/run/current")
+    @inner_app.get("/api/run/current")
     async def current_run(include_logs: bool = False):
         snapshot = state.current_run_snapshot()
         if not snapshot:
@@ -566,7 +588,7 @@ def create_app() -> FastAPI:
             response.logs = logs or []
         return response
 
-    @app.get("/api/pipelines", response_model=PipelinesResponse)
+    @inner_app.get("/api/pipelines", response_model=PipelinesResponse)
     async def list_pipelines() -> PipelinesResponse:
         if not state.token or not state.base_url:
             raise HTTPException(status_code=401, detail="Authentication required")
@@ -584,7 +606,7 @@ def create_app() -> FastAPI:
 
         return PipelinesResponse(pipelines=[PipelineInfo(**p) for p in pipelines])
 
-    @app.get("/api/bulk/schemas", response_model=BulkSchemasResponse)
+    @inner_app.get("/api/bulk/schemas", response_model=BulkSchemasResponse)
     async def bulk_list_schemas(pipelineId: str) -> BulkSchemasResponse:  # pylint: disable=invalid-name
         if not state.token or not state.base_url:
             raise HTTPException(status_code=401, detail="Authentication required")
@@ -611,7 +633,7 @@ def create_app() -> FastAPI:
 
         return BulkSchemasResponse(schemas=schemas, source_type=source_type, target_type=target_type)
 
-    @app.get("/api/bulk/tables", response_model=BulkTablesResponse)
+    @inner_app.get("/api/bulk/tables", response_model=BulkTablesResponse)
     async def bulk_list_tables(pipelineId: str, schema: str) -> BulkTablesResponse:  # pylint: disable=invalid-name
         if not state.token or not state.base_url:
             raise HTTPException(status_code=401, detail="Authentication required")
@@ -631,7 +653,7 @@ def create_app() -> FastAPI:
 
         return BulkTablesResponse(tables=tables)
 
-    @app.post("/api/bulk/create", response_model=ApiMessage)
+    @inner_app.post("/api/bulk/create", response_model=ApiMessage)
     async def bulk_create_entities(request: BulkCreateRequest) -> ApiMessage:
         if not state.token or not state.base_url:
             raise HTTPException(status_code=401, detail="Authentication required")
@@ -703,7 +725,7 @@ def create_app() -> FastAPI:
         msg = "Bulk entity creation completed successfully" if ok else result.get("error") or "Bulk entity creation failed"
         return ApiMessage(success=ok, message=msg)
 
-    @app.post("/api/bulk/template")
+    @inner_app.post("/api/bulk/template")
     async def bulk_export_template(request: BulkTemplateRequest):
         """Generate an on-the-fly table-list-style YAML for the selected tables.
 
@@ -831,7 +853,7 @@ def create_app() -> FastAPI:
             },
         )
 
-    @app.get("/api/export/pipeline/{pipeline_id}")
+    @inner_app.get("/api/export/pipeline/{pipeline_id}")
     async def export_pipeline(pipeline_id: str):
         """Export only the YAML metadata for a single pipeline."""
 
@@ -859,7 +881,7 @@ def create_app() -> FastAPI:
             },
         )
 
-    @app.get("/api/export/pipeline/{pipeline_id}/full")
+    @inner_app.get("/api/export/pipeline/{pipeline_id}/full")
     async def export_pipeline_full_backup(pipeline_id: str):
         """Export a full backup (YAML + agents-config + UDFs) for a single pipeline."""
 
@@ -902,7 +924,7 @@ def create_app() -> FastAPI:
             },
         )
 
-    @app.post("/api/duplicate/pipeline/{pipeline_id}", response_model=DuplicatePipelineResponse)
+    @inner_app.post("/api/duplicate/pipeline/{pipeline_id}", response_model=DuplicatePipelineResponse)
     async def duplicate_pipeline(pipeline_id: str, request: DuplicatePipelineRequest):
         """Duplicate a pipeline with new source and target agent configuration.
 
@@ -971,7 +993,7 @@ def create_app() -> FastAPI:
 
         return DuplicatePipelineResponse(**result)
 
-    @app.post("/api/duplicate/cancel", response_model=ApiMessage)
+    @inner_app.post("/api/duplicate/cancel", response_model=ApiMessage)
     async def cancel_duplicate() -> ApiMessage:
         """Request cancellation of an in-flight duplicate pipeline operation."""
 
@@ -983,7 +1005,7 @@ def create_app() -> FastAPI:
             return ApiMessage(success=False, message="No duplicate pipeline is currently running")
         return ApiMessage(success=True, message="Duplicate cancellation requested")
 
-    @app.get("/api/corehub/overview")
+    @inner_app.get("/api/corehub/overview")
     async def get_corehub_overview() -> dict:
         if not state.token or not state.base_url:
             raise HTTPException(status_code=401, detail="Authentication required")
@@ -1011,7 +1033,7 @@ def create_app() -> FastAPI:
         state.set_corehub_overview(summary)
         return summary
 
-    @app.get("/api/pipeline/{pipeline_id}/agents", response_model=PipelineAgentsResponse)
+    @inner_app.get("/api/pipeline/{pipeline_id}/agents", response_model=PipelineAgentsResponse)
     async def get_pipeline_agents(pipeline_id: str) -> PipelineAgentsResponse:
         """Get pipeline agent details for auto-populating duplicate form."""
 
@@ -1048,7 +1070,7 @@ def create_app() -> FastAPI:
             targetAgentTag=target_agent.get("agentTag") if target_agent else None,
         )
 
-    @app.post("/api/import/all", response_model=ApiMessage)
+    @inner_app.post("/api/import/all", response_model=ApiMessage)
     async def import_all(
         file: UploadFile = File(...),
         conductor_url: Optional[str] = Form(None),
@@ -1596,7 +1618,7 @@ def create_app() -> FastAPI:
 
         return ApiMessage(message=base_msg, logs=errors if errors else None)
 
-    @app.post("/api/import/validate-all", response_model=ApiMessage)
+    @inner_app.post("/api/import/validate-all", response_model=ApiMessage)
     async def validate_all(
         file: UploadFile = File(...),
         conductor_url: Optional[str] = None,
@@ -1844,7 +1866,7 @@ def create_app() -> FastAPI:
 
         return ApiMessage(success=success, message="\n".join(logs))
 
-    @app.get("/api/export/all-pipelines")
+    @inner_app.get("/api/export/all-pipelines")
     async def export_all_pipelines():
         if not state.token or not state.base_url:
             raise HTTPException(status_code=401, detail="Authentication required")
@@ -1984,7 +2006,7 @@ def create_app() -> FastAPI:
         status = "completed" if result.get("success") else "failed"
         state.finalize_run(run_id, status, result.get("error"))
 
-    @app.post("/api/run", response_model=ApiMessage)
+    @inner_app.post("/api/run", response_model=ApiMessage)
     async def start_run(request: RunRequest) -> ApiMessage:
         if not state.token:
             raise HTTPException(status_code=401, detail="Authentication required")
@@ -1997,7 +2019,17 @@ def create_app() -> FastAPI:
         asyncio.create_task(_execute_run(run_status.run_id, request))
         return ApiMessage(message="Entity creation started")
 
-    return app
+    if not base_path:
+        return inner_app
+
+    outer_app = FastAPI()
+
+    @outer_app.get(base_path, include_in_schema=False)
+    async def base_entrypoint() -> RedirectResponse:
+        return RedirectResponse(url=f"{base_path}/", status_code=307)
+
+    outer_app.mount(base_path, inner_app)
+    return outer_app
 
 
 def _deploy_agents_for_import(

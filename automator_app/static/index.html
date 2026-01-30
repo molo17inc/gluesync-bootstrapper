@@ -4,20 +4,23 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Gluesync Automator</title>
-    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="__AUTOMATOR_BASE_PATH__/static/styles.css" />
     <link
       rel="apple-touch-icon"
       sizes="180x180"
-      href="/static/apple-touch-icon.png"
+      href="__AUTOMATOR_BASE_PATH__/static/apple-touch-icon.png"
     />
-    <link rel="icon" type="image/x-icon" href="/static/favicon.ico" />
-    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+    <link rel="icon" type="image/x-icon" href="__AUTOMATOR_BASE_PATH__/static/favicon.ico" />
+    <link rel="icon" type="image/svg+xml" href="__AUTOMATOR_BASE_PATH__/static/favicon.svg" />
+    <script>
+      window.BASEPATH_VAR = "{{BASE_PATH_VALUE}}";
+    </script>
   </head>
   <body>
     <header class="topbar">
       <div class="brand">
         <img
-          src="/static/gluesync-bootstrapper.svg"
+          src="__AUTOMATOR_BASE_PATH__/static/gluesync-bootstrapper.svg"
           alt="Gluesync Automator"
           class="brand-logo"
         />
@@ -120,7 +123,7 @@
               Import &amp; clone
             </button>
             <button type="button" class="tab-button" data-tab="bulk">
-              Bulk
+              Bulk ops
             </button>
             <button type="button" class="tab-button" data-tab="settings">
               Settings
@@ -673,6 +676,6 @@
       <div class="log-line"></div>
     </template>
 
-    <script src="/static/app.js" type="module"></script>
+    <script src="__AUTOMATOR_BASE_PATH__/static/app.js" type="module"></script>
   </body>
 </html>
