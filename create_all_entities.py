@@ -799,6 +799,14 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         source_entity_type_name = "NoSqlEntity" if is_source_nosql else "SingleTable"
         logger.debug(f"Source entity type determination: source_type='{source_type}', is_source_nosql={is_source_nosql}, selected type='{source_entity_type_name}'")
 
+        # Build source table properties with optional whereClause
+        source_table_properties = {}
+        if custom_config and 'whereClause' in custom_config:
+            where_clause = custom_config['whereClause']
+            if where_clause:
+                source_table_properties["whereClause"] = str(where_clause)
+                logger.info(f"Added whereClause for {source_table_key}: {where_clause}")
+        
         source_entity = {
             "type": source_entity_type_name,
             "entityType": source_entity_type,
@@ -816,7 +824,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             "columns": columns_def,
             "keys": keys,
             "customProperties": source_custom_properties,
-            "tablesProperties": {source_table_key: {}}
+            "tablesProperties": {source_table_key: source_table_properties}
         }
 
         # Get allowed operations for the target entity
@@ -1274,8 +1282,15 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             multi_tables.append(table_obj)
             chain_source_ids[table_key] = source_table_id
 
-            # Add table to tables_properties
-            tables_properties[f"{source_schema}.{table_key}"] = {}
+            # Add table to tables_properties with optional whereClause
+            source_table_key = f"{source_schema}.{table_key}"
+            table_properties = {}
+            if table_data and 'whereClause' in table_data:
+                where_clause = table_data['whereClause']
+                if where_clause:
+                    table_properties["whereClause"] = str(where_clause)
+                    logger.info(f"Added whereClause for {source_table_key}: {where_clause}")
+            tables_properties[source_table_key] = table_properties
 
             # Process columns
             table_columns = []

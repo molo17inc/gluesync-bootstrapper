@@ -286,6 +286,9 @@ dbo:
           keys:
             - ID
           name: orders_headers
+          # whereClause: Filters source data during sync (applied at source table level)
+          # Example: Only sync orders with ID > 2
+          whereClause: "ID > 2"
           columns:
             - ID: "id"
             - ORDER_NUMBER: "orderNumber"

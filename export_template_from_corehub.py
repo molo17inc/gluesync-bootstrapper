@@ -401,6 +401,16 @@ def _process_single_entity(
     if keys:
         table_cfg["keys"] = keys
 
+    # Extract whereClause from source tablesProperties
+    source_tables_properties = source_ae.get("tablesProperties", {}) or {}
+    source_table_key = f"{source_schema}.{source_table_name}"
+    table_properties = source_tables_properties.get(source_table_key, {}) or {}
+    if "whereClause" in table_properties:
+        where_clause = table_properties["whereClause"]
+        if where_clause:
+            table_cfg["whereClause"] = str(where_clause)
+            logger.debug(f"Exported whereClause for {source_table_name}: {where_clause}")
+
     # Columns mapping (source -> alias). Preserve discovery order (ordinal/id).
     column_payload = source_ae.get("columns", []) or []
     if column_payload:
@@ -665,6 +675,16 @@ def _process_multitable_entity(
                     key_names.append(str(name))
             if key_names:
                 table_cfg["keys"] = key_names
+
+        # Extract whereClause from source tablesProperties for this table
+        source_tables_properties = source_ae.get("tablesProperties", {}) or {}
+        source_table_key = f"{source_schema}.{table_name}"
+        table_properties = source_tables_properties.get(source_table_key, {}) or {}
+        if "whereClause" in table_properties:
+            where_clause = table_properties["whereClause"]
+            if where_clause:
+                table_cfg["whereClause"] = str(where_clause)
+                logger.debug(f"Exported whereClause for MultiTable {table_name}: {where_clause}")
 
 
 def attach_schedules_from_jobs(
