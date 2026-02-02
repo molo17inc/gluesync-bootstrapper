@@ -692,7 +692,9 @@ button:disabled {
   display: none !important;
 }
 
-.is-hidden {
+/* Higher specificity to override requires-auth */
+.is-hidden,
+body.is-authenticated .is-hidden {
   display: none !important;
 }
 

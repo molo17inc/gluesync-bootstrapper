@@ -4,14 +4,32 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Gluesync Automator</title>
-    <link rel="stylesheet" href="__AUTOMATOR_BASE_PATH__/static/styles.css" />
+    <link
+      rel="stylesheet"
+      href="__AUTOMATOR_BASE_PATH__/static/styles.css"
+      id="default-styles"
+    />
+    <link
+      rel="stylesheet"
+      href="__AUTOMATOR_BASE_PATH__/static/styles-carbon.css"
+      id="carbon-styles"
+      disabled
+    />
     <link
       rel="apple-touch-icon"
       sizes="180x180"
       href="__AUTOMATOR_BASE_PATH__/static/apple-touch-icon.png"
     />
-    <link rel="icon" type="image/x-icon" href="__AUTOMATOR_BASE_PATH__/static/favicon.ico" />
-    <link rel="icon" type="image/svg+xml" href="__AUTOMATOR_BASE_PATH__/static/favicon.svg" />
+    <link
+      rel="icon"
+      type="image/x-icon"
+      href="__AUTOMATOR_BASE_PATH__/static/favicon.ico"
+    />
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="__AUTOMATOR_BASE_PATH__/static/favicon.svg"
+    />
     <script>
       window.BASEPATH_VAR = "{{BASE_PATH_VALUE}}";
     </script>
@@ -193,7 +211,13 @@
               <div class="corehub-section">
                 <div class="corehub-section-header">
                   <h3>Pipelines</h3>
-                  <button type="button" class="secondary" id="corehub-refresh-btn">Refresh</button>
+                  <button
+                    type="button"
+                    class="secondary"
+                    id="corehub-refresh-btn"
+                  >
+                    Refresh
+                  </button>
                 </div>
                 <ul class="corehub-pipelines" id="corehub-pipelines-list">
                   <li class="corehub-empty">No data available.</li>
@@ -659,13 +683,13 @@
               </form>
             </section>
           </div>
+
+          <section class="card log-card requires-auth is-hidden">
+            <h2>Execution log</h2>
+            <div id="log-output" class="log-output"></div>
+          </section>
         </div>
       </div>
-
-      <section class="card log-card requires-auth">
-        <h2>Execution log</h2>
-        <div id="log-output" class="log-output"></div>
-      </section>
     </main>
 
     <footer class="footer">
