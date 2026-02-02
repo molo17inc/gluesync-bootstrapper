@@ -29,6 +29,22 @@ RUN pip install --no-cache-dir \
     javaobj-py3 \
     pyjks
 
+# Copy and install the gluesync-sdk (only for local testing)
+# In production, SDK is installed via requirements.txt from PyPI
+COPY gluesync-client-sdk ./gluesync-client-sdk
+RUN python -c "import gluesync_sdk; print('SDK already installed from requirements.txt')" 2>/dev/null || \
+    (if [ -d "./gluesync-client-sdk/gluesync_sdk" ]; then \
+        echo "Installing SDK from local submodule for testing..."; \
+        SITE_PACKAGES=$(python -c "import site; print(site.getsitepackages()[0])"); \
+        mkdir -p $SITE_PACKAGES/gluesync_sdk; \
+        cp -r ./gluesync-client-sdk/gluesync_sdk/* $SITE_PACKAGES/gluesync_sdk/; \
+        touch $SITE_PACKAGES/gluesync_sdk/__init__.py; \
+        python -c "import gluesync_sdk; print('SDK import successful from submodule')" || exit 1; \
+    else \
+        echo "ERROR: SDK not in requirements.txt and submodule not found"; \
+        exit 1; \
+    fi)
+
 COPY automator_app ./automator_app
 COPY utils ./utils
 COPY commons.py create_all_entities.py create_all_tables.py create_user_defined_functions.py \

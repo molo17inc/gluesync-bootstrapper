@@ -1,4 +1,55 @@
-const BASE_PATH = (window.BASEPATH_VAR || window.__AUTOMATOR_BASE_PATH__ || "").replace(/\/$/, "");
+// Detect Docker environment and apply Carbon theme
+const isDockerEnvironment = () => {
+  // Check if running in Docker by looking for common Docker indicators
+  const userAgent = navigator.userAgent.toLowerCase();
+  const hostname = window.location.hostname;
+
+  // Docker typically runs on container hostnames or specific ports
+  const isContainerHost =
+    hostname !== "localhost" &&
+    hostname !== "127.0.0.1" &&
+    !hostname.includes("local");
+
+  // Check if BASE_PATH is set (common in Docker deployments)
+  const hasBasePath = window.BASEPATH_VAR && window.BASEPATH_VAR !== "";
+
+  // Check for Docker-specific environment markers
+  const isDocker =
+    isContainerHost ||
+    hasBasePath ||
+    sessionStorage.getItem("useDockerTheme") === "true";
+
+  return isDocker;
+};
+
+// Apply Carbon theme if in Docker environment
+const applyCarbonTheme = () => {
+  const defaultStyles = document.getElementById("default-styles");
+  const carbonStyles = document.getElementById("carbon-styles");
+
+  if (defaultStyles && carbonStyles) {
+    defaultStyles.disabled = true;
+    carbonStyles.disabled = false;
+    document.body.classList.add("carbon-theme");
+    console.log("Applied IBM Carbon Design System theme");
+  }
+};
+
+// Check and apply theme on load
+if (isDockerEnvironment()) {
+  // Apply immediately if DOM is ready
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", applyCarbonTheme);
+  } else {
+    applyCarbonTheme();
+  }
+}
+
+const BASE_PATH = (
+  window.BASEPATH_VAR ||
+  window.__AUTOMATOR_BASE_PATH__ ||
+  ""
+).replace(/\/$/, "");
 const normalizeRelativeUrl = (url) => {
   if (!url || /^https?:\/\//i.test(url)) {
     return url;
@@ -452,16 +503,37 @@ const ui = (() => {
     return fallback;
   }
 
+  function updateLogCardVisibility() {
+    const logCard = document.querySelector('.log-card');
+    if (!logCard || !logOutput) return;
+    
+    // Show log card if there are any log lines, hide if empty
+    const hasLogs = logOutput.children.length > 0;
+    if (hasLogs) {
+      logCard.classList.remove('is-hidden');
+    } else {
+      logCard.classList.add('is-hidden');
+    }
+  }
+
   function appendLogLine(text) {
     if (!logOutput || typeof text !== "string" || !text.trim()) return;
     logOutput.appendChild(makeLogNode(text));
     logOutput.scrollTop = logOutput.scrollHeight;
+    updateLogCardVisibility();
   }
 
   function renderLogs(logs = []) {
     if (!logOutput) return;
     logOutput.innerHTML = "";
     logs.forEach((line) => appendLogLine(line));
+    updateLogCardVisibility();
+  }
+  
+  function clearLogs() {
+    if (!logOutput) return;
+    logOutput.innerHTML = "";
+    updateLogCardVisibility();
   }
 
   return {
@@ -474,6 +546,8 @@ const ui = (() => {
     setAuthEnabled,
     renderLogs,
     appendLogLine,
+    clearLogs,
+    updateLogCardVisibility,
     lockAuthFields: setAuthFieldsLocked,
     setVersion: setVersionLabel,
     setConnectionInfo,
@@ -722,7 +796,12 @@ function initTabs() {
       panel.classList.toggle("active", panel.dataset.tabPanel === tabName);
     });
     if (logCard) {
-      const shouldHide = tabName === "corehub" || tabName === "settings";
+      const shouldHideForTab = tabName === "corehub" || tabName === "settings";
+      const logOutput = document.getElementById("log-output");
+      const hasLogs = logOutput && logOutput.children.length > 0;
+      
+      // Only show log card if: not on corehub/settings tabs AND has logs
+      const shouldHide = shouldHideForTab || !hasLogs;
       logCard.classList.toggle("is-hidden", shouldHide);
     }
     if (layout) {
@@ -2467,3 +2546,9 @@ initTabs();
 bindEvents();
 updateImportButtonsVisibility();
 initialize();
+
+// Initialize log card visibility (hide if empty)
+// Use setTimeout to ensure it runs after authentication state is set
+setTimeout(() => {
+  ui.updateLogCardVisibility();
+}, 100);
