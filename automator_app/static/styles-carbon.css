@@ -1,33 +1,50 @@
 /* IBM Carbon Design System Theme for Gluesync Automator (Docker Mode) */
 
 :root {
-  /* Gluesync Brand Colors */
+  /* Gluesync Brand Colors - from Kotlin UI */
   --gs-primary: #336DB8;
   --gs-primary-active: #002D9C;
   --gs-secondary: #393939;
-  --gs-shadow-gray: rgba(22, 22, 22, 0.25);
+  --gs-shadow-gray: rgba(0, 0, 0, 0.25);
   --gs-gray: #C6C6C6;
   --gs-on-secondary: #F4F4F4;
   --gs-header-grey: #EFEFEF;
+  --gs-header-strong-grey: #E0E0E0;
   --gs-carbon-dark: #161616;
   --gs-gray-variant: #6F6F6F;
   --gs-black: #161616;
   --gs-error: #E30A17;
   --gs-error-strong: #AF000A;
+  --gs-light-error-bg: #FFF1F1;
   --gs-textfield-bg: #F4F4F4;
   --gs-textfield-light-gray: #A8A8A8;
   --gs-textfield-dark-gray: #8D8D8D;
   --gs-nav-drawer-gray: #525252;
   --gs-dialog-bg: rgba(141, 141, 141, 0.5);
+  --gs-dialog-surface: #F4F4F4;
   --gs-dropdown-menu: #262626;
+  --gs-dropdown-disabled: rgba(22, 22, 22, 0.25);
   --gs-switch-green: #ABC058;
   --gs-light-green: #42BE65;
   --gs-dark-green: #0E6027;
-  --gs-dropdown-disabled: rgba(22, 22, 22, 0.25);
-  --gs-light-error-bg: #FFF1F1;
-  --gs-header-strong-grey: #E0E0E0;
   --gs-gold: #D4AF37;
-  --gs-dialog-surface: #F4F4F4;
+  --gs-target-selected: #0F62FE;
+  --gs-badge-blue: #0F62FE;
+  --gs-selected-notification: #E8E8E8;
+  --gs-collapsable-section-gray: #E8E8E8;
+  --gs-orange-bullet: #FF832B;
+  --gs-disabled-row-bg: rgba(244, 244, 244, 0.3);
+  --gs-kpi-light-blue: #EDF5FF;
+  --gs-light-purple: #E8DAFF;
+  --gs-hovered-agent-gray: #D3D5DB;
+  --gs-warning: #EFAB2A;
+  --gs-support-warning: #F1C21B;
+  --gs-support-success: #24A148;
+  --gs-text-white: #F4F4F4;
+  --gs-strong-gray-selected: rgba(22, 22, 22, 0.5);
+  --gs-light-green-version: #9EF0F0;
+  --gs-green-version-label: #005D5D;
+  --gs-red-version-error: #FFD7D9;
   --gs-target-selected: #0F62FE;
   --gs-badge-blue: #0F62FE;
   --gs-selected-notification: #E8E8E8;
@@ -96,6 +113,57 @@
   /* Typography - IBM Plex Sans (matching Android app) */
   --font: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Helvetica Neue", Arial, sans-serif;
   --mono: "IBM Plex Mono", "Menlo", "DejaVu Sans Mono", "Bitstream Vera Sans Mono", Courier, monospace;
+  
+  /* Gluesync Typography - from Kotlin UI (IBM Plex Sans) */
+  --type-display-large-size: 32px;
+  --type-display-large-weight: 400;
+  --type-display-large-spacing: 0px;
+  --type-display-large-height: 40px;
+  
+  --type-display-small-size: 12px;
+  --type-display-small-weight: 400;
+  --type-display-small-spacing: 0.16px;
+  --type-display-small-height: 18px;
+  
+  --type-headline-large-size: 28px;
+  --type-headline-large-weight: 400;
+  --type-headline-large-spacing: 0px;
+  --type-headline-large-height: 28px;
+  
+  --type-headline-small-size: 16px;
+  --type-headline-small-weight: 400;
+  --type-headline-small-spacing: 0.32px;
+  --type-headline-small-height: 22px;
+  
+  --type-title-large-size: 54px;
+  --type-title-large-weight: 400;
+  --type-title-large-spacing: 0.16px;
+  --type-title-large-height: 64px;
+  
+  --type-title-medium-size: 14px;
+  --type-title-medium-weight: 600;
+  --type-title-medium-spacing: 0.16px;
+  --type-title-medium-height: 18px;
+  
+  --type-title-small-size: 22px;
+  --type-title-small-weight: 400;
+  --type-title-small-spacing: 0.32px;
+  --type-title-small-height: 22px;
+  
+  --type-body-large-size: 16px;
+  --type-body-large-weight: 500;
+  --type-body-large-spacing: 0px;
+  --type-body-large-height: 24px;
+  
+  --type-body-medium-size: 14px;
+  --type-body-medium-weight: 400;
+  --type-body-medium-spacing: 0.16px;
+  --type-body-medium-height: 18px;
+  
+  --type-body-small-size: 12px;
+  --type-body-small-weight: 400;
+  --type-body-small-spacing: 0.32px;
+  --type-body-small-height: 16px;
   
   /* Material3 Typography Scale */
   --headline-large-size: 1.75rem;      /* 28sp */
@@ -176,8 +244,37 @@ body.iframe-mode .topbar {
   display: none;
 }
 
-/* Carbon UI Shell Header */
+/* Docker mode header - white background with Gluesync text color */
+.docker-header {
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  background: #FFFFFF;
+  /* border-bottom: 1px solid var(--gs-header-strong-grey); */
+  height: 48px;
+  position: sticky;
+  top: 0;
+  z-index: 8000;
+}
+
+.docker-header-title {
+  font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  font-size: var(--type-headline-small-size);
+  font-weight: var(--type-headline-small-weight);
+  line-height: var(--type-headline-small-height);
+  letter-spacing: var(--type-headline-small-spacing);
+  color: var(--gs-secondary);
+  margin: 0;
+  padding: 0;
+}
+
+/* Hide default header in Docker mode (Carbon theme) */
 .topbar {
+  display: none;
+}
+
+/* Carbon UI Shell Header (for reference, hidden in Docker mode) */
+.topbar-default {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -190,6 +287,7 @@ body.iframe-mode .topbar {
   z-index: 8000;
   color: var(--cds-white);
 }
+
 
 .brand {
   font-size: 0.875rem;
@@ -298,7 +396,6 @@ body.is-authenticated .requires-auth {
   display: flex;
   justify-content: flex-start;
   width: 100%;
-  border-bottom: 1px solid var(--border);
   background: var(--surface);
   padding: 0 var(--spacing-07);
   max-width: 1400px;
@@ -316,6 +413,11 @@ body.is-authenticated .requires-auth {
   margin: 0;
   box-shadow: none;
   height: 48px;
+  /* Gluesync Shapes - from Kotlin UI */
+  --radius-extra-small: 0px;
+  --radius-small: 8px;
+  --radius-medium: 4px;
+  --radius-large: 0px;
 }
 
 .tab-panels {
@@ -727,42 +829,86 @@ label {
 input[type="text"],
 input[type="password"],
 input[type="number"],
-input[type="file"],
-select {
-  padding: 0 var(--spacing-05);
-  border-radius: 0;
-  border: none;
-  border-bottom: 1px solid var(--border-strong);
-  background: var(--surface);
-  color: var(--text);
-  font-size: var(--body-medium-size);
-  line-height: var(--body-medium-line);
-  letter-spacing: var(--body-medium-spacing);
-  transition: background-color 110ms, outline 110ms;
+input[type="file"] {
+  font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  font-size: var(--type-body-small-size);
+  font-weight: var(--type-body-small-weight);
+  letter-spacing: var(--type-body-small-spacing);
+  line-height: var(--type-body-small-height);
+  padding: 0 16px;
+  height: 32px;
+  background: var(--gs-textfield-bg);
+  color: var(--gs-black);
+  border: 1px solid transparent;
+  border-radius: var(--radius-large);
+  outline: none;
+  transition: border-color 0.2s ease;
   width: 100%;
-  max-width: 100%;
-  height: 40px;
-  outline: 2px solid transparent;
-  outline-offset: -2px;
+}
+
+/* Dropdown/Select - matching Kotlin UI GSDropdown */
+select {
+  font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  font-size: var(--type-body-small-size);
+  font-weight: var(--type-body-small-weight);
+  letter-spacing: var(--type-body-small-spacing);
+  line-height: var(--type-body-small-height);
+  padding: 0 16px;
+  height: 32px;
+  background: var(--gs-textfield-bg);
+  color: var(--gs-black);
+  border: none;
+  border-bottom: 1px solid var(--gs-textfield-dark-gray);
+  border-radius: 0;
+  outline: none;
+  cursor: pointer;
+  width: 100%;
+  appearance: none;
+  background-image: url('data:image/svg+xml;charset=UTF-8,%3csvg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"%3e%3cpath d="M8 10L4 6h8l-4 4z" fill="%23161616"/%3e%3c/svg%3e');
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  padding-right: 32px;
+}
+
+select option {
+  background: var(--gs-textfield-bg);
+  color: var(--gs-black);
+  padding: 8px 16px;
+  font-size: var(--type-body-small-size);
+  font-weight: var(--type-body-small-weight);
+}
+
+select option:hover {
+  background: var(--gs-gray);
 }
 
 input[disabled],
-select[disabled],
 textarea[disabled] {
   cursor: not-allowed;
   opacity: 0.5;
-  background: var(--surface-alt);
+  background: var(--gs-dropdown-disabled);
   border-bottom-color: var(--border);
+}
+
+select[disabled] {
+  cursor: not-allowed;
+  color: var(--gs-textfield-dark-gray);
+  background: transparent;
+  border-bottom-color: var(--gs-textfield-dark-gray);
+  opacity: 1;
 }
 
 input[type="text"]:focus,
 input[type="password"]:focus,
 input[type="number"]:focus,
-input[type="file"]:focus,
-select:focus {
+input[type="file"]:focus {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
-  background: var(--surface);
+}
+
+select:focus {
+  border-bottom-color: var(--gs-primary);
+  outline: none;
 }
 
 input[type="file"] {
@@ -836,23 +982,25 @@ input[type="file"] {
 
 /* Carbon Button */
 button {
+  font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  font-size: var(--type-body-small-size);
+  font-weight: var(--type-body-small-weight);
+  letter-spacing: var(--type-body-small-spacing);
+  line-height: var(--type-body-small-height);
+  padding: 0 16px;
+  height: 40px;
+  min-width: 40px;
   border: none;
-  border-radius: 0;
-  padding: 0 var(--spacing-05);
-  font-size: var(--body-medium-size);
-  line-height: var(--body-medium-line);
-  letter-spacing: var(--body-medium-spacing);
-  font-weight: 400;
+  border-radius: var(--radius-large);
   cursor: pointer;
-  transition: background-color 110ms;
+  transition: background-color 0.2s ease;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: var(--spacing-03);
-  opacity: 1;
-  height: 32px;
-  max-width: 20rem;
+  gap: 8px;
+  text-decoration: none;
   white-space: nowrap;
+  box-shadow: none;
 }
 
 button:disabled {
@@ -866,13 +1014,13 @@ button:disabled {
 
 /* Carbon Primary Button */
 .primary {
-  background: var(--accent);
-  color: var(--cds-white);
-  border: 1px solid var(--accent);
+  background: var(--gs-secondary);
+  color: #FFFFFF;
+  /* border: 1px solid var(--accent); */
 }
 
 .primary:not(:disabled):hover {
-  background: var(--accent-hover);
+  background: var(--gs-primary);
   border-color: var(--accent-hover);
   box-shadow: none;
 }
@@ -884,9 +1032,9 @@ button:disabled {
 
 /* Carbon Secondary Button */
 .secondary {
-  background: transparent;
-  color: var(--text);
-  border: 1px solid var(--text);
+  background: var(--gs-textfield-bg);
+  color: var(--gs-black);
+  border: 1px solid var(--gs-textfield-dark-gray);
 }
 
 .secondary:not(:disabled):hover {
@@ -1022,14 +1170,9 @@ body.is-authenticated #auth-card {
   border-bottom: none;
 }
 
+/* Hide footer in Docker mode */
 .footer {
-  text-align: center;
-  padding: var(--spacing-05);
-  font-size: 0.75rem;
-  color: var(--text-secondary);
-  background: var(--bg);
-  border-top: 1px solid var(--border);
-  letter-spacing: 0.32px;
+  display: none;
 }
 
 /* Carbon Scrollbar */
