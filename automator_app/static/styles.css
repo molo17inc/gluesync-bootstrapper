@@ -748,6 +748,11 @@ body.is-authenticated #auth-card {
   border-bottom: none;
 }
 
+/* Hide Docker header in default mode */
+.docker-header {
+  display: none;
+}
+
 .footer {
   text-align: center;
   padding: 0rem 0.5rem;
