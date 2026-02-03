@@ -852,6 +852,11 @@ function logActivity(scope, message) {
 let isRefreshingCorehub = false;
 
 async function refreshCorehubOverview() {
+  // Skip CoreHub overview fetch in Docker mode (carbon-theme)
+  if (document.body.classList.contains("carbon-theme")) {
+    return;
+  }
+  
   if (!document.body.classList.contains("is-authenticated")) {
     corehubUI.showSignedOut();
     return;
@@ -897,13 +902,16 @@ const stateManager = {
       data.enableScheduling;
     document.getElementById("create-tables").checked = data.createTables;
 
-    if (data.corehubOverview) {
-      this.corehubSnapshot = data.corehubOverview;
-      corehubUI.renderOverview(data.corehubOverview);
-    } else if (this.corehubSnapshot) {
-      corehubUI.renderOverview(this.corehubSnapshot);
-    } else if (data.tokenPresent) {
-      corehubUI.showLoading("Waiting for Core Hub overview…");
+    // Skip CoreHub overview rendering in Docker mode (carbon-theme)
+    if (!document.body.classList.contains("carbon-theme")) {
+      if (data.corehubOverview) {
+        this.corehubSnapshot = data.corehubOverview;
+        corehubUI.renderOverview(data.corehubOverview);
+      } else if (this.corehubSnapshot) {
+        corehubUI.renderOverview(this.corehubSnapshot);
+      } else if (data.tokenPresent) {
+        corehubUI.showLoading("Waiting for Core Hub overview…");
+      }
     }
 
     ui.setAuthEnabled(data.tokenPresent);

@@ -489,7 +489,8 @@ def create_app() -> FastAPI:
     _ensure_static_assets()
     asset_rewrites = _fingerprint_static_assets()
     _configure_ui_flags_from_env()
-    _setup_sdk_auto_auth_if_enabled()
+    # SDK initialization moved to FastAPI startup event for proper async handling
+    # _setup_sdk_auto_auth_if_enabled() - REMOVED
 
     base_path = _normalize_base_path(os.getenv("AUTOMATOR_BASE_PATH"))
     client_base_path = base_path or ""
@@ -2019,17 +2020,75 @@ def create_app() -> FastAPI:
         asyncio.create_task(_execute_run(run_status.run_id, request))
         return ApiMessage(message="Entity creation started")
 
+    # Determine which app to return
     if not base_path:
-        return inner_app
+        final_app = inner_app
+    else:
+        outer_app = FastAPI()
 
-    outer_app = FastAPI()
+        @outer_app.get(base_path, include_in_schema=False)
+        async def base_entrypoint() -> RedirectResponse:
+            return RedirectResponse(url=f"{base_path}/", status_code=307)
 
-    @outer_app.get(base_path, include_in_schema=False)
-    async def base_entrypoint() -> RedirectResponse:
-        return RedirectResponse(url=f"{base_path}/", status_code=307)
-
-    outer_app.mount(base_path, inner_app)
-    return outer_app
+        outer_app.mount(base_path, inner_app)
+        final_app = outer_app
+    
+    # Add startup event to initialize SDK asynchronously
+    @final_app.on_event("startup")
+    async def startup_event():
+        """Initialize SDK on startup if USE_SDK is enabled"""
+        use_sdk = _env_flag("USE_SDK", False)
+        if not use_sdk:
+            logger.info("SDK auto-auth disabled (USE_SDK not set).")
+            return
+        
+        try:
+            from utils.gluesync_sdk_client import gluesync_sdk_client, get_corehub_url
+            
+            logger.info("Initializing Gluesync SDK client...")
+            await gluesync_sdk_client.initialize()
+            logger.info("Gluesync SDK client initialized successfully")
+            
+            # Wait a short time to ensure the SDK client has had time to extract the CoreHub URL
+            await asyncio.sleep(0.5)
+            
+            # Get token and CoreHub URL
+            token = gluesync_sdk_client.token
+            if not token:
+                logger.error("SDK initialized but no token available")
+                state.set_ui_flags(autoAuthenticated=False)
+                return
+            
+            core_hub_url = os.getenv("CORE_HUB_URL")
+            if not core_hub_url:
+                try:
+                    core_hub_url = get_corehub_url()
+                except Exception as exc:
+                    logger.warning("Unable to get CoreHub URL from SDK: %s", exc)
+                    core_hub_url = None
+            
+            if not core_hub_url:
+                core_hub_url = "http://gluesync-core-hub:1717"
+                logger.info("Falling back to default CoreHub URL: %s", core_hub_url)
+            
+            use_ssl = _env_flag("SSL_ENABLED", False)
+            skip_verify = _env_flag("SSL_SKIP_VERIFY", True)
+            state.set_auth(token, core_hub_url, use_ssl=use_ssl, skip_verify=skip_verify)
+            state.set_preferences(
+                enable_scheduling=_env_flag("ENABLE_SCHEDULING", True),
+                create_tables=_env_flag("CREATE_TABLE_IF_NOT_EXISTS", True),
+            )
+            state.set_ui_flags(autoAuthenticated=True)
+            logger.info("Gluesync SDK auto-authentication enabled for %s", core_hub_url)
+            
+        except ImportError as exc:
+            logger.error("Gluesync SDK helpers unavailable: %s", exc)
+            state.set_ui_flags(autoAuthenticated=False)
+        except Exception as exc:
+            logger.exception("Failed to initialize Gluesync SDK: %s", exc)
+            state.set_ui_flags(autoAuthenticated=False)
+    
+    return final_app
 
 
 def _deploy_agents_for_import(

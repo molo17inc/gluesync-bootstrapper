@@ -1171,8 +1171,13 @@ body.is-authenticated #auth-card {
 }
 
 /* Hide footer in Docker mode */
-.footer {
+body.carbon-theme .footer {
   display: none;
+}
+
+/* Hide CoreHub overview section in Docker mode */
+body.carbon-theme #corehub-card {
+  display: none !important;
 }
 
 /* Carbon Scrollbar */
