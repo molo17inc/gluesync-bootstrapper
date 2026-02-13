@@ -309,6 +309,9 @@ dbo:
               #   maxPartitionsNumber: 10
             target:
               ttlValue: 0
+              postSnapshotCommand: "SELECT COUNT(1)"
+              preSnapshotCommand: "SELECT COUNT(1)"
+
         ORDERS_ROWS:
           chainId: "orders_chain"  # Same chainId as ORDERS_HEADERS to be included in the same MultiTable
           groupId: "sales"

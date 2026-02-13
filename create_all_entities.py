@@ -1646,7 +1646,10 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 "columnsMappingMatrix": columns_mapping_matrix
             },
             "agentId": target_agent_id,
-            "customProperties": {"ttlValue": table_data.get('customProperties', {}).get('target', {}).get('ttlValue', 0)},
+            "customProperties": {"ttlValue": table_data.get('customProperties', {}).get('target', {}).get('ttlValue', 0), 
+                                 "postSnapshotCommand": table_data.get('customProperties', {}).get('target', {}).get('postSnapshotCommand', 0),
+                                 "preSnapshotCommand": table_data.get('customProperties', {}).get('target', {}).get('preSnapshotCommand', 0),
+                                 },
             "tablesProperties": target_tables_properties,
             "tables": target_tables,
             "columns": target_columns,
