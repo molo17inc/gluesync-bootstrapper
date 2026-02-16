@@ -694,16 +694,16 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             else:
                 # No column mappings, use keys directly from source columns
                 for key_name in custom_config['keys']:
-                    # Find the column and its index
+                    # Find the column and its index (case-insensitive to handle cross-db scenarios like pgsql→oracle)
                     for col in columns["columns"]:
-                        if col["name"] == key_name:
+                        if col["name"].lower() == key_name.lower():
                             # Use the id field from CoreHub API as the column ID
                             col_id = col.get('id')
                             if col_id is None:
                                 error_msg = f"CRITICAL ERROR: Column '{key_name}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
                                 logger.error(error_msg)
                                 raise ValueError(error_msg)
-                                
+
                             keys.append({
                                 "id": col_id,  # Use actual ordinal position from database
                                 "name": col["name"],
@@ -913,7 +913,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             target_discovered_columns = get_table_columns(token, pipeline_id, target_agent_id, yaml_target_schema, target_table_name)
             if target_discovered_columns and isinstance(target_discovered_columns.get('columns'), list):
                 target_discovered_columns_by_name = {
-                    c.get('name'): c
+                    c.get('name').lower(): c
                     for c in target_discovered_columns['columns']
                     if c.get('name')
                 }
@@ -942,7 +942,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 for column_map in custom_config.get('columns', []):
                     for source_name, target_name in column_map.items():
                         if source_name == col["name"]:
-                            discovered_target_col = target_discovered_columns_by_name.get(target_name)
+                            discovered_target_col = target_discovered_columns_by_name.get(target_name.lower())
                             resolved_target_type = None
                             if discovered_target_col and discovered_target_col.get('type'):
                                 resolved_target_type = discovered_target_col.get('type')
@@ -967,7 +967,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 
                 max_target_col_id = max(max_target_col_id, col_id)
 
-                discovered_target_col = target_discovered_columns_by_name.get(col["name"])
+                discovered_target_col = target_discovered_columns_by_name.get(col["name"].lower())
                 resolved_target_type = None
                 if discovered_target_col and discovered_target_col.get('type'):
                     resolved_target_type = discovered_target_col.get('type')
@@ -1084,7 +1084,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     for column_map in custom_config.get('columns', []):
                         for source_name, target_name in column_map.items():
                             if source_name == col["name"] and source_name in custom_config.get('keys', []):
-                                discovered_target_col = target_discovered_columns_by_name.get(target_name)
+                                discovered_target_col = target_discovered_columns_by_name.get(target_name.lower())
                                 resolved_target_type = None
                                 if discovered_target_col and discovered_target_col.get('type'):
                                     resolved_target_type = discovered_target_col.get('type')
@@ -1101,9 +1101,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             else:
                 # No column mappings, use keys directly from source columns
                 for key_name in custom_config['keys']:
-                    # Find the column and its ID
+                    # Find the column and its ID (case-insensitive)
                     for col in columns["columns"]:
-                        if col["name"] == key_name:
+                        if col["name"].lower() == key_name.lower():
                             # Use the id field from CoreHub API as the column ID
                             col_id = col.get('id')
                             if col_id is None:
@@ -1111,7 +1111,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                 logger.error(error_msg)
                                 raise ValueError(error_msg)
 
-                            discovered_target_col = target_discovered_columns_by_name.get(key_name)
+                            discovered_target_col = target_discovered_columns_by_name.get(key_name.lower())
                             resolved_target_type = None
                             if discovered_target_col and discovered_target_col.get('type'):
                                 resolved_target_type = discovered_target_col.get('type')
@@ -1142,7 +1142,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         "id": col_id,  # Use actual ordinal position from database
                         "name": col["name"],
                         "alias": col["name"],
-                        "type": target_discovered_columns_by_name.get(col["name"], {}).get('type') or map_data_type(col["type"], source_node_info, target_node_info)
+                        "type": target_discovered_columns_by_name.get(col["name"].lower(), {}).get('type') or map_data_type(col["type"], source_node_info, target_node_info)
                     })
             logger.debug(f"Using primary target keys for {table_name}: {target_keys}")
 
@@ -1340,20 +1340,20 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         key_alias = key_def
                         key_type = None
 
-                    # Try to find the key in the columns to get its type and ID if not specified
+                    # Try to find the key in the columns to get its type and ID if not specified (case-insensitive)
                     for col in columns["columns"]:
-                        if col["name"] == key_name:
+                        if col["name"].lower() == key_name.lower():
                             # Use the id field from CoreHub API as the column ID
                             col_id = col.get('id')
                             if col_id is None:
                                 error_msg = f"CRITICAL ERROR: Column '{key_name}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
                                 logger.error(error_msg)
                                 raise ValueError(error_msg)
-                                
+
                             keys.append({
                                 "id": col_id,  # Use actual ordinal position from database
-                                "name": key_name,
-                                "alias": key_alias,
+                                "name": col["name"],
+                                "alias": key_alias if key_alias.lower() != key_name.lower() else col["name"],
                                 "table": {
                                     "id": str(source_table_id),
                                     "name": table_key,
@@ -1560,9 +1560,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     else:
                         key_name = key_def
 
-                    # Try to find the key in the columns to get its type and ID
+                    # Try to find the key in the columns to get its type and ID (case-insensitive)
                     for col in columns["columns"]:
-                        if col["name"] == key_name:
+                        if col["name"].lower() == key_name.lower():
                             # Use the id field from CoreHub API as the column ID
                             col_id = col.get('id')
                             if col_id is None:
