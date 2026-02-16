@@ -1120,8 +1120,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
                             target_keys.append({
                                 "id": col_id,  # Use actual ordinal position from database
-                                "name": key_name,
-                                "alias": key_name,
+                                "name": col["name"],
+                                "alias": col["name"],
                                 "type": resolved_target_type
                             })
                             break
@@ -1572,7 +1572,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                 
                             keys.append({
                                 "id": col_id,  # Use actual ordinal position from database
-                                "name": key_name,
+                                "name": col["name"],
                                 "type": map_data_type(col["type"], source_node_info, target_node_info)
                             })
                             break
