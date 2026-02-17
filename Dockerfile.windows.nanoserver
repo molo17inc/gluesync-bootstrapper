@@ -1,0 +1,153 @@
+# escape=`
+
+ARG WINDOWS_TAG=ltsc2022
+
+ARG FILE_CONF_PATH=C:\opt\config\config.json
+ARG CORE_HUB_URL=http://localhost:1717
+ARG CHRONOS_URL=http://gluesync-chronos:8000
+ARG SOURCE_TYPE=
+ARG TARGET_TYPE=
+ARG ENTITY_START_TIMEOUT=1
+ARG TABLE_LIST_YAML=C:\opt\config\TABLE_LIST.yaml
+ARG LOG_DIR=C:\app\logs
+ARG UDF_PATH=C:\opt\udfs
+ARG DEFAULT_PASSWORD=
+ARG GLUESYNC_LICENSE_FILE=C:\opt\gluesync\shared\gs-license.dat
+ARG GLUESYNC_MODULE_TAG=gluesync-bootstrapper
+ARG SSL_ENABLED=False
+ARG GLUESYNC_SECURITY_CONFIG=C:\opt\gluesync\shared\security-config.json
+ARG ENABLE_SCHEDULING=true
+ARG USE_SDK=False
+ARG SSL_SKIP_VERIFY=True
+ARG CREATE_TABLE_IF_NOT_EXISTS=true
+ARG LOG_LEVEL=INFO
+ARG TEST_NAME=DRY_RUN
+ARG VERSION=latest
+ARG JOB_ID=not_set
+ARG HANDLE_WITH_CONDUCTOR=false
+
+# ------------------
+# Stage 1: Build exe (Server Core)
+# ------------------
+FROM mcr.microsoft.com/windows/servercore:${WINDOWS_TAG} AS builder
+
+SHELL ["powershell", "-NoProfile", "-Command", "$ErrorActionPreference='Stop';"]
+
+RUN Set-ExecutionPolicy Bypass -Scope Process -Force; `
+    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; `
+    iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+
+RUN choco upgrade chocolatey -y; `
+    choco install python --version=3.11.9 -y --installargs '"/quiet InstallAllUsers=1 PrependPath=1"'; `
+    choco install git -y; `
+    choco install openssl.light -y; `
+    choco cache remove -y -f
+
+RUN $installer = 'C:\temp\vs_buildtools.exe'; `
+    Invoke-WebRequest -Uri 'https://aka.ms/vs/17/release/vs_buildtools.exe' -OutFile $installer; `
+    $args = @('--quiet','--wait','--norestart','--nocache','--installPath','C:\BuildTools','--add','Microsoft.Component.MSBuild','--add','Microsoft.VisualStudio.Component.VC.Tools.x86.x64','--add','Microsoft.VisualStudio.Component.Windows10SDK.19041'); `
+    $process = Start-Process -FilePath $installer -ArgumentList $args -Wait -PassThru; `
+    if ($process.ExitCode -ne 0 -and $process.ExitCode -ne 3010) { throw "VS Build Tools install failed with exit code $($process.ExitCode)" }; `
+    Remove-Item $installer -Force
+
+RUN if (-not (Test-Path 'C:\temp')) { New-Item -ItemType Directory -Force -Path 'C:\temp' | Out-Null }
+
+WORKDIR C:\app
+
+RUN $paths = @('C:\opt\gluesync\data','C:\opt\gluesync\shared','C:\opt\config','C:\opt\udfs','C:\app\data','C:\app\logs'); `
+    foreach ($path in $paths) { if (-not (Test-Path $path)) { New-Item -ItemType Directory -Force -Path $path | Out-Null } }
+
+COPY requirements.txt .
+
+RUN python -m pip install --upgrade pip setuptools wheel; `
+    python -m pip install --no-cache-dir -r requirements.txt --extra-index-url "https://oauth2:${env:GITLAB_TOKEN}@gitlab.com/api/v4/projects/68232363/packages/pypi/simple"; `
+    python -m pip install --no-cache-dir pyinstaller
+
+COPY VERSION .
+COPY . .
+
+RUN if (-not (Test-Path 'VERSION')) { '0.0.0-dev' | Out-File -FilePath VERSION -Encoding ASCII }
+
+RUN pyinstaller `
+  --clean `
+  --onefile `
+  --name GluesyncBootstrapper `
+  --paths "C:\app" `
+  --add-data "agents.json;." `
+  --add-data "table-list-template.yaml;." `
+  --add-data "table-list-template-basic.yaml;." `
+  --add-data "example-config.json;." `
+  main.py
+
+# ------------------
+# Stage 2: Runtime (Nano Server)
+# ------------------
+FROM mcr.microsoft.com/windows/nanoserver:${WINDOWS_TAG}
+
+ARG FILE_CONF_PATH
+ARG CORE_HUB_URL
+ARG CHRONOS_URL
+ARG SOURCE_TYPE
+ARG TARGET_TYPE
+ARG ENTITY_START_TIMEOUT
+ARG TABLE_LIST_YAML
+ARG LOG_DIR
+ARG UDF_PATH
+ARG DEFAULT_PASSWORD
+ARG GLUESYNC_LICENSE_FILE
+ARG GLUESYNC_MODULE_TAG
+ARG SSL_ENABLED
+ARG GLUESYNC_SECURITY_CONFIG
+ARG ENABLE_SCHEDULING
+ARG USE_SDK
+ARG SSL_SKIP_VERIFY
+ARG CREATE_TABLE_IF_NOT_EXISTS
+ARG LOG_LEVEL
+ARG TEST_NAME
+ARG VERSION
+ARG JOB_ID
+ARG HANDLE_WITH_CONDUCTOR
+
+USER ContainerAdministrator
+
+WORKDIR C:\app
+
+ENV PYTHONDONTWRITEBYTECODE=1 `
+    PYTHONUNBUFFERED=1 `
+    PYTHONPATH=C:\app `
+    FILE_CONF_PATH=${FILE_CONF_PATH} `
+    CORE_HUB_URL=${CORE_HUB_URL} `
+    CHRONOS_URL=${CHRONOS_URL} `
+    SOURCE_TYPE=${SOURCE_TYPE} `
+    TARGET_TYPE=${TARGET_TYPE} `
+    ENTITY_START_TIMEOUT=${ENTITY_START_TIMEOUT} `
+    TABLE_LIST_YAML=${TABLE_LIST_YAML} `
+    LOG_DIR=${LOG_DIR} `
+    UDF_PATH=${UDF_PATH} `
+    DEFAULT_PASSWORD=${DEFAULT_PASSWORD} `
+    USE_SDK=${USE_SDK} `
+    GLUESYNC_LICENSE_FILE=${GLUESYNC_LICENSE_FILE} `
+    GLUESYNC_MODULE_TAG=${GLUESYNC_MODULE_TAG} `
+    SSL_ENABLED=${SSL_ENABLED} `
+    GLUESYNC_SECURITY_CONFIG=${GLUESYNC_SECURITY_CONFIG} `
+    ENABLE_SCHEDULING=${ENABLE_SCHEDULING} `
+    SSL_SKIP_VERIFY=${SSL_SKIP_VERIFY} `
+    CREATE_TABLE_IF_NOT_EXISTS=${CREATE_TABLE_IF_NOT_EXISTS} `
+    LOG_LEVEL=${LOG_LEVEL} `
+    TEST_NAME=${TEST_NAME} `
+    VERSION=${VERSION} `
+    JOB_ID=${JOB_ID} `
+    HANDLE_WITH_CONDUCTOR=${HANDLE_WITH_CONDUCTOR} `
+    DATA_DIR=C:\app\data
+
+RUN $paths = @('C:\opt\gluesync\data','C:\opt\gluesync\shared','C:\opt\config','C:\opt\udfs','C:\app\data','C:\app\logs'); `
+    foreach ($path in $paths) { if (-not (Test-Path $path)) { New-Item -ItemType Directory -Force -Path $path | Out-Null } }
+
+COPY --from=builder C:\app\dist\GluesyncBootstrapper.exe .
+COPY --from=builder C:\app\VERSION .
+COPY --from=builder C:\app\table-list-template.yaml .
+COPY --from=builder C:\app\table-list-template-basic.yaml .
+COPY --from=builder C:\app\example-config.json .
+COPY --from=builder C:\app\agents.json .
+
+ENTRYPOINT ["C:\app\GluesyncBootstrapper.exe"]

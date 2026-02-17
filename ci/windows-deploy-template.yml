@@ -1,0 +1,82 @@
+.windows-deploy-template:
+  stage: deploy
+  script:
+    - $ErrorActionPreference = "Stop"
+
+    # Docker login
+    - Write-Host "Logging into Docker registry..."
+    - $env:CI_REGISTRY_PASSWORD | docker login -u "$env:CI_REGISTRY_USER" --password-stdin
+    - if ($LASTEXITCODE -ne 0) { throw "❌ Docker login failed" }
+    - Write-Host "✅ Docker login successful"
+
+    # Extract version from tag
+    - "Write-Host Processing tag: $env:CI_COMMIT_TAG"
+    - $TAG_PART = [regex]::Match($env:CI_COMMIT_TAG, '[0-9]+\.[0-9]+\.[0-9](.*)').Value
+    - if (-not $TAG_PART) { throw "❌ Could not extract version from tag" }
+    - $IMAGE_NAME = "$env:DOCKER_REGISTRY/$env:APP_NAME"
+    - $VERSION_TAG_WINDOWS = "$IMAGE_NAME:$TAG_PART-win-nanoserver-$env:WINDOWS_TAG"
+    - "Write-Host Image name: $IMAGE_NAME; Write-Host Version tag: $VERSION_TAG_WINDOWS"
+
+    # Initialize git submodules (SDK)
+    - Write-Host "Initializing git submodules..."
+    - git submodule update --init --recursive
+    - if ($LASTEXITCODE -ne 0) { throw "❌ Git submodule update failed" }
+    - Write-Host "✅ Submodules ready"
+
+    # Create VERSION file
+    - Set-Content -Path "VERSION" -Value $TAG_PART
+    - "Write-Host ✅ VERSION file created with content: $(Get-Content VERSION)"
+
+    # Build Windows Docker image (conditional on WINDOWS_TAG)
+    - |
+      if ($env:WINDOWS_TAG -eq "ltsc2019") {
+          Write-Host "Building Docker image for LTSC2019..."
+
+          docker build --file Dockerfile.windows.nanoserver.2019 `
+                      --build-arg WINDOWS_TAG="$env:WINDOWS_TAG" `
+                      --tag "$VERSION_TAG_WINDOWS" .
+      }
+      else {
+          Write-Host "Building Docker image for $env:WINDOWS_TAG using Server Core + Nano runtime..."
+
+          docker build --file Dockerfile.windows.nanoserver `
+                      --build-arg WINDOWS_TAG="$env:WINDOWS_TAG" `
+                      --tag "$VERSION_TAG_WINDOWS" .
+      }
+
+      if ($LASTEXITCODE -ne 0) { throw "❌ Docker build failed" }
+      Write-Host "✅ Docker build completed successfully for $env:WINDOWS_TAG"
+
+    # Push Windows Docker image
+    - docker push "$VERSION_TAG_WINDOWS"
+    - if ($LASTEXITCODE -ne 0) { throw "❌ Docker push failed" }
+    - Write-Host "✅ Pushed $VERSION_TAG_WINDOWS"
+
+    # Tag and push latest-windows for release branches
+    - |
+      if ($env:CI_COMMIT_TAG -match '^release-') {
+        $LATEST_BASE = "$env:DOCKER_REGISTRY/$env:APP_NAME:latest"
+        $LATEST_TAG = "$LATEST_BASE-win-nanoserver-$env:WINDOWS_TAG"
+
+        docker tag "$VERSION_TAG_WINDOWS" "$LATEST_TAG"
+        if ($LASTEXITCODE -ne 0) { throw "❌ Docker tag failed" }
+
+        docker push "$LATEST_TAG"
+        if ($LASTEXITCODE -ne 0) { throw "❌ Docker push latest-windows failed" }
+
+        Write-Host "✅ Pushed $LATEST_TAG"
+
+        if ($env:WINDOWS_TAG -eq "ltsc2022") {
+          $LEGACY_TAG = "$env:DOCKER_REGISTRY/$env:APP_NAME:latest-windows"
+          docker tag "$VERSION_TAG_WINDOWS" "$LEGACY_TAG"
+          if ($LASTEXITCODE -ne 0) { throw "❌ Docker tag legacy failed" }
+
+          docker push "$LEGACY_TAG"
+          if ($LASTEXITCODE -ne 0) { throw "❌ Docker push legacy failed" }
+
+          Write-Host "✅ Pushed legacy tag $LEGACY_TAG (for ltsc2022)"
+        }
+      }
+
+  rules:
+    - if: $CI_COMMIT_TAG
