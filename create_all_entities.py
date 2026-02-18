@@ -1633,6 +1633,18 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         "targetColumnId": col_id
                     })
         
+        target_custom_properties = {
+            "ttlValue": table_data.get('customProperties', {}).get('target', {}).get('ttlValue', 0)
+        }
+
+        post_snapshot_cmd = table_data.get('customProperties', {}).get('target', {}).get('postSnapshotCommand', {})
+        if isinstance(post_snapshot_cmd, dict) and post_snapshot_cmd:
+            target_custom_properties["postSnapshotCommand"] = post_snapshot_cmd
+
+        pre_snapshot_cmd = table_data.get('customProperties', {}).get('target', {}).get('preSnapshotCommand', {})
+        if isinstance(pre_snapshot_cmd, dict) and pre_snapshot_cmd:
+            target_custom_properties["preSnapshotCommand"] = pre_snapshot_cmd
+
         # Create the target entity for MultiTable
         target_entity = {
             "type": "MultiTable",
@@ -1646,10 +1658,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 "columnsMappingMatrix": columns_mapping_matrix
             },
             "agentId": target_agent_id,
-            "customProperties": {"ttlValue": table_data.get('customProperties', {}).get('target', {}).get('ttlValue', 0), 
-                                 "postSnapshotCommand": table_data.get('customProperties', {}).get('target', {}).get('postSnapshotCommand', {}),
-                                 "preSnapshotCommand": table_data.get('customProperties', {}).get('target', {}).get('preSnapshotCommand', {}),
-                                 },
+            "customProperties": target_custom_properties,
             "tablesProperties": target_tables_properties,
             "tables": target_tables,
             "columns": target_columns,
