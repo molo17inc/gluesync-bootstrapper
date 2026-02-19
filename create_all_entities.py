@@ -974,10 +974,13 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 else:
                     resolved_target_type = map_data_type(col["type"], source_node_info, target_node_info)
 
+                # Use the target-discovered column name (preserves original case from target DB)
+                # Fall back to source column name if target column not found
+                target_col_name = discovered_target_col.get('name') if discovered_target_col else col["name"]
                 target_columns_def.append({
                     "id": col_id,  # Use actual ordinal position from database
-                    "name": col["name"],
-                    "alias": col["name"],
+                    "name": target_col_name,
+                    "alias": target_col_name,
                     "type": resolved_target_type
                 })
         
@@ -1118,10 +1121,13 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             else:
                                 resolved_target_type = map_data_type(col["type"], source_node_info, target_node_info)
 
+                            # Use the target-discovered column name (preserves original case from target DB)
+                            # Fall back to source column name if target column not found
+                            target_key_name = discovered_target_col.get('name') if discovered_target_col else col["name"]
                             target_keys.append({
                                 "id": col_id,  # Use actual ordinal position from database
-                                "name": col["name"],
-                                "alias": col["name"],
+                                "name": target_key_name,
+                                "alias": target_key_name,
                                 "type": resolved_target_type
                             })
                             break
