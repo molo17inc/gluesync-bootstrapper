@@ -22,6 +22,7 @@ import os
 import json
 import urllib3
 import argparse
+import copy
 from commons import get_node_info, get_table_columns, fetch_core_hub, get_pipeline_config, get_pipeline_agents, \
     get_agent_tables, create_entity_schedules, map_data_type, create_pipeline_schedules, create_group_schedules, load_yaml_config, \
     process_filter_clauses, create_group, assign_entities_to_group, get_table_id
@@ -1878,8 +1879,12 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 if 'schedules' in current_schema_config:
                     has_schedules = True
                 # Group-level schedules
-                if 'group_schedules' in current_schema_config and isinstance(current_schema_config['group_schedules'], dict):
-                    if any(isinstance(v, list) and v for v in current_schema_config['group_schedules'].values()):
+                if 'group_schedules' in current_schema_config:
+                    group_scheds = current_schema_config['group_schedules']
+                    if isinstance(group_scheds, dict):
+                        if any(isinstance(v, list) and v for v in group_scheds.values()):
+                            has_schedules = True
+                    elif isinstance(group_scheds, list) and group_scheds:
                         has_schedules = True
                 # Entity-level schedules
                 if 'tables' in current_schema_config and 'custom' in current_schema_config['tables']:
@@ -1945,38 +1950,82 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
             # Create group-level schedules if defined (only for current source_schema)
             if yaml_config and isinstance(current_schema_config, dict) and 'group_schedules' in current_schema_config:
-                group_scheds_cfg = current_schema_config.get('group_schedules', {})
-                if isinstance(group_scheds_cfg, dict) and group_scheds_cfg:
+                group_scheds_cfg = current_schema_config.get('group_schedules')
+                if group_scheds_cfg:
                     logger.info("Creating group-level schedules...")
                     try:
-                        # Only use groups we already created earlier in this run
-                        # Accept either:
-                        # - key equals a known group NAME in groupId_map
-                        # - key equals a known group ID (value of groupId_map)
                         known_ids = {gid for gid in groupId_map.values() if gid and gid != '_default'}
-                        group_schedules_by_id = {}
-                        for grp_key, schedules_cfg in group_scheds_cfg.items():
-                            if not isinstance(schedules_cfg, list) or not schedules_cfg:
-                                continue
 
-                            grp_key_str = str(grp_key).strip()
-
-                            # Resolve by name first
-                            if grp_key_str in groupId_map and groupId_map[grp_key_str] and groupId_map[grp_key_str] != '_default':
-                                resolved_id = groupId_map[grp_key_str]
-                            # Or accept raw ID if it matches one we created
-                            elif grp_key_str in known_ids:
-                                resolved_id = grp_key_str
+                        def _expand_group_ids(raw_ids):
+                            if raw_ids is None:
+                                return []
+                            if isinstance(raw_ids, str):
+                                candidates = [raw_ids]
                             else:
-                                logger.warning(f"Skipping group schedules for '{grp_key_str}': group not created in this run")
+                                candidates = list(raw_ids)
+                            resolved = []
+                            for candidate in candidates:
+                                candidate_str = str(candidate).strip()
+                                if not candidate_str:
+                                    continue
+                                if candidate_str == '*':
+                                    if known_ids:
+                                        resolved.extend(list(known_ids))
+                                    else:
+                                        logger.warning("Wildcard group_ids requested but no groups were created in this run")
+                                    continue
+                                if candidate_str in groupId_map and groupId_map[candidate_str] and groupId_map[candidate_str] != '_default':
+                                    resolved.append(groupId_map[candidate_str])
+                                elif candidate_str in known_ids:
+                                    resolved.append(candidate_str)
+                                else:
+                                    logger.warning(f"Skipping unknown group reference '{candidate_str}' in schedule configuration")
+                            # Deduplicate while preserving order
+                            seen = set()
+                            ordered = []
+                            for gid in resolved:
+                                if gid not in seen:
+                                    seen.add(gid)
+                                    ordered.append(gid)
+                            return ordered
+
+                        base_schedule_list = []
+                        if isinstance(group_scheds_cfg, dict):
+                            for grp_key, schedules_cfg in group_scheds_cfg.items():
+                                if not isinstance(schedules_cfg, list):
+                                    logger.warning(
+                                        f"Skipping group schedule block for '{grp_key}': expected a list of schedule objects"
+                                    )
+                                    continue
+                                for schedule_cfg in schedules_cfg:
+                                    if not isinstance(schedule_cfg, dict):
+                                        continue
+                                    schedule_copy = copy.deepcopy(schedule_cfg)
+                                    schedule_copy['group_ids'] = [grp_key]
+                                    base_schedule_list.append(schedule_copy)
+                        elif isinstance(group_scheds_cfg, list):
+                            for schedule_cfg in group_scheds_cfg:
+                                if isinstance(schedule_cfg, dict):
+                                    base_schedule_list.append(copy.deepcopy(schedule_cfg))
+
+                        prepared_schedules = []
+                        for schedule_cfg in base_schedule_list:
+                            raw_ids = schedule_cfg.get('group_ids')
+                            if not raw_ids and 'groups' in schedule_cfg:
+                                raw_ids = schedule_cfg['groups']
+                            resolved_ids = _expand_group_ids(raw_ids)
+                            if not resolved_ids:
+                                logger.warning("No valid group IDs resolved for schedule; skipping entry")
                                 continue
+                            schedule_copy = copy.deepcopy(schedule_cfg)
+                            schedule_copy['group_ids'] = resolved_ids
+                            schedule_copy.pop('groups', None)
+                            prepared_schedules.append(schedule_copy)
 
-                            group_schedules_by_id[resolved_id] = schedules_cfg
-
-                        if group_schedules_by_id:
-                            create_group_schedules(token, pipeline_id, group_schedules_by_id)
+                        if prepared_schedules:
+                            create_group_schedules(token, pipeline_id, prepared_schedules)
                         else:
-                            logger.debug("No valid group schedules to create after filtering to known group IDs")
+                            logger.debug("No valid group schedules to create after resolving targets")
                     except Exception as e:
                         logger.error(f"Error creating group-level schedules: {str(e)}")
 

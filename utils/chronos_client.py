@@ -154,7 +154,7 @@ class ChronosClient:
         if not pipeline_id or not entity_id:
             raise ValueError("Both pipeline_id and entity_id are required")
             
-        if task_type not in ('entity_start', 'entity_stop', 'entity_snapshot'):
+        if task_type not in ('entity_start', 'entity_stop', 'entity_snapshot', 'entity_redo'):
             raise ValueError(f"Invalid task_type for entity: {task_type}")
             
         # Generate a name if not provided
@@ -162,7 +162,8 @@ class ChronosClient:
             task_name_map = {
                 'entity_start': 'Start',
                 'entity_stop': 'Stop',
-                'entity_snapshot': 'Snapshot'
+                'entity_snapshot': 'Snapshot',
+                'entity_redo': 'Redo'
             }
             name = f"{task_name_map.get(task_type, 'Schedule')} for {entity_id}"
             
@@ -215,7 +216,7 @@ class ChronosClient:
         if not pipeline_id:
             raise ValueError("pipeline_id is required")
             
-        if task_type not in ('pipeline_start', 'pipeline_stop', 'pipeline_snapshot'):
+        if task_type not in ('pipeline_start', 'pipeline_stop', 'pipeline_snapshot', 'pipeline_redo'):
             raise ValueError(f"Invalid task_type for pipeline: {task_type}")
             
         # Generate a name if not provided
@@ -223,7 +224,8 @@ class ChronosClient:
             task_name_map = {
                 'pipeline_start': 'Start',
                 'pipeline_stop': 'Stop',
-                'pipeline_snapshot': 'Snapshot'
+                'pipeline_snapshot': 'Snapshot',
+                'pipeline_redo': 'Redo'
             }
             name = f"{task_name_map.get(task_type, 'Schedule')} for pipeline {pipeline_id}"
             
@@ -314,7 +316,7 @@ class ChronosClient:
         if not isinstance(group_ids, list) or not all(isinstance(gid, str) for gid in group_ids):
             raise ValueError("group_ids must be a string or a list of strings")
             
-        if task_type not in ('group_start', 'group_stop', 'group_snapshot'):
+        if task_type not in ('group_start', 'group_stop', 'group_snapshot', 'group_redo'):
             raise ValueError(f"Invalid task_type for group: {task_type}")
             
         # Generate a name if not provided
@@ -322,7 +324,8 @@ class ChronosClient:
             task_name_map = {
                 'group_start': 'Start',
                 'group_stop': 'Stop',
-                'group_snapshot': 'Snapshot'
+                'group_snapshot': 'Snapshot',
+                'group_redo': 'Redo'
             }
             group_names = ", ".join(group_ids[:3])
             if len(group_ids) > 3:

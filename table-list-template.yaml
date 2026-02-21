@@ -40,7 +40,7 @@ dbo:
   sourceType: SQL
   targetType: NoSQL
   customProperties:
-    source: 
+    source:
       maxItemsCountPerIteration: 1000
       pollingIntervalMilliseconds: 100
     target:
@@ -51,7 +51,7 @@ dbo:
     # Pipeline start schedule (runs on weekdays at 7:00 AM)
     - name: "Daily pipeline startup"
       description: "Start the entire pipeline every weekday morning"
-      task_type: "pipeline_start"  # pipeline_start, pipeline_stop, pipeline_snapshot
+      task_type: "pipeline_start" # pipeline_start, pipeline_stop, pipeline_snapshot
       schedule:
         days_of_week: ["monday", "tuesday", "wednesday", "thursday", "friday"]
         hour: 7
@@ -59,7 +59,18 @@ dbo:
       # Alternatively, you can use cron expression:
       # cron_expression: "0 7 * * 1-5"
       with_snapshot: false
-      snapshot_write_method: "UPSERT"  # INSERT or UPSERT (default: UPSERT)
+      snapshot_write_method: "UPSERT" # INSERT or UPSERT (default: UPSERT)
+      enabled: true
+    - name: "Monthly pipeline redo"
+      description: "Perform snapshot + CDC restart for the entire pipeline on the first Sunday"
+      task_type: "pipeline_redo"
+      schedule:
+        days_of_week: ["sunday"]
+        week_of_month: 1  # first Sunday of each month
+        hour: 1
+        minute: 30
+      with_snapshot: true
+      snapshot_write_method: "UPSERT"
       enabled: true
   # Group schedules can be defined in two ways:
   # 1. As a list of schedule configurations that can apply to multiple groups (recommended)
@@ -74,7 +85,7 @@ dbo:
       # Alternative: groups: ["finance", "accounting"]
       cron_expression: "0 2 * * *"
       with_snapshot: true
-      snapshot_write_method: "UPSERT"  # INSERT or UPSERT (default: UPSERT)
+      snapshot_write_method: "UPSERT" # INSERT or UPSERT (default: UPSERT)
       enabled: true
 
     - name: "Weekend maintenance for all groups"
@@ -93,9 +104,19 @@ dbo:
       description: "Run reconciliation for finance and accounting on the 15th of each month"
       task_type: "group_snapshot"
       group_ids: ["finance", "accounting"]
-      cron_expression: "0 4 15 * *"  # 4 AM on the 15th of every month
+      cron_expression: "0 4 15 * *" # 4 AM on the 15th of every month
       with_snapshot: true
-      snapshot_write_method: "INSERT"  # Use INSERT instead of UPSERT for reconciliation
+      snapshot_write_method: "INSERT" # Use INSERT instead of UPSERT for reconciliation
+      enabled: true
+
+    - name: "Quarterly finance redo"
+      description: "Perform snapshot + CDC restart for finance chain at quarter end"
+      task_type: "group_redo" # new option exposed by Chronos API
+      group_ids: ["finance"]
+      # Runs at 23:00 on the last day of March, June, September, December
+      cron_expression: "0 23 31 3,6,9,12 *"
+      with_snapshot: true
+      snapshot_write_method: "UPSERT"
       enabled: true
 
     # Format 2: Legacy format converted to new format
@@ -103,7 +124,7 @@ dbo:
       description: "Create snapshot of sales entities every hour during business hours"
       task_type: "group_snapshot"
       group_ids: ["sales"]
-      cron_expression: "0 9-17 * * 1-5"  # Every hour from 9 AM to 5 PM, weekdays only
+      cron_expression: "0 9-17 * * 1-5" # Every hour from 9 AM to 5 PM, weekdays only
       with_snapshot: true
       snapshot_write_method: "UPSERT"
       enabled: true
@@ -116,220 +137,227 @@ dbo:
         days_of_week: ["monday", "tuesday", "wednesday", "thursday", "friday"]
         hour: 18
         minute: 0
-      enabled: false  # Disabled by default
+      enabled: false # Disabled by default
   tables:
     whitelist:
       - DRIVERS
       - VEHICLES
     custom:
-        # Each key under 'custom' defines a table and implicitly a single-table entity.
-        # The resulting entityName in CoreHub will be "<source_schema>.<tableKey>",
-        # for example "dbo.DRIVERS" for the DRIVERS table below.
-        DRIVERS:
-          keys: [ID]
-          documentKey:
-            prefix: "TESTPREFIX"
-            suffix: "TESTSUFFIX"
-            separator: "-"
-            keys: 
-              - ID
-              - LAST_NAME
-          name: drivers  # Target table/collection name; entityName remains "dbo.DRIVERS"
-          groupId: "_default"
-          columns:
-            - FIRST_NAME: "firstName"
-            - LAST_NAME: "lastName"
-            - AGE: "age"
-            - DRIVING_LICENSE_EXPIRE_DATE: "licenseExpiry"
-            - EMAIL: "email"
-            - ID: "id"
-          # Entity-level schedule configurations
-          schedules:
-            # First schedule for entity (runs every day at midnight)
-            - name: "Daily driver data snapshot"
-              description: "Create snapshot of driver data daily at midnight"
-              task_type: "entity_snapshot"  # entity_start, entity_stop, entity_snapshot
-              cron_expression: "0 0 * * *"  # Every day at midnight
-              snapshot_write_method: "INSERT"  # INSERT or UPSERT (default: UPSERT)
-              enabled: true
-            # Second schedule for entity (runs on weekends at 2:00 AM)
-            - name: "Weekend driver data refresh"
-              description: "Restart driver entity every weekend for data refresh"
-              task_type: "entity_start"  # entity_start, entity_stop, entity_snapshot
-              schedule:
-                days_of_week: ["saturday", "sunday"]
-                hour: 2
-                minute: 0
-              with_snapshot: true
-              snapshot_write_method: "UPSERT"  # INSERT or UPSERT (default: UPSERT)
-              enabled: true
-          # New filter configuration
-          filter:
-            clauses:
-              - column: GENDER
-                type: string  # Specify the column type for proper mapping
-                operation: Equal
-                value: "Female"
-              - column: AGE
-                type: int
-                operation: GreaterEqual
-                value: 21
-              - column: DRIVING_LICENSE_EXPIRE_DATE
-                type: string
-                operation: IsNotNull
-              - column: EMAIL
-                type: string
-                operation: Regex
-                value: ".*@company\\.com"
-          # Snapshot delete filter - controls which records are NOT deleted during snapshot
-          # These records will be preserved in the target even if they don't exist in the source
-          snapshotDeleteFilter:
-            clauses:
-              - column: STATUS
-                type: string
-                operation: Equal
-                value: "ARCHIVED"  # Don't delete archived drivers during snapshot
-              - column: LAST_MODIFIED
-                type: string
-                operation: Greater
-                value: "2024-01-01"  # Also preserve recently modified records
-          # Snapshot write method - controls how records are written during snapshot
-          # UPSERT: Update existing records or insert new ones (default)
-          # INSERT: Only insert new records, skip existing ones
-          snapshotWriteMethod: "UPSERT"
-          customProperties:
-            target:
-              ttlValue: 20000000
-              udf: # User defined functions
-                - name: UPPERCASE_DRIVERS
-                  type: java
-          
-        # Example of a table with unlocked schema
-        # This allows different column counts and data types between source and target
-        # UDF is mandatory when using unlocked schema
-        ARTICLES:
-          keys: [ID]
-          name: ARTICLES
-          unlockedSchema: true  # Enable unlocked schema for this table
-          # In unlocked schema mode, columns definition can be omitted or partial
-          # The UDF will handle the mapping between source and target columns
-          # Target-only columns: These columns exist only in the target, not in source
-          # For object format, you must specify: name, type, dataLength, numericPrecision, numericScale, isNullable
-          # Discovery behavior: If a target-only column matches an existing target table column,
-          # the system will use the discovered column's properties instead of user-defined ones
-          targetOnlyColumns:
-            - CURRENCY  # Simple string format (uses defaults: varchar, dataLength=1024, nullable=false)
-            - name: CREATED_AT
-              type: datetime
-              dataLength: 19  # Length for datetime format like "2024-01-01 12:00:00"
-              numericPrecision: 0
-              numericScale: 0
-              isNullable: false
-            - name: PROCESSING_STATUS
-              type: varchar
-              dataLength: 50
-              numericPrecision: 0
-              numericScale: 0
-              isNullable: true
-          customProperties:
-            target:
-              # UDF is mandatory for unlocked schema tables
-              udf:
-                - name: UDF_ARTICLES_TRANSFORM
-                  type: java
-          
-        VEHICLES:
-          groupId: "finance"  # Connects this entity to the 'finance' group defined at top-level under groups:
-          keys:
-            - VEHICLE_ID
-          name: vehicles
-          columns:
-            - VEHICLE_ID: "id"
-            - MODEL: "model"
-            - YEAR: "year"
-            - REGISTRATION_DATE: "registrationDate"
-          # Entity-level schedule configurations
-          schedules:
-            - name: "Weekly vehicles snapshot"
-              description: "Create a snapshot of vehicle data every Sunday at 1:00 AM"
-              task_type: "entity_snapshot"
-              schedule:
-                days_of_week: ["sunday"]
-                hour: 1
-                minute: 0
-              enabled: true
-          filter:
-            clauses:
-              - column: REGISTRATION_DATE
-                type: string
-                operation: Greater
-                value: "2020-01-01"
-              - column: STATUS
-                type: string
-                operation: In
-                value: ["ACTIVE", "MAINTENANCE"]
-          # Example of snapshot delete filter for vehicles
-          snapshotDeleteFilter:
-            clauses:
-              - column: STATUS
-                type: string
-                operation: NotEqual
-                value: "SOLD"  # Preserve sold vehicles in target during snapshot
-          # Use INSERT mode for vehicles to avoid updating existing records
-          snapshotWriteMethod: "INSERT"
-                
-        # MultiTable entity example with chainId
-        # The following tables will be combined into a single MultiTable entity
-        ORDERS_HEADERS:
-          chainId: "orders_chain"  # Tables with the same chainId will be combined into a MultiTable entity
-          groupId: "sales"
+      # Each key under 'custom' defines a table and implicitly a single-table entity.
+      # The resulting entityName in CoreHub will be "<source_schema>.<tableKey>",
+      # for example "dbo.DRIVERS" for the DRIVERS table below.
+      DRIVERS:
+        keys: [ID]
+        documentKey:
+          prefix: "TESTPREFIX"
+          suffix: "TESTSUFFIX"
+          separator: "-"
           keys:
             - ID
-          name: orders_headers
-          # whereClause: Filters source data during sync (applied at source table level)
-          # Example: Only sync orders with ID > 2
-          whereClause: "ID > 2"
-          columns:
-            - ID: "id"
-            - ORDER_NUMBER: "orderNumber"
-            - ORDER_DATE: "orderDate"
-            - STATUS: "status"
-            - CUSTOMER_ID: "customerId"
-            - ADDRESS_ID: "addressId"
-            - NOTES: "notes"
-            - DRIVER_ID: "driverId"
-          customProperties:
-            source:
-              maxItemsCountPerIteration: 1000
-              pollingIntervalMilliseconds: 100
-              partitions: "ORDER_ID"  # Logical partition column (simple format)
-              # Extended format with custom partition count:
-              # partitions:
-              #   column: "ORDER_ID"
-              #   maxPartitionsNumber: 10
-            target:
-              ttlValue: 0
-              postSnapshotCommand: "SELECT COUNT(1)"
-              preSnapshotCommand: "SELECT COUNT(1)"
+            - LAST_NAME
+        name: drivers # Target table/collection name; entityName remains "dbo.DRIVERS"
+        groupId: "_default"
+        columns:
+          - FIRST_NAME: "firstName"
+          - LAST_NAME: "lastName"
+          - AGE: "age"
+          - DRIVING_LICENSE_EXPIRE_DATE: "licenseExpiry"
+          - EMAIL: "email"
+          - ID: "id"
+        # Entity-level schedule configurations
+        schedules:
+          # First schedule for entity (runs every day at midnight)
+          - name: "Daily driver data snapshot"
+            description: "Create snapshot of driver data daily at midnight"
+            task_type: "entity_snapshot" # entity_start, entity_stop, entity_snapshot
+            cron_expression: "0 0 * * *" # Every day at midnight
+            snapshot_write_method: "INSERT" # INSERT or UPSERT (default: UPSERT)
+            enabled: true
+          # Second schedule for entity (runs on weekends at 2:00 AM)
+          - name: "Weekend driver data refresh"
+            description: "Restart driver entity every weekend for data refresh"
+            task_type: "entity_start" # entity_start, entity_stop, entity_snapshot
+            schedule:
+              days_of_week: ["saturday", "sunday"]
+              hour: 2
+              minute: 0
+            with_snapshot: true
+            snapshot_write_method: "UPSERT" # INSERT or UPSERT (default: UPSERT)
+            enabled: true
+          - name: "Quarterly driver redo"
+            description: "Redo driver entity to refresh CDC at quarter boundaries"
+            task_type: "entity_redo"
+            cron_expression: "0 1 1 1,4,7,10 *"  # 01:00 on the first day of each quarter
+            with_snapshot: true
+            snapshot_write_method: "UPSERT"
+            enabled: true
+        # New filter configuration
+        filter:
+          clauses:
+            - column: GENDER
+              type: string # Specify the column type for proper mapping
+              operation: Equal
+              value: "Female"
+            - column: AGE
+              type: int
+              operation: GreaterEqual
+              value: 21
+            - column: DRIVING_LICENSE_EXPIRE_DATE
+              type: string
+              operation: IsNotNull
+            - column: EMAIL
+              type: string
+              operation: Regex
+              value: ".*@company\\.com"
+        # Snapshot delete filter - controls which records are NOT deleted during snapshot
+        # These records will be preserved in the target even if they don't exist in the source
+        snapshotDeleteFilter:
+          clauses:
+            - column: STATUS
+              type: string
+              operation: Equal
+              value: "ARCHIVED" # Don't delete archived drivers during snapshot
+            - column: LAST_MODIFIED
+              type: string
+              operation: Greater
+              value: "2024-01-01" # Also preserve recently modified records
+        # Snapshot write method - controls how records are written during snapshot
+        # UPSERT: Update existing records or insert new ones (default)
+        # INSERT: Only insert new records, skip existing ones
+        snapshotWriteMethod: "UPSERT"
+        customProperties:
+          target:
+            ttlValue: 20000000
+            udf: # User defined functions
+              - name: UPPERCASE_DRIVERS
+                type: java
 
-        ORDERS_ROWS:
-          chainId: "orders_chain"  # Same chainId as ORDERS_HEADERS to be included in the same MultiTable
-          groupId: "sales"
-          keys:
-            - ID
-          name: orders_rows
-          columns:
-            - ID: "id"
-            - ARTICLE_ID: "articleId"
-            - QUANTITY: "quantity"
-            - ORDER_ID: "orderId"
-            - NOTES: "notes"
-          customProperties:
-            source:
-              maxItemsCountPerIteration: 1000
-              pollingIntervalMilliseconds: 100
-            target:
-              ttlValue: 0
-              # Bulk operations settings (both default to false)
-              useBulkOperationsDuringCDC: false
-              useBulkOperationsWhileSnapshot: false
+      # Example of a table with unlocked schema
+      # This allows different column counts and data types between source and target
+      # UDF is mandatory when using unlocked schema
+      ARTICLES:
+        keys: [ID]
+        name: ARTICLES
+        unlockedSchema: true # Enable unlocked schema for this table
+        # In unlocked schema mode, columns definition can be omitted or partial
+        # The UDF will handle the mapping between source and target columns
+        # Target-only columns: These columns exist only in the target, not in source
+        # For object format, you must specify: name, type, dataLength, numericPrecision, numericScale, isNullable
+        # Discovery behavior: If a target-only column matches an existing target table column,
+        # the system will use the discovered column's properties instead of user-defined ones
+        targetOnlyColumns:
+          - CURRENCY # Simple string format (uses defaults: varchar, dataLength=1024, nullable=false)
+          - name: CREATED_AT
+            type: datetime
+            dataLength: 19 # Length for datetime format like "2024-01-01 12:00:00"
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: PROCESSING_STATUS
+            type: varchar
+            dataLength: 50
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+        customProperties:
+          target:
+            # UDF is mandatory for unlocked schema tables
+            udf:
+              - name: UDF_ARTICLES_TRANSFORM
+                type: java
+
+      VEHICLES:
+        groupId: "finance" # Connects this entity to the 'finance' group defined at top-level under groups:
+        keys:
+          - VEHICLE_ID
+        name: vehicles
+        columns:
+          - VEHICLE_ID: "id"
+          - MODEL: "model"
+          - YEAR: "year"
+          - REGISTRATION_DATE: "registrationDate"
+        # Entity-level schedule configurations
+        schedules:
+          - name: "Weekly vehicles snapshot"
+            description: "Create a snapshot of vehicle data every Sunday at 1:00 AM"
+            task_type: "entity_snapshot"
+            schedule:
+              days_of_week: ["sunday"]
+              hour: 1
+              minute: 0
+            enabled: true
+        filter:
+          clauses:
+            - column: REGISTRATION_DATE
+              type: string
+              operation: Greater
+              value: "2020-01-01"
+            - column: STATUS
+              type: string
+              operation: In
+              value: ["ACTIVE", "MAINTENANCE"]
+        # Example of snapshot delete filter for vehicles
+        snapshotDeleteFilter:
+          clauses:
+            - column: STATUS
+              type: string
+              operation: NotEqual
+              value: "SOLD" # Preserve sold vehicles in target during snapshot
+        # Use INSERT mode for vehicles to avoid updating existing records
+        snapshotWriteMethod: "INSERT"
+
+      # MultiTable entity example with chainId
+      # The following tables will be combined into a single MultiTable entity
+      ORDERS_HEADERS:
+        chainId: "orders_chain" # Tables with the same chainId will be combined into a MultiTable entity
+        groupId: "sales"
+        keys:
+          - ID
+        name: orders_headers
+        # whereClause: Filters source data during sync (applied at source table level)
+        # Example: Only sync orders with ID > 2
+        whereClause: "ID > 2"
+        columns:
+          - ID: "id"
+          - ORDER_NUMBER: "orderNumber"
+          - ORDER_DATE: "orderDate"
+          - STATUS: "status"
+          - CUSTOMER_ID: "customerId"
+          - ADDRESS_ID: "addressId"
+          - NOTES: "notes"
+          - DRIVER_ID: "driverId"
+        customProperties:
+          source:
+            maxItemsCountPerIteration: 1000
+            pollingIntervalMilliseconds: 100
+            partitions: "ORDER_ID" # Logical partition column (simple format)
+            # Extended format with custom partition count:
+            # partitions:
+            #   column: "ORDER_ID"
+            #   maxPartitionsNumber: 10
+          target:
+            ttlValue: 0
+            postSnapshotCommand: "SELECT COUNT(1)"
+            preSnapshotCommand: "SELECT COUNT(1)"
+
+      ORDERS_ROWS:
+        chainId: "orders_chain" # Same chainId as ORDERS_HEADERS to be included in the same MultiTable
+        groupId: "sales"
+        keys:
+          - ID
+        name: orders_rows
+        columns:
+          - ID: "id"
+          - ARTICLE_ID: "articleId"
+          - QUANTITY: "quantity"
+          - ORDER_ID: "orderId"
+          - NOTES: "notes"
+        customProperties:
+          source:
+            maxItemsCountPerIteration: 1000
+            pollingIntervalMilliseconds: 100
+          target:
+            ttlValue: 0
+            # Bulk operations settings (both default to false)
+            useBulkOperationsDuringCDC: false
+            useBulkOperationsWhileSnapshot: false
