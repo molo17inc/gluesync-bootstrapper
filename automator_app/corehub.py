@@ -33,7 +33,7 @@ import tempfile
 from contextlib import redirect_stdout
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Tuple
 from urllib.parse import urljoin
 
 import requests
@@ -119,6 +119,52 @@ def _load_agent_type_catalog() -> Dict[str, str]:
             catalog[name.lower()] = agent_type.upper()
     _AGENT_TYPE_BY_NAME = catalog
     return catalog
+
+
+def _normalize_agent_category(agent_category: Optional[str]) -> Optional[str]:
+    """Normalize agent categories coming from agents.json to SQL/NoSQL labels."""
+
+    if not agent_category:
+        return None
+
+    normalized = agent_category.strip().upper()
+    if normalized in {"RDBMS", "SQL"}:
+        return "SQL"
+    if normalized == "NOSQL":
+        return "NoSQL"
+    return agent_category
+
+
+def _infer_schema_types_from_agents_list(agents: Any) -> Tuple[Optional[str], Optional[str]]:
+    """Infer (source_type, target_type) directly from a pipeline's agents payload."""
+
+    if not isinstance(agents, list):
+        return None, None
+
+    catalog = _load_agent_type_catalog()
+
+    def _classify(agent: Any) -> Optional[str]:
+        if not isinstance(agent, dict):
+            return None
+        tag = str(agent.get("agentTag") or "").lower()
+        if not tag:
+            return None
+        return _normalize_agent_category(catalog.get(tag))
+
+    source_agent = next((a for a in agents if isinstance(a, dict) and a.get("agentType") == "SOURCE"), None)
+    target_agent = next((a for a in agents if isinstance(a, dict) and a.get("agentType") == "TARGET"), None)
+
+    return _classify(source_agent), _classify(target_agent)
+
+
+def _normalize_conductor_url(conductor_url: str) -> str:
+    """Ensure conductor URL points to the API root (adds /api if missing)."""
+    if not conductor_url:
+        return conductor_url
+    normal = conductor_url.rstrip("/")
+    if not normal.endswith("/api"):
+        normal = f"{normal}/api"
+    return normal
 
 
 def _build_service_url(base_url: Optional[str], suffix: str) -> Optional[str]:
@@ -374,6 +420,27 @@ def run_create_entities_for_tables(
         raw_target_id = target_agent.get("agentId") or target_agent.get("id")
         if not raw_source_id or not raw_target_id:
             raise RuntimeError("Source/target agents are missing IDs")
+
+        inferred_source_type, inferred_target_type = _infer_schema_types_from_agents_list(agents)
+        if inferred_source_type and inferred_source_type != source_type:
+            logger.info(
+                "Overriding provided source_type '%s' with inferred '%s' based on pipeline agents",
+                source_type,
+                inferred_source_type,
+            )
+            source_type = inferred_source_type
+        if inferred_target_type and inferred_target_type != target_type:
+            logger.info(
+                "Overriding provided target_type '%s' with inferred '%s' based on pipeline agents",
+                target_type,
+                inferred_target_type,
+            )
+            target_type = inferred_target_type
+
+        if not source_type:
+            source_type = "SQL"
+        if not target_type:
+            target_type = "SQL"
 
         # Discover all tables for this schema, then restrict to the selected ones
         discovered_tables = get_agent_tables(token, pipeline_id, raw_source_id, source_schema)
@@ -720,35 +787,9 @@ def infer_agent_schema_types(
     configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
 
     agents = get_pipeline_agents(token, pipeline_id)
-    if not isinstance(agents, list):
-        return "SQL", "SQL"
+    source_type, target_type = _infer_schema_types_from_agents_list(agents)
 
-    catalog = _load_agent_type_catalog()
-
-    def _classify_tag(tag: str) -> str:
-        key = (tag or "").lower()
-        if not key:
-            return "SQL"
-
-        if key in catalog:
-            return catalog[key]
-
-        # If the agent tag is unknown to the catalog, fall back to SQL.
-        return "SQL"
-
-    source_agent = next(
-        (a for a in agents if isinstance(a, dict) and a.get("agentType") == "SOURCE"),
-        None,
-    )
-    target_agent = next(
-        (a for a in agents if isinstance(a, dict) and a.get("agentType") == "TARGET"),
-        None,
-    )
-
-    source_tag = str(source_agent.get("agentTag")) if isinstance(source_agent, dict) else ""
-    target_tag = str(target_agent.get("agentTag")) if isinstance(target_agent, dict) else ""
-
-    return _classify_tag(source_tag), _classify_tag(target_tag)
+    return source_type or "SQL", target_type or "SQL"
 
 
 def list_pipelines(
