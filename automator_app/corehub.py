@@ -31,6 +31,7 @@ import shutil
 import zipfile
 import tempfile
 from contextlib import redirect_stdout
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 from urllib.parse import urljoin
@@ -961,7 +962,8 @@ def export_pipeline_full_backup(
         safe_name = "".join(c for c in pipeline_name if c.isalnum() or c in (" ", "-", "_")).rstrip()
         if not safe_name:
             safe_name = pipeline_id
-        filename = f"{root_prefix}backup_{safe_name}_{pipeline_id}.yaml"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{root_prefix}backup_{safe_name}_{pipeline_id}_{timestamp}.yaml"
         zip_file.writestr(filename, yaml_content)
         logger.info("Exported pipeline %s (%s) YAML", pipeline_name, pipeline_id)
 
@@ -1229,7 +1231,8 @@ def export_all_pipelines_yaml(
                 safe_name = "".join(c for c in pipeline_name if c.isalnum() or c in (' ', '-', '_')).rstrip()
                 if not safe_name:
                     safe_name = pipeline_id
-                filename = f"backup_{safe_name}_{pipeline_id}.yaml"
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"backup_{safe_name}_{pipeline_id}_{timestamp}.yaml"
 
                 # Add to ZIP
                 zip_file.writestr(filename, yaml_content)
@@ -1622,6 +1625,8 @@ def duplicate_pipeline(
     conductor_url: Optional[str] = None,
     source_host_override: Optional[str] = None,
     target_host_override: Optional[str] = None,
+    source_port_override: Optional[int] = None,
+    target_port_override: Optional[int] = None,
     override_schemas: bool = False,
     override_source_schema: Optional[str] = None,
     override_target_schema: Optional[str] = None,
@@ -1862,6 +1867,7 @@ def duplicate_pipeline(
         password: str,
         label: str,
         host_override: Optional[str],
+        port_override: Optional[int],
     ) -> dict:
         if not password:
             raise RuntimeError(f"{label} agent password is required to duplicate the pipeline.")
@@ -1869,6 +1875,9 @@ def duplicate_pipeline(
         if host_override:
             logger.info("Overriding %s host to %s", label.lower(), host_override)
             base_host_credentials["host"] = host_override
+        if port_override:
+            logger.info("Overriding %s port to %s", label.lower(), port_override)
+            base_host_credentials["port"] = port_override
         payload = {
             "agentType": agent_template.get("agentType"),
             "agentTag": new_tag,
@@ -1890,6 +1899,7 @@ def duplicate_pipeline(
             source_agent_password,
             "Source",
             source_host_override,
+            source_port_override,
         ),
         _convert_agent_payload(
             target_agent,
@@ -1897,6 +1907,7 @@ def duplicate_pipeline(
             target_agent_password,
             "Target",
             target_host_override,
+            target_port_override,
         ),
     ]
 

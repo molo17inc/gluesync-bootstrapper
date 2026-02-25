@@ -190,7 +190,13 @@
               <div class="corehub-section">
                 <div class="corehub-section-header">
                   <h3>Pipelines</h3>
-                  <button type="button" class="secondary" id="corehub-refresh-btn">Refresh</button>
+                  <button
+                    type="button"
+                    class="secondary"
+                    id="corehub-refresh-btn"
+                  >
+                    Refresh
+                  </button>
                 </div>
                 <ul class="corehub-pipelines" id="corehub-pipelines-list">
                   <li class="corehub-empty">No data available.</li>
@@ -508,6 +514,30 @@
                       />
                     </label>
                   </div>
+                  <div class="dual-field-group">
+                    <label>
+                      Source host port (optional)
+                      <input
+                        type="number"
+                        id="duplicate-source-port"
+                        name="sourcePort"
+                        placeholder="Leave blank to reuse current source port"
+                        min="1"
+                        max="65535"
+                      />
+                    </label>
+                    <label>
+                      Target host port (optional)
+                      <input
+                        type="number"
+                        id="duplicate-target-port"
+                        name="targetPort"
+                        placeholder="Leave blank to reuse current target port"
+                        min="1"
+                        max="65535"
+                      />
+                    </label>
+                  </div>
                   <label class="checkbox">
                     <input type="checkbox" id="customize-schemas" />
                     Override source &amp; target schemas
@@ -577,12 +607,13 @@
                     </select>
                   </label>
                   <label>
-                    Target schema (optional)
+                    Target schema
                     <input
                       type="text"
                       id="bulk-target-schema"
                       name="bulkTargetSchema"
-                      placeholder="Defaults to same as source schema"
+                      placeholder="Enter target schema name"
+                      required
                     />
                   </label>
                   <div id="bulk-tables-container">
@@ -590,6 +621,14 @@
                       Select a schema to load tables.
                     </div>
                     <div id="bulk-tables-list" class="bulk-tables-list"></div>
+                    <button
+                      type="button"
+                      class="secondary"
+                      id="bulk-show-all-btn"
+                      style="display: none; margin-top: 0.5rem;"
+                    >
+                      Show all tables
+                    </button>
                   </div>
                   <div class="button-group">
                     <button

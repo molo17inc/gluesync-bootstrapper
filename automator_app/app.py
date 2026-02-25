@@ -31,6 +31,7 @@ import shutil
 import sys
 import tempfile
 import zipfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 import hashlib
@@ -140,6 +141,7 @@ class LoginRequest(BaseModel):
 class BulkTemplateRequest(BaseModel):
     pipeline_id: str = Field(..., alias="pipelineId")
     source_schema: str = Field(..., alias="sourceSchema")
+    target_schema: str = Field(..., alias="targetSchema")
     table_names: list[str] = Field(..., alias="tableNames")
 
     class Config:
@@ -246,6 +248,8 @@ class DuplicatePipelineRequest(BaseModel):
     clone_entities: bool = Field(True, alias="cloneEntities")
     source_host_override: Optional[str] = Field(None, alias="sourceHost")
     target_host_override: Optional[str] = Field(None, alias="targetHost")
+    source_port_override: Optional[int] = Field(None, alias="sourcePort")
+    target_port_override: Optional[int] = Field(None, alias="targetPort")
     override_schemas: bool = Field(False, alias="overrideSchemas")
     override_source_schema: Optional[str] = Field(None, alias="overrideSourceSchema")
     override_target_schema: Optional[str] = Field(None, alias="overrideTargetSchema")
@@ -621,12 +625,15 @@ def create_app() -> FastAPI:
 
         pipeline_id = request.pipeline_id
         source_schema = request.source_schema
+        target_schema = request.target_schema
         table_names = [name for name in request.table_names or [] if name]
 
         if not pipeline_id:
             raise HTTPException(status_code=400, detail="pipelineId is required")
         if not source_schema:
             raise HTTPException(status_code=400, detail="sourceSchema is required")
+        if not target_schema:
+            raise HTTPException(status_code=400, detail="targetSchema is required")
         if not table_names:
             raise HTTPException(status_code=400, detail="tableNames must contain at least one table")
 
@@ -704,7 +711,7 @@ def create_app() -> FastAPI:
             custom_cfg[name] = entry
 
         schema_cfg: dict[str, Any] = {
-            "target": source_schema,
+            "target": target_schema,
             "tables": {
                 "whitelist": unique_tables,
                 "custom": custom_cfg,
@@ -725,7 +732,8 @@ def create_app() -> FastAPI:
             allow_unicode=True,
         )
 
-        filename = f"template_{pipeline_id}_{source_schema}.yaml"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"template_{pipeline_id}_{source_schema}_{timestamp}.yaml"
         return StreamingResponse(
             io.BytesIO(yaml_text.encode("utf-8")),
             media_type="application/x-yaml",
@@ -753,7 +761,8 @@ def create_app() -> FastAPI:
             logger.exception("Failed to export pipeline %s", pipeline_id)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-        filename = f"backup_{pipeline_id}.yaml"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"backup_{pipeline_id}_{timestamp}.yaml"
         return StreamingResponse(
             io.BytesIO(yaml_text.encode("utf-8")),
             media_type="application/x-yaml",
@@ -796,7 +805,8 @@ def create_app() -> FastAPI:
                 if cleaned:
                     safe_name = cleaned
 
-        filename = f"backup_{safe_name}_{pipeline_id}.zip"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"backup_{safe_name}_{pipeline_id}_{timestamp}.zip"
         return StreamingResponse(
             io.BytesIO(zip_data),
             media_type="application/zip",
@@ -857,6 +867,8 @@ def create_app() -> FastAPI:
                 conductor_url=request.conductor_url,
                 source_host_override=request.source_host_override,
                 target_host_override=request.target_host_override,
+                source_port_override=request.source_port_override,
+                target_port_override=request.target_port_override,
                 override_schemas=request.override_schemas,
                 override_source_schema=request.override_source_schema,
                 override_target_schema=request.override_target_schema,
@@ -1763,7 +1775,8 @@ def create_app() -> FastAPI:
             logger.exception("Failed to export all pipelines")
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-        filename = "pipeline_backups.zip"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"pipeline_backups_{timestamp}.zip"
         return StreamingResponse(
             io.BytesIO(zip_data),
             media_type="application/zip",
