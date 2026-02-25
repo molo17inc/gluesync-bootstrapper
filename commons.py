@@ -542,11 +542,6 @@ def map_data_type(source_type, source_node_info, target_node_info,
                 if 'varchar' == t.lower():
                     print(f"Mapping {normalized_source_type} to {t}")
                     return t
-        elif normalized_source_type in ['datetime']:
-            for t in target_item['supportedTypes']:
-                if 'timestamp with time zone' == t.lower():
-                    print(f"Mapping {normalized_source_type} to {t}")
-                    return t
         elif normalized_source_type in ['bigint']:
             for t in target_item['supportedTypes']:
                 if 'number' == t.lower():
