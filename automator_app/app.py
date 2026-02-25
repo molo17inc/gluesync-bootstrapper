@@ -580,6 +580,12 @@ def create_app() -> FastAPI:
             target_type = "SQL"
             logger.info(f"Using fallback target_type: {target_type}")
 
+        # Disable table creation for NoSQL targets (same logic as duplicate pipeline)
+        effective_create_tables = bool(create_tables)
+        if target_type and target_type.upper() == 'NOSQL':
+            logger.info("Target is NoSQL - disabling table creation")
+            effective_create_tables = False
+
         try:
             result = corehub.run_create_entities_for_tables(
                 token=state.token,
@@ -593,7 +599,7 @@ def create_app() -> FastAPI:
                 skip_errors=request.skip_errors,
                 chunk_size=request.chunk_size,
                 enable_scheduling=bool(enable_scheduling),
-                create_tables=bool(create_tables),
+                create_tables=effective_create_tables,
                 use_ssl=state.use_ssl,
                 skip_verify=state.skip_verify,
             )

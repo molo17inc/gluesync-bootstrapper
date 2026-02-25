@@ -462,13 +462,16 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                         col_numeric_precision = _to_int(col_meta.get('numericPrecision', col_meta.get('numeric_precision')))
                         col_numeric_scale = _to_int(col_meta.get('numericScale', col_meta.get('numeric_scale')))
                         col_is_nullable = _to_bool(col_meta.get('isNullable', col_meta.get('is_nullable')))
-                        column_id = _to_int(col_meta.get('id', col_meta.get('ordinalPosition')), idx)
+                        
+                        # Use separate id and ordinalPosition from YAML metadata
+                        column_id = _to_int(col_meta.get('id'), idx)
+                        ordinal_position = _to_int(col_meta.get('ordinalPosition'), idx)
 
                         column_dtos.append(ColumnDto(
                             name=col_name,
                             type=format_column_type(col_type, col_data_length, col_numeric_precision, col_numeric_scale),
                             id=column_id,
-                            ordinalPosition=column_id,
+                            ordinalPosition=ordinal_position,
                             isPrimaryKey=col_name in key_names,
                             isNullable=col_is_nullable,
                             dataLength=col_data_length,

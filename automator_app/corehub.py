@@ -364,6 +364,27 @@ def run_create_entities_for_tables(
     set_scheduling_enabled(enable_scheduling)
     configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
 
+    # Resolve source/target types from agents.json catalog (same as pipeline backup)
+    inferred_source_type, inferred_target_type = infer_agent_schema_types(
+        token=token,
+        base_url=base_url,
+        pipeline_id=pipeline_id,
+        use_ssl=use_ssl,
+        skip_verify=skip_verify,
+    )
+    if inferred_target_type and inferred_target_type.upper() == "NOSQL":
+        logger.info(
+            "Pipeline %s has a NoSQL target (%s) - disabling table creation",
+            pipeline_id,
+            inferred_target_type,
+        )
+        create_tables = False
+    # Override the caller-supplied types with the authoritative inferred values
+    if inferred_source_type:
+        source_type = inferred_source_type
+    if inferred_target_type:
+        target_type = inferred_target_type
+
     prev_env_create_tables = os.environ.get("CREATE_TABLE_IF_NOT_EXISTS")
     prev_flag_create_tables = CREATE_TABLE_IF_NOT_EXISTS
     set_create_table_if_not_exists(create_tables)
@@ -674,7 +695,20 @@ def discover_column_metadata_for_table(
         if not name:
             continue
 
-        ordinal = col.get("ordinalPosition") or col.get("id") or idx
+        # Use the actual id from the API response
+        col_id = col.get("id")
+        if col_id is None:
+            logger.warning(
+                "Column '%s' in table %s.%s is missing 'id' field in API response, using fallback index %d",
+                name,
+                schema,
+                table_name,
+                idx
+            )
+            col_id = idx
+        
+        # Use ordinalPosition from API if available, otherwise use id
+        ordinal = col.get("ordinalPosition", col_id)
 
         meta: Dict[str, Any] = {
             "name": name,
@@ -683,7 +717,7 @@ def discover_column_metadata_for_table(
             "numericPrecision": col.get("numericPrecision", 0),
             "numericScale": col.get("numericScale", 0),
             "isNullable": col.get("isNullable", False),
-            "id": ordinal,
+            "id": col_id,
             "ordinalPosition": ordinal,
         }
         metadata.append(meta)

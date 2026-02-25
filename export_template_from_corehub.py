@@ -411,7 +411,7 @@ def _process_single_entity(
             table_cfg["whereClause"] = str(where_clause)
             logger.debug(f"Exported whereClause for {source_table_name}: {where_clause}")
 
-    # Columns mapping (source -> alias). Preserve discovery order (ordinal/id).
+    # Columns: Export full metadata including id and ordinalPosition
     column_payload = source_ae.get("columns", []) or []
     if column_payload:
         def _column_sort_key(col: Dict[str, Any], idx: int) -> int:
@@ -425,16 +425,33 @@ def _process_single_entity(
             enumerate(column_payload, start=1),
             key=lambda pair: _column_sort_key(pair[1], pair[0]),
         )
-        column_mappings: List[Dict[str, str]] = []
+        
+        # Export full column metadata with id and ordinalPosition
+        column_metadata: List[Dict[str, Any]] = []
         for _, col in ordered_columns:
             name = col.get("name")
-            alias = col.get("alias") or name
-            if not name or not alias:
+            if not name:
                 continue
-            column_mappings.append({str(name): str(alias)})
+            
+            # Use the actual id from the entity column data
+            col_id = col.get("id")
+            # Use ordinalPosition from entity if available, otherwise use id
+            ordinal = col.get("ordinalPosition", col_id)
+            
+            col_meta: Dict[str, Any] = {
+                "name": name,
+                "type": col.get("type"),
+                "dataLength": col.get("dataLength", 0),
+                "numericPrecision": col.get("numericPrecision", 0),
+                "numericScale": col.get("numericScale", 0),
+                "isNullable": col.get("isNullable", False),
+                "id": col_id,
+                "ordinalPosition": ordinal,
+            }
+            column_metadata.append(col_meta)
 
-        if column_mappings:
-            table_cfg["columns"] = column_mappings
+        if column_metadata:
+            table_cfg["columns"] = column_metadata
 
     # Filters on target entityType
     target_et = target_ae.get("entityType", {}) or {}
@@ -655,16 +672,33 @@ def _process_multitable_entity(
         if group_name:
             table_cfg["groupId"] = group_name
 
-        # Restore column mappings if missing
+        # Restore column metadata with full details including id and ordinalPosition
         if table_name in column_groups and "columns" not in table_cfg:
-            cols = []
+            column_metadata: List[Dict[str, Any]] = []
             for col in column_groups[table_name]:
                 name = col.get("name")
-                alias = col.get("alias") or name
-                if name and alias:
-                    cols.append({str(name): str(alias)})
-            if cols:
-                table_cfg["columns"] = cols
+                if not name:
+                    continue
+                
+                # Use the actual id from the entity column data
+                col_id = col.get("id")
+                # Use ordinalPosition from entity if available, otherwise use id
+                ordinal = col.get("ordinalPosition", col_id)
+                
+                col_meta: Dict[str, Any] = {
+                    "name": name,
+                    "type": col.get("type"),
+                    "dataLength": col.get("dataLength", 0),
+                    "numericPrecision": col.get("numericPrecision", 0),
+                    "numericScale": col.get("numericScale", 0),
+                    "isNullable": col.get("isNullable", False),
+                    "id": col_id,
+                    "ordinalPosition": ordinal,
+                }
+                column_metadata.append(col_meta)
+            
+            if column_metadata:
+                table_cfg["columns"] = column_metadata
 
         # Restore key names if missing
         if table_name in key_groups and "keys" not in table_cfg:

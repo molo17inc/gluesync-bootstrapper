@@ -180,10 +180,10 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
     source_node_info = get_node_info(token, pipeline_id, source_agent_id)
     target_node_info = get_node_info(token, pipeline_id, target_agent_id)
 
-    logger.debug("Source Node Info:")
-    logger.debug(json.dumps(source_node_info, indent=2))
-    logger.debug("Target Node Info:")
-    logger.debug(json.dumps(target_node_info, indent=2))
+    logger.info("Source Node Info:")
+    logger.info(json.dumps(source_node_info, indent=2))
+    logger.info("Target Node Info:")
+    logger.info(json.dumps(target_node_info, indent=2))
 
     logger.debug(f"Full YAML config: {json.dumps(yaml_config, indent=2)}")
 
@@ -739,18 +739,25 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             logger.warning(f"Warning: No keys specified for {table_name}. Table will have no keys.")
 
         if CREATE_TABLE_IF_NOT_EXISTS:
-            logger.info(f"CREATE_TABLE_IF_NOT_EXISTS is enabled - creating table {target_table_name}")
-            handle_table_creation(
-                pipeline_id,
-                target_table_name,
-                yaml_target_schema,
-                keys,
-                token,
-                columns,
-                custom_config,
-                source_node_info,
-                target_node_info
-            )
+            # Only create tables for RDBMS targets, skip for NoSQL
+            # target_type is passed from the caller and indicates SQL or NoSQL
+            is_nosql_target = target_type and target_type.upper() == 'NOSQL'
+            
+            if is_nosql_target:
+                logger.info(f"Skipping table creation for {target_table_name} - target is NoSQL")
+            else:
+                logger.info(f"CREATE_TABLE_IF_NOT_EXISTS is enabled - creating table {target_table_name}")
+                handle_table_creation(
+                    pipeline_id,
+                    target_table_name,
+                    yaml_target_schema,
+                    keys,
+                    token,
+                    columns,
+                    custom_config,
+                    source_node_info,
+                    target_node_info
+                )
 
         # Generate table IDs for use in entities (prefer discovered IDs)
         source_table_id = None
