@@ -1,3819 +1,655 @@
-###                                                  ###
-# Automatically generated file, do not modify manually #
-###                                                  ###
-
-image: gradle:8.8-jdk21
+# This program is part of Gluesync.
+#
+# Gluesync Bootstrapper is dual-licensed under the following licenses:
+#
+# 1. GNU General Public License (GPL) Version 3
+#    You may use, modify, and distribute this software under the terms of the GPL v3.
+#    See the LICENSE-GPL file or <http://www.gnu.org/licenses/gpl-3.0.html> for details.
+#    This option is available at no cost, but any derivative works must also be licensed under GPL v3.
+#
+# 2. MOLO17 Commercial License
+#    Alternatively, you may use this software under the MOLO17 Commercial License,
+#    which includes a warranty and permits proprietary use. Contact MOLO17 at info@molo17.com
+#    for licensing terms and conditions.
+#
+# You must choose one of these licenses to use this software. Using this software implies
+# acceptance of one of these licenses. See the accompanying LICENSE files or contact
+# MOLO17 for more information.
+#
+# Copyright (C) 2025 MOLO17. All rights reserved.
 
 stages:
-  - test
   - build
-  - publish
   - deploy
+
+default:
+  tags:
+    - gs-runners-hq
 
 variables:
   DOCKER_TLS_CERTDIR: ""
-  GIT_DEPTH: "1"
-  GIT_STRATEGY: "fetch"
+  AWS_REGION: us-east-1
+  STACK_NAME: dbmoto-xml-converter
+  RESULTS_BUCKET_PREFIX: gluesync-conversion-results
+  HOSTED_ZONE_ID: ""  # Route 53 hosted zone ID for molo17.com - set in GitLab CI/CD variables
 
-workflow:
+automator_build:
+  stage: build
+  image: python:3.9-bullseye
   rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy"'
-    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_TAG == null'
+    - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
       when: always
     - when: never
-  name: "$PIPELINE_DESCRIPTION"
-
-build_test_all:
-  stage: test
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_TAG == null'
+  variables:
+    PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    PYTHONDONTWRITEBYTECODE: "1"
+  before_script:
+    - python3 --version
+    - pip3 install --break-system-packages --upgrade pip
+    - pip3 install --break-system-packages -r requirements.txt pyinstaller
   script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - gradle check
-  interruptible: true
-
-build_gluesync_core_hub:
-  stage: build
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "core-hub"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - mkdir libs
-    - gradle :corehub:obfuscateWithProguard
-    - find . -type f -name gluesync-*.jar -path '*/build/*' -exec cp '{}' libs/ \;
+    - |
+      export AUTOMATOR_VERSION="${CI_COMMIT_TAG#automator-}"
+      echo "Building Gluesync Automator version $AUTOMATOR_VERSION for Linux"
+      echo "$AUTOMATOR_VERSION" > automator_app/VERSION
+      pyinstaller automator-linux.spec --clean --distpath .automator-build/dist --workpath .automator-build/build
+    - ls -la .automator-build/dist
   artifacts:
+    name: "gluesync-automator-linux-${CI_COMMIT_TAG}"
     paths:
-      - libs/*
-    expire_in: 1 day
-  interruptible: true
+      - .automator-build/dist/gluesync-automator-linux
+    expire_in: 2 weeks
 
-publish_gluesync_core_hub:
-  stage: publish
-  retry: 2
+automator_build_windows:
+  stage: build
   tags:
-    - hq-linux-docker
+    - hq-windows-shell-2022
   rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "core-hub"'
+    - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
+      when: always
+    - when: never
+  variables:
+    PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    PYTHONDONTWRITEBYTECODE: "1"
+  before_script:
+    - |
+      $ErrorActionPreference = 'Stop'
+      $pythonDir = Join-Path $env:CI_PROJECT_DIR 'python'
+      New-Item -ItemType Directory -Force -Path $pythonDir | Out-Null
+      $pythonZip = Join-Path $pythonDir 'python.zip'
+      Invoke-WebRequest -Uri 'https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip' -OutFile $pythonZip
+      Expand-Archive -Path $pythonZip -DestinationPath $pythonDir -Force
+      Remove-Item $pythonZip
+      $pthFile = Join-Path $pythonDir 'python311._pth'
+      (Get-Content $pthFile) -replace '#import site', 'import site' | Set-Content $pthFile
+      $getPip = Join-Path $pythonDir 'get-pip.py'
+      Invoke-WebRequest -Uri 'https://bootstrap.pypa.io/get-pip.py' -OutFile $getPip
+      & (Join-Path $pythonDir 'python.exe') $getPip
+      & (Join-Path $pythonDir 'python.exe') -m pip install --upgrade pip
+      & (Join-Path $pythonDir 'python.exe') -m pip install pyinstaller
+      & (Join-Path $pythonDir 'python.exe') -m pip install -r (Join-Path $env:CI_PROJECT_DIR 'requirements.txt')
+      $env:Path = "$pythonDir;$env:Path"
   script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - apt-get update && apt-get install -y gnupg zip curl
-    - echo "$GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
     - |
-      if [ -z "$MODULE_VERSION" ]; then
-        echo "MODULE_VERSION is not set. Ensure the pipeline is triggered with module version." >&2
-        exit 1
-      fi
-      export VERSION="$MODULE_VERSION"
-    - RELEASE_VERSION="$VERSION" gradle -Psigning.gnupg.keyName="$GPG_KEY_ID" -Psigning.gnupg.passphrase="$GPG_PASSPHRASE" :corehub:publishToMavenLocal
-    - ARTIFACT_DIR="${HOME}/.m2/repository/com/molo17/gluesync/gluesync-core-hub/$VERSION"
-    - |
-      if [ ! -d "$ARTIFACT_DIR" ]; then
-        echo "Artifacts not found in $ARTIFACT_DIR" >&2
-        exit 1
-      fi
-    - mkdir -p /tmp/bundle/com/molo17/gluesync/gluesync-core-hub/$VERSION
-    - cp $ARTIFACT_DIR/* /tmp/bundle/com/molo17/gluesync/gluesync-core-hub/$VERSION/
-    - cd /tmp/bundle/com/molo17/gluesync/gluesync-core-hub/$VERSION
-    - |
-      for file in *.jar *.pom; do
-        if [ -f "$file" ]; then
-          md5sum "$file" | awk '{print $1}' > "${file}.md5"
-          sha1sum "$file" | awk '{print $1}' > "${file}.sha1"
-        fi
-      done
-    - cd /tmp/bundle && zip -r /tmp/gluesync-core-hub-bundle.zip com/
-    - export AUTH_TOKEN=$(printf "${SONATYPE_USERNAME}:${SONATYPE_PASSWORD}" | base64)
-    - |
-      curl --fail --request POST \
-        --header "Authorization: Bearer ${AUTH_TOKEN}" \
-        --form bundle=@/tmp/gluesync-core-hub-bundle.zip \
-        --form publishingType=AUTOMATIC \
-        https://central.sonatype.com/api/v1/publisher/upload
-  dependencies:
-    - build_gluesync_core_hub
-  interruptible: true
+      $python = Join-Path $env:CI_PROJECT_DIR 'python\python.exe'
+      $version = $env:CI_COMMIT_TAG -replace '^automator-', ''
+      Write-Host "Building Gluesync Automator version $version for Windows"
+      Set-Content -Path (Join-Path $env:CI_PROJECT_DIR 'automator_app\VERSION') -Value $version
+      & $python -m PyInstaller automator-windows.spec --clean --distpath .automator-build/dist --workpath .automator-build/build
+    - Get-ChildItem .automator-build/dist
+  artifacts:
+    name: "gluesync-automator-windows-${CI_COMMIT_TAG}"
+    paths:
+      - .automator-build/dist/gluesync-automator-windows.exe
+    expire_in: 2 weeks
 
-deploy_gluesync_core_hub:
+# automator_build_macos:
+#   stage: build
+#   image: python:3.9-bullseye
+#   rules:
+#     - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
+#       when: always
+#     - when: never
+#   variables:
+#     PIP_DISABLE_PIP_VERSION_CHECK: "1"
+#     PYTHONDONTWRITEBYTECODE: "1"
+#   before_script:
+#     - python3 --version
+#     - pip3 install --break-system-packages --upgrade pip
+#     - pip3 install --break-system-packages -r requirements.txt pyinstaller
+#   script:
+#     - |
+#       export AUTOMATOR_VERSION="${CI_COMMIT_TAG#automator-}"
+#       echo "Building Gluesync Automator version $AUTOMATOR_VERSION for macOS"
+#       pyinstaller automator-macos.spec --clean --distpath .automator-build/dist --workpath .automator-build/build
+#     - ls -la .automator-build/dist
+#   artifacts:
+#     name: "gluesync-automator-macos-${CI_COMMIT_TAG}"
+#     paths:
+#       - .automator-build/dist/gluesync-automator-macos
+#     expire_in: 2 weeks
+
+automator_publish:
   stage: deploy
-  retry: 2
-  tags:
-    - hq-linux-docker
-  image: docker:27.3.1
+  image: alpine:3.20
+  needs:
+    - job: automator_build
+      artifacts: true
+    - job: automator_build_windows
+      artifacts: true
+    - job: automator_build_macos  # Uncomment when macOS CI is enabled
+      artifacts: true
+      optional: true  # Make it optional since macOS build might be disabled
   rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "core-hub"'
+    - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
+      when: always
+    - when: never
+  before_script:
+    - apk add --no-cache lftp
+  script:
+    - echo "Checking available build artifacts..."
+    - ls -la .automator-build/dist/ || echo "No .automator-build/dist directory found"
+    - 
+      |
+      cd .automator-build/dist
+      lftp -c "open -u $FTP_USER,$FTP_PASSWORD $FTP_SITE; put gluesync-automator-windows.exe -o /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-windows.exe" 
+      lftp -c "open -u $FTP_USER,$FTP_PASSWORD $FTP_SITE; put gluesync-automator-linux -o /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-linux" 
+      if [ -f "gluesync-automator-macos" ]; then
+        lftp -c "open -u $FTP_USER,$FTP_PASSWORD $FTP_SITE; put gluesync-automator-macos -o /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-macos"
+        echo "Uploaded macOS executable"
+      else
+        echo "macOS executable not available (built locally)"
+      fi
+      if [ -f "$CI_PROJECT_DIR/table-list-template.yaml" ]; then
+        lftp -c "open -u $FTP_USER,$FTP_PASSWORD $FTP_SITE; put $CI_PROJECT_DIR/table-list-template.yaml -o /molo17.com/public_html/gs-content/gluesync-automator/table-list-template.yaml.txt"
+        echo "Uploaded table-list-template.yaml.txt"
+      else
+        echo "table-list-template.yaml not found in project root"
+      fi
+
+deploy:
+  stage: deploy
+  image: docker:latest
   services:
     - name: docker:dind
       variables:
         DOCKER_TLS_CERTDIR: ""
   script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - sh scripts/docker-build.sh --tag=core-hub --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --supported-deploy-arch=DEPLOY_AMD64_ARM64
-  dependencies:
-    - build_gluesync_core_hub
-  interruptible: true
+    - echo "Building & deploying started..."
 
-deploy_gluesync_windows_core_hub:
+    - apk add --no-cache bash git
+    
+    # Initialize and update the Git submodule
+    - git submodule init
+    - git submodule update
+
+    - 
+      | 
+      MODULE_NAME=${CI_COMMIT_TAG#tag-}  # Removes everything before "tag-"
+      MODULE_NAME=${MODULE_NAME%-v*}  # Removes everything after the last "-"
+
+      TAGPART=`echo $CI_COMMIT_TAG | grep -oE '[0-9]+\.[0-9]+\.[0-9](.*)'`
+
+      DEFAULT_NAME=${DOCKER_REGISTRY}/${APP_NAME}
+      ADDITIONAL_TAG="${DEFAULT_NAME}:${TAGPART}"
+
+    - docker login -u danieleangeli -p "$CI_REGISTRY_PASSWORD"
+    - docker build -t $DEFAULT_NAME:latest .
+    - docker tag $DEFAULT_NAME:latest "$ADDITIONAL_TAG"
+    - docker push "$ADDITIONAL_TAG"
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^tag-/
+
+# Deploy Lambda function on changes to dbmoto-converter or related files
+deploy_lambda:
   stage: deploy
-  retry: 2
-  parallel:
-    matrix:
-      - WINDOWS_TAG: "ltsc2019"
-        WINDOWS_RUNNER_VERSION: "2019"
-      - WINDOWS_TAG: "ltsc2022"
-        WINDOWS_RUNNER_VERSION: "2022"
-      # - WINDOWS_TAG: "ltsc2025"
-      #   WINDOWS_RUNNER_VERSION: "2025"
-  tags:
-    - "hq-windows-shell-$WINDOWS_RUNNER_VERSION"
+  image: python:3.9
   rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "core-hub"'
+    - if: $CI_COMMIT_TAG =~ /^dbmoto-/
+      when: always
   script:
-    - $env:GRADLE_USER_HOME = "$((Get-Location).Path)\.gradle"
-    - ./scripts/docker-build-win.ps1 --tag=core-hub --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --windows-tag=$WINDOWS_TAG
-  dependencies:
-    - build_gluesync_core_hub
-  interruptible: true
-
-build_gluesync_cassandra:
-  stage: build
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "cassandra"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - mkdir libs
-    - gradle :cassandra:obfuscateWithProguard
-    - find . -type f -name gluesync-*.jar -path '*/build/*' -exec cp '{}' libs/ \;
-  artifacts:
-    paths:
-      - libs/*
-    expire_in: 1 day
-  interruptible: true
-
-publish_gluesync_cassandra:
-  stage: publish
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "cassandra"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - apt-get update && apt-get install -y gnupg zip curl
-    - echo "$GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
+    - echo "🚀 Starting Lambda deployment..."
+    - cd dbmoto-converter
+    - apt-get update && apt-get install -y awscli jq curl zip
+    - aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
+    - aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY
+    - aws configure set region $AWS_REGION
+    - export RESULTS_BUCKET="${RESULTS_BUCKET_PREFIX}-${CI_PIPELINE_ID}-${CI_JOB_ID}"
+    - echo "📦 Creating Lambda deployment package..."
+    - pip install -r requirements.txt -t lambda-package/ --quiet
+    - cp parse_dbmoto_metadata_xml.py lambda-package/
+    - cp table-list-template-basic.yaml lambda-package/ 2>/dev/null || true
+    - cp lambda_function.py lambda-package/
+    - cd lambda-package && zip -r ../lambda-package.zip . -q && cd ..
     - |
-      if [ -z "$MODULE_VERSION" ]; then
-        echo "MODULE_VERSION is not set. Ensure the pipeline is triggered with module version." >&2
-        exit 1
-      fi
-      export VERSION="$MODULE_VERSION"
-    - RELEASE_VERSION="$VERSION" gradle -Psigning.gnupg.keyName="$GPG_KEY_ID" -Psigning.gnupg.passphrase="$GPG_PASSPHRASE" :cassandra:publishToMavenLocal
-    - ARTIFACT_DIR="${HOME}/.m2/repository/com/molo17/gluesync/gluesync-cassandra/$VERSION"
-    - |
-      if [ ! -d "$ARTIFACT_DIR" ]; then
-        echo "Artifacts not found in $ARTIFACT_DIR" >&2
-        exit 1
-      fi
-    - mkdir -p /tmp/bundle/com/molo17/gluesync/gluesync-cassandra/$VERSION
-    - cp $ARTIFACT_DIR/* /tmp/bundle/com/molo17/gluesync/gluesync-cassandra/$VERSION/
-    - cd /tmp/bundle/com/molo17/gluesync/gluesync-cassandra/$VERSION
-    - |
-      for file in *.jar *.pom; do
-        if [ -f "$file" ]; then
-          md5sum "$file" | awk '{print $1}' > "${file}.md5"
-          sha1sum "$file" | awk '{print $1}' > "${file}.sha1"
+      # Check if stack exists and get its status
+      if aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
+        STACK_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].StackStatus' --output text)
+        echo "📊 Current stack status: $STACK_STATUS"
+        
+        # Handle stack in ROLLBACK_COMPLETE state
+        if [[ "$STACK_STATUS" == "ROLLBACK_COMPLETE" ]]; then
+          echo "🔄 Deleting stack in ROLLBACK_COMPLETE state..."
+          aws cloudformation delete-stack --stack-name "$STACK_NAME" --region "$AWS_REGION"
+          aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" --region "$AWS_REGION"
+          echo "✅ Stack deletion complete"
         fi
-      done
-    - cd /tmp/bundle && zip -r /tmp/gluesync-cassandra-bundle.zip com/
-    - export AUTH_TOKEN=$(printf "${SONATYPE_USERNAME}:${SONATYPE_PASSWORD}" | base64)
-    - |
-      curl --fail --request POST \
-        --header "Authorization: Bearer ${AUTH_TOKEN}" \
-        --form bundle=@/tmp/gluesync-cassandra-bundle.zip \
-        --form publishingType=AUTOMATIC \
-        https://central.sonatype.com/api/v1/publisher/upload
-  dependencies:
-    - build_gluesync_cassandra
-  interruptible: true
-
-deploy_gluesync_cassandra:
-  stage: deploy
-  retry: 2
-  tags:
-    - hq-linux-docker
-  image: docker:27.3.1
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "cassandra"'
-  services:
-    - name: docker:dind
-      variables:
-        DOCKER_TLS_CERTDIR: ""
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - sh scripts/docker-build.sh --tag=cassandra --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --supported-deploy-arch=DEPLOY_AMD64_ARM64
-  dependencies:
-    - build_gluesync_cassandra
-  interruptible: true
-
-deploy_gluesync_windows_cassandra:
-  stage: deploy
-  retry: 2
-  parallel:
-    matrix:
-      - WINDOWS_TAG: "ltsc2019"
-        WINDOWS_RUNNER_VERSION: "2019"
-      - WINDOWS_TAG: "ltsc2022"
-        WINDOWS_RUNNER_VERSION: "2022"
-      # - WINDOWS_TAG: "ltsc2025"
-      #   WINDOWS_RUNNER_VERSION: "2025"
-  tags:
-    - "hq-windows-shell-$WINDOWS_RUNNER_VERSION"
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "cassandra"'
-  script:
-    - $env:GRADLE_USER_HOME = "$((Get-Location).Path)\.gradle"
-    - ./scripts/docker-build-win.ps1 --tag=cassandra --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --windows-tag=$WINDOWS_TAG
-  dependencies:
-    - build_gluesync_cassandra
-  interruptible: true
-
-build_gluesync_postgresql_cdc:
-  stage: build
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "postgresql-cdc"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - mkdir libs
-    - gradle :postgresql:obfuscateWithProguard
-    - find . -type f -name gluesync-*.jar -path '*/build/*' -exec cp '{}' libs/ \;
-  artifacts:
-    paths:
-      - libs/*
-    expire_in: 1 day
-  interruptible: true
-
-publish_gluesync_postgresql_cdc:
-  stage: publish
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "postgresql-cdc"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - apt-get update && apt-get install -y gnupg zip curl
-    - echo "$GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
-    - |
-      if [ -z "$MODULE_VERSION" ]; then
-        echo "MODULE_VERSION is not set. Ensure the pipeline is triggered with module version." >&2
-        exit 1
       fi
-      export VERSION="$MODULE_VERSION"
-    - RELEASE_VERSION="$VERSION" gradle -Psigning.gnupg.keyName="$GPG_KEY_ID" -Psigning.gnupg.passphrase="$GPG_PASSPHRASE" :postgresql:publishToMavenLocal
-    - ARTIFACT_DIR="${HOME}/.m2/repository/com/molo17/gluesync/gluesync-postgresql-cdc/$VERSION"
-    - |
-      if [ ! -d "$ARTIFACT_DIR" ]; then
-        echo "Artifacts not found in $ARTIFACT_DIR" >&2
-        exit 1
-      fi
-    - mkdir -p /tmp/bundle/com/molo17/gluesync/gluesync-postgresql-cdc/$VERSION
-    - cp $ARTIFACT_DIR/* /tmp/bundle/com/molo17/gluesync/gluesync-postgresql-cdc/$VERSION/
-    - cd /tmp/bundle/com/molo17/gluesync/gluesync-postgresql-cdc/$VERSION
-    - |
-      for file in *.jar *.pom; do
-        if [ -f "$file" ]; then
-          md5sum "$file" | awk '{print $1}' > "${file}.md5"
-          sha1sum "$file" | awk '{print $1}' > "${file}.sha1"
+
+      # Set operation type for later use
+      export OPERATION="create-stack"
+      export WAIT_OPERATION="stack-create-complete"
+      
+      # Load template body once
+      TEMPLATE_BODY=$(cat cloudformation-template.yaml)
+      
+      # Check if we need to update or create the stack
+      if aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
+        echo "🔍 Checking for stack updates..."
+        
+        # Use change sets to check for updates without making changes
+        CHANGE_SET_NAME="changeset-${CI_PIPELINE_ID}-${CI_JOB_ID}"
+        
+        # Create a change set to check for updates
+        aws cloudformation create-change-set \
+          --stack-name "$STACK_NAME" \
+          --region "$AWS_REGION" \
+          --change-set-name "$CHANGE_SET_NAME" \
+          --template-body "$TEMPLATE_BODY" \
+          --parameters \
+              ParameterKey=FtpHost,ParameterValue="$FTP_SITE" \
+              ParameterKey=FtpUser,ParameterValue="$FTP_USER" \
+              ParameterKey=FtpPassword,ParameterValue="$FTP_PASSWORD" \
+              ParameterKey=FtpBasePath,ParameterValue="/molo17.com/public_html/gs-content/dbmoto-conversion/" \
+              ParameterKey=CustomDomainName,ParameterValue="dbmoto-converter.labs.molo17.com" \
+          --capabilities CAPABILITY_IAM
+        
+        # Wait for change set to complete
+        echo "⏳ Waiting for change set creation to complete..."
+        aws cloudformation wait change-set-create-complete \
+          --stack-name "$STACK_NAME" \
+          --region "$AWS_REGION" \
+          --change-set-name "$CHANGE_SET_NAME" \
+          || true  # Continue even if there are no changes
+        
+        # Check if there are changes to apply
+        CHANGE_SET_STATUS=$(aws cloudformation describe-change-set \
+          --stack-name "$STACK_NAME" \
+          --region "$AWS_REGION" \
+          --change-set-name "$CHANGE_SET_NAME" \
+          --query 'Status' \
+          --output text 2>/dev/null || echo "FAILED")
+        
+        if [[ "$CHANGE_SET_STATUS" == "FAILED" ]]; then
+          # Check if the failure is due to no changes
+          CHANGE_SET_REASON=$(aws cloudformation describe-change-set \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --change-set-name "$CHANGE_SET_NAME" \
+            --query 'StatusReason' \
+            --output text 2>/dev/null || echo "Unknown error")
+          
+          if [[ "$CHANGE_SET_REASON" == *"No updates are to be performed"* ]] || [[ "$CHANGE_SET_REASON" == *"didn't contain changes"* ]]; then
+            echo "✅ No changes detected in the stack. Stack is already up to date."
+            # Delete the change set as it's no longer needed
+            aws cloudformation delete-change-set \
+              --stack-name "$STACK_NAME" \
+              --region "$AWS_REGION" \
+              --change-set-name "$CHANGE_SET_NAME"
+            # Set a flag to skip the update (but we will still update Lambda)
+            export NO_UPDATES_NEEDED=true
+          else
+            echo "❌ Failed to create change set: $CHANGE_SET_REASON"
+            # Delete the failed change set
+            aws cloudformation delete-change-set \
+              --stack-name "$STACK_NAME" \
+              --region "$AWS_REGION" \
+              --change-set-name "$CHANGE_SET_NAME"
+            exit 1
+          fi
+        else
+          echo "🔄 Changes detected, applying update..."
+          # Execute the change set
+          aws cloudformation execute-change-set \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --change-set-name "$CHANGE_SET_NAME"
+          
+          echo "⏳ Waiting for stack update to complete..."
+          aws cloudformation wait stack-update-complete \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION"
+          echo "✅ Stack update completed successfully"
         fi
-      done
-    - cd /tmp/bundle && zip -r /tmp/gluesync-postgresql-cdc-bundle.zip com/
-    - export AUTH_TOKEN=$(printf "${SONATYPE_USERNAME}:${SONATYPE_PASSWORD}" | base64)
-    - |
-      curl --fail --request POST \
-        --header "Authorization: Bearer ${AUTH_TOKEN}" \
-        --form bundle=@/tmp/gluesync-postgresql-cdc-bundle.zip \
-        --form publishingType=AUTOMATIC \
-        https://central.sonatype.com/api/v1/publisher/upload
-  dependencies:
-    - build_gluesync_postgresql_cdc
-  interruptible: true
-
-deploy_gluesync_postgresql_cdc:
-  stage: deploy
-  retry: 2
-  tags:
-    - hq-linux-docker
-  image: docker:27.3.1
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "postgresql-cdc"'
-  services:
-    - name: docker:dind
-      variables:
-        DOCKER_TLS_CERTDIR: ""
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - sh scripts/docker-build.sh --tag=postgresql-cdc --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --supported-deploy-arch=DEPLOY_AMD64_ARM64
-  dependencies:
-    - build_gluesync_postgresql_cdc
-  interruptible: true
-
-deploy_gluesync_windows_postgresql_cdc:
-  stage: deploy
-  retry: 2
-  parallel:
-    matrix:
-      - WINDOWS_TAG: "ltsc2019"
-        WINDOWS_RUNNER_VERSION: "2019"
-      - WINDOWS_TAG: "ltsc2022"
-        WINDOWS_RUNNER_VERSION: "2022"
-      # - WINDOWS_TAG: "ltsc2025"
-      #   WINDOWS_RUNNER_VERSION: "2025"
-  tags:
-    - "hq-windows-shell-$WINDOWS_RUNNER_VERSION"
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "postgresql-cdc"'
-  script:
-    - $env:GRADLE_USER_HOME = "$((Get-Location).Path)\.gradle"
-    - ./scripts/docker-build-win.ps1 --tag=postgresql-cdc --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --windows-tag=$WINDOWS_TAG
-  dependencies:
-    - build_gluesync_postgresql_cdc
-  interruptible: true
-
-build_gluesync_mysql_cdc:
-  stage: build
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "mysql-cdc"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - mkdir libs
-    - gradle :mysql-cdc:obfuscateWithProguard
-    - find . -type f -name gluesync-*.jar -path '*/build/*' -exec cp '{}' libs/ \;
-  artifacts:
-    paths:
-      - libs/*
-    expire_in: 1 day
-  interruptible: true
-
-publish_gluesync_mysql_cdc:
-  stage: publish
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "mysql-cdc"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - apt-get update && apt-get install -y gnupg zip curl
-    - echo "$GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
-    - |
-      if [ -z "$MODULE_VERSION" ]; then
-        echo "MODULE_VERSION is not set. Ensure the pipeline is triggered with module version." >&2
-        exit 1
+      else
+        # Stack doesn't exist, create it
+        echo "🆕 Creating new stack..."
+        aws cloudformation create-stack \
+          --stack-name "$STACK_NAME" \
+          --region "$AWS_REGION" \
+          --template-body "$TEMPLATE_BODY" \
+          --parameters \
+              ParameterKey=FtpHost,ParameterValue="c1107198.sgvps.net" \
+              ParameterKey=FtpUser,ParameterValue="$FTP_USER" \
+              ParameterKey=FtpPassword,ParameterValue="$FTP_PASSWORD" \
+              ParameterKey=FtpBasePath,ParameterValue="/molo17.com/public_html/gs-content/dbmoto-conversion/" \
+              ParameterKey=CustomDomainName,ParameterValue="dbmoto-converter.labs.molo17.com" \
+          --capabilities CAPABILITY_IAM
+          
+        echo "⏳ Waiting for stack creation to complete..."
+        aws cloudformation wait stack-create-complete \
+          --stack-name "$STACK_NAME" \
+          --region "$AWS_REGION"
+        echo "✅ Stack creation completed successfully"
       fi
-      export VERSION="$MODULE_VERSION"
-    - RELEASE_VERSION="$VERSION" gradle -Psigning.gnupg.keyName="$GPG_KEY_ID" -Psigning.gnupg.passphrase="$GPG_PASSPHRASE" :mysql-cdc:publishToMavenLocal
-    - ARTIFACT_DIR="${HOME}/.m2/repository/com/molo17/gluesync/gluesync-mysql-cdc/$VERSION"
+    # Always update Lambda function code for dbmoto deployments
     - |
-      if [ ! -d "$ARTIFACT_DIR" ]; then
-        echo "Artifacts not found in $ARTIFACT_DIR" >&2
-        exit 1
-      fi
-    - mkdir -p /tmp/bundle/com/molo17/gluesync/gluesync-mysql-cdc/$VERSION
-    - cp $ARTIFACT_DIR/* /tmp/bundle/com/molo17/gluesync/gluesync-mysql-cdc/$VERSION/
-    - cd /tmp/bundle/com/molo17/gluesync/gluesync-mysql-cdc/$VERSION
-    - |
-      for file in *.jar *.pom; do
-        if [ -f "$file" ]; then
-          md5sum "$file" | awk '{print $1}' > "${file}.md5"
-          sha1sum "$file" | awk '{print $1}' > "${file}.sha1"
+      echo "⏳ Waiting for Lambda function to be ready (max 5 minutes)..."
+      WAIT_START=$(date +%s)
+      TIMEOUT=300
+      LAMBDA_READY=false
+      
+      while [ $(( $(date +%s) - WAIT_START )) -lt $TIMEOUT ]; do
+        if aws lambda get-function --function-name dbmoto-xml-converter --region "$AWS_REGION" >/dev/null 2>&1; then
+          LAMBDA_READY=true
+          break
         fi
+        echo "⏱️  Waiting for Lambda function to be available... ($(( $(date +%s) - WAIT_START ))s elapsed)"
+        sleep 10
       done
-    - cd /tmp/bundle && zip -r /tmp/gluesync-mysql-cdc-bundle.zip com/
-    - export AUTH_TOKEN=$(printf "${SONATYPE_USERNAME}:${SONATYPE_PASSWORD}" | base64)
-    - |
-      curl --fail --request POST \
-        --header "Authorization: Bearer ${AUTH_TOKEN}" \
-        --form bundle=@/tmp/gluesync-mysql-cdc-bundle.zip \
-        --form publishingType=AUTOMATIC \
-        https://central.sonatype.com/api/v1/publisher/upload
-  dependencies:
-    - build_gluesync_mysql_cdc
-  interruptible: true
-
-deploy_gluesync_mysql_cdc:
-  stage: deploy
-  retry: 2
-  tags:
-    - hq-linux-docker
-  image: docker:27.3.1
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "mysql-cdc"'
-  services:
-    - name: docker:dind
-      variables:
-        DOCKER_TLS_CERTDIR: ""
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - sh scripts/docker-build.sh --tag=mysql-cdc --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --supported-deploy-arch=DEPLOY_AMD64_ARM64
-  dependencies:
-    - build_gluesync_mysql_cdc
-  interruptible: true
-
-deploy_gluesync_windows_mysql_cdc:
-  stage: deploy
-  retry: 2
-  parallel:
-    matrix:
-      - WINDOWS_TAG: "ltsc2019"
-        WINDOWS_RUNNER_VERSION: "2019"
-      - WINDOWS_TAG: "ltsc2022"
-        WINDOWS_RUNNER_VERSION: "2022"
-      # - WINDOWS_TAG: "ltsc2025"
-      #   WINDOWS_RUNNER_VERSION: "2025"
-  tags:
-    - "hq-windows-shell-$WINDOWS_RUNNER_VERSION"
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "mysql-cdc"'
-  script:
-    - $env:GRADLE_USER_HOME = "$((Get-Location).Path)\.gradle"
-    - ./scripts/docker-build-win.ps1 --tag=mysql-cdc --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --windows-tag=$WINDOWS_TAG
-  dependencies:
-    - build_gluesync_mysql_cdc
-  interruptible: true
-
-build_gluesync_ibm_iseries:
-  stage: build
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "ibm-iseries"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - mkdir libs
-    - gradle :ibm-iseries:obfuscateWithProguard
-    - find . -type f -name gluesync-*.jar -path '*/build/*' -exec cp '{}' libs/ \;
-  artifacts:
-    paths:
-      - libs/*
-    expire_in: 1 day
-  interruptible: true
-
-publish_gluesync_ibm_iseries:
-  stage: publish
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "ibm-iseries"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - apt-get update && apt-get install -y gnupg zip curl
-    - echo "$GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
-    - |
-      if [ -z "$MODULE_VERSION" ]; then
-        echo "MODULE_VERSION is not set. Ensure the pipeline is triggered with module version." >&2
+      
+      if [[ "$LAMBDA_READY" == "false" ]]; then
+        echo "❌ Timeout waiting for Lambda function to be available"
         exit 1
       fi
-      export VERSION="$MODULE_VERSION"
-    - RELEASE_VERSION="$VERSION" gradle -Psigning.gnupg.keyName="$GPG_KEY_ID" -Psigning.gnupg.passphrase="$GPG_PASSPHRASE" :ibm-iseries:publishToMavenLocal
-    - ARTIFACT_DIR="${HOME}/.m2/repository/com/molo17/gluesync/gluesync-ibm-iseries/$VERSION"
+      
+      echo "📦 Updating Lambda function code..."
+      aws lambda update-function-code \
+        --function-name dbmoto-xml-converter \
+        --zip-file fileb://lambda-package.zip \
+        --region "$AWS_REGION"
+        
+      echo "⏳ Waiting for Lambda update to complete..."
+      aws lambda wait function-updated --function-name dbmoto-xml-converter --region "$AWS_REGION"
+      echo "✅ Lambda function update completed successfully"
+    - echo "⏳ Checking stack status before waiting..."
     - |
-      if [ ! -d "$ARTIFACT_DIR" ]; then
-        echo "Artifacts not found in $ARTIFACT_DIR" >&2
+      CURRENT_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].StackStatus' --output text)
+      echo "📊 Current stack status: $CURRENT_STATUS"
+      
+      if [[ "$CURRENT_STATUS" == "CREATE_COMPLETE" ]] || [[ "$CURRENT_STATUS" == "UPDATE_COMPLETE" ]]; then
+        echo "✅ Stack is already complete, skipping wait!"
+      elif [[ "$CURRENT_STATUS" == *"FAILED"* ]] || [[ "$CURRENT_STATUS" == "ROLLBACK_COMPLETE" ]]; then
+        echo "❌ Stack is in failed state: $CURRENT_STATUS"
+        aws cloudformation describe-stack-events --stack-name "$STACK_NAME" --region "$AWS_REGION" --max-items 10 --output table
         exit 1
-      fi
-    - mkdir -p /tmp/bundle/com/molo17/gluesync/gluesync-ibm-iseries/$VERSION
-    - cp $ARTIFACT_DIR/* /tmp/bundle/com/molo17/gluesync/gluesync-ibm-iseries/$VERSION/
-    - cd /tmp/bundle/com/molo17/gluesync/gluesync-ibm-iseries/$VERSION
-    - |
-      for file in *.jar *.pom; do
-        if [ -f "$file" ]; then
-          md5sum "$file" | awk '{print $1}' > "${file}.md5"
-          sha1sum "$file" | awk '{print $1}' > "${file}.sha1"
+      else
+        echo "⏳ Waiting for stack deployment (status: $CURRENT_STATUS)..."
+        if [ "$OPERATION" = "create-stack" ]; then
+          timeout 600 aws cloudformation wait stack-create-complete --stack-name "$STACK_NAME" --region "$AWS_REGION" || {
+          EXIT_CODE=$?
+          echo "❌ Stack creation failed or timed out (exit code: $EXIT_CODE)"
+          STACK_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].StackStatus' --output text)
+          echo "📊 Final stack status: $STACK_STATUS"
+          echo ""
+          echo "📋 Failed resources and reasons:"
+          aws cloudformation describe-stack-events \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --max-items 50 \
+            --query 'StackEvents[?ResourceStatus==`CREATE_FAILED` || ResourceStatus==`ROLLBACK_IN_PROGRESS`].[Timestamp,LogicalResourceId,ResourceType,ResourceStatusReason]' \
+            --output table
+          echo ""
+          echo "📋 All recent events:"
+          aws cloudformation describe-stack-events \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --max-items 20 \
+            --output table
+          exit 1
+        }
+      else
+        timeout 600 aws cloudformation wait stack-update-complete --stack-name "$STACK_NAME" --region "$AWS_REGION" || {
+          EXIT_CODE=$?
+          echo "❌ Stack update failed or timed out (exit code: $EXIT_CODE)"
+          STACK_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].StackStatus' --output text)
+          echo "📊 Final stack status: $STACK_STATUS"
+          echo ""
+          echo "📋 Failed resources and reasons:"
+          aws cloudformation describe-stack-events \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --max-items 50 \
+            --query 'StackEvents[?ResourceStatus==`UPDATE_FAILED` || ResourceStatus==`UPDATE_ROLLBACK_IN_PROGRESS`].[Timestamp,LogicalResourceId,ResourceType,ResourceStatusReason]' \
+            --output table
+          echo ""
+          echo "📋 All recent events:"
+          aws cloudformation describe-stack-events \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --max-items 20 \
+            --output table
+          exit 1
+        }
         fi
-      done
-    - cd /tmp/bundle && zip -r /tmp/gluesync-ibm-iseries-bundle.zip com/
-    - export AUTH_TOKEN=$(printf "${SONATYPE_USERNAME}:${SONATYPE_PASSWORD}" | base64)
-    - |
-      curl --fail --request POST \
-        --header "Authorization: Bearer ${AUTH_TOKEN}" \
-        --form bundle=@/tmp/gluesync-ibm-iseries-bundle.zip \
-        --form publishingType=AUTOMATIC \
-        https://central.sonatype.com/api/v1/publisher/upload
-  dependencies:
-    - build_gluesync_ibm_iseries
-  interruptible: true
-
-deploy_gluesync_ibm_iseries:
-  stage: deploy
-  retry: 2
-  tags:
-    - hq-linux-docker
-  image: docker:27.3.1
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "ibm-iseries"'
-  services:
-    - name: docker:dind
-      variables:
-        DOCKER_TLS_CERTDIR: ""
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - sh scripts/docker-build.sh --tag=ibm-iseries --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --supported-deploy-arch=DEPLOY_AMD64_ARM64
-  dependencies:
-    - build_gluesync_ibm_iseries
-  interruptible: true
-
-deploy_gluesync_windows_ibm_iseries:
-  stage: deploy
-  retry: 2
-  parallel:
-    matrix:
-      - WINDOWS_TAG: "ltsc2019"
-        WINDOWS_RUNNER_VERSION: "2019"
-      - WINDOWS_TAG: "ltsc2022"
-        WINDOWS_RUNNER_VERSION: "2022"
-      # - WINDOWS_TAG: "ltsc2025"
-      #   WINDOWS_RUNNER_VERSION: "2025"
-  tags:
-    - "hq-windows-shell-$WINDOWS_RUNNER_VERSION"
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "ibm-iseries"'
-  script:
-    - $env:GRADLE_USER_HOME = "$((Get-Location).Path)\.gradle"
-    - ./scripts/docker-build-win.ps1 --tag=ibm-iseries --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --windows-tag=$WINDOWS_TAG
-  dependencies:
-    - build_gluesync_ibm_iseries
-  interruptible: true
-
-build_gluesync_couchbase:
-  stage: build
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "couchbase"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - mkdir libs
-    - gradle :couchbase:obfuscateWithProguard
-    - find . -type f -name gluesync-*.jar -path '*/build/*' -exec cp '{}' libs/ \;
-  artifacts:
-    paths:
-      - libs/*
-    expire_in: 1 day
-  interruptible: true
-
-publish_gluesync_couchbase:
-  stage: publish
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "couchbase"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - apt-get update && apt-get install -y gnupg zip curl
-    - echo "$GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
-    - |
-      if [ -z "$MODULE_VERSION" ]; then
-        echo "MODULE_VERSION is not set. Ensure the pipeline is triggered with module version." >&2
-        exit 1
       fi
-      export VERSION="$MODULE_VERSION"
-    - RELEASE_VERSION="$VERSION" gradle -Psigning.gnupg.keyName="$GPG_KEY_ID" -Psigning.gnupg.passphrase="$GPG_PASSPHRASE" :couchbase:publishToMavenLocal
-    - ARTIFACT_DIR="${HOME}/.m2/repository/com/molo17/gluesync/gluesync-couchbase/$VERSION"
+    - echo "✅ Stack deployment completed!"
     - |
-      if [ ! -d "$ARTIFACT_DIR" ]; then
-        echo "Artifacts not found in $ARTIFACT_DIR" >&2
-        exit 1
-      fi
-    - mkdir -p /tmp/bundle/com/molo17/gluesync/gluesync-couchbase/$VERSION
-    - cp $ARTIFACT_DIR/* /tmp/bundle/com/molo17/gluesync/gluesync-couchbase/$VERSION/
-    - cd /tmp/bundle/com/molo17/gluesync/gluesync-couchbase/$VERSION
+      API_ENDPOINT=$(aws cloudformation describe-stacks \
+        --stack-name "$STACK_NAME" \
+        --region "$AWS_REGION" \
+        --query 'Stacks[0].Outputs[?OutputKey==`ApiEndpoint`].OutputValue' \
+        --output text)
+      CUSTOM_DOMAIN_ENDPOINT=$(aws cloudformation describe-stacks \
+        --stack-name "$STACK_NAME" \
+        --region "$AWS_REGION" \
+        --query 'Stacks[0].Outputs[?OutputKey==`CustomDomainEndpoint`].OutputValue' \
+        --output text)
+      REGIONAL_DOMAIN=$(aws cloudformation describe-stacks \
+        --stack-name "$STACK_NAME" \
+        --region "$AWS_REGION" \
+        --query 'Stacks[0].Outputs[?OutputKey==`RegionalDomainName`].OutputValue' \
+        --output text)
+      CERT_VALIDATION_NAME=$(aws cloudformation describe-stacks \
+        --stack-name "$STACK_NAME" \
+        --region "$AWS_REGION" \
+        --query 'Stacks[0].Outputs[?OutputKey==`CertificateValidationRecordName`].OutputValue' \
+        --output text 2>/dev/null || echo "")
+      CERT_VALIDATION_VALUE=$(aws cloudformation describe-stacks \
+        --stack-name "$STACK_NAME" \
+        --region "$AWS_REGION" \
+        --query 'Stacks[0].Outputs[?OutputKey==`CertificateValidationRecordValue`].OutputValue' \
+        --output text 2>/dev/null || echo "")
+      RESULTS_BUCKET_NAME=$(aws cloudformation describe-stacks \
+        --stack-name "$STACK_NAME" \
+        --region "$AWS_REGION" \
+        --query 'Stacks[0].Outputs[?OutputKey==`ResultsBucketName`].OutputValue' \
+        --output text)
+      echo "API_ENDPOINT=$API_ENDPOINT" >> deploy.env
+      echo "CUSTOM_DOMAIN_ENDPOINT=$CUSTOM_DOMAIN_ENDPOINT" >> deploy.env
+      echo "REGIONAL_DOMAIN=$REGIONAL_DOMAIN" >> deploy.env
+      echo "CERT_VALIDATION_NAME=$CERT_VALIDATION_NAME" >> deploy.env
+      echo "CERT_VALIDATION_VALUE=$CERT_VALIDATION_VALUE" >> deploy.env
+      echo "RESULTS_BUCKET_NAME=$RESULTS_BUCKET_NAME" >> deploy.env
     - |
-      for file in *.jar *.pom; do
-        if [ -f "$file" ]; then
-          md5sum "$file" | awk '{print $1}' > "${file}.md5"
-          sha1sum "$file" | awk '{print $1}' > "${file}.sha1"
+      echo "🧪 Testing API endpoint..."
+      RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" "$API_ENDPOINT/convert" -X POST 2>/dev/null || echo "000")
+      if [ "$RESPONSE" != "000" ]; then
+        echo "✅ API endpoint is responding (HTTP $RESPONSE)"
+        if [ "$RESPONSE" = "500" ]; then
+          echo "ℹ️  Note: 500 error expected without valid XML file upload"
         fi
-      done
-    - cd /tmp/bundle && zip -r /tmp/gluesync-couchbase-bundle.zip com/
-    - export AUTH_TOKEN=$(printf "${SONATYPE_USERNAME}:${SONATYPE_PASSWORD}" | base64)
+      else
+        echo "❌ API endpoint is not reachable"
+        exit 1
+      fi
     - |
-      curl --fail --request POST \
-        --header "Authorization: Bearer ${AUTH_TOKEN}" \
-        --form bundle=@/tmp/gluesync-couchbase-bundle.zip \
-        --form publishingType=AUTOMATIC \
-        https://central.sonatype.com/api/v1/publisher/upload
-  dependencies:
-    - build_gluesync_couchbase
-  interruptible: true
+      echo "🌐 Custom Domain Configuration:"
+      echo ""
+      echo "📋 Manual DNS setup required:"
+      echo ""
+      echo "1. SSL Certificate Validation (Required for HTTPS):"
+      echo "   - Go to AWS Certificate Manager console"
+      echo "   - Find certificate for dbmoto-converter.labs.molo17.com"
+      echo "   - Copy the CNAME record name and value"
+      echo "   - Add CNAME record to your DNS (Route 53 or other)"
+      echo ""
+      echo "2. Custom Domain CNAME:"
+      echo "   CNAME: dbmoto-converter.labs.molo17.com"
+      echo "   Value: $REGIONAL_DOMAIN"
+      echo ""
+      echo "3. Once DNS is configured, your API will be available at:"
+      echo "   $CUSTOM_DOMAIN_ENDPOINT/convert"
+      echo ""
+      echo "⚠️  DNS propagation may take 5-15 minutes"
+      echo "⚠️  SSL certificate validation may take additional time"
 
-deploy_gluesync_couchbase:
-  stage: deploy
-  retry: 2
-  tags:
-    - hq-linux-docker
-  image: docker:27.3.1
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "couchbase"'
-  services:
-    - name: docker:dind
-      variables:
-        DOCKER_TLS_CERTDIR: ""
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - sh scripts/docker-build.sh --tag=couchbase --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --supported-deploy-arch=DEPLOY_AMD64_ARM64
-  dependencies:
-    - build_gluesync_couchbase
-  interruptible: true
-
-deploy_gluesync_windows_couchbase:
-  stage: deploy
-  retry: 2
-  parallel:
-    matrix:
-      - WINDOWS_TAG: "ltsc2019"
-        WINDOWS_RUNNER_VERSION: "2019"
-      - WINDOWS_TAG: "ltsc2022"
-        WINDOWS_RUNNER_VERSION: "2022"
-      # - WINDOWS_TAG: "ltsc2025"
-      #   WINDOWS_RUNNER_VERSION: "2025"
-  tags:
-    - "hq-windows-shell-$WINDOWS_RUNNER_VERSION"
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "couchbase"'
-  script:
-    - $env:GRADLE_USER_HOME = "$((Get-Location).Path)\.gradle"
-    - ./scripts/docker-build-win.ps1 --tag=couchbase --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --windows-tag=$WINDOWS_TAG
-  dependencies:
-    - build_gluesync_couchbase
-  interruptible: true
-
-build_gluesync_mssql_ct:
-  stage: build
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "mssql-ct"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - mkdir libs
-    - gradle :mssql:changetracking:obfuscateWithProguard
-    - find . -type f -name gluesync-*.jar -path '*/build/*' -exec cp '{}' libs/ \;
   artifacts:
+    reports:
+      dotenv: deploy.env
     paths:
-      - libs/*
-    expire_in: 1 day
-  interruptible: true
+      - lambda-package.zip
+    expire_in: 1 week
 
-publish_gluesync_mssql_ct:
-  stage: publish
-  retry: 2
-  tags:
-    - hq-linux-docker
+  environment:
+    name: production
+    url: $API_ENDPOINT
+
+# Deploy WordPress plugin to hosting
+deploy_wordpress_plugin:
+  stage: deploy
+  image: alpine:latest
   rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "mssql-ct"'
+    - if: $CI_COMMIT_TAG =~ /^dbmoto-/
+      when: always
+  dependencies:
+    - deploy_lambda
   script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - apt-get update && apt-get install -y gnupg zip curl
-    - echo "$GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
+    - echo "🚀 Deploying WordPress plugin to hosting..."
+    - apk add --no-cache lftp
+    - cd dbmoto-converter/wordpress-plugin/dbmoto-converter
+    - echo "📤 Uploading plugin files to WordPress hosting..."
+    - lftp -c "open -u $FTP_USER,$FTP_PASSWORD ftp://$FTP_SITE; mirror -R . /molo17.com/public_html/wp-content/plugins/dbmoto-converter/"
+    - echo "✅ WordPress plugin deployed successfully!"
+  when: manual
+  allow_failure: true
+
+# Manual cleanup job
+cleanup_lambda:
+  stage: deploy
+  image: amazon/aws-cli:latest
+  when: manual
+  only:
+    - web
+  script:
+    - echo "🧹 Cleaning up Lambda deployment..."
+    - aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
+    - aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY
+    - aws configure set region $AWS_REGION
+    - aws cloudformation delete-stack --stack-name "$STACK_NAME" --region "$AWS_REGION"
+    - echo "⏳ Waiting for stack deletion..."
+    - aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" --region "$AWS_REGION"
+    - echo "✅ Lambda deployment cleaned up successfully"
+
+update_budibase_version:
+  stage: deploy
+  image: alpine:latest
+  needs:
+    - job: automator_publish
+      optional: true
+    - job: deploy
+      optional: true
+  script:
+    - apk add --no-cache bash curl jq
     - |
+      set -euo pipefail
+      
+      if [ -z "${CI_COMMIT_TAG:-}" ]; then
+        echo "[ERROR] Not a tracked tag"
+        exit 1
+      fi
+
+      MODULE_VERSION=$(echo "$CI_COMMIT_TAG" | grep -oE '[0-9]+\.[0-9]+\.[0-9](.*)' || true)
+
       if [ -z "$MODULE_VERSION" ]; then
-        echo "MODULE_VERSION is not set. Ensure the pipeline is triggered with module version." >&2
+        echo "[ERROR] Unable to extract version from tag: $CI_COMMIT_TAG"
         exit 1
       fi
-      export VERSION="$MODULE_VERSION"
-    - RELEASE_VERSION="$VERSION" gradle -Psigning.gnupg.keyName="$GPG_KEY_ID" -Psigning.gnupg.passphrase="$GPG_PASSPHRASE" :mssql:changetracking:publishToMavenLocal
-    - ARTIFACT_DIR="${HOME}/.m2/repository/com/molo17/gluesync/gluesync-mssql-ct/$VERSION"
-    - |
-      if [ ! -d "$ARTIFACT_DIR" ]; then
-        echo "Artifacts not found in $ARTIFACT_DIR" >&2
+
+      case "$CI_COMMIT_TAG" in
+        automator-*)
+          BUILD_TAG="automator"
+          ;;
+        *)
+          BUILD_TAG="bootstrapper"
+          ;;
+      esac
+
+      echo "[INFO] Updating Budibase version: BUILD_TAG=$BUILD_TAG, MODULE_VERSION=$MODULE_VERSION"
+      
+      SEARCH_PAYLOAD="{
+        \"query\": {
+          \"equal\": {
+            \"internalName\": \"$BUILD_TAG\"
+          }
+        },
+        \"paginate\": false,
+        \"limit\": 1000
+      }"
+
+      SEARCH_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+        -H "x-budibase-app-id: $BUDIBASE_APP_ID" \
+        -H "Content-Type: application/json" \
+        -H "Accept: application/json" \
+        -H "x-budibase-api-key: $BUDIBASE_API_KEY" \
+        -d "$SEARCH_PAYLOAD" \
+        "$BUDIBASE_BASE_URL/tables/datasource_plus_3dbc0976d090472f82658f287ec8ad6d__AvailableAgents/rows/search")
+
+      SEARCH_BODY=$(printf "%s" "$SEARCH_RESPONSE" | sed -e '$d')
+      SEARCH_STATUS=$(printf "%s" "$SEARCH_RESPONSE" | tail -n 1)
+
+      if [ "$SEARCH_STATUS" -ne 200 ]; then
+        echo "Failed to search for row. HTTP Status: $SEARCH_STATUS"
+        echo "Response: $SEARCH_BODY"
+        echo "Search Payload: $SEARCH_PAYLOAD"
         exit 1
       fi
-    - mkdir -p /tmp/bundle/com/molo17/gluesync/gluesync-mssql-ct/$VERSION
-    - cp $ARTIFACT_DIR/* /tmp/bundle/com/molo17/gluesync/gluesync-mssql-ct/$VERSION/
-    - cd /tmp/bundle/com/molo17/gluesync/gluesync-mssql-ct/$VERSION
-    - |
-      for file in *.jar *.pom; do
-        if [ -f "$file" ]; then
-          md5sum "$file" | awk '{print $1}' > "${file}.md5"
-          sha1sum "$file" | awk '{print $1}' > "${file}.sha1"
-        fi
-      done
-    - cd /tmp/bundle && zip -r /tmp/gluesync-mssql-ct-bundle.zip com/
-    - export AUTH_TOKEN=$(printf "${SONATYPE_USERNAME}:${SONATYPE_PASSWORD}" | base64)
-    - |
-      curl --fail --request POST \
-        --header "Authorization: Bearer ${AUTH_TOKEN}" \
-        --form bundle=@/tmp/gluesync-mssql-ct-bundle.zip \
-        --form publishingType=AUTOMATIC \
-        https://central.sonatype.com/api/v1/publisher/upload
-  dependencies:
-    - build_gluesync_mssql_ct
-  interruptible: true
 
-deploy_gluesync_mssql_ct:
-  stage: deploy
-  retry: 2
-  tags:
-    - hq-linux-docker
-  image: docker:27.3.1
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "mssql-ct"'
-  services:
-    - name: docker:dind
-      variables:
-        DOCKER_TLS_CERTDIR: ""
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - sh scripts/docker-build.sh --tag=mssql-ct --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --supported-deploy-arch=DEPLOY_AMD64_ARM64
-  dependencies:
-    - build_gluesync_mssql_ct
-  interruptible: true
+      ROW_ID=$(echo "$SEARCH_BODY" | jq -r '.data[0]._id // empty')
 
-deploy_gluesync_windows_mssql_ct:
-  stage: deploy
-  retry: 2
-  parallel:
-    matrix:
-      - WINDOWS_TAG: "ltsc2019"
-        WINDOWS_RUNNER_VERSION: "2019"
-      - WINDOWS_TAG: "ltsc2022"
-        WINDOWS_RUNNER_VERSION: "2022"
-      # - WINDOWS_TAG: "ltsc2025"
-      #   WINDOWS_RUNNER_VERSION: "2025"
-  tags:
-    - "hq-windows-shell-$WINDOWS_RUNNER_VERSION"
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "mssql-ct"'
-  script:
-    - $env:GRADLE_USER_HOME = "$((Get-Location).Path)\.gradle"
-    - ./scripts/docker-build-win.ps1 --tag=mssql-ct --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --windows-tag=$WINDOWS_TAG
-  dependencies:
-    - build_gluesync_mssql_ct
-  interruptible: true
-
-build_gluesync_mssql_cdc:
-  stage: build
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "mssql-cdc"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - mkdir libs
-    - gradle :mssql:cdc:obfuscateWithProguard
-    - find . -type f -name gluesync-*.jar -path '*/build/*' -exec cp '{}' libs/ \;
-  artifacts:
-    paths:
-      - libs/*
-    expire_in: 1 day
-  interruptible: true
-
-publish_gluesync_mssql_cdc:
-  stage: publish
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "mssql-cdc"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - apt-get update && apt-get install -y gnupg zip curl
-    - echo "$GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
-    - |
-      if [ -z "$MODULE_VERSION" ]; then
-        echo "MODULE_VERSION is not set. Ensure the pipeline is triggered with module version." >&2
+      if [ -z "$ROW_ID" ]; then
+        echo "No matching row found for internalName: $BUILD_TAG"
         exit 1
       fi
-      export VERSION="$MODULE_VERSION"
-    - RELEASE_VERSION="$VERSION" gradle -Psigning.gnupg.keyName="$GPG_KEY_ID" -Psigning.gnupg.passphrase="$GPG_PASSPHRASE" :mssql:cdc:publishToMavenLocal
-    - ARTIFACT_DIR="${HOME}/.m2/repository/com/molo17/gluesync/gluesync-mssql-cdc/$VERSION"
-    - |
-      if [ ! -d "$ARTIFACT_DIR" ]; then
-        echo "Artifacts not found in $ARTIFACT_DIR" >&2
-        exit 1
+
+      UPDATE_PAYLOAD="{
+        \"latestVersionAlpha\": \"$MODULE_VERSION\",
+        \"latestVersionBeta\": \"$MODULE_VERSION\",
+        \"latestVersionGA\": \"$MODULE_VERSION\"
+      }"
+
+      UPDATE_RESPONSE=$(curl -s -w "\n%{http_code}" -X PUT \
+        -H "x-budibase-app-id: $BUDIBASE_APP_ID" \
+        -H "Content-Type: application/json" \
+        -H "Accept: application/json" \
+        -H "x-budibase-api-key: $BUDIBASE_API_KEY" \
+        -d "$UPDATE_PAYLOAD" \
+        "$BUDIBASE_BASE_URL/tables/datasource_plus_3dbc0976d090472f82658f287ec8ad6d__AvailableAgents/rows/$ROW_ID")
+
+      UPDATE_BODY=$(printf "%s" "$UPDATE_RESPONSE" | sed -e '$d')
+      UPDATE_STATUS=$(printf "%s" "$UPDATE_RESPONSE" | tail -n 1)
+
+      echo "Budibase API update response code: $UPDATE_STATUS"
+      echo "Budibase API update response: $UPDATE_BODY"
+
+      if [ "$UPDATE_STATUS" -ge 200 ] && [ "$UPDATE_STATUS" -lt 300 ]; then
+          echo "Successfully updated version on budibase"
+      else
+          echo "Failed to update version on budibase. HTTP Status: $UPDATE_STATUS"
+          exit 1
       fi
-    - mkdir -p /tmp/bundle/com/molo17/gluesync/gluesync-mssql-cdc/$VERSION
-    - cp $ARTIFACT_DIR/* /tmp/bundle/com/molo17/gluesync/gluesync-mssql-cdc/$VERSION/
-    - cd /tmp/bundle/com/molo17/gluesync/gluesync-mssql-cdc/$VERSION
-    - |
-      for file in *.jar *.pom; do
-        if [ -f "$file" ]; then
-          md5sum "$file" | awk '{print $1}' > "${file}.md5"
-          sha1sum "$file" | awk '{print $1}' > "${file}.sha1"
-        fi
-      done
-    - cd /tmp/bundle && zip -r /tmp/gluesync-mssql-cdc-bundle.zip com/
-    - export AUTH_TOKEN=$(printf "${SONATYPE_USERNAME}:${SONATYPE_PASSWORD}" | base64)
-    - |
-      curl --fail --request POST \
-        --header "Authorization: Bearer ${AUTH_TOKEN}" \
-        --form bundle=@/tmp/gluesync-mssql-cdc-bundle.zip \
-        --form publishingType=AUTOMATIC \
-        https://central.sonatype.com/api/v1/publisher/upload
-  dependencies:
-    - build_gluesync_mssql_cdc
-  interruptible: true
-
-deploy_gluesync_mssql_cdc:
-  stage: deploy
-  retry: 2
-  tags:
-    - hq-linux-docker
-  image: docker:27.3.1
   rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "mssql-cdc"'
-  services:
-    - name: docker:dind
-      variables:
-        DOCKER_TLS_CERTDIR: ""
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - sh scripts/docker-build.sh --tag=mssql-cdc --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --supported-deploy-arch=DEPLOY_AMD64_ARM64
-  dependencies:
-    - build_gluesync_mssql_cdc
-  interruptible: true
-
-deploy_gluesync_windows_mssql_cdc:
-  stage: deploy
-  retry: 2
-  parallel:
-    matrix:
-      - WINDOWS_TAG: "ltsc2019"
-        WINDOWS_RUNNER_VERSION: "2019"
-      - WINDOWS_TAG: "ltsc2022"
-        WINDOWS_RUNNER_VERSION: "2022"
-      # - WINDOWS_TAG: "ltsc2025"
-      #   WINDOWS_RUNNER_VERSION: "2025"
-  tags:
-    - "hq-windows-shell-$WINDOWS_RUNNER_VERSION"
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "mssql-cdc"'
-  script:
-    - $env:GRADLE_USER_HOME = "$((Get-Location).Path)\.gradle"
-    - ./scripts/docker-build-win.ps1 --tag=mssql-cdc --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --windows-tag=$WINDOWS_TAG
-  dependencies:
-    - build_gluesync_mssql_cdc
-  interruptible: true
-
-build_gluesync_vertica:
-  stage: build
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "vertica"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - mkdir libs
-    - gradle :vertica:obfuscateWithProguard
-    - find . -type f -name gluesync-*.jar -path '*/build/*' -exec cp '{}' libs/ \;
-  artifacts:
-    paths:
-      - libs/*
-    expire_in: 1 day
-  interruptible: true
-
-publish_gluesync_vertica:
-  stage: publish
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "vertica"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - apt-get update && apt-get install -y gnupg zip curl
-    - echo "$GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
-    - |
-      if [ -z "$MODULE_VERSION" ]; then
-        echo "MODULE_VERSION is not set. Ensure the pipeline is triggered with module version." >&2
-        exit 1
-      fi
-      export VERSION="$MODULE_VERSION"
-    - RELEASE_VERSION="$VERSION" gradle -Psigning.gnupg.keyName="$GPG_KEY_ID" -Psigning.gnupg.passphrase="$GPG_PASSPHRASE" :vertica:publishToMavenLocal
-    - ARTIFACT_DIR="${HOME}/.m2/repository/com/molo17/gluesync/gluesync-vertica/$VERSION"
-    - |
-      if [ ! -d "$ARTIFACT_DIR" ]; then
-        echo "Artifacts not found in $ARTIFACT_DIR" >&2
-        exit 1
-      fi
-    - mkdir -p /tmp/bundle/com/molo17/gluesync/gluesync-vertica/$VERSION
-    - cp $ARTIFACT_DIR/* /tmp/bundle/com/molo17/gluesync/gluesync-vertica/$VERSION/
-    - cd /tmp/bundle/com/molo17/gluesync/gluesync-vertica/$VERSION
-    - |
-      for file in *.jar *.pom; do
-        if [ -f "$file" ]; then
-          md5sum "$file" | awk '{print $1}' > "${file}.md5"
-          sha1sum "$file" | awk '{print $1}' > "${file}.sha1"
-        fi
-      done
-    - cd /tmp/bundle && zip -r /tmp/gluesync-vertica-bundle.zip com/
-    - export AUTH_TOKEN=$(printf "${SONATYPE_USERNAME}:${SONATYPE_PASSWORD}" | base64)
-    - |
-      curl --fail --request POST \
-        --header "Authorization: Bearer ${AUTH_TOKEN}" \
-        --form bundle=@/tmp/gluesync-vertica-bundle.zip \
-        --form publishingType=AUTOMATIC \
-        https://central.sonatype.com/api/v1/publisher/upload
-  dependencies:
-    - build_gluesync_vertica
-  interruptible: true
-
-deploy_gluesync_vertica:
-  stage: deploy
-  retry: 2
-  tags:
-    - hq-linux-docker
-  image: docker:27.3.1
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "vertica"'
-  services:
-    - name: docker:dind
-      variables:
-        DOCKER_TLS_CERTDIR: ""
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - sh scripts/docker-build.sh --tag=vertica --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --supported-deploy-arch=DEPLOY_AMD64_ARM64
-  dependencies:
-    - build_gluesync_vertica
-  interruptible: true
-
-deploy_gluesync_windows_vertica:
-  stage: deploy
-  retry: 2
-  parallel:
-    matrix:
-      - WINDOWS_TAG: "ltsc2019"
-        WINDOWS_RUNNER_VERSION: "2019"
-      - WINDOWS_TAG: "ltsc2022"
-        WINDOWS_RUNNER_VERSION: "2022"
-      # - WINDOWS_TAG: "ltsc2025"
-      #   WINDOWS_RUNNER_VERSION: "2025"
-  tags:
-    - "hq-windows-shell-$WINDOWS_RUNNER_VERSION"
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "vertica"'
-  script:
-    - $env:GRADLE_USER_HOME = "$((Get-Location).Path)\.gradle"
-    - ./scripts/docker-build-win.ps1 --tag=vertica --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --windows-tag=$WINDOWS_TAG
-  dependencies:
-    - build_gluesync_vertica
-  interruptible: true
-
-build_gluesync_kafka:
-  stage: build
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "kafka"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - mkdir libs
-    - gradle :kafka:obfuscateWithProguard
-    - find . -type f -name gluesync-*.jar -path '*/build/*' -exec cp '{}' libs/ \;
-  artifacts:
-    paths:
-      - libs/*
-    expire_in: 1 day
-  interruptible: true
-
-publish_gluesync_kafka:
-  stage: publish
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "kafka"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - apt-get update && apt-get install -y gnupg zip curl
-    - echo "$GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
-    - |
-      if [ -z "$MODULE_VERSION" ]; then
-        echo "MODULE_VERSION is not set. Ensure the pipeline is triggered with module version." >&2
-        exit 1
-      fi
-      export VERSION="$MODULE_VERSION"
-    - RELEASE_VERSION="$VERSION" gradle -Psigning.gnupg.keyName="$GPG_KEY_ID" -Psigning.gnupg.passphrase="$GPG_PASSPHRASE" :kafka:publishToMavenLocal
-    - ARTIFACT_DIR="${HOME}/.m2/repository/com/molo17/gluesync/gluesync-kafka/$VERSION"
-    - |
-      if [ ! -d "$ARTIFACT_DIR" ]; then
-        echo "Artifacts not found in $ARTIFACT_DIR" >&2
-        exit 1
-      fi
-    - mkdir -p /tmp/bundle/com/molo17/gluesync/gluesync-kafka/$VERSION
-    - cp $ARTIFACT_DIR/* /tmp/bundle/com/molo17/gluesync/gluesync-kafka/$VERSION/
-    - cd /tmp/bundle/com/molo17/gluesync/gluesync-kafka/$VERSION
-    - |
-      for file in *.jar *.pom; do
-        if [ -f "$file" ]; then
-          md5sum "$file" | awk '{print $1}' > "${file}.md5"
-          sha1sum "$file" | awk '{print $1}' > "${file}.sha1"
-        fi
-      done
-    - cd /tmp/bundle && zip -r /tmp/gluesync-kafka-bundle.zip com/
-    - export AUTH_TOKEN=$(printf "${SONATYPE_USERNAME}:${SONATYPE_PASSWORD}" | base64)
-    - |
-      curl --fail --request POST \
-        --header "Authorization: Bearer ${AUTH_TOKEN}" \
-        --form bundle=@/tmp/gluesync-kafka-bundle.zip \
-        --form publishingType=AUTOMATIC \
-        https://central.sonatype.com/api/v1/publisher/upload
-  dependencies:
-    - build_gluesync_kafka
-  interruptible: true
-
-deploy_gluesync_kafka:
-  stage: deploy
-  retry: 2
-  tags:
-    - hq-linux-docker
-  image: docker:27.3.1
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "kafka"'
-  services:
-    - name: docker:dind
-      variables:
-        DOCKER_TLS_CERTDIR: ""
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - sh scripts/docker-build.sh --tag=kafka --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --supported-deploy-arch=DEPLOY_AMD64_ARM64
-  dependencies:
-    - build_gluesync_kafka
-  interruptible: true
-
-deploy_gluesync_windows_kafka:
-  stage: deploy
-  retry: 2
-  parallel:
-    matrix:
-      - WINDOWS_TAG: "ltsc2019"
-        WINDOWS_RUNNER_VERSION: "2019"
-      - WINDOWS_TAG: "ltsc2022"
-        WINDOWS_RUNNER_VERSION: "2022"
-      # - WINDOWS_TAG: "ltsc2025"
-      #   WINDOWS_RUNNER_VERSION: "2025"
-  tags:
-    - "hq-windows-shell-$WINDOWS_RUNNER_VERSION"
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "kafka"'
-  script:
-    - $env:GRADLE_USER_HOME = "$((Get-Location).Path)\.gradle"
-    - ./scripts/docker-build-win.ps1 --tag=kafka --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --windows-tag=$WINDOWS_TAG
-  dependencies:
-    - build_gluesync_kafka
-  interruptible: true
-
-build_gluesync_solace:
-  stage: build
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "solace"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - mkdir libs
-    - gradle :solace:obfuscateWithProguard
-    - find . -type f -name gluesync-*.jar -path '*/build/*' -exec cp '{}' libs/ \;
-  artifacts:
-    paths:
-      - libs/*
-    expire_in: 1 day
-  interruptible: true
-
-publish_gluesync_solace:
-  stage: publish
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "solace"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - apt-get update && apt-get install -y gnupg zip curl
-    - echo "$GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
-    - |
-      if [ -z "$MODULE_VERSION" ]; then
-        echo "MODULE_VERSION is not set. Ensure the pipeline is triggered with module version." >&2
-        exit 1
-      fi
-      export VERSION="$MODULE_VERSION"
-    - RELEASE_VERSION="$VERSION" gradle -Psigning.gnupg.keyName="$GPG_KEY_ID" -Psigning.gnupg.passphrase="$GPG_PASSPHRASE" :solace:publishToMavenLocal
-    - ARTIFACT_DIR="${HOME}/.m2/repository/com/molo17/gluesync/gluesync-solace/$VERSION"
-    - |
-      if [ ! -d "$ARTIFACT_DIR" ]; then
-        echo "Artifacts not found in $ARTIFACT_DIR" >&2
-        exit 1
-      fi
-    - mkdir -p /tmp/bundle/com/molo17/gluesync/gluesync-solace/$VERSION
-    - cp $ARTIFACT_DIR/* /tmp/bundle/com/molo17/gluesync/gluesync-solace/$VERSION/
-    - cd /tmp/bundle/com/molo17/gluesync/gluesync-solace/$VERSION
-    - |
-      for file in *.jar *.pom; do
-        if [ -f "$file" ]; then
-          md5sum "$file" | awk '{print $1}' > "${file}.md5"
-          sha1sum "$file" | awk '{print $1}' > "${file}.sha1"
-        fi
-      done
-    - cd /tmp/bundle && zip -r /tmp/gluesync-solace-bundle.zip com/
-    - export AUTH_TOKEN=$(printf "${SONATYPE_USERNAME}:${SONATYPE_PASSWORD}" | base64)
-    - |
-      curl --fail --request POST \
-        --header "Authorization: Bearer ${AUTH_TOKEN}" \
-        --form bundle=@/tmp/gluesync-solace-bundle.zip \
-        --form publishingType=AUTOMATIC \
-        https://central.sonatype.com/api/v1/publisher/upload
-  dependencies:
-    - build_gluesync_solace
-  interruptible: true
-
-deploy_gluesync_solace:
-  stage: deploy
-  retry: 2
-  tags:
-    - hq-linux-docker
-  image: docker:27.3.1
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "solace"'
-  services:
-    - name: docker:dind
-      variables:
-        DOCKER_TLS_CERTDIR: ""
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - sh scripts/docker-build.sh --tag=solace --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --supported-deploy-arch=DEPLOY_AMD64_ARM64
-  dependencies:
-    - build_gluesync_solace
-  interruptible: true
-
-deploy_gluesync_windows_solace:
-  stage: deploy
-  retry: 2
-  parallel:
-    matrix:
-      - WINDOWS_TAG: "ltsc2019"
-        WINDOWS_RUNNER_VERSION: "2019"
-      - WINDOWS_TAG: "ltsc2022"
-        WINDOWS_RUNNER_VERSION: "2022"
-      # - WINDOWS_TAG: "ltsc2025"
-      #   WINDOWS_RUNNER_VERSION: "2025"
-  tags:
-    - "hq-windows-shell-$WINDOWS_RUNNER_VERSION"
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "solace"'
-  script:
-    - $env:GRADLE_USER_HOME = "$((Get-Location).Path)\.gradle"
-    - ./scripts/docker-build-win.ps1 --tag=solace --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --windows-tag=$WINDOWS_TAG
-  dependencies:
-    - build_gluesync_solace
-  interruptible: true
-
-build_gluesync_mongodb:
-  stage: build
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "mongodb"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - mkdir libs
-    - gradle :mongodb:obfuscateWithProguard
-    - find . -type f -name gluesync-*.jar -path '*/build/*' -exec cp '{}' libs/ \;
-  artifacts:
-    paths:
-      - libs/*
-    expire_in: 1 day
-  interruptible: true
-
-publish_gluesync_mongodb:
-  stage: publish
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "mongodb"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - apt-get update && apt-get install -y gnupg zip curl
-    - echo "$GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
-    - |
-      if [ -z "$MODULE_VERSION" ]; then
-        echo "MODULE_VERSION is not set. Ensure the pipeline is triggered with module version." >&2
-        exit 1
-      fi
-      export VERSION="$MODULE_VERSION"
-    - RELEASE_VERSION="$VERSION" gradle -Psigning.gnupg.keyName="$GPG_KEY_ID" -Psigning.gnupg.passphrase="$GPG_PASSPHRASE" :mongodb:publishToMavenLocal
-    - ARTIFACT_DIR="${HOME}/.m2/repository/com/molo17/gluesync/gluesync-mongodb/$VERSION"
-    - |
-      if [ ! -d "$ARTIFACT_DIR" ]; then
-        echo "Artifacts not found in $ARTIFACT_DIR" >&2
-        exit 1
-      fi
-    - mkdir -p /tmp/bundle/com/molo17/gluesync/gluesync-mongodb/$VERSION
-    - cp $ARTIFACT_DIR/* /tmp/bundle/com/molo17/gluesync/gluesync-mongodb/$VERSION/
-    - cd /tmp/bundle/com/molo17/gluesync/gluesync-mongodb/$VERSION
-    - |
-      for file in *.jar *.pom; do
-        if [ -f "$file" ]; then
-          md5sum "$file" | awk '{print $1}' > "${file}.md5"
-          sha1sum "$file" | awk '{print $1}' > "${file}.sha1"
-        fi
-      done
-    - cd /tmp/bundle && zip -r /tmp/gluesync-mongodb-bundle.zip com/
-    - export AUTH_TOKEN=$(printf "${SONATYPE_USERNAME}:${SONATYPE_PASSWORD}" | base64)
-    - |
-      curl --fail --request POST \
-        --header "Authorization: Bearer ${AUTH_TOKEN}" \
-        --form bundle=@/tmp/gluesync-mongodb-bundle.zip \
-        --form publishingType=AUTOMATIC \
-        https://central.sonatype.com/api/v1/publisher/upload
-  dependencies:
-    - build_gluesync_mongodb
-  interruptible: true
-
-deploy_gluesync_mongodb:
-  stage: deploy
-  retry: 2
-  tags:
-    - hq-linux-docker
-  image: docker:27.3.1
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "mongodb"'
-  services:
-    - name: docker:dind
-      variables:
-        DOCKER_TLS_CERTDIR: ""
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - sh scripts/docker-build.sh --tag=mongodb --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --supported-deploy-arch=DEPLOY_AMD64_ARM64
-  dependencies:
-    - build_gluesync_mongodb
-  interruptible: true
-
-deploy_gluesync_windows_mongodb:
-  stage: deploy
-  retry: 2
-  parallel:
-    matrix:
-      - WINDOWS_TAG: "ltsc2019"
-        WINDOWS_RUNNER_VERSION: "2019"
-      - WINDOWS_TAG: "ltsc2022"
-        WINDOWS_RUNNER_VERSION: "2022"
-      # - WINDOWS_TAG: "ltsc2025"
-      #   WINDOWS_RUNNER_VERSION: "2025"
-  tags:
-    - "hq-windows-shell-$WINDOWS_RUNNER_VERSION"
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "mongodb"'
-  script:
-    - $env:GRADLE_USER_HOME = "$((Get-Location).Path)\.gradle"
-    - ./scripts/docker-build-win.ps1 --tag=mongodb --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --windows-tag=$WINDOWS_TAG
-  dependencies:
-    - build_gluesync_mongodb
-  interruptible: true
-
-build_gluesync_sybase:
-  stage: build
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "sybase"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - mkdir libs
-    - gradle :sybase:obfuscateWithProguard
-    - find . -type f -name gluesync-*.jar -path '*/build/*' -exec cp '{}' libs/ \;
-  artifacts:
-    paths:
-      - libs/*
-    expire_in: 1 day
-  interruptible: true
-
-publish_gluesync_sybase:
-  stage: publish
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "sybase"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - apt-get update && apt-get install -y gnupg zip curl
-    - echo "$GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
-    - |
-      if [ -z "$MODULE_VERSION" ]; then
-        echo "MODULE_VERSION is not set. Ensure the pipeline is triggered with module version." >&2
-        exit 1
-      fi
-      export VERSION="$MODULE_VERSION"
-    - RELEASE_VERSION="$VERSION" gradle -Psigning.gnupg.keyName="$GPG_KEY_ID" -Psigning.gnupg.passphrase="$GPG_PASSPHRASE" :sybase:publishToMavenLocal
-    - ARTIFACT_DIR="${HOME}/.m2/repository/com/molo17/gluesync/gluesync-sybase/$VERSION"
-    - |
-      if [ ! -d "$ARTIFACT_DIR" ]; then
-        echo "Artifacts not found in $ARTIFACT_DIR" >&2
-        exit 1
-      fi
-    - mkdir -p /tmp/bundle/com/molo17/gluesync/gluesync-sybase/$VERSION
-    - cp $ARTIFACT_DIR/* /tmp/bundle/com/molo17/gluesync/gluesync-sybase/$VERSION/
-    - cd /tmp/bundle/com/molo17/gluesync/gluesync-sybase/$VERSION
-    - |
-      for file in *.jar *.pom; do
-        if [ -f "$file" ]; then
-          md5sum "$file" | awk '{print $1}' > "${file}.md5"
-          sha1sum "$file" | awk '{print $1}' > "${file}.sha1"
-        fi
-      done
-    - cd /tmp/bundle && zip -r /tmp/gluesync-sybase-bundle.zip com/
-    - export AUTH_TOKEN=$(printf "${SONATYPE_USERNAME}:${SONATYPE_PASSWORD}" | base64)
-    - |
-      curl --fail --request POST \
-        --header "Authorization: Bearer ${AUTH_TOKEN}" \
-        --form bundle=@/tmp/gluesync-sybase-bundle.zip \
-        --form publishingType=AUTOMATIC \
-        https://central.sonatype.com/api/v1/publisher/upload
-  dependencies:
-    - build_gluesync_sybase
-  interruptible: true
-
-deploy_gluesync_sybase:
-  stage: deploy
-  retry: 2
-  tags:
-    - hq-linux-docker
-  image: docker:27.3.1
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "sybase"'
-  services:
-    - name: docker:dind
-      variables:
-        DOCKER_TLS_CERTDIR: ""
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - sh scripts/docker-build.sh --tag=sybase --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --supported-deploy-arch=DEPLOY_AMD64_ARM64
-  dependencies:
-    - build_gluesync_sybase
-  interruptible: true
-
-deploy_gluesync_windows_sybase:
-  stage: deploy
-  retry: 2
-  parallel:
-    matrix:
-      - WINDOWS_TAG: "ltsc2019"
-        WINDOWS_RUNNER_VERSION: "2019"
-      - WINDOWS_TAG: "ltsc2022"
-        WINDOWS_RUNNER_VERSION: "2022"
-      # - WINDOWS_TAG: "ltsc2025"
-      #   WINDOWS_RUNNER_VERSION: "2025"
-  tags:
-    - "hq-windows-shell-$WINDOWS_RUNNER_VERSION"
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "sybase"'
-  script:
-    - $env:GRADLE_USER_HOME = "$((Get-Location).Path)\.gradle"
-    - ./scripts/docker-build-win.ps1 --tag=sybase --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --windows-tag=$WINDOWS_TAG
-  dependencies:
-    - build_gluesync_sybase
-  interruptible: true
-
-build_gluesync_dynamodb:
-  stage: build
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "dynamodb"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - mkdir libs
-    - gradle :dynamodb:obfuscateWithProguard
-    - find . -type f -name gluesync-*.jar -path '*/build/*' -exec cp '{}' libs/ \;
-  artifacts:
-    paths:
-      - libs/*
-    expire_in: 1 day
-  interruptible: true
-
-publish_gluesync_dynamodb:
-  stage: publish
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "dynamodb"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - apt-get update && apt-get install -y gnupg zip curl
-    - echo "$GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
-    - |
-      if [ -z "$MODULE_VERSION" ]; then
-        echo "MODULE_VERSION is not set. Ensure the pipeline is triggered with module version." >&2
-        exit 1
-      fi
-      export VERSION="$MODULE_VERSION"
-    - RELEASE_VERSION="$VERSION" gradle -Psigning.gnupg.keyName="$GPG_KEY_ID" -Psigning.gnupg.passphrase="$GPG_PASSPHRASE" :dynamodb:publishToMavenLocal
-    - ARTIFACT_DIR="${HOME}/.m2/repository/com/molo17/gluesync/gluesync-dynamodb/$VERSION"
-    - |
-      if [ ! -d "$ARTIFACT_DIR" ]; then
-        echo "Artifacts not found in $ARTIFACT_DIR" >&2
-        exit 1
-      fi
-    - mkdir -p /tmp/bundle/com/molo17/gluesync/gluesync-dynamodb/$VERSION
-    - cp $ARTIFACT_DIR/* /tmp/bundle/com/molo17/gluesync/gluesync-dynamodb/$VERSION/
-    - cd /tmp/bundle/com/molo17/gluesync/gluesync-dynamodb/$VERSION
-    - |
-      for file in *.jar *.pom; do
-        if [ -f "$file" ]; then
-          md5sum "$file" | awk '{print $1}' > "${file}.md5"
-          sha1sum "$file" | awk '{print $1}' > "${file}.sha1"
-        fi
-      done
-    - cd /tmp/bundle && zip -r /tmp/gluesync-dynamodb-bundle.zip com/
-    - export AUTH_TOKEN=$(printf "${SONATYPE_USERNAME}:${SONATYPE_PASSWORD}" | base64)
-    - |
-      curl --fail --request POST \
-        --header "Authorization: Bearer ${AUTH_TOKEN}" \
-        --form bundle=@/tmp/gluesync-dynamodb-bundle.zip \
-        --form publishingType=AUTOMATIC \
-        https://central.sonatype.com/api/v1/publisher/upload
-  dependencies:
-    - build_gluesync_dynamodb
-  interruptible: true
-
-deploy_gluesync_dynamodb:
-  stage: deploy
-  retry: 2
-  tags:
-    - hq-linux-docker
-  image: docker:27.3.1
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "dynamodb"'
-  services:
-    - name: docker:dind
-      variables:
-        DOCKER_TLS_CERTDIR: ""
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - sh scripts/docker-build.sh --tag=dynamodb --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --supported-deploy-arch=DEPLOY_AMD64_ARM64
-  dependencies:
-    - build_gluesync_dynamodb
-  interruptible: true
-
-deploy_gluesync_windows_dynamodb:
-  stage: deploy
-  retry: 2
-  parallel:
-    matrix:
-      - WINDOWS_TAG: "ltsc2019"
-        WINDOWS_RUNNER_VERSION: "2019"
-      - WINDOWS_TAG: "ltsc2022"
-        WINDOWS_RUNNER_VERSION: "2022"
-      # - WINDOWS_TAG: "ltsc2025"
-      #   WINDOWS_RUNNER_VERSION: "2025"
-  tags:
-    - "hq-windows-shell-$WINDOWS_RUNNER_VERSION"
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "dynamodb"'
-  script:
-    - $env:GRADLE_USER_HOME = "$((Get-Location).Path)\.gradle"
-    - ./scripts/docker-build-win.ps1 --tag=dynamodb --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --windows-tag=$WINDOWS_TAG
-  dependencies:
-    - build_gluesync_dynamodb
-  interruptible: true
-
-build_gluesync_snowflake:
-  stage: build
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "snowflake"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - mkdir libs
-    - gradle :snowflake:obfuscateWithProguard
-    - find . -type f -name gluesync-*.jar -path '*/build/*' -exec cp '{}' libs/ \;
-  artifacts:
-    paths:
-      - libs/*
-    expire_in: 1 day
-  interruptible: true
-
-publish_gluesync_snowflake:
-  stage: publish
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "snowflake"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - apt-get update && apt-get install -y gnupg zip curl
-    - echo "$GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
-    - |
-      if [ -z "$MODULE_VERSION" ]; then
-        echo "MODULE_VERSION is not set. Ensure the pipeline is triggered with module version." >&2
-        exit 1
-      fi
-      export VERSION="$MODULE_VERSION"
-    - RELEASE_VERSION="$VERSION" gradle -Psigning.gnupg.keyName="$GPG_KEY_ID" -Psigning.gnupg.passphrase="$GPG_PASSPHRASE" :snowflake:publishToMavenLocal
-    - ARTIFACT_DIR="${HOME}/.m2/repository/com/molo17/gluesync/gluesync-snowflake/$VERSION"
-    - |
-      if [ ! -d "$ARTIFACT_DIR" ]; then
-        echo "Artifacts not found in $ARTIFACT_DIR" >&2
-        exit 1
-      fi
-    - mkdir -p /tmp/bundle/com/molo17/gluesync/gluesync-snowflake/$VERSION
-    - cp $ARTIFACT_DIR/* /tmp/bundle/com/molo17/gluesync/gluesync-snowflake/$VERSION/
-    - cd /tmp/bundle/com/molo17/gluesync/gluesync-snowflake/$VERSION
-    - |
-      for file in *.jar *.pom; do
-        if [ -f "$file" ]; then
-          md5sum "$file" | awk '{print $1}' > "${file}.md5"
-          sha1sum "$file" | awk '{print $1}' > "${file}.sha1"
-        fi
-      done
-    - cd /tmp/bundle && zip -r /tmp/gluesync-snowflake-bundle.zip com/
-    - export AUTH_TOKEN=$(printf "${SONATYPE_USERNAME}:${SONATYPE_PASSWORD}" | base64)
-    - |
-      curl --fail --request POST \
-        --header "Authorization: Bearer ${AUTH_TOKEN}" \
-        --form bundle=@/tmp/gluesync-snowflake-bundle.zip \
-        --form publishingType=AUTOMATIC \
-        https://central.sonatype.com/api/v1/publisher/upload
-  dependencies:
-    - build_gluesync_snowflake
-  interruptible: true
-
-deploy_gluesync_snowflake:
-  stage: deploy
-  retry: 2
-  tags:
-    - hq-linux-docker
-  image: docker:27.3.1
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "snowflake"'
-  services:
-    - name: docker:dind
-      variables:
-        DOCKER_TLS_CERTDIR: ""
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - sh scripts/docker-build.sh --tag=snowflake --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --supported-deploy-arch=DEPLOY_AMD64_ARM64
-  dependencies:
-    - build_gluesync_snowflake
-  interruptible: true
-
-deploy_gluesync_windows_snowflake:
-  stage: deploy
-  retry: 2
-  parallel:
-    matrix:
-      - WINDOWS_TAG: "ltsc2019"
-        WINDOWS_RUNNER_VERSION: "2019"
-      - WINDOWS_TAG: "ltsc2022"
-        WINDOWS_RUNNER_VERSION: "2022"
-      # - WINDOWS_TAG: "ltsc2025"
-      #   WINDOWS_RUNNER_VERSION: "2025"
-  tags:
-    - "hq-windows-shell-$WINDOWS_RUNNER_VERSION"
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "snowflake"'
-  script:
-    - $env:GRADLE_USER_HOME = "$((Get-Location).Path)\.gradle"
-    - ./scripts/docker-build-win.ps1 --tag=snowflake --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --windows-tag=$WINDOWS_TAG
-  dependencies:
-    - build_gluesync_snowflake
-  interruptible: true
-
-build_gluesync_oracle_xstream:
-  stage: build
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "oracle-xstream"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - mkdir additional-libs
-    - cp -a oracle/xstream/additional additional-libs
-    - mkdir libs
-    - gradle :oracle:xstream:obfuscateWithProguard
-    - find . -type f -name gluesync-*.jar -path '*/build/*' -exec cp '{}' libs/ \;
-  artifacts:
-    paths:
-      - libs/*
-      - additional-libs/*
-    expire_in: 1 day
-  interruptible: true
-
-publish_gluesync_oracle_xstream:
-  stage: publish
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "oracle-xstream"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - apt-get update && apt-get install -y gnupg zip curl
-    - echo "$GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
-    - |
-      if [ -z "$MODULE_VERSION" ]; then
-        echo "MODULE_VERSION is not set. Ensure the pipeline is triggered with module version." >&2
-        exit 1
-      fi
-      export VERSION="$MODULE_VERSION"
-    - RELEASE_VERSION="$VERSION" gradle -Psigning.gnupg.keyName="$GPG_KEY_ID" -Psigning.gnupg.passphrase="$GPG_PASSPHRASE" :oracle:xstream:publishToMavenLocal
-    - ARTIFACT_DIR="${HOME}/.m2/repository/com/molo17/gluesync/gluesync-oracle-xstream/$VERSION"
-    - |
-      if [ ! -d "$ARTIFACT_DIR" ]; then
-        echo "Artifacts not found in $ARTIFACT_DIR" >&2
-        exit 1
-      fi
-    - mkdir -p /tmp/bundle/com/molo17/gluesync/gluesync-oracle-xstream/$VERSION
-    - cp $ARTIFACT_DIR/* /tmp/bundle/com/molo17/gluesync/gluesync-oracle-xstream/$VERSION/
-    - cd /tmp/bundle/com/molo17/gluesync/gluesync-oracle-xstream/$VERSION
-    - |
-      for file in *.jar *.pom; do
-        if [ -f "$file" ]; then
-          md5sum "$file" | awk '{print $1}' > "${file}.md5"
-          sha1sum "$file" | awk '{print $1}' > "${file}.sha1"
-        fi
-      done
-    - cd /tmp/bundle && zip -r /tmp/gluesync-oracle-xstream-bundle.zip com/
-    - export AUTH_TOKEN=$(printf "${SONATYPE_USERNAME}:${SONATYPE_PASSWORD}" | base64)
-    - |
-      curl --fail --request POST \
-        --header "Authorization: Bearer ${AUTH_TOKEN}" \
-        --form bundle=@/tmp/gluesync-oracle-xstream-bundle.zip \
-        --form publishingType=AUTOMATIC \
-        https://central.sonatype.com/api/v1/publisher/upload
-  dependencies:
-    - build_gluesync_oracle_xstream
-  interruptible: true
-
-deploy_gluesync_oracle_xstream:
-  stage: deploy
-  retry: 2
-  tags:
-    - hq-linux-docker
-  image: docker:27.3.1
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "oracle-xstream"'
-  services:
-    - name: docker:dind
-      variables:
-        DOCKER_TLS_CERTDIR: ""
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - sh scripts/docker-build.sh --tag=oracle-xstream --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --supported-deploy-arch=DEPLOY_AMD64_ARM64
-  dependencies:
-    - build_gluesync_oracle_xstream
-  interruptible: true
-
-deploy_gluesync_windows_oracle_xstream:
-  stage: deploy
-  retry: 2
-  parallel:
-    matrix:
-      - WINDOWS_TAG: "ltsc2019"
-        WINDOWS_RUNNER_VERSION: "2019"
-      - WINDOWS_TAG: "ltsc2022"
-        WINDOWS_RUNNER_VERSION: "2022"
-      # - WINDOWS_TAG: "ltsc2025"
-      #   WINDOWS_RUNNER_VERSION: "2025"
-  tags:
-    - "hq-windows-shell-$WINDOWS_RUNNER_VERSION"
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "oracle-xstream"'
-  script:
-    - $env:GRADLE_USER_HOME = "$((Get-Location).Path)\.gradle"
-    - ./scripts/docker-build-win.ps1 --tag=oracle-xstream --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --windows-tag=$WINDOWS_TAG
-  dependencies:
-    - build_gluesync_oracle_xstream
-  interruptible: true
-
-build_gluesync_oracle_triggers:
-  stage: build
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "oracle-triggers"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - mkdir libs
-    - gradle :oracle:triggers:obfuscateWithProguard
-    - find . -type f -name gluesync-*.jar -path '*/build/*' -exec cp '{}' libs/ \;
-  artifacts:
-    paths:
-      - libs/*
-    expire_in: 1 day
-  interruptible: true
-
-publish_gluesync_oracle_triggers:
-  stage: publish
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "oracle-triggers"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - apt-get update && apt-get install -y gnupg zip curl
-    - echo "$GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
-    - |
-      if [ -z "$MODULE_VERSION" ]; then
-        echo "MODULE_VERSION is not set. Ensure the pipeline is triggered with module version." >&2
-        exit 1
-      fi
-      export VERSION="$MODULE_VERSION"
-    - RELEASE_VERSION="$VERSION" gradle -Psigning.gnupg.keyName="$GPG_KEY_ID" -Psigning.gnupg.passphrase="$GPG_PASSPHRASE" :oracle:triggers:publishToMavenLocal
-    - ARTIFACT_DIR="${HOME}/.m2/repository/com/molo17/gluesync/gluesync-oracle-triggers/$VERSION"
-    - |
-      if [ ! -d "$ARTIFACT_DIR" ]; then
-        echo "Artifacts not found in $ARTIFACT_DIR" >&2
-        exit 1
-      fi
-    - mkdir -p /tmp/bundle/com/molo17/gluesync/gluesync-oracle-triggers/$VERSION
-    - cp $ARTIFACT_DIR/* /tmp/bundle/com/molo17/gluesync/gluesync-oracle-triggers/$VERSION/
-    - cd /tmp/bundle/com/molo17/gluesync/gluesync-oracle-triggers/$VERSION
-    - |
-      for file in *.jar *.pom; do
-        if [ -f "$file" ]; then
-          md5sum "$file" | awk '{print $1}' > "${file}.md5"
-          sha1sum "$file" | awk '{print $1}' > "${file}.sha1"
-        fi
-      done
-    - cd /tmp/bundle && zip -r /tmp/gluesync-oracle-triggers-bundle.zip com/
-    - export AUTH_TOKEN=$(printf "${SONATYPE_USERNAME}:${SONATYPE_PASSWORD}" | base64)
-    - |
-      curl --fail --request POST \
-        --header "Authorization: Bearer ${AUTH_TOKEN}" \
-        --form bundle=@/tmp/gluesync-oracle-triggers-bundle.zip \
-        --form publishingType=AUTOMATIC \
-        https://central.sonatype.com/api/v1/publisher/upload
-  dependencies:
-    - build_gluesync_oracle_triggers
-  interruptible: true
-
-deploy_gluesync_oracle_triggers:
-  stage: deploy
-  retry: 2
-  tags:
-    - hq-linux-docker
-  image: docker:27.3.1
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "oracle-triggers"'
-  services:
-    - name: docker:dind
-      variables:
-        DOCKER_TLS_CERTDIR: ""
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - sh scripts/docker-build.sh --tag=oracle-triggers --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --supported-deploy-arch=DEPLOY_AMD64_ARM64
-  dependencies:
-    - build_gluesync_oracle_triggers
-  interruptible: true
-
-deploy_gluesync_windows_oracle_triggers:
-  stage: deploy
-  retry: 2
-  parallel:
-    matrix:
-      - WINDOWS_TAG: "ltsc2019"
-        WINDOWS_RUNNER_VERSION: "2019"
-      - WINDOWS_TAG: "ltsc2022"
-        WINDOWS_RUNNER_VERSION: "2022"
-      # - WINDOWS_TAG: "ltsc2025"
-      #   WINDOWS_RUNNER_VERSION: "2025"
-  tags:
-    - "hq-windows-shell-$WINDOWS_RUNNER_VERSION"
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "oracle-triggers"'
-  script:
-    - $env:GRADLE_USER_HOME = "$((Get-Location).Path)\.gradle"
-    - ./scripts/docker-build-win.ps1 --tag=oracle-triggers --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --windows-tag=$WINDOWS_TAG
-  dependencies:
-    - build_gluesync_oracle_triggers
-  interruptible: true
-
-build_gluesync_oracle_triggers_legacy:
-  stage: build
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "oracle-triggers-legacy"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - mkdir libs
-    - gradle :oracle:triggers-legacy:obfuscateWithProguard
-    - find . -type f -name gluesync-*.jar -path '*/build/*' -exec cp '{}' libs/ \;
-  artifacts:
-    paths:
-      - libs/*
-    expire_in: 1 day
-  interruptible: true
-
-publish_gluesync_oracle_triggers_legacy:
-  stage: publish
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "oracle-triggers-legacy"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - apt-get update && apt-get install -y gnupg zip curl
-    - echo "$GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
-    - |
-      if [ -z "$MODULE_VERSION" ]; then
-        echo "MODULE_VERSION is not set. Ensure the pipeline is triggered with module version." >&2
-        exit 1
-      fi
-      export VERSION="$MODULE_VERSION"
-    - RELEASE_VERSION="$VERSION" gradle -Psigning.gnupg.keyName="$GPG_KEY_ID" -Psigning.gnupg.passphrase="$GPG_PASSPHRASE" :oracle:triggers-legacy:publishToMavenLocal
-    - ARTIFACT_DIR="${HOME}/.m2/repository/com/molo17/gluesync/gluesync-oracle-triggers-legacy/$VERSION"
-    - |
-      if [ ! -d "$ARTIFACT_DIR" ]; then
-        echo "Artifacts not found in $ARTIFACT_DIR" >&2
-        exit 1
-      fi
-    - mkdir -p /tmp/bundle/com/molo17/gluesync/gluesync-oracle-triggers-legacy/$VERSION
-    - cp $ARTIFACT_DIR/* /tmp/bundle/com/molo17/gluesync/gluesync-oracle-triggers-legacy/$VERSION/
-    - cd /tmp/bundle/com/molo17/gluesync/gluesync-oracle-triggers-legacy/$VERSION
-    - |
-      for file in *.jar *.pom; do
-        if [ -f "$file" ]; then
-          md5sum "$file" | awk '{print $1}' > "${file}.md5"
-          sha1sum "$file" | awk '{print $1}' > "${file}.sha1"
-        fi
-      done
-    - cd /tmp/bundle && zip -r /tmp/gluesync-oracle-triggers-legacy-bundle.zip com/
-    - export AUTH_TOKEN=$(printf "${SONATYPE_USERNAME}:${SONATYPE_PASSWORD}" | base64)
-    - |
-      curl --fail --request POST \
-        --header "Authorization: Bearer ${AUTH_TOKEN}" \
-        --form bundle=@/tmp/gluesync-oracle-triggers-legacy-bundle.zip \
-        --form publishingType=AUTOMATIC \
-        https://central.sonatype.com/api/v1/publisher/upload
-  dependencies:
-    - build_gluesync_oracle_triggers_legacy
-  interruptible: true
-
-deploy_gluesync_oracle_triggers_legacy:
-  stage: deploy
-  retry: 2
-  tags:
-    - hq-linux-docker
-  image: docker:27.3.1
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "oracle-triggers-legacy"'
-  services:
-    - name: docker:dind
-      variables:
-        DOCKER_TLS_CERTDIR: ""
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - sh scripts/docker-build.sh --tag=oracle-triggers-legacy --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --supported-deploy-arch=DEPLOY_AMD64_ARM64
-  dependencies:
-    - build_gluesync_oracle_triggers_legacy
-  interruptible: true
-
-deploy_gluesync_windows_oracle_triggers_legacy:
-  stage: deploy
-  retry: 2
-  parallel:
-    matrix:
-      - WINDOWS_TAG: "ltsc2019"
-        WINDOWS_RUNNER_VERSION: "2019"
-      - WINDOWS_TAG: "ltsc2022"
-        WINDOWS_RUNNER_VERSION: "2022"
-      # - WINDOWS_TAG: "ltsc2025"
-      #   WINDOWS_RUNNER_VERSION: "2025"
-  tags:
-    - "hq-windows-shell-$WINDOWS_RUNNER_VERSION"
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "oracle-triggers-legacy"'
-  script:
-    - $env:GRADLE_USER_HOME = "$((Get-Location).Path)\.gradle"
-    - ./scripts/docker-build-win.ps1 --tag=oracle-triggers-legacy --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --windows-tag=$WINDOWS_TAG
-  dependencies:
-    - build_gluesync_oracle_triggers_legacy
-  interruptible: true
-
-build_gluesync_oracle_logminer:
-  stage: build
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "oracle-logminer"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - mkdir libs
-    - gradle :oracle:cdc:obfuscateWithProguard
-    - find . -type f -name gluesync-*.jar -path '*/build/*' -exec cp '{}' libs/ \;
-  artifacts:
-    paths:
-      - libs/*
-    expire_in: 1 day
-  interruptible: true
-
-publish_gluesync_oracle_logminer:
-  stage: publish
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "oracle-logminer"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - apt-get update && apt-get install -y gnupg zip curl
-    - echo "$GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
-    - |
-      if [ -z "$MODULE_VERSION" ]; then
-        echo "MODULE_VERSION is not set. Ensure the pipeline is triggered with module version." >&2
-        exit 1
-      fi
-      export VERSION="$MODULE_VERSION"
-    - RELEASE_VERSION="$VERSION" gradle -Psigning.gnupg.keyName="$GPG_KEY_ID" -Psigning.gnupg.passphrase="$GPG_PASSPHRASE" :oracle:cdc:publishToMavenLocal
-    - ARTIFACT_DIR="${HOME}/.m2/repository/com/molo17/gluesync/gluesync-oracle-logminer/$VERSION"
-    - |
-      if [ ! -d "$ARTIFACT_DIR" ]; then
-        echo "Artifacts not found in $ARTIFACT_DIR" >&2
-        exit 1
-      fi
-    - mkdir -p /tmp/bundle/com/molo17/gluesync/gluesync-oracle-logminer/$VERSION
-    - cp $ARTIFACT_DIR/* /tmp/bundle/com/molo17/gluesync/gluesync-oracle-logminer/$VERSION/
-    - cd /tmp/bundle/com/molo17/gluesync/gluesync-oracle-logminer/$VERSION
-    - |
-      for file in *.jar *.pom; do
-        if [ -f "$file" ]; then
-          md5sum "$file" | awk '{print $1}' > "${file}.md5"
-          sha1sum "$file" | awk '{print $1}' > "${file}.sha1"
-        fi
-      done
-    - cd /tmp/bundle && zip -r /tmp/gluesync-oracle-logminer-bundle.zip com/
-    - export AUTH_TOKEN=$(printf "${SONATYPE_USERNAME}:${SONATYPE_PASSWORD}" | base64)
-    - |
-      curl --fail --request POST \
-        --header "Authorization: Bearer ${AUTH_TOKEN}" \
-        --form bundle=@/tmp/gluesync-oracle-logminer-bundle.zip \
-        --form publishingType=AUTOMATIC \
-        https://central.sonatype.com/api/v1/publisher/upload
-  dependencies:
-    - build_gluesync_oracle_logminer
-  interruptible: true
-
-deploy_gluesync_oracle_logminer:
-  stage: deploy
-  retry: 2
-  tags:
-    - hq-linux-docker
-  image: docker:27.3.1
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "oracle-logminer"'
-  services:
-    - name: docker:dind
-      variables:
-        DOCKER_TLS_CERTDIR: ""
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - sh scripts/docker-build.sh --tag=oracle-logminer --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --supported-deploy-arch=DEPLOY_AMD64_ARM64
-  dependencies:
-    - build_gluesync_oracle_logminer
-  interruptible: true
-
-deploy_gluesync_windows_oracle_logminer:
-  stage: deploy
-  retry: 2
-  parallel:
-    matrix:
-      - WINDOWS_TAG: "ltsc2019"
-        WINDOWS_RUNNER_VERSION: "2019"
-      - WINDOWS_TAG: "ltsc2022"
-        WINDOWS_RUNNER_VERSION: "2022"
-      # - WINDOWS_TAG: "ltsc2025"
-      #   WINDOWS_RUNNER_VERSION: "2025"
-  tags:
-    - "hq-windows-shell-$WINDOWS_RUNNER_VERSION"
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "oracle-logminer"'
-  script:
-    - $env:GRADLE_USER_HOME = "$((Get-Location).Path)\.gradle"
-    - ./scripts/docker-build-win.ps1 --tag=oracle-logminer --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --windows-tag=$WINDOWS_TAG
-  dependencies:
-    - build_gluesync_oracle_logminer
-  interruptible: true
-
-build_gluesync_aerospike:
-  stage: build
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "aerospike"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - mkdir libs
-    - gradle :aerospike:obfuscateWithProguard
-    - find . -type f -name gluesync-*.jar -path '*/build/*' -exec cp '{}' libs/ \;
-  artifacts:
-    paths:
-      - libs/*
-    expire_in: 1 day
-  interruptible: true
-
-publish_gluesync_aerospike:
-  stage: publish
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "aerospike"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - apt-get update && apt-get install -y gnupg zip curl
-    - echo "$GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
-    - |
-      if [ -z "$MODULE_VERSION" ]; then
-        echo "MODULE_VERSION is not set. Ensure the pipeline is triggered with module version." >&2
-        exit 1
-      fi
-      export VERSION="$MODULE_VERSION"
-    - RELEASE_VERSION="$VERSION" gradle -Psigning.gnupg.keyName="$GPG_KEY_ID" -Psigning.gnupg.passphrase="$GPG_PASSPHRASE" :aerospike:publishToMavenLocal
-    - ARTIFACT_DIR="${HOME}/.m2/repository/com/molo17/gluesync/gluesync-aerospike/$VERSION"
-    - |
-      if [ ! -d "$ARTIFACT_DIR" ]; then
-        echo "Artifacts not found in $ARTIFACT_DIR" >&2
-        exit 1
-      fi
-    - mkdir -p /tmp/bundle/com/molo17/gluesync/gluesync-aerospike/$VERSION
-    - cp $ARTIFACT_DIR/* /tmp/bundle/com/molo17/gluesync/gluesync-aerospike/$VERSION/
-    - cd /tmp/bundle/com/molo17/gluesync/gluesync-aerospike/$VERSION
-    - |
-      for file in *.jar *.pom; do
-        if [ -f "$file" ]; then
-          md5sum "$file" | awk '{print $1}' > "${file}.md5"
-          sha1sum "$file" | awk '{print $1}' > "${file}.sha1"
-        fi
-      done
-    - cd /tmp/bundle && zip -r /tmp/gluesync-aerospike-bundle.zip com/
-    - export AUTH_TOKEN=$(printf "${SONATYPE_USERNAME}:${SONATYPE_PASSWORD}" | base64)
-    - |
-      curl --fail --request POST \
-        --header "Authorization: Bearer ${AUTH_TOKEN}" \
-        --form bundle=@/tmp/gluesync-aerospike-bundle.zip \
-        --form publishingType=AUTOMATIC \
-        https://central.sonatype.com/api/v1/publisher/upload
-  dependencies:
-    - build_gluesync_aerospike
-  interruptible: true
-
-deploy_gluesync_aerospike:
-  stage: deploy
-  retry: 2
-  tags:
-    - hq-linux-docker
-  image: docker:27.3.1
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "aerospike"'
-  services:
-    - name: docker:dind
-      variables:
-        DOCKER_TLS_CERTDIR: ""
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - sh scripts/docker-build.sh --tag=aerospike --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --supported-deploy-arch=DEPLOY_AMD64_ARM64
-  dependencies:
-    - build_gluesync_aerospike
-  interruptible: true
-
-deploy_gluesync_windows_aerospike:
-  stage: deploy
-  retry: 2
-  parallel:
-    matrix:
-      - WINDOWS_TAG: "ltsc2019"
-        WINDOWS_RUNNER_VERSION: "2019"
-      - WINDOWS_TAG: "ltsc2022"
-        WINDOWS_RUNNER_VERSION: "2022"
-      # - WINDOWS_TAG: "ltsc2025"
-      #   WINDOWS_RUNNER_VERSION: "2025"
-  tags:
-    - "hq-windows-shell-$WINDOWS_RUNNER_VERSION"
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "aerospike"'
-  script:
-    - $env:GRADLE_USER_HOME = "$((Get-Location).Path)\.gradle"
-    - ./scripts/docker-build-win.ps1 --tag=aerospike --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --windows-tag=$WINDOWS_TAG
-  dependencies:
-    - build_gluesync_aerospike
-  interruptible: true
-
-build_gluesync_singlestore:
-  stage: build
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "singlestore"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - mkdir libs
-    - gradle :singlestore:obfuscateWithProguard
-    - find . -type f -name gluesync-*.jar -path '*/build/*' -exec cp '{}' libs/ \;
-  artifacts:
-    paths:
-      - libs/*
-    expire_in: 1 day
-  interruptible: true
-
-publish_gluesync_singlestore:
-  stage: publish
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "singlestore"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - apt-get update && apt-get install -y gnupg zip curl
-    - echo "$GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
-    - |
-      if [ -z "$MODULE_VERSION" ]; then
-        echo "MODULE_VERSION is not set. Ensure the pipeline is triggered with module version." >&2
-        exit 1
-      fi
-      export VERSION="$MODULE_VERSION"
-    - RELEASE_VERSION="$VERSION" gradle -Psigning.gnupg.keyName="$GPG_KEY_ID" -Psigning.gnupg.passphrase="$GPG_PASSPHRASE" :singlestore:publishToMavenLocal
-    - ARTIFACT_DIR="${HOME}/.m2/repository/com/molo17/gluesync/gluesync-singlestore/$VERSION"
-    - |
-      if [ ! -d "$ARTIFACT_DIR" ]; then
-        echo "Artifacts not found in $ARTIFACT_DIR" >&2
-        exit 1
-      fi
-    - mkdir -p /tmp/bundle/com/molo17/gluesync/gluesync-singlestore/$VERSION
-    - cp $ARTIFACT_DIR/* /tmp/bundle/com/molo17/gluesync/gluesync-singlestore/$VERSION/
-    - cd /tmp/bundle/com/molo17/gluesync/gluesync-singlestore/$VERSION
-    - |
-      for file in *.jar *.pom; do
-        if [ -f "$file" ]; then
-          md5sum "$file" | awk '{print $1}' > "${file}.md5"
-          sha1sum "$file" | awk '{print $1}' > "${file}.sha1"
-        fi
-      done
-    - cd /tmp/bundle && zip -r /tmp/gluesync-singlestore-bundle.zip com/
-    - export AUTH_TOKEN=$(printf "${SONATYPE_USERNAME}:${SONATYPE_PASSWORD}" | base64)
-    - |
-      curl --fail --request POST \
-        --header "Authorization: Bearer ${AUTH_TOKEN}" \
-        --form bundle=@/tmp/gluesync-singlestore-bundle.zip \
-        --form publishingType=AUTOMATIC \
-        https://central.sonatype.com/api/v1/publisher/upload
-  dependencies:
-    - build_gluesync_singlestore
-  interruptible: true
-
-deploy_gluesync_singlestore:
-  stage: deploy
-  retry: 2
-  tags:
-    - hq-linux-docker
-  image: docker:27.3.1
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "singlestore"'
-  services:
-    - name: docker:dind
-      variables:
-        DOCKER_TLS_CERTDIR: ""
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - sh scripts/docker-build.sh --tag=singlestore --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --supported-deploy-arch=DEPLOY_AMD64_ARM64
-  dependencies:
-    - build_gluesync_singlestore
-  interruptible: true
-
-deploy_gluesync_windows_singlestore:
-  stage: deploy
-  retry: 2
-  parallel:
-    matrix:
-      - WINDOWS_TAG: "ltsc2019"
-        WINDOWS_RUNNER_VERSION: "2019"
-      - WINDOWS_TAG: "ltsc2022"
-        WINDOWS_RUNNER_VERSION: "2022"
-      # - WINDOWS_TAG: "ltsc2025"
-      #   WINDOWS_RUNNER_VERSION: "2025"
-  tags:
-    - "hq-windows-shell-$WINDOWS_RUNNER_VERSION"
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "singlestore"'
-  script:
-    - $env:GRADLE_USER_HOME = "$((Get-Location).Path)\.gradle"
-    - ./scripts/docker-build-win.ps1 --tag=singlestore --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --windows-tag=$WINDOWS_TAG
-  dependencies:
-    - build_gluesync_singlestore
-  interruptible: true
-
-build_gluesync_awss3:
-  stage: build
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "awss3"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - mkdir libs
-    - gradle :awss3:obfuscateWithProguard
-    - find . -type f -name gluesync-*.jar -path '*/build/*' -exec cp '{}' libs/ \;
-  artifacts:
-    paths:
-      - libs/*
-    expire_in: 1 day
-  interruptible: true
-
-publish_gluesync_awss3:
-  stage: publish
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "awss3"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - apt-get update && apt-get install -y gnupg zip curl
-    - echo "$GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
-    - |
-      if [ -z "$MODULE_VERSION" ]; then
-        echo "MODULE_VERSION is not set. Ensure the pipeline is triggered with module version." >&2
-        exit 1
-      fi
-      export VERSION="$MODULE_VERSION"
-    - RELEASE_VERSION="$VERSION" gradle -Psigning.gnupg.keyName="$GPG_KEY_ID" -Psigning.gnupg.passphrase="$GPG_PASSPHRASE" :awss3:publishToMavenLocal
-    - ARTIFACT_DIR="${HOME}/.m2/repository/com/molo17/gluesync/gluesync-awss3/$VERSION"
-    - |
-      if [ ! -d "$ARTIFACT_DIR" ]; then
-        echo "Artifacts not found in $ARTIFACT_DIR" >&2
-        exit 1
-      fi
-    - mkdir -p /tmp/bundle/com/molo17/gluesync/gluesync-awss3/$VERSION
-    - cp $ARTIFACT_DIR/* /tmp/bundle/com/molo17/gluesync/gluesync-awss3/$VERSION/
-    - cd /tmp/bundle/com/molo17/gluesync/gluesync-awss3/$VERSION
-    - |
-      for file in *.jar *.pom; do
-        if [ -f "$file" ]; then
-          md5sum "$file" | awk '{print $1}' > "${file}.md5"
-          sha1sum "$file" | awk '{print $1}' > "${file}.sha1"
-        fi
-      done
-    - cd /tmp/bundle && zip -r /tmp/gluesync-awss3-bundle.zip com/
-    - export AUTH_TOKEN=$(printf "${SONATYPE_USERNAME}:${SONATYPE_PASSWORD}" | base64)
-    - |
-      curl --fail --request POST \
-        --header "Authorization: Bearer ${AUTH_TOKEN}" \
-        --form bundle=@/tmp/gluesync-awss3-bundle.zip \
-        --form publishingType=AUTOMATIC \
-        https://central.sonatype.com/api/v1/publisher/upload
-  dependencies:
-    - build_gluesync_awss3
-  interruptible: true
-
-deploy_gluesync_awss3:
-  stage: deploy
-  retry: 2
-  tags:
-    - hq-linux-docker
-  image: docker:27.3.1
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "awss3"'
-  services:
-    - name: docker:dind
-      variables:
-        DOCKER_TLS_CERTDIR: ""
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - sh scripts/docker-build.sh --tag=awss3 --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --supported-deploy-arch=DEPLOY_AMD64_ARM64
-  dependencies:
-    - build_gluesync_awss3
-  interruptible: true
-
-deploy_gluesync_windows_awss3:
-  stage: deploy
-  retry: 2
-  parallel:
-    matrix:
-      - WINDOWS_TAG: "ltsc2019"
-        WINDOWS_RUNNER_VERSION: "2019"
-      - WINDOWS_TAG: "ltsc2022"
-        WINDOWS_RUNNER_VERSION: "2022"
-      # - WINDOWS_TAG: "ltsc2025"
-      #   WINDOWS_RUNNER_VERSION: "2025"
-  tags:
-    - "hq-windows-shell-$WINDOWS_RUNNER_VERSION"
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "awss3"'
-  script:
-    - $env:GRADLE_USER_HOME = "$((Get-Location).Path)\.gradle"
-    - ./scripts/docker-build-win.ps1 --tag=awss3 --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --windows-tag=$WINDOWS_TAG
-  dependencies:
-    - build_gluesync_awss3
-  interruptible: true
-
-build_gluesync_cosmosdb:
-  stage: build
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "cosmosdb"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - mkdir libs
-    - gradle :cosmosdb:obfuscateWithProguard
-    - find . -type f -name gluesync-*.jar -path '*/build/*' -exec cp '{}' libs/ \;
-  artifacts:
-    paths:
-      - libs/*
-    expire_in: 1 day
-  interruptible: true
-
-publish_gluesync_cosmosdb:
-  stage: publish
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "cosmosdb"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - apt-get update && apt-get install -y gnupg zip curl
-    - echo "$GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
-    - |
-      if [ -z "$MODULE_VERSION" ]; then
-        echo "MODULE_VERSION is not set. Ensure the pipeline is triggered with module version." >&2
-        exit 1
-      fi
-      export VERSION="$MODULE_VERSION"
-    - RELEASE_VERSION="$VERSION" gradle -Psigning.gnupg.keyName="$GPG_KEY_ID" -Psigning.gnupg.passphrase="$GPG_PASSPHRASE" :cosmosdb:publishToMavenLocal
-    - ARTIFACT_DIR="${HOME}/.m2/repository/com/molo17/gluesync/gluesync-cosmosdb/$VERSION"
-    - |
-      if [ ! -d "$ARTIFACT_DIR" ]; then
-        echo "Artifacts not found in $ARTIFACT_DIR" >&2
-        exit 1
-      fi
-    - mkdir -p /tmp/bundle/com/molo17/gluesync/gluesync-cosmosdb/$VERSION
-    - cp $ARTIFACT_DIR/* /tmp/bundle/com/molo17/gluesync/gluesync-cosmosdb/$VERSION/
-    - cd /tmp/bundle/com/molo17/gluesync/gluesync-cosmosdb/$VERSION
-    - |
-      for file in *.jar *.pom; do
-        if [ -f "$file" ]; then
-          md5sum "$file" | awk '{print $1}' > "${file}.md5"
-          sha1sum "$file" | awk '{print $1}' > "${file}.sha1"
-        fi
-      done
-    - cd /tmp/bundle && zip -r /tmp/gluesync-cosmosdb-bundle.zip com/
-    - export AUTH_TOKEN=$(printf "${SONATYPE_USERNAME}:${SONATYPE_PASSWORD}" | base64)
-    - |
-      curl --fail --request POST \
-        --header "Authorization: Bearer ${AUTH_TOKEN}" \
-        --form bundle=@/tmp/gluesync-cosmosdb-bundle.zip \
-        --form publishingType=AUTOMATIC \
-        https://central.sonatype.com/api/v1/publisher/upload
-  dependencies:
-    - build_gluesync_cosmosdb
-  interruptible: true
-
-deploy_gluesync_cosmosdb:
-  stage: deploy
-  retry: 2
-  tags:
-    - hq-linux-docker
-  image: docker:27.3.1
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "cosmosdb"'
-  services:
-    - name: docker:dind
-      variables:
-        DOCKER_TLS_CERTDIR: ""
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - sh scripts/docker-build.sh --tag=cosmosdb --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --supported-deploy-arch=DEPLOY_AMD64_ARM64
-  dependencies:
-    - build_gluesync_cosmosdb
-  interruptible: true
-
-deploy_gluesync_windows_cosmosdb:
-  stage: deploy
-  retry: 2
-  parallel:
-    matrix:
-      - WINDOWS_TAG: "ltsc2019"
-        WINDOWS_RUNNER_VERSION: "2019"
-      - WINDOWS_TAG: "ltsc2022"
-        WINDOWS_RUNNER_VERSION: "2022"
-      # - WINDOWS_TAG: "ltsc2025"
-      #   WINDOWS_RUNNER_VERSION: "2025"
-  tags:
-    - "hq-windows-shell-$WINDOWS_RUNNER_VERSION"
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "cosmosdb"'
-  script:
-    - $env:GRADLE_USER_HOME = "$((Get-Location).Path)\.gradle"
-    - ./scripts/docker-build-win.ps1 --tag=cosmosdb --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --windows-tag=$WINDOWS_TAG
-  dependencies:
-    - build_gluesync_cosmosdb
-  interruptible: true
-
-build_gluesync_informix:
-  stage: build
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "informix"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - mkdir libs
-    - gradle :informix:obfuscateWithProguard
-    - find . -type f -name gluesync-*.jar -path '*/build/*' -exec cp '{}' libs/ \;
-  artifacts:
-    paths:
-      - libs/*
-    expire_in: 1 day
-  interruptible: true
-
-publish_gluesync_informix:
-  stage: publish
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "informix"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - apt-get update && apt-get install -y gnupg zip curl
-    - echo "$GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
-    - |
-      if [ -z "$MODULE_VERSION" ]; then
-        echo "MODULE_VERSION is not set. Ensure the pipeline is triggered with module version." >&2
-        exit 1
-      fi
-      export VERSION="$MODULE_VERSION"
-    - RELEASE_VERSION="$VERSION" gradle -Psigning.gnupg.keyName="$GPG_KEY_ID" -Psigning.gnupg.passphrase="$GPG_PASSPHRASE" :informix:publishToMavenLocal
-    - ARTIFACT_DIR="${HOME}/.m2/repository/com/molo17/gluesync/gluesync-informix/$VERSION"
-    - |
-      if [ ! -d "$ARTIFACT_DIR" ]; then
-        echo "Artifacts not found in $ARTIFACT_DIR" >&2
-        exit 1
-      fi
-    - mkdir -p /tmp/bundle/com/molo17/gluesync/gluesync-informix/$VERSION
-    - cp $ARTIFACT_DIR/* /tmp/bundle/com/molo17/gluesync/gluesync-informix/$VERSION/
-    - cd /tmp/bundle/com/molo17/gluesync/gluesync-informix/$VERSION
-    - |
-      for file in *.jar *.pom; do
-        if [ -f "$file" ]; then
-          md5sum "$file" | awk '{print $1}' > "${file}.md5"
-          sha1sum "$file" | awk '{print $1}' > "${file}.sha1"
-        fi
-      done
-    - cd /tmp/bundle && zip -r /tmp/gluesync-informix-bundle.zip com/
-    - export AUTH_TOKEN=$(printf "${SONATYPE_USERNAME}:${SONATYPE_PASSWORD}" | base64)
-    - |
-      curl --fail --request POST \
-        --header "Authorization: Bearer ${AUTH_TOKEN}" \
-        --form bundle=@/tmp/gluesync-informix-bundle.zip \
-        --form publishingType=AUTOMATIC \
-        https://central.sonatype.com/api/v1/publisher/upload
-  dependencies:
-    - build_gluesync_informix
-  interruptible: true
-
-deploy_gluesync_informix:
-  stage: deploy
-  retry: 2
-  tags:
-    - hq-linux-docker
-  image: docker:27.3.1
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "informix"'
-  services:
-    - name: docker:dind
-      variables:
-        DOCKER_TLS_CERTDIR: ""
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - sh scripts/docker-build.sh --tag=informix --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --supported-deploy-arch=DEPLOY_AMD64_ARM64
-  dependencies:
-    - build_gluesync_informix
-  interruptible: true
-
-deploy_gluesync_windows_informix:
-  stage: deploy
-  retry: 2
-  parallel:
-    matrix:
-      - WINDOWS_TAG: "ltsc2019"
-        WINDOWS_RUNNER_VERSION: "2019"
-      - WINDOWS_TAG: "ltsc2022"
-        WINDOWS_RUNNER_VERSION: "2022"
-      # - WINDOWS_TAG: "ltsc2025"
-      #   WINDOWS_RUNNER_VERSION: "2025"
-  tags:
-    - "hq-windows-shell-$WINDOWS_RUNNER_VERSION"
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "informix"'
-  script:
-    - $env:GRADLE_USER_HOME = "$((Get-Location).Path)\.gradle"
-    - ./scripts/docker-build-win.ps1 --tag=informix --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --windows-tag=$WINDOWS_TAG
-  dependencies:
-    - build_gluesync_informix
-  interruptible: true
-
-build_gluesync_google_cloud_storage:
-  stage: build
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "google-cloud-storage"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - mkdir libs
-    - gradle :gcpstorage:obfuscateWithProguard
-    - find . -type f -name gluesync-*.jar -path '*/build/*' -exec cp '{}' libs/ \;
-  artifacts:
-    paths:
-      - libs/*
-    expire_in: 1 day
-  interruptible: true
-
-publish_gluesync_google_cloud_storage:
-  stage: publish
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "google-cloud-storage"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - apt-get update && apt-get install -y gnupg zip curl
-    - echo "$GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
-    - |
-      if [ -z "$MODULE_VERSION" ]; then
-        echo "MODULE_VERSION is not set. Ensure the pipeline is triggered with module version." >&2
-        exit 1
-      fi
-      export VERSION="$MODULE_VERSION"
-    - RELEASE_VERSION="$VERSION" gradle -Psigning.gnupg.keyName="$GPG_KEY_ID" -Psigning.gnupg.passphrase="$GPG_PASSPHRASE" :gcpstorage:publishToMavenLocal
-    - ARTIFACT_DIR="${HOME}/.m2/repository/com/molo17/gluesync/gluesync-google-cloud-storage/$VERSION"
-    - |
-      if [ ! -d "$ARTIFACT_DIR" ]; then
-        echo "Artifacts not found in $ARTIFACT_DIR" >&2
-        exit 1
-      fi
-    - mkdir -p /tmp/bundle/com/molo17/gluesync/gluesync-google-cloud-storage/$VERSION
-    - cp $ARTIFACT_DIR/* /tmp/bundle/com/molo17/gluesync/gluesync-google-cloud-storage/$VERSION/
-    - cd /tmp/bundle/com/molo17/gluesync/gluesync-google-cloud-storage/$VERSION
-    - |
-      for file in *.jar *.pom; do
-        if [ -f "$file" ]; then
-          md5sum "$file" | awk '{print $1}' > "${file}.md5"
-          sha1sum "$file" | awk '{print $1}' > "${file}.sha1"
-        fi
-      done
-    - cd /tmp/bundle && zip -r /tmp/gluesync-google-cloud-storage-bundle.zip com/
-    - export AUTH_TOKEN=$(printf "${SONATYPE_USERNAME}:${SONATYPE_PASSWORD}" | base64)
-    - |
-      curl --fail --request POST \
-        --header "Authorization: Bearer ${AUTH_TOKEN}" \
-        --form bundle=@/tmp/gluesync-google-cloud-storage-bundle.zip \
-        --form publishingType=AUTOMATIC \
-        https://central.sonatype.com/api/v1/publisher/upload
-  dependencies:
-    - build_gluesync_google_cloud_storage
-  interruptible: true
-
-deploy_gluesync_google_cloud_storage:
-  stage: deploy
-  retry: 2
-  tags:
-    - hq-linux-docker
-  image: docker:27.3.1
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "google-cloud-storage"'
-  services:
-    - name: docker:dind
-      variables:
-        DOCKER_TLS_CERTDIR: ""
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - sh scripts/docker-build.sh --tag=google-cloud-storage --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --supported-deploy-arch=DEPLOY_AMD64_ARM64
-  dependencies:
-    - build_gluesync_google_cloud_storage
-  interruptible: true
-
-deploy_gluesync_windows_google_cloud_storage:
-  stage: deploy
-  retry: 2
-  parallel:
-    matrix:
-      - WINDOWS_TAG: "ltsc2019"
-        WINDOWS_RUNNER_VERSION: "2019"
-      - WINDOWS_TAG: "ltsc2022"
-        WINDOWS_RUNNER_VERSION: "2022"
-      # - WINDOWS_TAG: "ltsc2025"
-      #   WINDOWS_RUNNER_VERSION: "2025"
-  tags:
-    - "hq-windows-shell-$WINDOWS_RUNNER_VERSION"
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "google-cloud-storage"'
-  script:
-    - $env:GRADLE_USER_HOME = "$((Get-Location).Path)\.gradle"
-    - ./scripts/docker-build-win.ps1 --tag=google-cloud-storage --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --windows-tag=$WINDOWS_TAG
-  dependencies:
-    - build_gluesync_google_cloud_storage
-  interruptible: true
-
-build_gluesync_ravendb:
-  stage: build
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "ravendb"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - mkdir libs
-    - gradle :ravendb:obfuscateWithProguard
-    - find . -type f -name gluesync-*.jar -path '*/build/*' -exec cp '{}' libs/ \;
-  artifacts:
-    paths:
-      - libs/*
-    expire_in: 1 day
-  interruptible: true
-
-publish_gluesync_ravendb:
-  stage: publish
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "ravendb"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - apt-get update && apt-get install -y gnupg zip curl
-    - echo "$GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
-    - |
-      if [ -z "$MODULE_VERSION" ]; then
-        echo "MODULE_VERSION is not set. Ensure the pipeline is triggered with module version." >&2
-        exit 1
-      fi
-      export VERSION="$MODULE_VERSION"
-    - RELEASE_VERSION="$VERSION" gradle -Psigning.gnupg.keyName="$GPG_KEY_ID" -Psigning.gnupg.passphrase="$GPG_PASSPHRASE" :ravendb:publishToMavenLocal
-    - ARTIFACT_DIR="${HOME}/.m2/repository/com/molo17/gluesync/gluesync-ravendb/$VERSION"
-    - |
-      if [ ! -d "$ARTIFACT_DIR" ]; then
-        echo "Artifacts not found in $ARTIFACT_DIR" >&2
-        exit 1
-      fi
-    - mkdir -p /tmp/bundle/com/molo17/gluesync/gluesync-ravendb/$VERSION
-    - cp $ARTIFACT_DIR/* /tmp/bundle/com/molo17/gluesync/gluesync-ravendb/$VERSION/
-    - cd /tmp/bundle/com/molo17/gluesync/gluesync-ravendb/$VERSION
-    - |
-      for file in *.jar *.pom; do
-        if [ -f "$file" ]; then
-          md5sum "$file" | awk '{print $1}' > "${file}.md5"
-          sha1sum "$file" | awk '{print $1}' > "${file}.sha1"
-        fi
-      done
-    - cd /tmp/bundle && zip -r /tmp/gluesync-ravendb-bundle.zip com/
-    - export AUTH_TOKEN=$(printf "${SONATYPE_USERNAME}:${SONATYPE_PASSWORD}" | base64)
-    - |
-      curl --fail --request POST \
-        --header "Authorization: Bearer ${AUTH_TOKEN}" \
-        --form bundle=@/tmp/gluesync-ravendb-bundle.zip \
-        --form publishingType=AUTOMATIC \
-        https://central.sonatype.com/api/v1/publisher/upload
-  dependencies:
-    - build_gluesync_ravendb
-  interruptible: true
-
-deploy_gluesync_ravendb:
-  stage: deploy
-  retry: 2
-  tags:
-    - hq-linux-docker
-  image: docker:27.3.1
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "ravendb"'
-  services:
-    - name: docker:dind
-      variables:
-        DOCKER_TLS_CERTDIR: ""
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - sh scripts/docker-build.sh --tag=ravendb --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --supported-deploy-arch=DEPLOY_AMD64_ARM64
-  dependencies:
-    - build_gluesync_ravendb
-  interruptible: true
-
-deploy_gluesync_windows_ravendb:
-  stage: deploy
-  retry: 2
-  parallel:
-    matrix:
-      - WINDOWS_TAG: "ltsc2019"
-        WINDOWS_RUNNER_VERSION: "2019"
-      - WINDOWS_TAG: "ltsc2022"
-        WINDOWS_RUNNER_VERSION: "2022"
-      # - WINDOWS_TAG: "ltsc2025"
-      #   WINDOWS_RUNNER_VERSION: "2025"
-  tags:
-    - "hq-windows-shell-$WINDOWS_RUNNER_VERSION"
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "ravendb"'
-  script:
-    - $env:GRADLE_USER_HOME = "$((Get-Location).Path)\.gradle"
-    - ./scripts/docker-build-win.ps1 --tag=ravendb --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --windows-tag=$WINDOWS_TAG
-  dependencies:
-    - build_gluesync_ravendb
-  interruptible: true
-
-build_gluesync_google_pubsub:
-  stage: build
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "google-pubsub"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - mkdir libs
-    - gradle :google-pubsub:obfuscateWithProguard
-    - find . -type f -name gluesync-*.jar -path '*/build/*' -exec cp '{}' libs/ \;
-  artifacts:
-    paths:
-      - libs/*
-    expire_in: 1 day
-  interruptible: true
-
-publish_gluesync_google_pubsub:
-  stage: publish
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "google-pubsub"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - apt-get update && apt-get install -y gnupg zip curl
-    - echo "$GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
-    - |
-      if [ -z "$MODULE_VERSION" ]; then
-        echo "MODULE_VERSION is not set. Ensure the pipeline is triggered with module version." >&2
-        exit 1
-      fi
-      export VERSION="$MODULE_VERSION"
-    - RELEASE_VERSION="$VERSION" gradle -Psigning.gnupg.keyName="$GPG_KEY_ID" -Psigning.gnupg.passphrase="$GPG_PASSPHRASE" :google-pubsub:publishToMavenLocal
-    - ARTIFACT_DIR="${HOME}/.m2/repository/com/molo17/gluesync/gluesync-google-pubsub/$VERSION"
-    - |
-      if [ ! -d "$ARTIFACT_DIR" ]; then
-        echo "Artifacts not found in $ARTIFACT_DIR" >&2
-        exit 1
-      fi
-    - mkdir -p /tmp/bundle/com/molo17/gluesync/gluesync-google-pubsub/$VERSION
-    - cp $ARTIFACT_DIR/* /tmp/bundle/com/molo17/gluesync/gluesync-google-pubsub/$VERSION/
-    - cd /tmp/bundle/com/molo17/gluesync/gluesync-google-pubsub/$VERSION
-    - |
-      for file in *.jar *.pom; do
-        if [ -f "$file" ]; then
-          md5sum "$file" | awk '{print $1}' > "${file}.md5"
-          sha1sum "$file" | awk '{print $1}' > "${file}.sha1"
-        fi
-      done
-    - cd /tmp/bundle && zip -r /tmp/gluesync-google-pubsub-bundle.zip com/
-    - export AUTH_TOKEN=$(printf "${SONATYPE_USERNAME}:${SONATYPE_PASSWORD}" | base64)
-    - |
-      curl --fail --request POST \
-        --header "Authorization: Bearer ${AUTH_TOKEN}" \
-        --form bundle=@/tmp/gluesync-google-pubsub-bundle.zip \
-        --form publishingType=AUTOMATIC \
-        https://central.sonatype.com/api/v1/publisher/upload
-  dependencies:
-    - build_gluesync_google_pubsub
-  interruptible: true
-
-deploy_gluesync_google_pubsub:
-  stage: deploy
-  retry: 2
-  tags:
-    - hq-linux-docker
-  image: docker:27.3.1
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "google-pubsub"'
-  services:
-    - name: docker:dind
-      variables:
-        DOCKER_TLS_CERTDIR: ""
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - sh scripts/docker-build.sh --tag=google-pubsub --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --supported-deploy-arch=DEPLOY_AMD64_ARM64
-  dependencies:
-    - build_gluesync_google_pubsub
-  interruptible: true
-
-deploy_gluesync_windows_google_pubsub:
-  stage: deploy
-  retry: 2
-  parallel:
-    matrix:
-      - WINDOWS_TAG: "ltsc2019"
-        WINDOWS_RUNNER_VERSION: "2019"
-      - WINDOWS_TAG: "ltsc2022"
-        WINDOWS_RUNNER_VERSION: "2022"
-      # - WINDOWS_TAG: "ltsc2025"
-      #   WINDOWS_RUNNER_VERSION: "2025"
-  tags:
-    - "hq-windows-shell-$WINDOWS_RUNNER_VERSION"
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "google-pubsub"'
-  script:
-    - $env:GRADLE_USER_HOME = "$((Get-Location).Path)\.gradle"
-    - ./scripts/docker-build-win.ps1 --tag=google-pubsub --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --windows-tag=$WINDOWS_TAG
-  dependencies:
-    - build_gluesync_google_pubsub
-  interruptible: true
-
-build_gluesync_redis:
-  stage: build
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "redis"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - mkdir libs
-    - gradle :redis:obfuscateWithProguard
-    - find . -type f -name gluesync-*.jar -path '*/build/*' -exec cp '{}' libs/ \;
-  artifacts:
-    paths:
-      - libs/*
-    expire_in: 1 day
-  interruptible: true
-
-publish_gluesync_redis:
-  stage: publish
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "redis"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - apt-get update && apt-get install -y gnupg zip curl
-    - echo "$GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
-    - |
-      if [ -z "$MODULE_VERSION" ]; then
-        echo "MODULE_VERSION is not set. Ensure the pipeline is triggered with module version." >&2
-        exit 1
-      fi
-      export VERSION="$MODULE_VERSION"
-    - RELEASE_VERSION="$VERSION" gradle -Psigning.gnupg.keyName="$GPG_KEY_ID" -Psigning.gnupg.passphrase="$GPG_PASSPHRASE" :redis:publishToMavenLocal
-    - ARTIFACT_DIR="${HOME}/.m2/repository/com/molo17/gluesync/gluesync-redis/$VERSION"
-    - |
-      if [ ! -d "$ARTIFACT_DIR" ]; then
-        echo "Artifacts not found in $ARTIFACT_DIR" >&2
-        exit 1
-      fi
-    - mkdir -p /tmp/bundle/com/molo17/gluesync/gluesync-redis/$VERSION
-    - cp $ARTIFACT_DIR/* /tmp/bundle/com/molo17/gluesync/gluesync-redis/$VERSION/
-    - cd /tmp/bundle/com/molo17/gluesync/gluesync-redis/$VERSION
-    - |
-      for file in *.jar *.pom; do
-        if [ -f "$file" ]; then
-          md5sum "$file" | awk '{print $1}' > "${file}.md5"
-          sha1sum "$file" | awk '{print $1}' > "${file}.sha1"
-        fi
-      done
-    - cd /tmp/bundle && zip -r /tmp/gluesync-redis-bundle.zip com/
-    - export AUTH_TOKEN=$(printf "${SONATYPE_USERNAME}:${SONATYPE_PASSWORD}" | base64)
-    - |
-      curl --fail --request POST \
-        --header "Authorization: Bearer ${AUTH_TOKEN}" \
-        --form bundle=@/tmp/gluesync-redis-bundle.zip \
-        --form publishingType=AUTOMATIC \
-        https://central.sonatype.com/api/v1/publisher/upload
-  dependencies:
-    - build_gluesync_redis
-  interruptible: true
-
-deploy_gluesync_redis:
-  stage: deploy
-  retry: 2
-  tags:
-    - hq-linux-docker
-  image: docker:27.3.1
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "redis"'
-  services:
-    - name: docker:dind
-      variables:
-        DOCKER_TLS_CERTDIR: ""
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - sh scripts/docker-build.sh --tag=redis --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --supported-deploy-arch=DEPLOY_AMD64_ARM64
-  dependencies:
-    - build_gluesync_redis
-  interruptible: true
-
-deploy_gluesync_windows_redis:
-  stage: deploy
-  retry: 2
-  parallel:
-    matrix:
-      - WINDOWS_TAG: "ltsc2019"
-        WINDOWS_RUNNER_VERSION: "2019"
-      - WINDOWS_TAG: "ltsc2022"
-        WINDOWS_RUNNER_VERSION: "2022"
-      # - WINDOWS_TAG: "ltsc2025"
-      #   WINDOWS_RUNNER_VERSION: "2025"
-  tags:
-    - "hq-windows-shell-$WINDOWS_RUNNER_VERSION"
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "redis"'
-  script:
-    - $env:GRADLE_USER_HOME = "$((Get-Location).Path)\.gradle"
-    - ./scripts/docker-build-win.ps1 --tag=redis --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --windows-tag=$WINDOWS_TAG
-  dependencies:
-    - build_gluesync_redis
-  interruptible: true
-
-build_gluesync_cockroachdb:
-  stage: build
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "cockroachdb"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - mkdir libs
-    - gradle :cockroachdb:obfuscateWithProguard
-    - find . -type f -name gluesync-*.jar -path '*/build/*' -exec cp '{}' libs/ \;
-  artifacts:
-    paths:
-      - libs/*
-    expire_in: 1 day
-  interruptible: true
-
-publish_gluesync_cockroachdb:
-  stage: publish
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "cockroachdb"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - apt-get update && apt-get install -y gnupg zip curl
-    - echo "$GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
-    - |
-      if [ -z "$MODULE_VERSION" ]; then
-        echo "MODULE_VERSION is not set. Ensure the pipeline is triggered with module version." >&2
-        exit 1
-      fi
-      export VERSION="$MODULE_VERSION"
-    - RELEASE_VERSION="$VERSION" gradle -Psigning.gnupg.keyName="$GPG_KEY_ID" -Psigning.gnupg.passphrase="$GPG_PASSPHRASE" :cockroachdb:publishToMavenLocal
-    - ARTIFACT_DIR="${HOME}/.m2/repository/com/molo17/gluesync/gluesync-cockroachdb/$VERSION"
-    - |
-      if [ ! -d "$ARTIFACT_DIR" ]; then
-        echo "Artifacts not found in $ARTIFACT_DIR" >&2
-        exit 1
-      fi
-    - mkdir -p /tmp/bundle/com/molo17/gluesync/gluesync-cockroachdb/$VERSION
-    - cp $ARTIFACT_DIR/* /tmp/bundle/com/molo17/gluesync/gluesync-cockroachdb/$VERSION/
-    - cd /tmp/bundle/com/molo17/gluesync/gluesync-cockroachdb/$VERSION
-    - |
-      for file in *.jar *.pom; do
-        if [ -f "$file" ]; then
-          md5sum "$file" | awk '{print $1}' > "${file}.md5"
-          sha1sum "$file" | awk '{print $1}' > "${file}.sha1"
-        fi
-      done
-    - cd /tmp/bundle && zip -r /tmp/gluesync-cockroachdb-bundle.zip com/
-    - export AUTH_TOKEN=$(printf "${SONATYPE_USERNAME}:${SONATYPE_PASSWORD}" | base64)
-    - |
-      curl --fail --request POST \
-        --header "Authorization: Bearer ${AUTH_TOKEN}" \
-        --form bundle=@/tmp/gluesync-cockroachdb-bundle.zip \
-        --form publishingType=AUTOMATIC \
-        https://central.sonatype.com/api/v1/publisher/upload
-  dependencies:
-    - build_gluesync_cockroachdb
-  interruptible: true
-
-deploy_gluesync_cockroachdb:
-  stage: deploy
-  retry: 2
-  tags:
-    - hq-linux-docker
-  image: docker:27.3.1
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "cockroachdb"'
-  services:
-    - name: docker:dind
-      variables:
-        DOCKER_TLS_CERTDIR: ""
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - sh scripts/docker-build.sh --tag=cockroachdb --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --supported-deploy-arch=DEPLOY_AMD64_ARM64
-  dependencies:
-    - build_gluesync_cockroachdb
-  interruptible: true
-
-deploy_gluesync_windows_cockroachdb:
-  stage: deploy
-  retry: 2
-  parallel:
-    matrix:
-      - WINDOWS_TAG: "ltsc2019"
-        WINDOWS_RUNNER_VERSION: "2019"
-      - WINDOWS_TAG: "ltsc2022"
-        WINDOWS_RUNNER_VERSION: "2022"
-      # - WINDOWS_TAG: "ltsc2025"
-      #   WINDOWS_RUNNER_VERSION: "2025"
-  tags:
-    - "hq-windows-shell-$WINDOWS_RUNNER_VERSION"
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "cockroachdb"'
-  script:
-    - $env:GRADLE_USER_HOME = "$((Get-Location).Path)\.gradle"
-    - ./scripts/docker-build-win.ps1 --tag=cockroachdb --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --windows-tag=$WINDOWS_TAG
-  dependencies:
-    - build_gluesync_cockroachdb
-  interruptible: true
-
-build_gluesync_mariadb_cdc:
-  stage: build
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "mariadb-cdc"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - mkdir libs
-    - gradle :mariadb-cdc:obfuscateWithProguard
-    - find . -type f -name gluesync-*.jar -path '*/build/*' -exec cp '{}' libs/ \;
-  artifacts:
-    paths:
-      - libs/*
-    expire_in: 1 day
-  interruptible: true
-
-publish_gluesync_mariadb_cdc:
-  stage: publish
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "mariadb-cdc"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - apt-get update && apt-get install -y gnupg zip curl
-    - echo "$GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
-    - |
-      if [ -z "$MODULE_VERSION" ]; then
-        echo "MODULE_VERSION is not set. Ensure the pipeline is triggered with module version." >&2
-        exit 1
-      fi
-      export VERSION="$MODULE_VERSION"
-    - RELEASE_VERSION="$VERSION" gradle -Psigning.gnupg.keyName="$GPG_KEY_ID" -Psigning.gnupg.passphrase="$GPG_PASSPHRASE" :mariadb-cdc:publishToMavenLocal
-    - ARTIFACT_DIR="${HOME}/.m2/repository/com/molo17/gluesync/gluesync-mariadb-cdc/$VERSION"
-    - |
-      if [ ! -d "$ARTIFACT_DIR" ]; then
-        echo "Artifacts not found in $ARTIFACT_DIR" >&2
-        exit 1
-      fi
-    - mkdir -p /tmp/bundle/com/molo17/gluesync/gluesync-mariadb-cdc/$VERSION
-    - cp $ARTIFACT_DIR/* /tmp/bundle/com/molo17/gluesync/gluesync-mariadb-cdc/$VERSION/
-    - cd /tmp/bundle/com/molo17/gluesync/gluesync-mariadb-cdc/$VERSION
-    - |
-      for file in *.jar *.pom; do
-        if [ -f "$file" ]; then
-          md5sum "$file" | awk '{print $1}' > "${file}.md5"
-          sha1sum "$file" | awk '{print $1}' > "${file}.sha1"
-        fi
-      done
-    - cd /tmp/bundle && zip -r /tmp/gluesync-mariadb-cdc-bundle.zip com/
-    - export AUTH_TOKEN=$(printf "${SONATYPE_USERNAME}:${SONATYPE_PASSWORD}" | base64)
-    - |
-      curl --fail --request POST \
-        --header "Authorization: Bearer ${AUTH_TOKEN}" \
-        --form bundle=@/tmp/gluesync-mariadb-cdc-bundle.zip \
-        --form publishingType=AUTOMATIC \
-        https://central.sonatype.com/api/v1/publisher/upload
-  dependencies:
-    - build_gluesync_mariadb_cdc
-  interruptible: true
-
-deploy_gluesync_mariadb_cdc:
-  stage: deploy
-  retry: 2
-  tags:
-    - hq-linux-docker
-  image: docker:27.3.1
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "mariadb-cdc"'
-  services:
-    - name: docker:dind
-      variables:
-        DOCKER_TLS_CERTDIR: ""
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - sh scripts/docker-build.sh --tag=mariadb-cdc --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --supported-deploy-arch=DEPLOY_AMD64_ARM64
-  dependencies:
-    - build_gluesync_mariadb_cdc
-  interruptible: true
-
-deploy_gluesync_windows_mariadb_cdc:
-  stage: deploy
-  retry: 2
-  parallel:
-    matrix:
-      - WINDOWS_TAG: "ltsc2019"
-        WINDOWS_RUNNER_VERSION: "2019"
-      - WINDOWS_TAG: "ltsc2022"
-        WINDOWS_RUNNER_VERSION: "2022"
-      # - WINDOWS_TAG: "ltsc2025"
-      #   WINDOWS_RUNNER_VERSION: "2025"
-  tags:
-    - "hq-windows-shell-$WINDOWS_RUNNER_VERSION"
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "mariadb-cdc"'
-  script:
-    - $env:GRADLE_USER_HOME = "$((Get-Location).Path)\.gradle"
-    - ./scripts/docker-build-win.ps1 --tag=mariadb-cdc --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --windows-tag=$WINDOWS_TAG
-  dependencies:
-    - build_gluesync_mariadb_cdc
-  interruptible: true
-
-build_gluesync_google_bigquery:
-  stage: build
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "google-bigquery"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - mkdir libs
-    - gradle :google-big-query:obfuscateWithProguard
-    - find . -type f -name gluesync-*.jar -path '*/build/*' -exec cp '{}' libs/ \;
-  artifacts:
-    paths:
-      - libs/*
-    expire_in: 1 day
-  interruptible: true
-
-publish_gluesync_google_bigquery:
-  stage: publish
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "google-bigquery"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - apt-get update && apt-get install -y gnupg zip curl
-    - echo "$GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
-    - |
-      if [ -z "$MODULE_VERSION" ]; then
-        echo "MODULE_VERSION is not set. Ensure the pipeline is triggered with module version." >&2
-        exit 1
-      fi
-      export VERSION="$MODULE_VERSION"
-    - RELEASE_VERSION="$VERSION" gradle -Psigning.gnupg.keyName="$GPG_KEY_ID" -Psigning.gnupg.passphrase="$GPG_PASSPHRASE" :google-big-query:publishToMavenLocal
-    - ARTIFACT_DIR="${HOME}/.m2/repository/com/molo17/gluesync/gluesync-google-bigquery/$VERSION"
-    - |
-      if [ ! -d "$ARTIFACT_DIR" ]; then
-        echo "Artifacts not found in $ARTIFACT_DIR" >&2
-        exit 1
-      fi
-    - mkdir -p /tmp/bundle/com/molo17/gluesync/gluesync-google-bigquery/$VERSION
-    - cp $ARTIFACT_DIR/* /tmp/bundle/com/molo17/gluesync/gluesync-google-bigquery/$VERSION/
-    - cd /tmp/bundle/com/molo17/gluesync/gluesync-google-bigquery/$VERSION
-    - |
-      for file in *.jar *.pom; do
-        if [ -f "$file" ]; then
-          md5sum "$file" | awk '{print $1}' > "${file}.md5"
-          sha1sum "$file" | awk '{print $1}' > "${file}.sha1"
-        fi
-      done
-    - cd /tmp/bundle && zip -r /tmp/gluesync-google-bigquery-bundle.zip com/
-    - export AUTH_TOKEN=$(printf "${SONATYPE_USERNAME}:${SONATYPE_PASSWORD}" | base64)
-    - |
-      curl --fail --request POST \
-        --header "Authorization: Bearer ${AUTH_TOKEN}" \
-        --form bundle=@/tmp/gluesync-google-bigquery-bundle.zip \
-        --form publishingType=AUTOMATIC \
-        https://central.sonatype.com/api/v1/publisher/upload
-  dependencies:
-    - build_gluesync_google_bigquery
-  interruptible: true
-
-deploy_gluesync_google_bigquery:
-  stage: deploy
-  retry: 2
-  tags:
-    - hq-linux-docker
-  image: docker:27.3.1
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "google-bigquery"'
-  services:
-    - name: docker:dind
-      variables:
-        DOCKER_TLS_CERTDIR: ""
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - sh scripts/docker-build.sh --tag=google-bigquery --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --supported-deploy-arch=DEPLOY_AMD64_ARM64
-  dependencies:
-    - build_gluesync_google_bigquery
-  interruptible: true
-
-deploy_gluesync_windows_google_bigquery:
-  stage: deploy
-  retry: 2
-  parallel:
-    matrix:
-      - WINDOWS_TAG: "ltsc2019"
-        WINDOWS_RUNNER_VERSION: "2019"
-      - WINDOWS_TAG: "ltsc2022"
-        WINDOWS_RUNNER_VERSION: "2022"
-      # - WINDOWS_TAG: "ltsc2025"
-      #   WINDOWS_RUNNER_VERSION: "2025"
-  tags:
-    - "hq-windows-shell-$WINDOWS_RUNNER_VERSION"
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "google-bigquery"'
-  script:
-    - $env:GRADLE_USER_HOME = "$((Get-Location).Path)\.gradle"
-    - ./scripts/docker-build-win.ps1 --tag=google-bigquery --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --windows-tag=$WINDOWS_TAG
-  dependencies:
-    - build_gluesync_google_bigquery
-  interruptible: true
-
-build_gluesync_scylladb:
-  stage: build
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "scylladb"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - mkdir libs
-    - gradle :scylladb:obfuscateWithProguard
-    - find . -type f -name gluesync-*.jar -path '*/build/*' -exec cp '{}' libs/ \;
-  artifacts:
-    paths:
-      - libs/*
-    expire_in: 1 day
-  interruptible: true
-
-publish_gluesync_scylladb:
-  stage: publish
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "scylladb"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - apt-get update && apt-get install -y gnupg zip curl
-    - echo "$GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
-    - |
-      if [ -z "$MODULE_VERSION" ]; then
-        echo "MODULE_VERSION is not set. Ensure the pipeline is triggered with module version." >&2
-        exit 1
-      fi
-      export VERSION="$MODULE_VERSION"
-    - RELEASE_VERSION="$VERSION" gradle -Psigning.gnupg.keyName="$GPG_KEY_ID" -Psigning.gnupg.passphrase="$GPG_PASSPHRASE" :scylladb:publishToMavenLocal
-    - ARTIFACT_DIR="${HOME}/.m2/repository/com/molo17/gluesync/gluesync-scylladb/$VERSION"
-    - |
-      if [ ! -d "$ARTIFACT_DIR" ]; then
-        echo "Artifacts not found in $ARTIFACT_DIR" >&2
-        exit 1
-      fi
-    - mkdir -p /tmp/bundle/com/molo17/gluesync/gluesync-scylladb/$VERSION
-    - cp $ARTIFACT_DIR/* /tmp/bundle/com/molo17/gluesync/gluesync-scylladb/$VERSION/
-    - cd /tmp/bundle/com/molo17/gluesync/gluesync-scylladb/$VERSION
-    - |
-      for file in *.jar *.pom; do
-        if [ -f "$file" ]; then
-          md5sum "$file" | awk '{print $1}' > "${file}.md5"
-          sha1sum "$file" | awk '{print $1}' > "${file}.sha1"
-        fi
-      done
-    - cd /tmp/bundle && zip -r /tmp/gluesync-scylladb-bundle.zip com/
-    - export AUTH_TOKEN=$(printf "${SONATYPE_USERNAME}:${SONATYPE_PASSWORD}" | base64)
-    - |
-      curl --fail --request POST \
-        --header "Authorization: Bearer ${AUTH_TOKEN}" \
-        --form bundle=@/tmp/gluesync-scylladb-bundle.zip \
-        --form publishingType=AUTOMATIC \
-        https://central.sonatype.com/api/v1/publisher/upload
-  dependencies:
-    - build_gluesync_scylladb
-  interruptible: true
-
-deploy_gluesync_scylladb:
-  stage: deploy
-  retry: 2
-  tags:
-    - hq-linux-docker
-  image: docker:27.3.1
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "scylladb"'
-  services:
-    - name: docker:dind
-      variables:
-        DOCKER_TLS_CERTDIR: ""
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - sh scripts/docker-build.sh --tag=scylladb --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --supported-deploy-arch=DEPLOY_AMD64_ARM64
-  dependencies:
-    - build_gluesync_scylladb
-  interruptible: true
-
-deploy_gluesync_windows_scylladb:
-  stage: deploy
-  retry: 2
-  parallel:
-    matrix:
-      - WINDOWS_TAG: "ltsc2019"
-        WINDOWS_RUNNER_VERSION: "2019"
-      - WINDOWS_TAG: "ltsc2022"
-        WINDOWS_RUNNER_VERSION: "2022"
-      # - WINDOWS_TAG: "ltsc2025"
-      #   WINDOWS_RUNNER_VERSION: "2025"
-  tags:
-    - "hq-windows-shell-$WINDOWS_RUNNER_VERSION"
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "scylladb"'
-  script:
-    - $env:GRADLE_USER_HOME = "$((Get-Location).Path)\.gradle"
-    - ./scripts/docker-build-win.ps1 --tag=scylladb --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --windows-tag=$WINDOWS_TAG
-  dependencies:
-    - build_gluesync_scylladb
-  interruptible: true
-
-build_gluesync_yugabytedb:
-  stage: build
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "yugabytedb"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - mkdir libs
-    - gradle :yugabytedb:obfuscateWithProguard
-    - find . -type f -name gluesync-*.jar -path '*/build/*' -exec cp '{}' libs/ \;
-  artifacts:
-    paths:
-      - libs/*
-    expire_in: 1 day
-  interruptible: true
-
-publish_gluesync_yugabytedb:
-  stage: publish
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "yugabytedb"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - apt-get update && apt-get install -y gnupg zip curl
-    - echo "$GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
-    - |
-      if [ -z "$MODULE_VERSION" ]; then
-        echo "MODULE_VERSION is not set. Ensure the pipeline is triggered with module version." >&2
-        exit 1
-      fi
-      export VERSION="$MODULE_VERSION"
-    - RELEASE_VERSION="$VERSION" gradle -Psigning.gnupg.keyName="$GPG_KEY_ID" -Psigning.gnupg.passphrase="$GPG_PASSPHRASE" :yugabytedb:publishToMavenLocal
-    - ARTIFACT_DIR="${HOME}/.m2/repository/com/molo17/gluesync/gluesync-yugabytedb/$VERSION"
-    - |
-      if [ ! -d "$ARTIFACT_DIR" ]; then
-        echo "Artifacts not found in $ARTIFACT_DIR" >&2
-        exit 1
-      fi
-    - mkdir -p /tmp/bundle/com/molo17/gluesync/gluesync-yugabytedb/$VERSION
-    - cp $ARTIFACT_DIR/* /tmp/bundle/com/molo17/gluesync/gluesync-yugabytedb/$VERSION/
-    - cd /tmp/bundle/com/molo17/gluesync/gluesync-yugabytedb/$VERSION
-    - |
-      for file in *.jar *.pom; do
-        if [ -f "$file" ]; then
-          md5sum "$file" | awk '{print $1}' > "${file}.md5"
-          sha1sum "$file" | awk '{print $1}' > "${file}.sha1"
-        fi
-      done
-    - cd /tmp/bundle && zip -r /tmp/gluesync-yugabytedb-bundle.zip com/
-    - export AUTH_TOKEN=$(printf "${SONATYPE_USERNAME}:${SONATYPE_PASSWORD}" | base64)
-    - |
-      curl --fail --request POST \
-        --header "Authorization: Bearer ${AUTH_TOKEN}" \
-        --form bundle=@/tmp/gluesync-yugabytedb-bundle.zip \
-        --form publishingType=AUTOMATIC \
-        https://central.sonatype.com/api/v1/publisher/upload
-  dependencies:
-    - build_gluesync_yugabytedb
-  interruptible: true
-
-deploy_gluesync_yugabytedb:
-  stage: deploy
-  retry: 2
-  tags:
-    - hq-linux-docker
-  image: docker:27.3.1
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "yugabytedb"'
-  services:
-    - name: docker:dind
-      variables:
-        DOCKER_TLS_CERTDIR: ""
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - sh scripts/docker-build.sh --tag=yugabytedb --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --supported-deploy-arch=DEPLOY_AMD64_ARM64
-  dependencies:
-    - build_gluesync_yugabytedb
-  interruptible: true
-
-deploy_gluesync_windows_yugabytedb:
-  stage: deploy
-  retry: 2
-  parallel:
-    matrix:
-      - WINDOWS_TAG: "ltsc2019"
-        WINDOWS_RUNNER_VERSION: "2019"
-      - WINDOWS_TAG: "ltsc2022"
-        WINDOWS_RUNNER_VERSION: "2022"
-      # - WINDOWS_TAG: "ltsc2025"
-      #   WINDOWS_RUNNER_VERSION: "2025"
-  tags:
-    - "hq-windows-shell-$WINDOWS_RUNNER_VERSION"
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "yugabytedb"'
-  script:
-    - $env:GRADLE_USER_HOME = "$((Get-Location).Path)\.gradle"
-    - ./scripts/docker-build-win.ps1 --tag=yugabytedb --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --windows-tag=$WINDOWS_TAG
-  dependencies:
-    - build_gluesync_yugabytedb
-  interruptible: true
-
-build_gluesync_gridgain:
-  stage: build
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "gridgain"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - mkdir libs
-    - gradle :gridgain:obfuscateWithProguard
-    - find . -type f -name gluesync-*.jar -path '*/build/*' -exec cp '{}' libs/ \;
-  artifacts:
-    paths:
-      - libs/*
-    expire_in: 1 day
-  interruptible: true
-
-publish_gluesync_gridgain:
-  stage: publish
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "gridgain"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - apt-get update && apt-get install -y gnupg zip curl
-    - echo "$GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
-    - |
-      if [ -z "$MODULE_VERSION" ]; then
-        echo "MODULE_VERSION is not set. Ensure the pipeline is triggered with module version." >&2
-        exit 1
-      fi
-      export VERSION="$MODULE_VERSION"
-    - RELEASE_VERSION="$VERSION" gradle -Psigning.gnupg.keyName="$GPG_KEY_ID" -Psigning.gnupg.passphrase="$GPG_PASSPHRASE" :gridgain:publishToMavenLocal
-    - ARTIFACT_DIR="${HOME}/.m2/repository/com/molo17/gluesync/gluesync-gridgain/$VERSION"
-    - |
-      if [ ! -d "$ARTIFACT_DIR" ]; then
-        echo "Artifacts not found in $ARTIFACT_DIR" >&2
-        exit 1
-      fi
-    - mkdir -p /tmp/bundle/com/molo17/gluesync/gluesync-gridgain/$VERSION
-    - cp $ARTIFACT_DIR/* /tmp/bundle/com/molo17/gluesync/gluesync-gridgain/$VERSION/
-    - cd /tmp/bundle/com/molo17/gluesync/gluesync-gridgain/$VERSION
-    - |
-      for file in *.jar *.pom; do
-        if [ -f "$file" ]; then
-          md5sum "$file" | awk '{print $1}' > "${file}.md5"
-          sha1sum "$file" | awk '{print $1}' > "${file}.sha1"
-        fi
-      done
-    - cd /tmp/bundle && zip -r /tmp/gluesync-gridgain-bundle.zip com/
-    - export AUTH_TOKEN=$(printf "${SONATYPE_USERNAME}:${SONATYPE_PASSWORD}" | base64)
-    - |
-      curl --fail --request POST \
-        --header "Authorization: Bearer ${AUTH_TOKEN}" \
-        --form bundle=@/tmp/gluesync-gridgain-bundle.zip \
-        --form publishingType=AUTOMATIC \
-        https://central.sonatype.com/api/v1/publisher/upload
-  dependencies:
-    - build_gluesync_gridgain
-  interruptible: true
-
-deploy_gluesync_gridgain:
-  stage: deploy
-  retry: 2
-  tags:
-    - hq-linux-docker
-  image: docker:27.3.1
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "gridgain"'
-  services:
-    - name: docker:dind
-      variables:
-        DOCKER_TLS_CERTDIR: ""
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - sh scripts/docker-build.sh --tag=gridgain --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --supported-deploy-arch=DEPLOY_AMD64_ARM64
-  dependencies:
-    - build_gluesync_gridgain
-  interruptible: true
-
-deploy_gluesync_windows_gridgain:
-  stage: deploy
-  retry: 2
-  parallel:
-    matrix:
-      - WINDOWS_TAG: "ltsc2019"
-        WINDOWS_RUNNER_VERSION: "2019"
-      - WINDOWS_TAG: "ltsc2022"
-        WINDOWS_RUNNER_VERSION: "2022"
-      # - WINDOWS_TAG: "ltsc2025"
-      #   WINDOWS_RUNNER_VERSION: "2025"
-  tags:
-    - "hq-windows-shell-$WINDOWS_RUNNER_VERSION"
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "gridgain"'
-  script:
-    - $env:GRADLE_USER_HOME = "$((Get-Location).Path)\.gradle"
-    - ./scripts/docker-build-win.ps1 --tag=gridgain --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --windows-tag=$WINDOWS_TAG
-  dependencies:
-    - build_gluesync_gridgain
-  interruptible: true
-
-build_gluesync_db2_luw_triggers:
-  stage: build
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "db2-luw-triggers"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - mkdir libs
-    - gradle :db2-luw:triggers:obfuscateWithProguard
-    - find . -type f -name gluesync-*.jar -path '*/build/*' -exec cp '{}' libs/ \;
-  artifacts:
-    paths:
-      - libs/*
-    expire_in: 1 day
-  interruptible: true
-
-publish_gluesync_db2_luw_triggers:
-  stage: publish
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "db2-luw-triggers"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - apt-get update && apt-get install -y gnupg zip curl
-    - echo "$GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
-    - |
-      if [ -z "$MODULE_VERSION" ]; then
-        echo "MODULE_VERSION is not set. Ensure the pipeline is triggered with module version." >&2
-        exit 1
-      fi
-      export VERSION="$MODULE_VERSION"
-    - RELEASE_VERSION="$VERSION" gradle -Psigning.gnupg.keyName="$GPG_KEY_ID" -Psigning.gnupg.passphrase="$GPG_PASSPHRASE" :db2-luw:triggers:publishToMavenLocal
-    - ARTIFACT_DIR="${HOME}/.m2/repository/com/molo17/gluesync/gluesync-db2-luw-triggers/$VERSION"
-    - |
-      if [ ! -d "$ARTIFACT_DIR" ]; then
-        echo "Artifacts not found in $ARTIFACT_DIR" >&2
-        exit 1
-      fi
-    - mkdir -p /tmp/bundle/com/molo17/gluesync/gluesync-db2-luw-triggers/$VERSION
-    - cp $ARTIFACT_DIR/* /tmp/bundle/com/molo17/gluesync/gluesync-db2-luw-triggers/$VERSION/
-    - cd /tmp/bundle/com/molo17/gluesync/gluesync-db2-luw-triggers/$VERSION
-    - |
-      for file in *.jar *.pom; do
-        if [ -f "$file" ]; then
-          md5sum "$file" | awk '{print $1}' > "${file}.md5"
-          sha1sum "$file" | awk '{print $1}' > "${file}.sha1"
-        fi
-      done
-    - cd /tmp/bundle && zip -r /tmp/gluesync-db2-luw-triggers-bundle.zip com/
-    - export AUTH_TOKEN=$(printf "${SONATYPE_USERNAME}:${SONATYPE_PASSWORD}" | base64)
-    - |
-      curl --fail --request POST \
-        --header "Authorization: Bearer ${AUTH_TOKEN}" \
-        --form bundle=@/tmp/gluesync-db2-luw-triggers-bundle.zip \
-        --form publishingType=AUTOMATIC \
-        https://central.sonatype.com/api/v1/publisher/upload
-  dependencies:
-    - build_gluesync_db2_luw_triggers
-  interruptible: true
-
-deploy_gluesync_db2_luw_triggers:
-  stage: deploy
-  retry: 2
-  tags:
-    - hq-linux-docker
-  image: docker:27.3.1
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "db2-luw-triggers"'
-  services:
-    - name: docker:dind
-      variables:
-        DOCKER_TLS_CERTDIR: ""
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - sh scripts/docker-build.sh --tag=db2-luw-triggers --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --supported-deploy-arch=DEPLOY_AMD64_ARM64
-  dependencies:
-    - build_gluesync_db2_luw_triggers
-  interruptible: true
-
-deploy_gluesync_windows_db2_luw_triggers:
-  stage: deploy
-  retry: 2
-  parallel:
-    matrix:
-      - WINDOWS_TAG: "ltsc2019"
-        WINDOWS_RUNNER_VERSION: "2019"
-      - WINDOWS_TAG: "ltsc2022"
-        WINDOWS_RUNNER_VERSION: "2022"
-      # - WINDOWS_TAG: "ltsc2025"
-      #   WINDOWS_RUNNER_VERSION: "2025"
-  tags:
-    - "hq-windows-shell-$WINDOWS_RUNNER_VERSION"
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "db2-luw-triggers"'
-  script:
-    - $env:GRADLE_USER_HOME = "$((Get-Location).Path)\.gradle"
-    - ./scripts/docker-build-win.ps1 --tag=db2-luw-triggers --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --windows-tag=$WINDOWS_TAG
-  dependencies:
-    - build_gluesync_db2_luw_triggers
-  interruptible: true
-
-build_gluesync_azure_data_lake:
-  stage: build
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "azure-data-lake"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - mkdir libs
-    - gradle :azure-data-lake:obfuscateWithProguard
-    - find . -type f -name gluesync-*.jar -path '*/build/*' -exec cp '{}' libs/ \;
-  artifacts:
-    paths:
-      - libs/*
-    expire_in: 1 day
-  interruptible: true
-
-publish_gluesync_azure_data_lake:
-  stage: publish
-  retry: 2
-  tags:
-    - hq-linux-docker
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "azure-data-lake"'
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - apt-get update && apt-get install -y gnupg zip curl
-    - echo "$GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
-    - |
-      if [ -z "$MODULE_VERSION" ]; then
-        echo "MODULE_VERSION is not set. Ensure the pipeline is triggered with module version." >&2
-        exit 1
-      fi
-      export VERSION="$MODULE_VERSION"
-    - RELEASE_VERSION="$VERSION" gradle -Psigning.gnupg.keyName="$GPG_KEY_ID" -Psigning.gnupg.passphrase="$GPG_PASSPHRASE" :azure-data-lake:publishToMavenLocal
-    - ARTIFACT_DIR="${HOME}/.m2/repository/com/molo17/gluesync/gluesync-azure-data-lake/$VERSION"
-    - |
-      if [ ! -d "$ARTIFACT_DIR" ]; then
-        echo "Artifacts not found in $ARTIFACT_DIR" >&2
-        exit 1
-      fi
-    - mkdir -p /tmp/bundle/com/molo17/gluesync/gluesync-azure-data-lake/$VERSION
-    - cp $ARTIFACT_DIR/* /tmp/bundle/com/molo17/gluesync/gluesync-azure-data-lake/$VERSION/
-    - cd /tmp/bundle/com/molo17/gluesync/gluesync-azure-data-lake/$VERSION
-    - |
-      for file in *.jar *.pom; do
-        if [ -f "$file" ]; then
-          md5sum "$file" | awk '{print $1}' > "${file}.md5"
-          sha1sum "$file" | awk '{print $1}' > "${file}.sha1"
-        fi
-      done
-    - cd /tmp/bundle && zip -r /tmp/gluesync-azure-data-lake-bundle.zip com/
-    - export AUTH_TOKEN=$(printf "${SONATYPE_USERNAME}:${SONATYPE_PASSWORD}" | base64)
-    - |
-      curl --fail --request POST \
-        --header "Authorization: Bearer ${AUTH_TOKEN}" \
-        --form bundle=@/tmp/gluesync-azure-data-lake-bundle.zip \
-        --form publishingType=AUTOMATIC \
-        https://central.sonatype.com/api/v1/publisher/upload
-  dependencies:
-    - build_gluesync_azure_data_lake
-  interruptible: true
-
-deploy_gluesync_azure_data_lake:
-  stage: deploy
-  retry: 2
-  tags:
-    - hq-linux-docker
-  image: docker:27.3.1
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "azure-data-lake"'
-  services:
-    - name: docker:dind
-      variables:
-        DOCKER_TLS_CERTDIR: ""
-  script:
-    - export GRADLE_USER_HOME=`pwd`/.gradle
-    - sh scripts/docker-build.sh --tag=azure-data-lake --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --supported-deploy-arch=DEPLOY_AMD64_ARM64
-  dependencies:
-    - build_gluesync_azure_data_lake
-  interruptible: true
-
-deploy_gluesync_windows_azure_data_lake:
-  stage: deploy
-  retry: 2
-  parallel:
-    matrix:
-      - WINDOWS_TAG: "ltsc2019"
-        WINDOWS_RUNNER_VERSION: "2019"
-      - WINDOWS_TAG: "ltsc2022"
-        WINDOWS_RUNNER_VERSION: "2022"
-      # - WINDOWS_TAG: "ltsc2025"
-      #   WINDOWS_RUNNER_VERSION: "2025"
-  tags:
-    - "hq-windows-shell-$WINDOWS_RUNNER_VERSION"
-  rules:
-    - if: '$PIPELINE_TYPE == "build_and_deploy" && $MODULE == "azure-data-lake"'
-  script:
-    - $env:GRADLE_USER_HOME = "$((Get-Location).Path)\.gradle"
-    - ./scripts/docker-build-win.ps1 --tag=azure-data-lake --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --windows-tag=$WINDOWS_TAG
-  dependencies:
-    - build_gluesync_azure_data_lake
-  interruptible: true
+    - if: '$CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/'
+    - if: '$CI_COMMIT_TAG =~ /^release-/'
+    - if: '$CI_COMMIT_TAG =~ /^beta-/'
+    - if: '$CI_COMMIT_TAG =~ /^tag-/'
