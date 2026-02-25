@@ -1422,8 +1422,12 @@ function bindEvents() {
       ui.setBulkMessage('Starting bulk entity creation…');
       logActivity('Bulk', `Starting bulk entity creation for ${selectedTables.length} table(s) from schema ${sourceSchema}`);
 
+      ui.renderLogs();
       try {
         const res = await api.bulkCreate(payload);
+        if (res && Array.isArray(res.logs) && res.logs.length) {
+          ui.renderLogs(res.logs);
+        }
         if (res && typeof res.message === 'string') {
           ui.setBulkMessage(res.message, res.success === false ? 'error' : 'success');
           logActivity('Bulk', res.message);

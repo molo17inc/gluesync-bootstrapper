@@ -614,7 +614,7 @@ def create_app() -> FastAPI:
                 logger.info("[bulk-create] %s", line)
 
         msg = "Bulk entity creation completed successfully" if ok else result.get("error") or "Bulk entity creation failed"
-        return ApiMessage(success=ok, message=msg)
+        return ApiMessage(success=ok, message=msg, logs=logs)
 
     @app.post("/api/bulk/template")
     async def bulk_export_template(request: BulkTemplateRequest):

@@ -461,7 +461,20 @@ def run_create_entities_for_tables(
 
     except Exception as exc:  # pylint: disable=broad-except
         logger.exception("Bulk create_entities_for_tables execution failed")
-        return {"success": False, "logs": buffer.getvalue().splitlines(), "error": str(exc)}
+        # Extract full CoreHub exceptionMessage from HTTPError responses
+        error_detail = str(exc)
+        try:
+            import requests as _requests
+            if isinstance(exc, _requests.exceptions.HTTPError) and exc.response is not None:
+                body = exc.response.json()
+                corehub_msg = body.get("exceptionMessage") or body.get("message")
+                if corehub_msg:
+                    error_detail = f"{exc}: {corehub_msg}"
+        except Exception:
+            pass
+        logs = buffer.getvalue().splitlines()
+        logs.append(f"ERROR: {error_detail}")
+        return {"success": False, "logs": logs, "error": error_detail}
     finally:
         if prev_env_create_tables is not None:
             os.environ["CREATE_TABLE_IF_NOT_EXISTS"] = prev_env_create_tables
