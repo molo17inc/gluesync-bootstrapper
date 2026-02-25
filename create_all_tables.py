@@ -181,7 +181,8 @@ def create_target_table(pipeline_id: str, create_table_request: CreateTableReque
         raise
 
 def create_tables(token, pipeline_id, source_schema, target_schema, tables, source_agent_id, target_agent_id,
-                  source_type, target_type, yaml_config, skip_errors=True):
+                  source_type, target_type, yaml_config, skip_errors=True,
+                  source_agent_tag=None, target_agent_tag=None):
     # First, collect all unique group names from the YAML configuration
     group_names = set()
     if yaml_config:
@@ -355,11 +356,13 @@ def create_tables(token, pipeline_id, source_schema, target_schema, tables, sour
 
         # check if the table exists on the target
         handle_table_creation(pipeline_id, target_table_name, yaml_target_schema, keys, token, columns, custom_config,
-                              source_node_info, target_node_info)
+                              source_node_info, target_node_info,
+                              source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
 
 
 def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_schema: str, keys: list, token: str,
-                          columns: list, custom_config, source_node_info, target_node_info):
+                          columns: list, custom_config, source_node_info, target_node_info,
+                          source_agent_tag=None, target_agent_tag=None):
     custom_config = custom_config or {}
 
     if not table_exists(pipeline_id=pipeline_id, schema_name=yaml_target_schema, table_name=target_table_name,
@@ -419,7 +422,8 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                         col_is_nullable = target_col.get('isNullable', False)  # Default nullable
                     
                     # Map the column type to target node type
-                    mapped_type = map_data_type(col_type, source_node_info, target_node_info)
+                    mapped_type = map_data_type(col_type, source_node_info, target_node_info,
+                                               source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
                     
                     column_dtos.append(ColumnDto(
                         name=col_name,
@@ -468,7 +472,8 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                         ordinal_position = _to_int(col_meta.get('ordinalPosition'), idx)
 
                         # Map source type to target type (e.g. CHARACTER -> varchar)
-                        mapped_type = map_data_type(col_type, source_node_info, target_node_info)
+                        mapped_type = map_data_type(col_type, source_node_info, target_node_info,
+                                                   source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
 
                         column_dtos.append(ColumnDto(
                             name=col_name,
@@ -486,7 +491,8 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                     # When no metadata is provided, fall back to source column properties directly
                     for col in columns["columns"]:
                         # Map source type to target type (e.g. CHARACTER -> varchar)
-                        mapped_type = map_data_type(col["type"], source_node_info, target_node_info)
+                        mapped_type = map_data_type(col["type"], source_node_info, target_node_info,
+                                                   source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
                         column_dtos.append(ColumnDto(
                             name=col["name"],
                             type=format_column_type(mapped_type, col.get("dataLength", 0),
@@ -559,7 +565,9 @@ def main(pipeline_id, source_schema, target_schema, source_type, target_type, ya
         create_tables(
             token, pipeline_id, source_schema, target_schema,
             tables, source_agent['agentId'], target_agent['agentId'],
-            source_type, target_type, yaml_config, skip_errors
+            source_type, target_type, yaml_config, skip_errors,
+            source_agent_tag=source_agent.get('agentTag'),
+            target_agent_tag=target_agent.get('agentTag')
         )
 
     except Exception as e:

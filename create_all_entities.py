@@ -83,7 +83,7 @@ def get_allowed_operations(target_custom_properties):
     logger.info(f"Using default allowedOperations: {default_ops}")
     return default_ops
 
-def create_entities(token, pipeline_id, source_schema, target_schema, tables, source_agent_id, target_agent_id, source_type, target_type, yaml_config, skip_errors=True, chunk_size=50):
+def create_entities(token, pipeline_id, source_schema, target_schema, tables, source_agent_id, target_agent_id, source_type, target_type, yaml_config, skip_errors=True, chunk_size=50, source_agent_tag=None, target_agent_tag=None):
     # Debug logging to see what source_type and target_type values are received
     logger.debug(f"create_entities called with: source_type='{source_type}', target_type='{target_type}'")
     logger.debug(f"source_type type: {type(source_type)}, target_type type: {type(target_type)}")
@@ -955,7 +955,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             if discovered_target_col and discovered_target_col.get('type'):
                                 resolved_target_type = discovered_target_col.get('type')
                             else:
-                                resolved_target_type = map_data_type(col["type"], source_node_info, target_node_info)
+                                resolved_target_type = map_data_type(col["type"], source_node_info, target_node_info,
+                                                                     source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
 
                             target_columns_def.append({
                                 "id": col_id,  # Use actual ordinal position from database
@@ -980,7 +981,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 if discovered_target_col and discovered_target_col.get('type'):
                     resolved_target_type = discovered_target_col.get('type')
                 else:
-                    resolved_target_type = map_data_type(col["type"], source_node_info, target_node_info)
+                    resolved_target_type = map_data_type(col["type"], source_node_info, target_node_info,
+                                                         source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
 
                 # Use the target-discovered column name (preserves original case from target DB)
                 # Fall back to source column name if target column not found
@@ -1062,7 +1064,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                     raise ValueError(error_msg)
 
                     # Map the column type to target node type
-                    mapped_type = map_data_type(col_type, source_node_info, target_node_info)
+                    mapped_type = map_data_type(col_type, source_node_info, target_node_info,
+                                               source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
 
                     target_columns_def.append({
                         "id": max_target_col_id,  # Continue from last target column ID
@@ -1100,7 +1103,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                 if discovered_target_col and discovered_target_col.get('type'):
                                     resolved_target_type = discovered_target_col.get('type')
                                 else:
-                                    resolved_target_type = map_data_type(col["type"], source_node_info, target_node_info)
+                                    resolved_target_type = map_data_type(col["type"], source_node_info, target_node_info,
+                                                                         source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
 
                                 target_keys.append({
                                     "id": col_id,  # Use actual ordinal position from database
@@ -1127,7 +1131,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             if discovered_target_col and discovered_target_col.get('type'):
                                 resolved_target_type = discovered_target_col.get('type')
                             else:
-                                resolved_target_type = map_data_type(col["type"], source_node_info, target_node_info)
+                                resolved_target_type = map_data_type(col["type"], source_node_info, target_node_info,
+                                                                     source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
 
                             # Use the target-discovered column name (preserves original case from target DB)
                             # Fall back to source column name if target column not found
@@ -1156,7 +1161,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         "id": col_id,  # Use actual ordinal position from database
                         "name": col["name"],
                         "alias": col["name"],
-                        "type": target_discovered_columns_by_name.get(col["name"].lower(), {}).get('type') or map_data_type(col["type"], source_node_info, target_node_info)
+                        "type": target_discovered_columns_by_name.get(col["name"].lower(), {}).get('type') or map_data_type(col["type"], source_node_info, target_node_info,
+                                                                                                                                    source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
                     })
             logger.debug(f"Using primary target keys for {table_name}: {target_keys}")
 
@@ -1472,7 +1478,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 target_table_columns.append({
                     "id": col_id,  # Use actual ordinal position from database
                     "name": col["name"],
-                    "type": map_data_type(col["type"], source_node_info, target_node_info)
+                    "type": map_data_type(col["type"], source_node_info, target_node_info,
+                                         source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
                 })
 
             # Add target-only columns for this table if specified
@@ -1543,7 +1550,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                     raise ValueError(error_msg)
 
                     # Map the column type to target node type
-                    mapped_type = map_data_type(col_type, source_node_info, target_node_info)
+                    mapped_type = map_data_type(col_type, source_node_info, target_node_info,
+                                               source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
 
                     target_table_columns.append({
                         "id": max_target_col_id,  # Continue from last target column ID
@@ -1587,7 +1595,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             keys.append({
                                 "id": col_id,  # Use actual ordinal position from database
                                 "name": col["name"],
-                                "type": map_data_type(col["type"], source_node_info, target_node_info)
+                                "type": map_data_type(col["type"], source_node_info, target_node_info,
+                                                     source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
                             })
                             break
                     else:
@@ -1605,7 +1614,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         keys.append({
                             "id": col_id,  # Use actual ordinal position from database
                             "name": col["name"],
-                            "type": map_data_type(col["type"], source_node_info, target_node_info)
+                            "type": map_data_type(col["type"], source_node_info, target_node_info,
+                                                 source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
                         })
 
             # Add keys for this table
@@ -2096,7 +2106,9 @@ def main(pipeline_id, source_schema, target_schema, source_type, target_type, ya
         result = create_entities(
             token, pipeline_id, source_schema, target_schema,
             tables, source_agent['agentId'], target_agent['agentId'],
-            source_type, target_type, yaml_config, skip_errors, chunk_size
+            source_type, target_type, yaml_config, skip_errors, chunk_size,
+            source_agent_tag=source_agent.get('agentTag'),
+            target_agent_tag=target_agent.get('agentTag')
         )
         
         if result.get('skipped_discovery', False):
