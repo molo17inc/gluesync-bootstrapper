@@ -467,9 +467,12 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                         column_id = _to_int(col_meta.get('id'), idx)
                         ordinal_position = _to_int(col_meta.get('ordinalPosition'), idx)
 
+                        # Map source type to target type (e.g. CHARACTER -> varchar)
+                        mapped_type = map_data_type(col_type, source_node_info, target_node_info)
+
                         column_dtos.append(ColumnDto(
                             name=col_name,
-                            type=format_column_type(col_type, col_data_length, col_numeric_precision, col_numeric_scale),
+                            type=format_column_type(mapped_type, col_data_length, col_numeric_precision, col_numeric_scale),
                             id=column_id,
                             ordinalPosition=ordinal_position,
                             isPrimaryKey=col_name in key_names,
@@ -482,9 +485,11 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                 if not column_dtos:
                     # When no metadata is provided, fall back to source column properties directly
                     for col in columns["columns"]:
+                        # Map source type to target type (e.g. CHARACTER -> varchar)
+                        mapped_type = map_data_type(col["type"], source_node_info, target_node_info)
                         column_dtos.append(ColumnDto(
-                            name=col["name"], 
-                            type=format_column_type(col["type"], col.get("dataLength", 0), 
+                            name=col["name"],
+                            type=format_column_type(mapped_type, col.get("dataLength", 0),
                                                    col.get("numericPrecision", 0), col.get("numericScale", 0)),
                             id=col.get("ordinalPosition", col.get("id", 1)),
                             ordinalPosition=col.get("ordinalPosition", col.get("id", 1)),
