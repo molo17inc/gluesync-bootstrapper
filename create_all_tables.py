@@ -233,7 +233,7 @@ def create_tables(token, pipeline_id, source_schema, target_schema, tables, sour
     custom_tables = tables_config.get('custom', {})
     if custom_tables is None:
         custom_tables = {}
-        prilogger.infont("Warning: 'custom' attribute is present but empty in YAML. Converting to empty dict.")
+        logger.info("Warning: 'custom' attribute is present but empty in YAML. Converting to empty dict.")
 
     # Get schema-level custom properties
     schema_custom_properties = schema_config.get('customProperties', {})
@@ -404,6 +404,15 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                 else:
                     key_names.add(key)
 
+            key_names_lower = {
+                key_name.lower() for key_name in key_names if isinstance(key_name, str)
+            }
+
+            def _is_primary_key(column_name: str) -> bool:
+                if column_name in key_names:
+                    return True
+                return isinstance(column_name, str) and column_name.lower() in key_names_lower
+
             def _to_int(value, default=0):
                 try:
                     return int(value)
@@ -450,7 +459,7 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                         type=format_column_type(mapped_type, col_data_length, col_numeric_precision, col_numeric_scale),
                         id=idx,  # Use sequential IDs for target-only columns
                         ordinalPosition=idx,
-                        isPrimaryKey=col_name in key_names,
+                        isPrimaryKey=_is_primary_key(col_name),
                         isNullable=col_is_nullable,
                         dataLength=col_data_length,
                         numericPrecision=col_numeric_precision,
@@ -500,7 +509,7 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                             type=format_column_type(mapped_type, col_data_length, col_numeric_precision, col_numeric_scale),
                             id=column_id,
                             ordinalPosition=ordinal_position,
-                            isPrimaryKey=col_name in key_names,
+                            isPrimaryKey=_is_primary_key(col_name),
                             isNullable=col_is_nullable,
                             dataLength=col_data_length,
                             numericPrecision=col_numeric_precision,
@@ -519,7 +528,7 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                                                    col.get("numericPrecision", 0), col.get("numericScale", 0)),
                             id=col.get("ordinalPosition", col.get("id", 1)),
                             ordinalPosition=col.get("ordinalPosition", col.get("id", 1)),
-                            isPrimaryKey=col.get("isPrimaryKey", False),
+                            isPrimaryKey=_is_primary_key(col["name"]),
                             isNullable=col.get("isNullable", False),
                             dataLength=col.get("dataLength", 0),
                             numericPrecision=col.get("numericPrecision", 0),
