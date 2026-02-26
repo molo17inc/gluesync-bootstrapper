@@ -451,7 +451,24 @@ def map_data_type(source_type, source_node_info, target_node_info,
             f"source={source_tag!r} target={target_tag!r})"
         )
 
-    normalized_source_type = source_type.split('(')[0].lower()
+    gluesync_type_aliases = {
+        'DATE_TIME': 'LOCAL_DATE_TIME',
+        'DATETIME': 'LOCAL_DATE_TIME',
+        'TIMESTAMP_WITHOUT_TIME_ZONE': 'LOCAL_DATE_TIME',
+        'TIMESTAMP_WITH_TIME_ZONE': 'OFFSET_DATE_TIME',
+    }
+
+    native_type_aliases = {
+        'date_time': 'datetime',
+        'local_date_time': 'datetime',
+    }
+
+    def _normalize_gluesync_type(type_name):
+        normalized = str(type_name or '').strip().upper().replace('-', '_').replace(' ', '_')
+        return gluesync_type_aliases.get(normalized, normalized)
+
+    normalized_source_type = source_type.split('(')[0].strip().lower()
+    normalized_source_type = native_type_aliases.get(normalized_source_type, normalized_source_type)
     print(f"Mapping source type: {source_type} (normalized: {normalized_source_type})")
 
     if normalized_source_type == 'mediumblob':
@@ -460,9 +477,13 @@ def map_data_type(source_type, source_node_info, target_node_info,
         normalized_source_type = 'int'
 
     # Find matching source type in matrix (case-insensitive)
+    source_type_as_gluesync = _normalize_gluesync_type(source_type)
     source_item = next(
-        (item for item in source_matrix
-         if any(t.lower() == normalized_source_type for t in item['supportedTypes'])),
+        (
+            item for item in source_matrix
+            if any(t.lower() == normalized_source_type for t in item.get('supportedTypes', []))
+            or _normalize_gluesync_type(item.get('gluesyncDataType')) == source_type_as_gluesync
+        ),
         None
     )
 
@@ -470,13 +491,15 @@ def map_data_type(source_type, source_node_info, target_node_info,
         print(f"Warning: No mapping found for source type {source_type}. Using as is.")
         return source_type
 
-    source_gluesync_type = source_item['gluesyncDataType']
+    source_gluesync_type = _normalize_gluesync_type(source_item.get('gluesyncDataType'))
     print(f"Matched Gluesync data type: {source_gluesync_type}")
 
     # Find matching target type
     target_item = next(
-        (item for item in target_matrix
-         if item['gluesyncDataType'] == source_gluesync_type),
+        (
+            item for item in target_matrix
+            if _normalize_gluesync_type(item.get('gluesyncDataType')) == source_gluesync_type
+        ),
         None
     )
 
