@@ -221,7 +221,8 @@ def create_tables(token, pipeline_id, source_schema, target_schema, tables, sour
 
     logger.info(f"Full YAML config: {json.dumps(yaml_config, indent=2)}")
 
-    schema_config = yaml_config.get(source_schema, {})
+    schemas_root = yaml_config.get('schemas', yaml_config)
+    schema_config = schemas_root.get(source_schema, {})
     logger.info(f"Schema config for {source_schema}: {json.dumps(schema_config, indent=2)}")
 
     yaml_target_schema = schema_config.get('target', target_schema)
