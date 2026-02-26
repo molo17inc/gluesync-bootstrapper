@@ -121,16 +121,6 @@ def _load_agent_type_catalog() -> Dict[str, str]:
     return catalog
 
 
-def _normalize_conductor_url(conductor_url: str) -> str:
-    """Ensure conductor URL points to the API root (adds /api if missing)."""
-    if not conductor_url:
-        return conductor_url
-    normal = conductor_url.rstrip("/")
-    if not normal.endswith("/api"):
-        normal = f"{normal}/api"
-    return normal
-
-
 def _build_service_url(base_url: Optional[str], suffix: str) -> Optional[str]:
     if not base_url:
         return None
@@ -185,47 +175,6 @@ def _fetch_chronos_stats(
             stats["enabledJobs"] = sum(1 for job in jobs_payload if job.get("enabled", True))
     except Exception as exc:  # pylint: disable=broad-except
         logger.warning("Failed to fetch Chronos jobs: %s", exc)
-    return stats
-
-
-def _fetch_conductor_stats(
-    base_url: Optional[str],
-    *,
-    skip_verify: Optional[bool],
-) -> Dict[str, Any]:
-    stats = {
-        "available": False,
-        "runningContainers": 0,
-        "totalContainers": 0,
-    }
-    conductor_url = _build_service_url(base_url, 'conductor')
-    if not conductor_url:
-        return stats
-
-    api_url = f"{conductor_url.rstrip('/')}/api/containers"
-    verify = _should_verify(conductor_url, skip_verify)
-    try:
-        response = requests.get(api_url, timeout=5, verify=verify)
-        response.raise_for_status()
-        payload = response.json()
-        containers = []
-        if isinstance(payload, dict):
-            if payload.get("success") and isinstance(payload.get("data"), dict):
-                containers = payload["data"].get("containers") or []
-            elif isinstance(payload.get("containers"), list):
-                containers = payload["containers"]
-
-        stats["available"] = True
-        stats["totalContainers"] = len(containers)
-        stats["runningContainers"] = sum(
-            1
-            for container in containers
-            if isinstance(container, dict)
-            and isinstance(container.get("info"), dict)
-            and container["info"].get("state") == "running"
-        )
-    except Exception as exc:  # pylint: disable=broad-except
-        logger.warning("Failed to fetch Conductor containers: %s", exc)
     return stats
 
 
@@ -900,16 +849,13 @@ def get_environment_summary(
         pipeline_details.append(summary)
 
     chronos_stats = _fetch_chronos_stats(base_url, skip_verify=skip_verify)
-    conductor_stats = _fetch_conductor_stats(base_url, skip_verify=skip_verify)
     totals["schedules"] = chronos_stats.get("enabledJobs", 0)
-    totals["runningContainers"] = conductor_stats.get("runningContainers", 0)
 
     return {
         "totals": totals,
         "pipelines": pipeline_details,
         "services": {
             "chronos": chronos_stats,
-            "conductor": conductor_stats,
         },
     }
 
@@ -1669,14 +1615,6 @@ def duplicate_pipeline(
     clone_entities: bool,
     use_ssl: Optional[bool],
     skip_verify: Optional[bool],
-    conductor_url: Optional[str] = None,
-    source_host_override: Optional[str] = None,
-    target_host_override: Optional[str] = None,
-    source_port_override: Optional[int] = None,
-    target_port_override: Optional[int] = None,
-    override_schemas: bool = False,
-    override_source_schema: Optional[str] = None,
-    override_target_schema: Optional[str] = None,
     cancel_checker: Optional[Callable[[], bool]] = None,
 ) -> Dict[str, Any]:
     """Duplicate a pipeline with new source and target agent tags (keeping same agent types).
@@ -1685,8 +1623,7 @@ def duplicate_pipeline(
     1. Gets the original pipeline's agent types from CoreHub
     2. Exports the YAML configuration of the original pipeline
     3. Creates a new pipeline with the same agent types but new tags
-    4. If agents don't exist, can deploy them via conductor APIs
-    5. Imports the YAML configuration to the new pipeline
+    4. Imports the YAML configuration to the new pipeline
 
     Args:
         token: CoreHub authentication token
@@ -1697,7 +1634,6 @@ def duplicate_pipeline(
         target_agent_tag: New agent tag for the target (same type as original)
         use_ssl: Whether to use SSL for CoreHub connection
         skip_verify: Whether to skip SSL verification
-        conductor_url: Optional conductor URL override for agent deployment
 
     Returns:
         Dict containing the new pipeline information and any deployment details
@@ -1779,131 +1715,7 @@ def duplicate_pipeline(
 
     _raise_if_cancelled()
 
-    # Step 3: Check if the required agents exist
-    agents_available = _check_agents_available(
-        token=token,
-        base_url=base_url,
-        source_agent_type=source_agent_type,
-        source_agent_tag=source_agent_tag,
-        target_agent_type=target_agent_type,
-        target_agent_tag=target_agent_tag,
-        use_ssl=use_ssl,
-        skip_verify=skip_verify,
-    )
-
-    _raise_if_cancelled()
-
-    # Step 4: If agents don't exist and conductor is available, deploy them
-    deployed_agents = []
-    if not agents_available:
-        unassigned_agents = _get_unassigned_agents(
-            token=token,
-            base_url=base_url,
-            use_ssl=use_ssl,
-            skip_verify=skip_verify,
-        )
-
-        logger.info("Current unassigned agents before deployment attempt:")
-        _log_unassigned_snapshot(
-            token=token,
-            base_url=base_url,
-            use_ssl=use_ssl,
-            skip_verify=skip_verify,
-            context="pre-deploy",
-        )
-
-        def _has_unassigned(agent_type: str, agent_tag: str) -> bool:
-            return any(
-                isinstance(agent, dict)
-                and agent.get("agentType") == agent_type
-                and agent.get("agentTag") == agent_tag
-                for agent in unassigned_agents
-            )
-
-        source_needed = not _has_unassigned(source_agent_type, source_agent_tag)
-        target_needed = not _has_unassigned(target_agent_type, target_agent_tag)
-
-        if not source_needed and not target_needed:
-            logger.info(
-                "Required agents already available in unassigned list; skipping conductor deployment"
-            )
-            agents_available = True
-        else:
-            verify_conductor_ssl = True
-            if skip_verify is True:
-                verify_conductor_ssl = False
-        if conductor_url:
-            conductor_url = _normalize_conductor_url(conductor_url)
-        if not conductor_url:
-            try:
-                from urllib.parse import urljoin
-                conductor_url = _normalize_conductor_url(urljoin(base_url.rstrip('/'), '/conductor'))
-                logger.info("Using corehub-derived conductor URL for duplication: %s", conductor_url)
-            except Exception as exc:  # pylint: disable=broad-except
-                logger.warning("Failed to derive conductor URL from corehub: %s", exc)
-                conductor_url = None
-
-            if conductor_url:
-                logger.info("Required agents not available, attempting deployment via conductor")
-                deployed_agents = _deploy_agents_via_conductor(
-                    conductor_url=conductor_url,
-                    source_agent_type=source_agent_type,
-                    source_agent_tag=source_agent_tag,
-                    target_agent_type=target_agent_type,
-                    target_agent_tag=target_agent_tag,
-                    deploy_source_agent=source_needed,
-                    deploy_target_agent=target_needed,
-                    verify_ssl=verify_conductor_ssl,
-                    ssl_enabled_for_agents=bool(use_ssl),
-                )
-
-                if deployed_agents:
-                    attempt = 0
-                    while True:
-                        _raise_if_cancelled()
-                        attempt += 1
-                        logger.info(
-                            "Waiting for conductor-deployed agents to become available (attempt %s)",
-                            attempt,
-                        )
-                        time.sleep(5)
-                        time.sleep(5)
-                        _raise_if_cancelled()
-                        if _check_agents_available(
-                            token=token,
-                            base_url=base_url,
-                            source_agent_type=source_agent_type,
-                            source_agent_tag=source_agent_tag,
-                            target_agent_type=target_agent_type,
-                            target_agent_tag=target_agent_tag,
-                            use_ssl=use_ssl,
-                            skip_verify=skip_verify,
-                        ):
-                            agents_available = True
-                            logger.info(
-                                "Conductor-deployed agents are now available after %s attempts",
-                                attempt,
-                            )
-                            break
-                        _log_unassigned_snapshot(
-                            token=token,
-                            base_url=base_url,
-                            use_ssl=use_ssl,
-                            skip_verify=skip_verify,
-                            context=f"attempt-{attempt}",
-                        )
-                else:
-                    logger.warning("Conductor deployment did not return any service names")
-
-            if not agents_available:
-                raise RuntimeError(
-                    "Required agents are not available. Provide a conductorUrl override or ensure "
-                    "the agents are deployed manually before duplicating."
-                )
-
-        _raise_if_cancelled()
-
-    # Step 5: Modify the configuration for the new pipeline
+    # Step 3: Modify the configuration for the new pipeline
     # Update pipeline name
     if "pipelineName" in config_dict:
         config_dict["pipelineName"] = new_pipeline_name
@@ -1911,6 +1723,7 @@ def duplicate_pipeline(
     def _convert_agent_payload(
         agent_template: dict,
         new_tag: str,
+        internal_name: str,
         password: str,
         label: str,
         host_override: Optional[str],
@@ -1958,12 +1771,7 @@ def duplicate_pipeline(
         ),
     ]
 
-    # If we deployed agents, update the configuration with their details
-    if deployed_agents:
-        # This would need to be implemented based on the conductor response
-        pass
-
-    # Step 6: Import the modified configuration to create the new pipeline
+    # Step 4: Import the modified configuration to create the new pipeline
     try:
         _raise_if_cancelled()
         import_payload = {
@@ -2288,8 +2096,8 @@ def duplicate_pipeline(
         "originalPipelineId": pipeline_id,
         "newPipelineId": new_pipeline_id,
         "newPipelineName": new_pipeline_name,
-        "agentsAvailable": agents_available,
-        "deployedAgents": deployed_agents,
+        "agentsAvailable": True,
+        "deployedAgents": [],
         "sourceAgent": {"type": source_agent_type, "tag": source_agent_tag},
         "targetAgent": {"type": target_agent_type, "tag": target_agent_tag},
         "entityCloneStatus": entity_clone_status,

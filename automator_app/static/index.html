@@ -155,10 +155,6 @@
                       <dt>Chronos</dt>
                       <dd id="corehub-chronos-status">—</dd>
                     </div>
-                    <div>
-                      <dt>Conductor</dt>
-                      <dd id="corehub-conductor-status">—</dd>
-                    </div>
                   </dl>
                 </div>
                 <div class="corehub-section" id="corehub-totals-section">
@@ -349,10 +345,6 @@
                     entities, schedules and UDFs
                     <input type="file" id="import-all-file" accept=".zip" />
                   </label>
-                  <label class="checkbox">
-                    <input type="checkbox" id="auto-deploy-agents" checked />
-                    Automatically deploy missing agents via Conductor
-                  </label>
                   <div class="button-group">
                     <button
                       type="button"
@@ -479,21 +471,6 @@
                     Clone entities, schemas, and schedules from the original
                     pipeline
                   </label>
-                  <label class="checkbox">
-                    <input type="checkbox" id="customize-conductor" />
-                    Customize Conductor settings
-                  </label>
-                  <div id="conductor-fields" style="display: none">
-                    <label>
-                      Conductor URL (optional)
-                      <input
-                        type="text"
-                        id="duplicate-conductor-url"
-                        name="conductorUrl"
-                        placeholder="Leave empty to use default from CoreHub"
-                      />
-                    </label>
-                  </div>
                   <div class="dual-field-group">
                     <label>
                       Source host address (optional)
@@ -625,7 +602,7 @@
                       type="button"
                       class="secondary"
                       id="bulk-show-all-btn"
-                      style="display: none; margin-top: 0.5rem;"
+                      style="display: none; margin-top: 0.5rem"
                     >
                       Show all tables
                     </button>

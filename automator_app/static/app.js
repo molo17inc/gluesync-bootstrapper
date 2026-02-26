@@ -145,18 +145,6 @@ const api = {
   async importAll(file, autoDeployAgents = true) {
     const form = new FormData();
     form.append('file', file);
-    form.append('auto_deploy_agents', autoDeployAgents ? 'true' : 'false');
-    
-    // Get current CoreHub URL from state and derive Conductor URL
-    const stateRes = await fetch('/api/state');
-    if (stateRes.ok) {
-      const state = await stateRes.json();
-      if (state.baseUrl) {
-        // Derive conductor URL: same base URL + /conductor path
-        const conductorUrl = state.baseUrl.replace(/\/+$/, '') + '/conductor';
-        form.append('conductor_url', conductorUrl);
-      }
-    }
     
     const res = await fetch('/api/import/all', {
       method: 'POST',
@@ -400,7 +388,6 @@ const corehubUI = (() => {
   const tlsEl = document.getElementById('corehub-ssl');
   const verifyEl = document.getElementById('corehub-verify');
   const chronosStatusEl = document.getElementById('corehub-chronos-status');
-  const conductorStatusEl = document.getElementById('corehub-conductor-status');
   const pipelineTotalEl = document.getElementById('corehub-pipeline-count');
   const agentTotalEl = document.getElementById('corehub-agent-count');
   const entityTotalEl = document.getElementById('corehub-entity-count');
@@ -455,13 +442,6 @@ const corehubUI = (() => {
     const { enabled, total } = getChronosJobStats(service);
     if (total === 0) return '0 jobs';
     return `${enabled}/${total} jobs enabled`;
-  };
-
-  const formatConductorStatus = (service = {}) => {
-    if (!service.available) return 'Unavailable';
-    const running = service.runningContainers ?? 0;
-    if (running === 0) return 'Available (no containers running)';
-    return 'Available';
   };
 
   const setMetricsLoading = (isLoading) => {
@@ -537,7 +517,6 @@ const corehubUI = (() => {
       setText(verifyEl, formatToggle(state.skipVerify, ['Enforced', 'Skipped']));
       const services = state.services || {};
       setText(chronosStatusEl, formatChronosStatus(services.chronos));
-      setText(conductorStatusEl, formatConductorStatus(services.conductor));
       const urlText = state.baseUrl || 'unknown Core Hub';
       const tlsText = formatToggle(state.useSsl);
       setSummary(`Connected to ${urlText} · TLS ${tlsText}`, 'success');
@@ -554,7 +533,6 @@ const corehubUI = (() => {
       setText(tlsEl, '—');
       setText(verifyEl, '—');
       setText(chronosStatusEl, '—');
-      setText(conductorStatusEl, '—');
       setText(pipelineTotalEl, '0');
       setText(agentTotalEl, '0');
       setText(entityTotalEl, '0');
@@ -1737,9 +1715,6 @@ function bindEvents() {
         return;
       }
 
-      // Get auto-deploy checkbox value
-      const autoDeployCheckbox = document.getElementById('auto-deploy-agents');
-      const autoDeployAgents = autoDeployCheckbox ? autoDeployCheckbox.checked : true;
 
       ui.setConfigMessage('Importing full backup…');
       logActivity('Config', `Importing full backup ${file.name}…`);
@@ -1809,8 +1784,6 @@ function bindEvents() {
       'customize-agents',
       'duplicate-source-tag',
       'duplicate-target-tag',
-      'customize-conductor',
-      'duplicate-conductor-url',
       'duplicate-source-host',
       'duplicate-target-host',
       'customize-schemas',
@@ -1922,13 +1895,7 @@ function bindEvents() {
         sourceAgentPassword: sourcePassword,
         targetAgentPassword: targetPassword,
         cloneEntities: cloneEntitiesValue,
-        conductorUrl: document.getElementById('duplicate-conductor-url').value || undefined,
       };
-      if (payload.conductorUrl) {
-        logActivity('duplicate', `Using custom Conductor URL: ${payload.conductorUrl}`);
-      } else {
-        logActivity('duplicate', 'Using CoreHub-derived Conductor URL');
-      }
 
       const sourceHostInput = document.getElementById('duplicate-source-host');
       const targetHostInput = document.getElementById('duplicate-target-host');
@@ -2065,8 +2032,6 @@ function bindEvents() {
 
   const customizeAgentsCheckbox = document.getElementById('customize-agents');
   const agentCustomizationFields = document.getElementById('agent-customization-fields');
-  const customizeConductorCheckbox = document.getElementById('customize-conductor');
-  const conductorFields = document.getElementById('conductor-fields');
   const customizeSchemasCheckbox = document.getElementById('customize-schemas');
   const schemaOverrideFields = document.getElementById('schema-override-fields');
 
@@ -2090,11 +2055,6 @@ function bindEvents() {
     });
   }
 
-  function updateConductorVisibility() {
-    if (!customizeConductorCheckbox || !conductorFields) return;
-    const enabled = customizeConductorCheckbox.checked;
-    conductorFields.style.display = enabled ? '' : 'none';
-  }
 
   function updateSchemaOverrideVisibility() {
     if (!customizeSchemasCheckbox || !schemaOverrideFields) return;
@@ -2121,10 +2081,6 @@ function bindEvents() {
   if (customizeAgentsCheckbox) {
     updateAgentCustomizationVisibility();
     customizeAgentsCheckbox.addEventListener('change', updateAgentCustomizationVisibility);
-  }
-  if (customizeConductorCheckbox) {
-    updateConductorVisibility();
-    customizeConductorCheckbox.addEventListener('change', updateConductorVisibility);
   }
   if (customizeSchemasCheckbox) {
     updateSchemaOverrideVisibility();

@@ -244,7 +244,6 @@ class DuplicatePipelineRequest(BaseModel):
     target_agent_tag: str = Field(..., alias="targetAgentTag")
     source_agent_password: str = Field(..., alias="sourceAgentPassword")
     target_agent_password: str = Field(..., alias="targetAgentPassword")
-    conductor_url: Optional[str] = Field(None, alias="conductorUrl")
     clone_entities: bool = Field(True, alias="cloneEntities")
     source_host_override: Optional[str] = Field(None, alias="sourceHost")
     target_host_override: Optional[str] = Field(None, alias="targetHost")
@@ -826,7 +825,7 @@ def create_app() -> FastAPI:
         """Duplicate a pipeline with new source and target agent configuration.
 
         This endpoint allows users to clone an existing pipeline with different agents.
-        If the specified agents are not available, they can be deployed via conductor APIs.
+        Agents are provisioned via CoreHub API during pipeline creation.
         """
 
         if not state.token or not state.base_url:
@@ -870,7 +869,6 @@ def create_app() -> FastAPI:
                 clone_entities=request.clone_entities,
                 use_ssl=state.use_ssl,
                 skip_verify=state.skip_verify,
-                conductor_url=request.conductor_url,
                 source_host_override=request.source_host_override,
                 target_host_override=request.target_host_override,
                 source_port_override=request.source_port_override,
@@ -971,16 +969,12 @@ def create_app() -> FastAPI:
 
     @app.post("/api/import/all", response_model=ApiMessage)
     async def import_all(
-        file: UploadFile = File(...),
-        conductor_url: Optional[str] = Form(None),
-        conductor_auth_token: Optional[str] = Form(None),
-        auto_deploy_agents: str = Form("true")
+        file: UploadFile = File(...)
     ) -> ApiMessage:
         """Validate a full backup ZIP (pipelines + agents-config).
 
         The ZIP is expected to come from the Export All feature and contain
-        at least an agents-config.yaml file. As with /api/import/config, this
-        endpoint currently only validates and enforces password masking rules.
+        at least an agents-config.yaml file. Agents are provisioned via CoreHub API.
         """
 
         if not state.token or not state.base_url:
@@ -1078,169 +1072,7 @@ def create_app() -> FastAPI:
         if not isinstance(agents_list, list) or not agents_list:
             raise HTTPException(status_code=400, detail="agents-config.yaml does not contain a non-empty 'agents' list")
 
-        # Check agent availability and attempt deployment if needed
-        deployed_agents = []
-        missing_agents = []
         errors: list[str] = []
-        
-        # Parse auto_deploy_agents flag
-        should_auto_deploy = auto_deploy_agents.lower() == "true"
-
-        # Fetch unassigned agents for import
-        try:
-            unassigned = corehub.fetch_core_hub("/unassigned-agents", token=state.token)
-            logger.info(f"Fetched {len(unassigned) if isinstance(unassigned, list) else 0} unassigned agents from CoreHub")
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.exception("Failed to fetch unassigned agents during import-all")
-            errors.append(f"Failed to fetch unassigned agents: {exc}")
-            unassigned = []
-
-        # Log detailed info about unassigned agents for debugging
-        if isinstance(unassigned, list):
-            unassigned_info = []
-            for item in unassigned:
-                if isinstance(item, dict):
-                    unassigned_info.append(f"{item.get('agentType', 'N/A')}/{item.get('agentTag', 'N/A')}")
-            debug_msg = f"📋 Unassigned agents available: {', '.join(unassigned_info) if unassigned_info else 'none'}"
-            logger.info(debug_msg)
-            errors.append(debug_msg)
-
-        def _has_unassigned(agent_type: str, agent_tag: str) -> bool:
-            """Check if agent is available (unassigned)"""
-            if not isinstance(unassigned, list):
-                return False
-            for item in unassigned:
-                if not isinstance(item, dict):
-                    continue
-                # Case-insensitive comparison for agentType
-                item_type = item.get("agentType", "")
-                item_tag = item.get("agentTag", "")
-                if item_type.upper() == agent_type.upper() and item_tag == agent_tag:
-                    return True
-            return False
-
-        # Log what we're looking for from agents-config.yaml
-        required_agents_info = []
-        for cfg in agents_list:
-            if isinstance(cfg, dict):
-                a_type = cfg.get("agentType")
-                a_tag = cfg.get("agentTag")
-                if a_type and a_tag:
-                    required_agents_info.append(f"{a_type}/{a_tag}")
-        
-        required_msg = f"🔍 Required agents from backup: {', '.join(required_agents_info) if required_agents_info else 'none'}"
-        logger.info(required_msg)
-        errors.append(required_msg)
-
-        # Check each required agent
-        for cfg in agents_list:
-            if not isinstance(cfg, dict):
-                continue
-            a_type = cfg.get("agentType")
-            a_tag = cfg.get("agentTag")
-            if not a_type or not a_tag:
-                errors.append("One agent definition is missing agentType/agentTag.")
-                continue
-            
-            # Check if unassigned agent is available
-            if _has_unassigned(a_type, a_tag):
-                match_msg = f"✓ Found unassigned agent: {a_type}/{a_tag}"
-                logger.info(match_msg)
-                errors.append(match_msg)
-            else:
-                missing_msg = f"✗ Missing unassigned agent: {a_type}/{a_tag}"
-                logger.info(missing_msg)
-                errors.append(missing_msg)
-                missing_agents.append((a_type, a_tag))
-
-        # If agents are missing and auto-deploy is enabled, attempt deployment
-        if missing_agents and should_auto_deploy:
-            # Use corehub URL as default for conductor if not specified
-            if conductor_url is None:
-                # Build conductor URL from corehub URL: same host/protocol/port + /conductor path
-                try:
-                    from urllib.parse import urljoin
-                    conductor_url = urljoin(state.base_url.rstrip('/'), '/conductor')
-                    logger.info(f"Using corehub-derived conductor URL: {conductor_url}")
-                except Exception as exc:
-                    logger.warning(f"Failed to derive conductor URL from corehub: {exc}")
-                    conductor_url = None
-
-            # Conductor doesn't require authentication, auth_token is optional
-            if conductor_url:
-                logger.info(f"Found {len(missing_agents)} missing agents, attempting deployment via conductor for import...")
-                try:
-                    deployed_agents = _deploy_agents_for_import(
-                        conductor_url=conductor_url,
-                        conductor_auth_token=conductor_auth_token,
-                        missing_agents=missing_agents,
-                    )
-                    if deployed_agents:
-                        logger.info(f"Successfully deployed {len(deployed_agents)} agents via conductor for import")
-                        # Poll for deployed agents to appear in unassigned pool
-                        import time
-                        poll_interval = 5
-                        max_wait_seconds = 90  # Timeout to prevent HTTP request timeout
-                        elapsed = 0
-                        agents_ready = False
-                        
-                        # Log to both logger and errors list (which gets shown in UI)
-                        poll_msg = f"⏳ Waiting for {len(missing_agents)} deployed agents to become available (checking every {poll_interval}s, max {max_wait_seconds}s)..."
-                        logger.info(poll_msg)
-                        errors.append(poll_msg)
-                        
-                        while elapsed < max_wait_seconds:
-                            try:
-                                unassigned = corehub.fetch_core_hub("/unassigned-agents", token=state.token)
-                                # Check if all deployed agents are now available
-                                all_found = True
-                                missing_list = []
-                                for a_type, a_tag in missing_agents:
-                                    if not _has_unassigned(a_type, a_tag):
-                                        all_found = False
-                                        missing_list.append(f"{a_type}/{a_tag}")
-                                
-                                if all_found:
-                                    success_msg = f"✓ All deployed agents are now available after {elapsed}s"
-                                    logger.info(success_msg)
-                                    errors.append(success_msg)
-                                    agents_ready = True
-                                    break
-                                else:
-                                    # Log progress every 10 seconds
-                                    if elapsed % 10 == 0:
-                                        progress_msg = f"⏳ Still waiting for agents: {', '.join(missing_list)} ({elapsed}s elapsed)"
-                                        logger.info(progress_msg)
-                                        errors.append(progress_msg)
-                                    
-                            except Exception as exc:  # pylint: disable=broad-except
-                                logger.warning("Failed to fetch unassigned agents during polling: %s", exc)
-                            
-                            time.sleep(poll_interval)
-                            elapsed += poll_interval
-                        
-                        # Check if agents became ready
-                        if not agents_ready:
-                            timeout_msg = f"⏱️ Timeout: Agents did not become available within {max_wait_seconds}s. Please check Conductor logs and try again."
-                            logger.warning(timeout_msg)
-                            errors.append(timeout_msg)
-                            return ApiMessage(success=False, message=f"Agents did not become available within {max_wait_seconds} seconds", logs=errors)
-                    else:
-                        errors.append("Failed to deploy missing agents via conductor")
-                        return ApiMessage(success=False, message="Failed to deploy required agents via conductor", logs=errors)
-                except Exception as exc:  # pylint: disable=broad-except
-                    logger.exception("Failed to deploy agents via conductor during import")
-                    errors.append(f"Failed to deploy agents via conductor: {exc}")
-                    return ApiMessage(success=False, message=f"Failed to deploy required agents: {exc}", logs=errors)
-            else:
-                # No conductor URL available
-                for a_type, a_tag in missing_agents:
-                    errors.append(f"Agent {a_type}/{a_tag} does not exist and conductor URL is not available")
-                return ApiMessage(success=False, message="Required agents are missing and conductor is not available", logs=errors)
-        elif missing_agents and not should_auto_deploy:
-            # Auto-deploy is disabled, report missing agents as errors
-            errors.append("❌ Auto-deploy is disabled. Please deploy agents manually or enable auto-deploy.")
-            return ApiMessage(success=False, message="Required agents are missing and auto-deploy is disabled", logs=errors)
 
         # Build lookup for original pipeline metadata, if present
         pipelines_meta = agents_config.get("pipelines") or []
@@ -1519,9 +1351,7 @@ def create_app() -> FastAPI:
 
     @app.post("/api/import/validate-all", response_model=ApiMessage)
     async def validate_all(
-        file: UploadFile = File(...),
-        conductor_url: Optional[str] = None,
-        conductor_auth_token: Optional[str] = None
+        file: UploadFile = File(...)
     ) -> ApiMessage:
         """Dry-run validation for an Export All ZIP archive.
 
@@ -1590,27 +1420,7 @@ def create_app() -> FastAPI:
 
         logs.append(f"agents-config.yaml defines {len(agents_list)} agent configuration(s).")
 
-        # Check agent availability and attempt deployment if needed
-        deployed_agents = []
-        missing_agents = []
-
-        try:
-            unassigned = corehub.fetch_core_hub("/unassigned-agents", token=state.token)
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.exception("Failed to fetch unassigned agents during validate-all")
-            errors.append(f"Failed to fetch unassigned agents: {exc}")
-            unassigned = []
-
-        def _has_unassigned(agent_type: str, agent_tag: str) -> bool:
-            if not isinstance(unassigned, list):
-                return False
-            for item in unassigned:
-                if not isinstance(item, dict):
-                    continue
-                if item.get("agentType") == agent_type and item.get("agentTag") == agent_tag:
-                    return True
-            return False
-
+        # Validate agent definitions in agents-config.yaml
         for cfg in agents_list:
             if not isinstance(cfg, dict):
                 continue
@@ -1619,49 +1429,7 @@ def create_app() -> FastAPI:
             if not a_type or not a_tag:
                 errors.append("One agent definition is missing agentType/agentTag.")
                 continue
-            if not _has_unassigned(a_type, a_tag):
-                missing_agents.append((a_type, a_tag))
-
-        # If agents are missing and conductor is available, attempt deployment
-        if missing_agents:
-            # Use corehub URL as default for conductor if not specified
-            if conductor_url is None:
-                # Build conductor URL from corehub URL: same host/protocol/port + /conductor path
-                try:
-                    from urllib.parse import urljoin
-                    conductor_url = urljoin(state.base_url.rstrip('/'), '/conductor')
-                    logger.info(f"Using corehub-derived conductor URL: {conductor_url}")
-                except Exception as exc:
-                    logger.warning(f"Failed to derive conductor URL from corehub: {exc}")
-                    conductor_url = None
-
-            if conductor_url and conductor_auth_token:
-                logs.append(f"Found {len(missing_agents)} missing agents, attempting deployment via conductor...")
-                try:
-                    deployed_agents = _deploy_agents_for_import(
-                        conductor_url=conductor_url,
-                        conductor_auth_token=conductor_auth_token,
-                        missing_agents=missing_agents,
-                    )
-                    if deployed_agents:
-                        logs.append(f"Successfully deployed {len(deployed_agents)} agents via conductor")
-                        # Refresh unassigned agents list after deployment
-                        try:
-                            unassigned = corehub.fetch_core_hub("/unassigned-agents", token=state.token)
-                        except Exception as exc:  # pylint: disable=broad-except
-                            logger.warning("Failed to refresh unassigned agents after deployment: %s", exc)
-                    else:
-                        errors.append("Failed to deploy missing agents via conductor")
-                except Exception as exc:  # pylint: disable=broad-except
-                    logger.exception("Failed to deploy agents via conductor during validation")
-                    errors.append(f"Failed to deploy agents via conductor: {exc}")
-            else:
-                # Report missing agents as errors if no conductor deployment attempted
-                for a_type, a_tag in missing_agents:
-                    errors.append(
-                        f"No unassigned agent available for agentType={a_type!r}, agentTag={a_tag!r}. "
-                        "Import may fail unless matching agents are created first."
-                    )
+            logs.append(f"Agent definition found: {a_type}/{a_tag}")
 
         # Fetch existing pipelines to estimate final pipeline names that would be created
         existing_names: set[str] = set()
@@ -1922,91 +1690,3 @@ def create_app() -> FastAPI:
     return app
 
 
-def _deploy_agents_for_import(
-    *,
-    conductor_url: str,
-    conductor_auth_token: str,
-    missing_agents: list[tuple[str, str]],
-) -> list[str]:
-    """Deploy missing agents via conductor APIs for backup import.
-
-    Args:
-        conductor_url: Conductor API base URL
-        conductor_auth_token: Authentication token for conductor
-        missing_agents: List of (agent_type, agent_tag) tuples for missing agents
-
-    Returns:
-        List of deployed agent service names
-    """
-    logger.info("Deploying %d missing agents via conductor for backup import", len(missing_agents))
-
-    # Import the conductor function here to avoid circular imports
-    import sys
-    import os
-    parent_dir = os.path.dirname(os.path.dirname(__file__))
-    sys.path.insert(0, parent_dir)
-
-    try:
-        from add_agents_with_conductor import add_agents_with_conductor
-
-        # Get CoreHub connection details from state
-        from .state import state as app_state
-        use_ssl = app_state.base_url.startswith("https://") if app_state.base_url else True
-        
-        # Create a temporary config.json for the agents with proper environment variables
-        # Only include non-optional variables from agents.json supportedEnvironmentVariables
-        config_data = {
-            "globals": {
-                "testName": f"backup_import_{len(missing_agents)}_agents",
-                "jobId": "backup_import_job"
-            },
-            "agents": [
-                {
-                    "agentTag": agent_tag,
-                    "agentType": agent_type.lower(),
-                    "environment": {
-                        "TYPE": agent_type.lower(),
-                        "SSL_ENABLED": "true" if use_ssl else "false",
-                        "LOG_CONFIG_FILE": "/opt/gluesync/data/logback.xml"
-                    }
-                } for agent_type, agent_tag in missing_agents
-            ]
-        }
-
-        # Write temporary config file
-        import tempfile
-        import json
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-            json.dump(config_data, f)
-            config_path = f.name
-
-        try:
-            # Call the conductor function
-            # Use the same SSL verification setting as CoreHub
-            from .state import state as app_state
-            verify_ssl = not app_state.skip_verify
-            
-            result = add_agents_with_conductor(
-                config_path=config_path,
-                conductor_url=conductor_url,
-                auth_token=conductor_auth_token,
-                verify_ssl=verify_ssl
-            )
-
-            if result.get("error"):
-                logger.error("Conductor deployment failed for backup import: %s", result["error"])
-                return []
-
-            logger.info("Successfully deployed agents via conductor for backup import")
-            return result.get("service_names", [])
-
-        finally:
-            # Clean up temporary file
-            os.unlink(config_path)
-
-    except ImportError as exc:
-        logger.warning("Could not import conductor functions for backup import: %s", exc)
-        return []
-    except Exception as exc:
-        logger.exception("Failed to deploy agents via conductor for backup import: %s", exc)
-        return []

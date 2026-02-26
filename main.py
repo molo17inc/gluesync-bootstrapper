@@ -22,7 +22,6 @@ import os
 import json
 import yaml
 import requests
-from add_agents_with_conductor import add_agents_with_conductor
 from faker import Faker
 import urllib.parse
 import time
@@ -201,10 +200,6 @@ file_conf_path = os.getenv('FILE_CONF_PATH', './config.json')
 # Retrieve CoreHub URL from SDK if not specified
 core_hub_url = os.getenv('CORE_HUB_URL')
 
-conductor_url = os.getenv('CONDUCTOR_URL', 'http://gluesync-conductor:5017')
-
-handle_with_conductor = os.getenv('HANDLE_WITH_CONDUCTOR', 'false').lower() == 'true'
-
 # use_sdk variable is now defined earlier in the code
 
 if not core_hub_url:
@@ -252,6 +247,58 @@ def safe_encode(s):
 
 def generate_short_guid():
     return str(uuid.uuid4()).split('-')[0]
+
+
+def _normalize_agent_type_for_add(agent_type: str) -> str:
+    normalized = str(agent_type or '').strip().lower()
+    if normalized in {'source', 'target'}:
+        return normalized
+    raise ValueError(f"Unsupported agentType {agent_type!r}. Expected SOURCE or TARGET")
+
+
+def add_agent_to_pipeline_via_corehub(
+    *,
+    token: str,
+    pipeline_id: str,
+    agent_type: str,
+    agent_user_tag: str,
+    agent_internal_name: str,
+) -> str:
+    """Create/deploy an agent through Core Hub and attach it to a pipeline."""
+
+    normalized_type = _normalize_agent_type_for_add(agent_type)
+    response = fetch_core_hub(
+        f"/pipelines/{pipeline_id}/agents/add",
+        method='GET',
+        token=token,
+        params={
+            'agentType': normalized_type,
+            'agentUserTag': agent_user_tag,
+            'agentInternalName': agent_internal_name,
+        },
+    )
+
+    if not isinstance(response, dict):
+        raise RuntimeError(
+            f"Unexpected response while adding {normalized_type} agent "
+            f"{agent_user_tag!r}/{agent_internal_name!r}: {response}"
+        )
+
+    raw_agent_id = response.get('agentId') or response.get('id')
+    if not raw_agent_id:
+        raise RuntimeError(
+            f"Core Hub did not return an agentId for {normalized_type} agent "
+            f"{agent_user_tag!r}/{agent_internal_name!r}: {response}"
+        )
+
+    agent_id = str(raw_agent_id)
+    # Keep existing assignment step for compatibility with current Core Hub flow.
+    fetch_core_hub(
+        f"/pipelines/{pipeline_id}/agents/{agent_id}",
+        method='PUT',
+        token=token,
+    )
+    return agent_id
 
 def generate_random_password() -> str:
     symbols = [chr(i) for i in range(33, 47)]
@@ -306,7 +353,7 @@ else:
     logger.info("Skipping SDK initialization as USE_SDK is set to false")
 
 # Global initialization complete
-if not handle_with_conductor:
+if True:
     # Determine authentication method
     if not use_sdk:
         logger.info("Using manual authentication with provided password or token.")
@@ -595,7 +642,7 @@ def main():
     parser = argparse.ArgumentParser(description='Gluesync Bootstrapper')
     parser.add_argument('--pipeline-name', type=str, help='Optional name for the pipeline')
     args = parser.parse_args()
-    
+
     # Display ASCII art at startup
     ascii_art = """
                                                                                                         
@@ -608,365 +655,353 @@ def main():
                                                
 """
     logger.info("\n" + ascii_art)
-    if handle_with_conductor:
-        logger.info("Starting Gluesync Bootstrapper module in CONDUCTOR-ONLY mode...")
-        logger.info("Adding agents to Conductor and starting containers …")
-        reply = add_agents_with_conductor(file_conf_path, conductor_url)
+    logger.info("Starting Gluesync Bootstrapper module in STANDARD mode...")
 
-        if "error" in reply:
-            logger.error(f"Failed: {reply['error']}")
-            lockfile_failure()
-            raise RuntimeError(reply["error"])
+    # Start with explicit environment overrides when provided; these will
+    # be refined/overridden by YAML hints and agents.json when absent.
+    effective_source_type = source_type
+    effective_target_type = target_type
 
-        logger.info(f"POST /services accepted {len(reply['services'])} definition(s)")
-        if reply["containers_started"]:
-            logger.info("Containers started successfully; they will shortly appear in /containers")
-        else:
-            logger.warning(f"Container start failed: {reply.get('start_error')}")
+    # Extract schema information from YAML file
+    logger.info(f"Attempting to extract schemas from YAML file: {TABLE_LIST_YAML}")
+    schema_pairs = extract_all_schemas_from_yaml(TABLE_LIST_YAML)
+    if not schema_pairs:
+        logger.warning("No schemas found in YAML file. Entity creation will be skipped.")
+    else:
+        logger.info(f"Schema extraction successful. {len(schema_pairs)} schema pair(s) found: {schema_pairs}")
 
-        logger.debug("Full reply:\n" + json.dumps(reply, indent=2))
+        # Optionally derive source/target types from YAML if present
+        yaml_source_type, yaml_target_type = extract_schema_types_from_yaml(TABLE_LIST_YAML)
+        if yaml_source_type:
+            effective_source_type = yaml_source_type
+        if yaml_target_type:
+            effective_target_type = yaml_target_type
+        logger.info(
+            "YAML type hints: sourceType=%s, targetType=%s",
+            yaml_source_type,
+            yaml_target_type,
+        )
 
-        print("Waiting 10 seconds before returning to let agents warm up...")
-        time.sleep(10)
-        print("Starting bootstrapper now...")
+    # Initialize variables that might be used in different code paths
+    change_required = False
+    new_password = user_defined_password
 
-        # If this is conductor-only mode, exit here
-        log_success(logger, "Conductor-only operations completed successfully")
-        lockfile_complete()
+    try:
+        conf_test = load_config_from_file(file_conf_path)
+        logger.info(f"Loaded configuration from {file_conf_path}")
+    except Exception as e:
+        log_failure(logger, f"Failed to load configuration: {str(e)}")
+        lockfile_failure()
         return
 
-    else:
-        logger.info("Starting Gluesync Bootstrapper module in STANDARD mode...")
-
-        # Start with explicit environment overrides when provided; these will
-        # be refined/overridden by YAML hints and agents.json when absent.
-        effective_source_type = source_type
-        effective_target_type = target_type
-
-        # Extract schema information from YAML file
-        logger.info(f"Attempting to extract schemas from YAML file: {TABLE_LIST_YAML}")
-        schema_pairs = extract_all_schemas_from_yaml(TABLE_LIST_YAML)
-        if not schema_pairs:
-            logger.warning("No schemas found in YAML file. Entity creation will be skipped.")
-        else:
-            logger.info(f"Schema extraction successful. {len(schema_pairs)} schema pair(s) found: {schema_pairs}")
-
-            # Optionally derive source/target types from YAML if present
-            yaml_source_type, yaml_target_type = extract_schema_types_from_yaml(TABLE_LIST_YAML)
-            if yaml_source_type:
-                effective_source_type = yaml_source_type
-            if yaml_target_type:
-                effective_target_type = yaml_target_type
-            logger.info(
-                "YAML type hints: sourceType=%s, targetType=%s",
-                yaml_source_type,
-                yaml_target_type,
-            )
-
-        # Initialize variables that might be used in different code paths
-        change_required = False
-        new_password = user_defined_password
-        
-        try:
-            conf_test = load_config_from_file(file_conf_path)
-            logger.info(f"Loaded configuration from {file_conf_path}")
-        except Exception as e:
-            log_failure(logger, f"Failed to load configuration: {str(e)}")
-            lockfile_failure()
-            return
-
-        # If no explicit env/YAML type was provided, derive from config agents via agents.json
-        if effective_source_type is None or effective_target_type is None:
-            src_from_cfg, tgt_from_cfg = infer_pipeline_schema_types_from_config(conf_test)
-            if effective_source_type is None:
-                effective_source_type = src_from_cfg
-            if effective_target_type is None:
-                effective_target_type = tgt_from_cfg
-
-        # Final fallbacks if everything else failed
+    # If no explicit env/YAML type was provided, derive from config agents via agents.json
+    if effective_source_type is None or effective_target_type is None:
+        src_from_cfg, tgt_from_cfg = infer_pipeline_schema_types_from_config(conf_test)
         if effective_source_type is None:
-            effective_source_type = "SQL"
+            effective_source_type = src_from_cfg
         if effective_target_type is None:
-            effective_target_type = "NoSQL"
+            effective_target_type = tgt_from_cfg
 
-        logger.info(
-            "Using source_type=%s, target_type=%s (env/YAML/agents.json)",
-            effective_source_type,
-            effective_target_type,
-        )
-        
-        # First check if we have a valid SDK token
-        sdk_token = None
-        if not use_sdk:
-            try:
-                # Try to get token from SDK first if available
-                if 'GluesyncSDK' in globals():
-                    logger.info("Attempting to get token from Gluesync SDK")
-                    sdk_client = get_gluesync_client()
-                    if sdk_client:
-                        sdk_token = get_token()
-                        if sdk_token:
-                            logger.info("Successfully retrieved token from Gluesync SDK")
-                            # Verify the SDK token works
-                            try:
-                                check_token = fetch_core_hub(
-                                    '/pipelines',
-                                    method='GET',
-                                    token=sdk_token
-                                )
-                                if isinstance(check_token, list):
-                                    log_success(logger, "Successfully authenticated with SDK token")
-                                    token = sdk_token  # Use the SDK token for all subsequent requests
-                                else:
-                                    logger.warning("SDK token verification returned unexpected response")
-                                sdk_token = None
-                            except Exception as e:
-                                logger.warning(f"SDK token verification failed: {str(e)}")
-                                sdk_token = None
-            except Exception as e:
-                logger.warning(f"Error retrieving SDK token: {str(e)}")
-                sdk_token = None
-        
-        # If SDK token is valid, use it
-        if sdk_token:
-            token = sdk_token
-        else:
-            # Otherwise, check if a valid saved token is present
-            try:
-                with open(AUTH_TOKEN_PATH, 'r') as f:
-                    token_data = json.load(f)
-                    token = token_data.get('token')
-                    if token:
-                        # Verify login by attempting to authenticate
+    # Final fallbacks if everything else failed
+    if effective_source_type is None:
+        effective_source_type = "SQL"
+    if effective_target_type is None:
+        effective_target_type = "NoSQL"
+
+    logger.info(
+        "Using source_type=%s, target_type=%s (env/YAML/agents.json)",
+        effective_source_type,
+        effective_target_type,
+    )
+
+    # First check if we have a valid SDK token
+    sdk_token = None
+    if not use_sdk:
+        try:
+            # Try to get token from SDK first if available
+            if 'GluesyncSDK' in globals():
+                logger.info("Attempting to get token from Gluesync SDK")
+                sdk_client = get_gluesync_client()
+                if sdk_client:
+                    sdk_token = get_token()
+                    if sdk_token:
+                        logger.info("Successfully retrieved token from Gluesync SDK")
+                        # Verify the SDK token works
                         try:
                             check_token = fetch_core_hub(
                                 '/pipelines',
                                 method='GET',
-                                token=token
+                                token=sdk_token
                             )
                             if isinstance(check_token, list):
-                                log_success(logger, "Successfully authenticated with saved token")
-                        except Exception as e:
-                            if "401" in str(e):
-                                logger.warning("Saved token is invalid, attempting to authenticate with default credentials")
-                                token = None
+                                log_success(logger, "Successfully authenticated with SDK token")
+                                token = sdk_token  # Use the SDK token for all subsequent requests
                             else:
-                                raise e
-            except FileNotFoundError:
-                logger.info("No saved token found, attempting to authenticate with default credentials")
-                token = None
+                                logger.warning("SDK token verification returned unexpected response")
+                            sdk_token = None
+                        except Exception as e:
+                            logger.warning(f"SDK token verification failed: {str(e)}")
+                            sdk_token = None
+        except Exception as e:
+            logger.warning(f"Error retrieving SDK token: {str(e)}")
+            sdk_token = None
 
-            if not token:
-                # Initial authentication with default credentials as last resort
-                logger.info("Attempting authentication with default credentials")
-                try:
-                    auth_response = fetch_core_hub(
-                        '/authentication/login',
-                        method='POST',
-                        body={'username': default_user, 'password': user_defined_password}
-                    )
-                    token = auth_response.get('apiToken')
+    # If SDK token is valid, use it
+    if sdk_token:
+        token = sdk_token
+    else:
+        # Otherwise, check if a valid saved token is present
+        try:
+            with open(AUTH_TOKEN_PATH, 'r') as f:
+                token_data = json.load(f)
+                token = token_data.get('token')
+                if token:
+                    # Verify login by attempting to authenticate
+                    try:
+                        check_token = fetch_core_hub(
+                            '/pipelines',
+                            method='GET',
+                            token=token
+                        )
+                        if isinstance(check_token, list):
+                            log_success(logger, "Successfully authenticated with saved token")
+                    except Exception as e:
+                        if "401" in str(e):
+                            logger.warning("Saved token is invalid, attempting to authenticate with default credentials")
+                            token = None
+                        else:
+                            raise e
+        except FileNotFoundError:
+            logger.info("No saved token found, attempting to authenticate with default credentials")
+            token = None
 
-                    change_required = auth_response.get('changeRequired', False)
-
-                    if not change_required == False and not token:
-                        log_failure(logger, "Failed to authenticate")
-                        lockfile_failure()
-                        raise Exception('Failed to authenticate')
-                except Exception as e:
-                    if sdk_token:
-                        # If we have an SDK token but direct auth failed, use the SDK token
-                        logger.info("Using SDK token after direct authentication failure")
-                        token = sdk_token
-                    else:
-                        # If all authentication methods failed, raise the exception
-                        raise e
-
-            if change_required:
-                logger.info("Password change required")
-                # Generate a new random password and change it
-                new_password = generate_random_password()
-                try:
-                    # Change password and get new token
-                    token = change_password(token, user_defined_password, new_password)
-                    log_success(logger, f"[NEW PASSWORD] Successfully changed password to: {new_password}")
-                except Exception as e:
-                    log_failure(logger, f"Password change failed, attempting to continue with default password: {str(e)}")
-                    # Try to get a fresh token with the user-defined password
-                    auth_response = fetch_core_hub(
-                        '/authentication/login',
-                        method='POST',
-                        body={'username': default_user, 'password': user_defined_password}
-                    )
-                    token = auth_response.get('apiToken')
-                    if not token:
-                        log_failure(logger, "Failed to re-authenticate with user-defined password")
-                        lockfile_failure()
-                        raise Exception('Failed to re-authenticate with user-defined password')
-                    new_password = user_defined_password
-            else:
-                new_password = user_defined_password
-                # Save the initial token if no password change was required
-                save_token(token)
-
-        # List unassigned agents
-        unassigned_agents = fetch_core_hub('/unassigned-agents', token=token)
-        if not isinstance(unassigned_agents, list):
-            log_failure(logger, "Failed to retrieve unassigned agents")
-            lockfile_failure()
-            raise Exception('Failed to retrieve unassigned agents')
-
-        logger.info(f"Found {len(unassigned_agents)} unassigned agents")
-        logger.debug(f"Unassigned agents: {json.dumps(unassigned_agents, indent=2)}")
-        logger.debug(f"Config agents: {json.dumps(conf_test['agents'], indent=2)}")
-
-        # Use provided pipeline name or generate/derive one
-        if args.pipeline_name:
-            pipeline_name = args.pipeline_name
-            pipeline_description = f"Pipeline {pipeline_name}"
-        else:
-            config_pipeline_name = None
+        if not token:
+            # Initial authentication with default credentials as last resort
+            logger.info("Attempting authentication with default credentials")
             try:
-                if isinstance(conf_test, dict):
-                    config_pipeline_name = conf_test.get('pipelineName')
-            except NameError:
-                # conf_test may not be defined in some initialization paths
-                config_pipeline_name = None
+                auth_response = fetch_core_hub(
+                    '/authentication/login',
+                    method='POST',
+                    body={'username': default_user, 'password': user_defined_password}
+                )
+                token = auth_response.get('apiToken')
 
-            if config_pipeline_name:
-                pipeline_name = str(config_pipeline_name)
-                pipeline_description = f"Pipeline {pipeline_name}"
-                logger.info(f"Using pipeline name from configuration: {pipeline_name}")
-            else:
-                fancy_names = generate_fancy_names(2)
-                pipeline_name = fancy_names[0]
-                pipeline_description = fancy_names[1]
+                change_required = auth_response.get('changeRequired', False)
 
-        # Create pipeline
-        pipeline_response = fetch_core_hub(
-            '/pipelines',
-            method='POST',
-            token=token,
-            body={'name': pipeline_name, 'description': pipeline_description, 'configurationCompleted': False}
-        )
-        pipeline_id = pipeline_response.get('pipelineId')
-        if not pipeline_id:
-            log_failure(logger, "Failed to create pipeline")
-            lockfile_failure()
-            raise Exception('Failed to create pipeline')
+                if not change_required == False and not token:
+                    log_failure(logger, "Failed to authenticate")
+                    lockfile_failure()
+                    raise Exception('Failed to authenticate')
+            except Exception as e:
+                if sdk_token:
+                    # If we have an SDK token but direct auth failed, use the SDK token
+                    logger.info("Using SDK token after direct authentication failure")
+                    token = sdk_token
+                else:
+                    # If all authentication methods failed, raise the exception
+                    raise e
 
-        # Filter agents to configure
-        agents_to_conf = [
-            {
-                'agentId': agent['agentId'],
-                'agentType': agent['agentType'],
-                'agentTag': agent['agentTag'],
-                'hostCredentials': conf_agent['hostCredentials'],
-                'customHostCredentials': conf_agent['customHostCredentials'],
-                'specificConfiguration': conf_agent['specificConfiguration'],
-                'entities': conf_agent['entities']
-            }
-            for conf_agent in conf_test['agents']
-            for agent in unassigned_agents
-            if agent['agentTag'] == conf_agent['agentTag'] and agent['agentType'] == conf_agent['agentType']
-        ]
+        if change_required:
+            logger.info("Password change required")
+            # Generate a new random password and change it
+            new_password = generate_random_password()
+            try:
+                # Change password and get new token
+                token = change_password(token, user_defined_password, new_password)
+                log_success(logger, f"[NEW PASSWORD] Successfully changed password to: {new_password}")
+            except Exception as e:
+                log_failure(logger, f"Password change failed, attempting to continue with default password: {str(e)}")
+                # Try to get a fresh token with the user-defined password
+                auth_response = fetch_core_hub(
+                    '/authentication/login',
+                    method='POST',
+                    body={'username': default_user, 'password': user_defined_password}
+                )
+                token = auth_response.get('apiToken')
+                if not token:
+                    log_failure(logger, "Failed to re-authenticate with user-defined password")
+                    lockfile_failure()
+                    raise Exception('Failed to re-authenticate with user-defined password')
+                new_password = user_defined_password
+        else:
+            new_password = user_defined_password
+            # Save the initial token if no password change was required
+            save_token(token)
 
-        logger.info(f"Filtered {len(agents_to_conf)} agents for configuration")
-        logger.debug(f"Filtered agents: {json.dumps(agents_to_conf, indent=2)}")
+    # Use provided pipeline name or generate/derive one
+    if args.pipeline_name:
+        pipeline_name = args.pipeline_name
+        pipeline_description = f"Pipeline {pipeline_name}"
+    else:
+        config_pipeline_name = None
+        if isinstance(conf_test, dict):
+            config_pipeline_name = conf_test.get('pipelineName')
 
-        # Assign agents to pipeline
-        for agent in agents_to_conf:
-            if 'agentId' not in agent:
-                logger.warning(f"Agent missing 'agentId' field: {agent}")
-                continue
+        if config_pipeline_name:
+            pipeline_name = str(config_pipeline_name)
+            pipeline_description = f"Pipeline {pipeline_name}"
+            logger.info(f"Using pipeline name from configuration: {pipeline_name}")
+        else:
+            fancy_names = generate_fancy_names(2)
+            pipeline_name = fancy_names[0]
+            pipeline_description = fancy_names[1]
 
-            fetch_core_hub(
-                f"/pipelines/{pipeline_id}/agents/{agent['agentId']}",
-                method='PUT',
-                token=token
+    # Create pipeline
+    pipeline_response = fetch_core_hub(
+        '/pipelines',
+        method='POST',
+        token=token,
+        body={'name': pipeline_name, 'description': pipeline_description, 'configurationCompleted': False}
+    )
+    pipeline_id = pipeline_response.get('pipelineId')
+    if not pipeline_id:
+        log_failure(logger, "Failed to create pipeline")
+        lockfile_failure()
+        raise Exception('Failed to create pipeline')
+
+    # Provision and attach SOURCE/TARGET agents directly via Core Hub.
+    agents_to_conf = []
+    for conf_agent in conf_test.get('agents', []):
+        if not isinstance(conf_agent, dict):
+            logger.warning("Skipping invalid agent configuration entry: %r", conf_agent)
+            continue
+
+        configured_type = str(conf_agent.get('agentType') or '').upper()
+        agent_user_tag = conf_agent.get('agentUserTag') or conf_agent.get('agentTag')
+        agent_internal_name = conf_agent.get('agentInternalName') or conf_agent.get('agentTag')
+
+        if configured_type not in {'SOURCE', 'TARGET'}:
+            raise RuntimeError(
+                f"Invalid agentType {configured_type!r} in configuration. "
+                "Expected SOURCE or TARGET"
+            )
+        if not agent_user_tag:
+            raise RuntimeError(
+                f"Missing agentUserTag/agentTag for {configured_type} agent in configuration"
+            )
+        if not agent_internal_name:
+            raise RuntimeError(
+                f"Missing agentInternalName (or legacy agentTag) for {configured_type} agent "
+                f"{agent_user_tag!r}"
             )
 
-        # Apply agent host credentials
-        for agent in agents_to_conf:
-            if 'agentId' not in agent:
-                logger.warning(f"Agent missing 'agentId' field: {agent}")
-                continue
+        logger.info(
+            "Adding %s agent via Core Hub add API (userTag=%s, internalName=%s)",
+            configured_type,
+            agent_user_tag,
+            agent_internal_name,
+        )
+        agent_id = add_agent_to_pipeline_via_corehub(
+            token=token,
+            pipeline_id=pipeline_id,
+            agent_type=configured_type,
+            agent_user_tag=str(agent_user_tag),
+            agent_internal_name=str(agent_internal_name),
+        )
 
+        agents_to_conf.append({
+            'agentId': agent_id,
+            'agentType': configured_type,
+            'agentTag': str(agent_user_tag),
+            'agentUserTag': str(agent_user_tag),
+            'agentInternalName': str(agent_internal_name),
+            'hostCredentials': conf_agent.get('hostCredentials', {}),
+            'customHostCredentials': conf_agent.get('customHostCredentials', {}),
+            'specificConfiguration': conf_agent.get('specificConfiguration', {}),
+            'entities': conf_agent.get('entities', []),
+        })
+
+    logger.info(f"Prepared {len(agents_to_conf)} agents for configuration")
+    logger.debug(f"Filtered agents: {json.dumps(agents_to_conf, indent=2)}")
+
+    # Apply agent host credentials
+    for agent in agents_to_conf:
+        if 'agentId' not in agent:
+            logger.warning(f"Agent missing 'agentId' field: {agent}")
+            continue
+
+        fetch_core_hub(
+            f"/pipelines/{pipeline_id}/agents/{agent['agentId']}/config/credentials",
+            method='PUT',
+            token=token,
+            body={
+                'hostCredentials': agent['hostCredentials'],
+                'customHostCredentials': agent['customHostCredentials']
+            }
+        )
+
+    # Apply agent specific configuration
+    for agent in agents_to_conf:
+        if 'agentId' not in agent:
+            logger.warning(f"Agent missing 'agentId' field: {agent}")
+            continue
+
+        if agent['specificConfiguration']:
             fetch_core_hub(
-                f"/pipelines/{pipeline_id}/agents/{agent['agentId']}/config/credentials",
+                f"/pipelines/{pipeline_id}/agents/{agent['agentId']}/config/specific",
                 method='PUT',
                 token=token,
-                body={
-                    'hostCredentials': agent['hostCredentials'],
-                    'customHostCredentials': agent['customHostCredentials']
-                }
+                body={"configuration": agent['specificConfiguration']}
             )
 
-        # Apply agent specific configuration
-        for agent in agents_to_conf:
-            if 'agentId' not in agent:
-                logger.warning(f"Agent missing 'agentId' field: {agent}")
+    configure_entities(agents_to_conf, pipeline_id, token)
+
+    # Create entities sequentially for each schema pair
+    if schema_pairs:
+        entity_creation_script = 'create_all_entities.py'
+        for idx, (source_schema, target_schema) in enumerate(schema_pairs, start=1):
+            logger.info(
+                f"[Schema {idx}/{len(schema_pairs)}] Starting entity creation for "
+                f"source='{source_schema}', target='{target_schema}'"
+            )
+            try:
+                cmd = [
+                    'python3',
+                    entity_creation_script,
+                    '--pipeline', pipeline_id,
+                    '--source-schema', source_schema,
+                    '--source-type', effective_source_type,
+                    '--target-type', effective_target_type,
+                    '--token', token,
+                    '--target-schema', target_schema or source_schema
+                ]
+
+                if os.path.exists(TABLE_LIST_YAML):
+                    cmd.extend(['--yaml-file', TABLE_LIST_YAML])
+                    logger.info(f"Using TABLE_LIST.yaml: {TABLE_LIST_YAML}")
+                else:
+                    logger.warning(f"TABLE_LIST.yaml not found at {TABLE_LIST_YAML}. Proceeding without it.")
+
+                subprocess.run(cmd, check=True)
+                log_success(
+                    logger,
+                    f"[Schema {idx}/{len(schema_pairs)}] Entity creation completed for "
+                    f"source {source_schema} -> target {target_schema or source_schema}"
+                )
+            except subprocess.CalledProcessError as e:
+                log_failure(logger, f"[Schema {idx}/{len(schema_pairs)}] Error running entity creation script: {e}")
+                # Continue with next schema without failing entire process
                 continue
 
-            if agent['specificConfiguration']:
-                fetch_core_hub(
-                    f"/pipelines/{pipeline_id}/agents/{agent['agentId']}/config/specific",
-                    method='PUT',
-                    token=token,
-                    body={"configuration": agent['specificConfiguration']}
-                )
+    try:
+        # Set pipeline as ready (exiting from Draft status)
+        fetch_core_hub(
+            f"/pipelines/{pipeline_id}",
+            method='PUT',
+            token=token,
+            body={'configurationCompleted': True, 'name': pipeline_name}
+        )
 
-        configure_entities(agents_to_conf, pipeline_id, token)
+        time.sleep(ENTITY_START_TIMEOUT)
 
-        # Create entities sequentially for each schema pair
-        if schema_pairs:
-            entity_creation_script = 'create_all_entities.py'
-            for idx, (source_schema, target_schema) in enumerate(schema_pairs, start=1):
-                logger.info(f"[Schema {idx}/{len(schema_pairs)}] Starting entity creation for source='{source_schema}', target='{target_schema}'")
-                try:
-                    cmd = [
-                        'python3',
-                        entity_creation_script,
-                        '--pipeline', pipeline_id,
-                        '--source-schema', source_schema,
-                        '--source-type', effective_source_type,
-                        '--target-type', effective_target_type,
-                        '--token', token,
-                        '--target-schema', target_schema or source_schema
-                    ]
+        start_entity_syncs(token, pipeline_id)
 
-                    if os.path.exists(TABLE_LIST_YAML):
-                        cmd.extend(['--yaml-file', TABLE_LIST_YAML])
-                        logger.info(f"Using TABLE_LIST.yaml: {TABLE_LIST_YAML}")
-                    else:
-                        logger.warning(f"TABLE_LIST.yaml not found at {TABLE_LIST_YAML}. Proceeding without it.")
-
-                    subprocess.run(cmd, check=True)
-                    log_success(logger, f"[Schema {idx}/{len(schema_pairs)}] Entity creation completed for source {source_schema} -> target {target_schema or source_schema}")
-                except subprocess.CalledProcessError as e:
-                    log_failure(logger, f"[Schema {idx}/{len(schema_pairs)}] Error running entity creation script: {e}")
-                    # Continue with next schema without failing entire process
-                    continue
-
-        try:
-            # Set pipeline as ready (exiting from Draft status)
-            fetch_core_hub(
-                    f"/pipelines/{pipeline_id}",
-                    method='PUT',
-                    token=token,
-                    body={'configurationCompleted': True, 'name': fancy_names[0]}
-            )
-
-            time.sleep(ENTITY_START_TIMEOUT)
-
-            start_entity_syncs(token, pipeline_id)
-
-            # Log successful completion
-            log_success(logger, f"Pipeline {pipeline_id} successfully configured and started")
-            lockfile_complete()
-        except Exception as error:
-            log_failure(logger, f"Error: {error}")
-            lockfile_failure()
+        # Log successful completion
+        log_success(logger, f"Pipeline {pipeline_id} successfully configured and started")
+        lockfile_complete()
+    except Exception as error:
+        log_failure(logger, f"Error: {error}")
+        lockfile_failure()
 
 if __name__ == "__main__":
     main()
