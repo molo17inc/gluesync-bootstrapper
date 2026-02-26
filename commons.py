@@ -458,8 +458,6 @@ def map_data_type(source_type, source_node_info, target_node_info,
         normalized_source_type = 'blob'
     elif normalized_source_type == 'year':
         normalized_source_type = 'int'
-    elif normalized_source_type == 'character':
-        normalized_source_type = 'character varying'
 
     # Find matching source type in matrix (case-insensitive)
     source_item = next(
@@ -545,11 +543,6 @@ def map_data_type(source_type, source_node_info, target_node_info,
         elif normalized_source_type in ['bigint']:
             for t in target_item['supportedTypes']:
                 if 'number' == t.lower():
-                    print(f"Mapping {normalized_source_type} to {t}")
-                    return t
-        elif normalized_source_type in ['time']:
-            for t in target_item['supportedTypes']:
-                if 'timestamp with local time zone' == t.lower():
                     print(f"Mapping {normalized_source_type} to {t}")
                     return t
 

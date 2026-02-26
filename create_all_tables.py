@@ -351,6 +351,25 @@ def create_tables(token, pipeline_id, source_schema, target_schema, tables, sour
             ]
             logger.info(f"Using primary keys for {table_name}: {keys}")
 
+            if not keys and custom_config:
+                # Source has no discovered PKs — fall back to YAML keys (or documentKey.keys)
+                yaml_fallback_keys = custom_config.get('keys') or []
+                if not yaml_fallback_keys and 'documentKey' in custom_config:
+                    yaml_fallback_keys = custom_config['documentKey'].get('keys', [])
+
+                if yaml_fallback_keys:
+                    logger.info(f"Source table {table_name} has no PKs — using YAML-defined keys as fallback: {yaml_fallback_keys}")
+                    for key_name in yaml_fallback_keys:
+                        key_column = next((col for col in columns["columns"] if col["name"].lower() == key_name.lower()), None)
+                        if key_column:
+                            keys.append({
+                                "name": key_column["name"],
+                                "alias": key_column["name"],
+                                "type": key_column["type"]
+                            })
+                        else:
+                            logger.warning(f"Fallback key '{key_name}' not found in columns for table '{table_name}'")
+
         if not keys:
             logger.info(f"Warning: No keys specified for {table_name}. Table will have no keys.")
 
