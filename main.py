@@ -68,6 +68,55 @@ def set_core_hub_client(client):
 _core_hub_client = None
 
 # Define this function early since it's used throughout the code
+def wait_for_corehub_ready(max_retries=30, initial_delay=2):
+    """Wait for CoreHub to be ready with exponential backoff.
+    
+    Args:
+        max_retries: Maximum number of connection attempts (default: 30)
+        initial_delay: Initial delay in seconds between retries (default: 2)
+    
+    Returns:
+        True if CoreHub is ready, raises exception if max retries exceeded
+    """
+    client = get_core_hub_client()
+    delay = initial_delay
+    max_delay = 30  # Cap maximum delay at 30 seconds
+    
+    for attempt in range(1, max_retries + 1):
+        try:
+            logger.info(f"Checking CoreHub connectivity (attempt {attempt}/{max_retries})...")
+            # Simple health check - try to fetch pipelines endpoint
+            response = client.request('/pipelines', 'GET', token=None, body=None, params=None)
+            logger.info("CoreHub is ready and responding")
+            return True
+        except Exception as e:
+            error_msg = str(e)
+            if "Connection refused" in error_msg or "Failed to establish" in error_msg:
+                if attempt < max_retries:
+                    logger.warning(
+                        f"CoreHub not ready yet (attempt {attempt}/{max_retries}). "
+                        f"Retrying in {delay} seconds... Error: {error_msg}"
+                    )
+                    time.sleep(delay)
+                    # Exponential backoff with cap
+                    delay = min(delay * 1.5, max_delay)
+                else:
+                    logger.error(
+                        f"CoreHub failed to respond after {max_retries} attempts. "
+                        f"Please check that CoreHub service is running and accessible."
+                    )
+                    raise RuntimeError(
+                        f"CoreHub at {client.base_url} is not accessible after {max_retries} attempts. "
+                        f"Last error: {error_msg}"
+                    ) from e
+            else:
+                # Different error - might be auth related, let it through
+                logger.info(f"CoreHub responded (got error: {error_msg}), proceeding with authentication")
+                return True
+    
+    raise RuntimeError(f"CoreHub connection check failed after {max_retries} attempts")
+
+
 def fetch_core_hub(path, method='GET', token=None, body=None, params=None):
     client = get_core_hub_client()
     return client.request(path, method, token, body, params)
@@ -365,30 +414,45 @@ if True:
             log_failure(logger, f"Failed to load configuration: {str(e)}")
             lockfile_failure()
 
-        # Check if a valid token is present
+        # Initialize Core Hub client
+        configure_core_hub(core_hub_url, use_ssl=ssl_enabled, skip_verify=ssl_skip_verify)
+        logger.info(f"Core Hub URL: {core_hub_url}")
+
+        # Wait for CoreHub to be ready before attempting authentication
+        logger.info("Waiting for CoreHub to be ready...")
         try:
-            with open(AUTH_TOKEN_PATH, 'r') as f:
-                token_data = json.load(f)
-                token = token_data.get('token')
-                if token:
-                    # Verify login by attempting to authenticate
-                    try:
-                        check_token = fetch_core_hub(
-                            '/pipelines',
-                            method='GET',
-                            token=token
-                        )
-                        if isinstance(check_token, list):
-                            log_success(logger, "Successfully authenticated with saved token")
-                    except Exception as e:
-                        if "401" in str(e):
-                            logger.warning("Saved token is invalid, attempting to authenticate with default credentials")
-                            token = None
-                        else:
-                            raise e
-        except FileNotFoundError:
-            logger.info("No saved token found, attempting to authenticate with default credentials")
-            token = None
+            wait_for_corehub_ready(max_retries=30, initial_delay=2)
+        except RuntimeError as e:
+            logger.error(f"Failed to connect to CoreHub: {e}")
+            lockfile_failure()
+            raise
+
+        # Check if a valid token is present
+        token = None
+        if os.path.exists(AUTH_TOKEN_PATH):
+            try:
+                with open(AUTH_TOKEN_PATH, 'r') as f:
+                    token_data = json.load(f)
+                    token = token_data.get('token')
+                    if token:
+                        # Verify login by attempting to authenticate
+                        try:
+                            check_token = fetch_core_hub(
+                                '/pipelines',
+                                method='GET',
+                                token=token
+                            )
+                            if isinstance(check_token, list):
+                                log_success(logger, "Successfully authenticated with saved token")
+                        except Exception as e:
+                            if "401" in str(e):
+                                logger.warning("Saved token is invalid, attempting to authenticate with default credentials")
+                                token = None
+                            else:
+                                raise e
+            except FileNotFoundError:
+                logger.info("No saved token found, attempting to authenticate with default credentials")
+                token = None
 
         if not token:
             # Initial authentication
