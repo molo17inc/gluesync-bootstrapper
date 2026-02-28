@@ -279,6 +279,8 @@ _raw_target_type = os.getenv('TARGET_TYPE')
 source_type = _raw_source_type.strip() if _raw_source_type else None
 target_type = _raw_target_type.strip() if _raw_target_type else None
 TABLE_LIST_YAML = os.getenv('TABLE_LIST_YAML', '/opt/config/tables-list.yaml')
+ssl_enabled = os.getenv('SSL_ENABLED', 'False').lower() == 'true'
+ssl_skip_verify = os.getenv('SSL_SKIP_VERIFY', 'False').lower() == 'true'
 
 # Schema extraction will be done after logger initialization
 AUTH_TOKEN_PATH = os.path.join('/opt/config', 'auth_token.json')
