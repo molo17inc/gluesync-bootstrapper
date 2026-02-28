@@ -40,7 +40,7 @@ from urllib.parse import urlparse
 from utils.log import get_logger, create_log_file, log_success, log_failure, lockfile_failure, exit_on_fail, lockfile_complete
 from utils.gluesync_sdk_client import initialize_gluesync_sdk, get_token, get_gluesync_client
 from utils.core_hub_client import CoreHubClient
-from commons import extract_schemas_from_yaml, extract_all_schemas_from_yaml, extract_schema_types_from_yaml
+from commons import extract_schemas_from_yaml, extract_all_schemas_from_yaml, extract_schema_types_from_yaml, configure_core_hub
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
