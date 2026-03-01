@@ -362,7 +362,7 @@ def add_agent_to_pipeline_via_corehub(
         f"/pipelines/{pipeline_id}/agents/{agent_id}",
         method='PUT',
         token=token,
-        body={'agentType': normalized_type.upper()}
+        params={'agentType': normalized_type.upper()}  # agentType is a query parameter, not body
     )
     logger.info(
         "Successfully assigned %s agent %s (id=%s) to pipeline %s",
