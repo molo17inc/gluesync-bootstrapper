@@ -344,11 +344,20 @@ def add_agent_to_pipeline_via_corehub(
 
     agent_id = str(raw_agent_id)
     # Assign agent to pipeline with agent type in request body
+    assignment_payload = {'agentType': normalized_type.upper()}
+    logger.info(
+        "Attaching %s agent %s (id=%s) to pipeline %s with payload %s",
+        normalized_type,
+        agent_user_tag,
+        agent_id,
+        pipeline_id,
+        assignment_payload,
+    )
     fetch_core_hub(
         f"/pipelines/{pipeline_id}/agents/{agent_id}",
         method='PUT',
         token=token,
-        body={'agentType': normalized_type.upper()}  # API expects uppercase SOURCE/TARGET
+        body=assignment_payload,  # API expects uppercase SOURCE/TARGET
     )
     return agent_id
 
