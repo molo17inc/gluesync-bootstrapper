@@ -343,22 +343,15 @@ def add_agent_to_pipeline_via_corehub(
         )
 
     agent_id = str(raw_agent_id)
-    # Assign agent to pipeline with agent type in request body
-    assignment_payload = {'agentType': normalized_type.upper()}
     logger.info(
-        "Attaching %s agent %s (id=%s) to pipeline %s with payload %s",
+        "Successfully added %s agent %s (id=%s) to pipeline %s",
         normalized_type,
         agent_user_tag,
         agent_id,
         pipeline_id,
-        assignment_payload,
     )
-    fetch_core_hub(
-        f"/pipelines/{pipeline_id}/agents/{agent_id}",
-        method='PUT',
-        token=token,
-        body=assignment_payload,  # API expects uppercase SOURCE/TARGET
-    )
+    # Note: The /agents/add endpoint already assigns the agent to the pipeline,
+    # so no additional PUT call is needed
     return agent_id
 
 def generate_random_password() -> str:
