@@ -343,11 +343,12 @@ def add_agent_to_pipeline_via_corehub(
         )
 
     agent_id = str(raw_agent_id)
-    # Keep existing assignment step for compatibility with current Core Hub flow.
+    # Assign agent to pipeline with agent type in request body
     fetch_core_hub(
         f"/pipelines/{pipeline_id}/agents/{agent_id}",
         method='PUT',
         token=token,
+        body={'agentType': normalized_type.upper()}  # API expects uppercase SOURCE/TARGET
     )
     return agent_id
 

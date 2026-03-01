@@ -1573,6 +1573,7 @@ def import_pipeline_config_only(
             f"/pipelines/{pipeline_id}/agents/{agent_id}",
             method="PUT",
             token=token,
+            body={"agentType": agent_type.upper()}  # API expects uppercase SOURCE/TARGET
         )
 
         # Apply credentials
