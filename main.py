@@ -550,17 +550,34 @@ if True:
                     logger.debug(f"Token via property: {token is not None}")
                 
                 if not token:
-                    logger.error("All token retrieval methods failed.")
-                    exit(1)
+                    logger.error("SDK authentication failed - token is None.")
+                    # Retry SDK connection
+                    max_retries = 30
+                    retry_delay = 2
+                    for retry in range(1, max_retries + 1):
+                        logger.info(f"Retrying SDK authentication (attempt {retry}/{max_retries})...")
+                        time.sleep(retry_delay)
+                        try:
+                            # Reinitialize SDK client
+                            initialize_gluesync_sdk()
+                            token = get_token()
+                            if token:
+                                logger.info(f"Successfully obtained token from SDK on retry {retry}")
+                                save_token(token)
+                                break
+                        except Exception as retry_error:
+                            logger.warning(f"Retry {retry} failed: {str(retry_error)}")
+                            if retry == max_retries:
+                                logger.error("All SDK authentication retries exhausted.")
+                                raise Exception("Failed to authenticate via SDK after retries")
             else:
                 logger.info("Successfully obtained token from Gluesync SDK.")
                 # Save the token
                 save_token(token)
         except Exception as e:
-            logger.error(f"Exception during token retrieval: {str(e)}")
+            logger.error(f"Exception during SDK token retrieval: {str(e)}")
             logger.error(f"Exception type: {type(e).__name__}")
-            logger.error(f"Stack trace: {traceback.format_exc()}")
-            exit(1)
+            raise Exception(f"SDK authentication failed: {str(e)}")
 
         # Use the token for CoreHubClient
         # Set the global core_hub_client using the existing get_core_hub_client function
