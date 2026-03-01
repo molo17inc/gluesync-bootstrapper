@@ -1015,6 +1015,22 @@ def main():
 
     configure_entities(agents_to_conf, pipeline_id, token)
 
+    # Verify agents are properly registered in pipeline before creating entities
+    logger.info("Verifying agents are registered in pipeline configuration...")
+    pipeline_config = fetch_core_hub(f"/pipelines/{pipeline_id}/config", token=token)
+    registered_agents = pipeline_config.get('agents', [])
+    logger.info(f"Pipeline config shows {len(registered_agents)} agents registered")
+    for agent in registered_agents:
+        agent_id = agent.get('agentId') or agent.get('id')
+        agent_type = agent.get('agentType')
+        logger.info(f"  - Agent: type={agent_type}, id={agent_id}")
+    
+    if len(registered_agents) < 2:
+        raise RuntimeError(
+            f"Pipeline has only {len(registered_agents)} agents registered. "
+            f"Expected 2 (SOURCE and TARGET). Agents: {registered_agents}"
+        )
+
     # Create entities sequentially for each schema pair
     if schema_pairs:
         entity_creation_script = 'create_all_entities.py'
