@@ -344,14 +344,33 @@ def add_agent_to_pipeline_via_corehub(
 
     agent_id = str(raw_agent_id)
     logger.info(
-        "Successfully added %s agent %s (id=%s) to pipeline %s",
+        "Agent created via /agents/add: %s agent %s (id=%s)",
+        normalized_type,
+        agent_user_tag,
+        agent_id,
+    )
+    
+    # Explicitly assign the agent to the pipeline
+    # The /agents/add endpoint creates the agent but may not fully bind it to the pipeline
+    logger.info(
+        "Assigning agent %s to pipeline %s with type %s",
+        agent_id,
+        pipeline_id,
+        normalized_type.upper(),
+    )
+    fetch_core_hub(
+        f"/pipelines/{pipeline_id}/agents/{agent_id}",
+        method='PUT',
+        token=token,
+        body={'agentType': normalized_type.upper()}
+    )
+    logger.info(
+        "Successfully assigned %s agent %s (id=%s) to pipeline %s",
         normalized_type,
         agent_user_tag,
         agent_id,
         pipeline_id,
     )
-    # Note: The /agents/add endpoint already assigns the agent to the pipeline,
-    # so no additional PUT call is needed
     return agent_id
 
 def generate_random_password() -> str:

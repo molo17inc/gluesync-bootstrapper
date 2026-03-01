@@ -2091,8 +2091,20 @@ def main(pipeline_id, source_schema, target_schema, source_type, target_type, ya
             lockfile_failure()
             raise Exception(error_msg)
 
+        # Extract agent IDs with fallback for different field names
+        source_agent_id = source_agent.get('agentId') or source_agent.get('id')
+        target_agent_id = target_agent.get('agentId') or target_agent.get('id')
+        
+        if not source_agent_id or not target_agent_id:
+            error_msg = f"Agents missing IDs. Source ID: {source_agent_id}, Target ID: {target_agent_id}. Source agent: {source_agent}, Target agent: {target_agent}"
+            log_failure(logger, error_msg)
+            lockfile_failure()
+            raise Exception(error_msg)
+        
+        logger.info(f"Using source agent ID: {source_agent_id}, target agent ID: {target_agent_id}")
+
         # Get tables from source agent
-        tables = get_agent_tables(token, pipeline_id, source_agent['agentId'], source_schema)
+        tables = get_agent_tables(token, pipeline_id, source_agent_id, source_schema)
 
         if not tables:
             error_msg = f"No tables found in schema {source_schema}"
@@ -2106,7 +2118,7 @@ def main(pipeline_id, source_schema, target_schema, source_type, target_type, ya
         # Create entities
         result = create_entities(
             token, pipeline_id, source_schema, target_schema,
-            tables, source_agent['agentId'], target_agent['agentId'],
+            tables, source_agent_id, target_agent_id,
             source_type, target_type, yaml_config, skip_errors, chunk_size,
             source_agent_tag=source_agent.get('agentTag'),
             target_agent_tag=target_agent.get('agentTag')
