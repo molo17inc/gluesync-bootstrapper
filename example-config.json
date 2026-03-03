@@ -1,6 +1,4 @@
 {
-  "pipelineName": "demo-pgsql-to-kafka",
-  "pipelineId": "",
   "agents": [
     {
       "agentType": "SOURCE",
@@ -19,29 +17,34 @@
         "maxConnectionsCount": 100
       },
       "customHostCredentials": {},
-      "specificConfiguration": {}
+      "specificConfiguration": {},
+      "entitiesConfiguration": {},
+      "tablesConfiguration": {},
+      "entities": []
     },
     {
       "agentType": "TARGET",
-      "agentTag": "kafka",
+      "agentTag": "google-bigquery",
       "hostCredentials": {
-        "connectionName": "Kafka target",
-        "host": "kafka",
-        "port": 9092,
-        "databaseName": "",
+        "connectionName": "bigquery",
+        "host": "gluesync-demo",
+        "port": 443,
+        "databaseName": "us",
         "username": "",
         "password": "",
         "disableAuth": false,
         "enableTls": false,
-        "trustServerCertificate": false,
+        "trustServerCertificate": true,
         "additionalHosts": [],
-        "maxConnectionsCount": 100
+        "maxConnectionsCount": 100,
+        "certificatePath": "/cert.json",
+        "certificateType": "cert-store"
       },
-      "customHostCredentials": {
-        "saslMechanism": "PLAIN",
-        "securityProtocol": "PLAINTEXT"
-      },
-      "specificConfiguration": {}
+      "customHostCredentials": {},
+      "specificConfiguration": {},
+      "entitiesConfiguration": {},
+      "tablesConfiguration": {},
+      "entities": []
     }
   ]
 }

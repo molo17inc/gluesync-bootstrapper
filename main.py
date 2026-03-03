@@ -373,6 +373,42 @@ def add_agent_to_pipeline_via_corehub(
     )
     return agent_id
 
+
+def upload_agent_certificate(
+    *,
+    token: str,
+    pipeline_id: str,
+    agent_id: str,
+    certificate_type: str,
+    certificate_path: str,
+):
+    """Upload a certificate file for the specified agent."""
+
+    certificate_file = Path(certificate_path)
+    if not certificate_file.is_file():
+        raise FileNotFoundError(f"Certificate file not found at {certificate_path}")
+
+    certificate_bytes = certificate_file.read_bytes()
+    if not certificate_bytes:
+        raise ValueError(f"Certificate file {certificate_path} is empty")
+
+    certificate_ext = certificate_file.suffix.lstrip('.').lower() or 'crt'
+    logger.info(
+        "Uploading %s certificate for agent %s from %s (%d bytes)",
+        certificate_type,
+        agent_id,
+        certificate_path,
+        len(certificate_bytes),
+    )
+
+    fetch_core_hub(
+        f"/pipelines/{pipeline_id}/agents/{agent_id}/config/certificate/{certificate_type}",
+        method='PUT',
+        token=token,
+        body=certificate_bytes,
+        headers={'Certificate-Ext': certificate_ext},
+    )
+
 def generate_random_password() -> str:
     symbols = [chr(i) for i in range(33, 47)]
     password = ""
@@ -1025,15 +1061,36 @@ def main():
             logger.warning(f"Agent missing 'agentId' field: {agent}")
             continue
 
+        host_credentials = dict(agent['hostCredentials']) if agent['hostCredentials'] else {}
+        custom_host_credentials = agent['customHostCredentials']
+        certificate_path = host_credentials.pop('certificatePath', None)
+        certificate_type = host_credentials.pop('certificateType', None)
+
         fetch_core_hub(
             f"/pipelines/{pipeline_id}/agents/{agent['agentId']}/config/credentials",
             method='PUT',
             token=token,
             body={
-                'hostCredentials': agent['hostCredentials'],
-                'customHostCredentials': agent['customHostCredentials']
+                'hostCredentials': host_credentials,
+                'customHostCredentials': custom_host_credentials
             }
         )
+
+        if certificate_path and certificate_type:
+            try:
+                upload_agent_certificate(
+                    token=token,
+                    pipeline_id=pipeline_id,
+                    agent_id=agent['agentId'],
+                    certificate_type=certificate_type,
+                    certificate_path=certificate_path,
+                )
+            except Exception as cert_error:
+                log_failure(
+                    logger,
+                    f"Failed to upload certificate for agent {agent['agentId']}: {cert_error}"
+                )
+                raise
 
     # Apply agent specific configuration
     for agent in agents_to_conf:

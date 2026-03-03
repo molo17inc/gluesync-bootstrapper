@@ -83,20 +83,28 @@ def set_scheduling_enabled(enabled: bool):
 logger = get_logger()
 
 
-def fetch_core_hub(path, method='GET', token=None, body=None, params=None):
+def fetch_core_hub(path, method='GET', token=None, body=None, params=None, headers=None):
     # Log request details
     logger.debug(f"\n{'=' * 80}")
     logger.debug(f"[API REQUEST] {method.upper()} {path}")
 
     if params:
         logger.debug("\nQuery Parameters:")
-        for k, v in (params.items() if params else {}):
+        for k, v in params.items():
+            logger.debug(f"  {k}: {v}")
+
+    if headers:
+        logger.debug("\nCustom Headers:")
+        for k, v in headers.items():
             logger.debug(f"  {k}: {v}")
 
     if body is not None:
         logger.debug("\nRequest Body:")
         try:
-            logger.debug(json.dumps(body, indent=2) if isinstance(body, (dict, list)) else str(body))
+            if isinstance(body, (bytes, bytearray)):
+                logger.debug(f"<binary payload: {len(body)} bytes>")
+            else:
+                logger.debug(json.dumps(body, indent=2) if isinstance(body, (dict, list)) else str(body))
         except Exception as e:
             logger.debug(f"<Unable to serialize request body: {e}>")
 
@@ -105,7 +113,7 @@ def fetch_core_hub(path, method='GET', token=None, body=None, params=None):
     try:
         # Make the request
         start_time = time.time()
-        response = core_hub_client.request(path, method, token, body, params)
+        response = core_hub_client.request(path, method, token, body, params, headers=headers)
         duration = time.time() - start_time
 
         # Log response (dump full JSON when possible, otherwise capture long strings)

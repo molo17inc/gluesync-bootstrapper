@@ -75,9 +75,9 @@ class CoreHubClient:
 
         self.session = requests.Session()
 
-    def request(self, path, method='GET', token=None, body=None, params=None):
+    def request(self, path, method='GET', token=None, body=None, params=None, headers=None):
         url = f"{self.base_url}{path}"
-        headers = {}
+        headers = headers.copy() if headers else {}
         
         if token:
             headers['Authorization'] = f'Bearer {token}'
@@ -89,11 +89,19 @@ class CoreHubClient:
             if method.upper() == 'GET':
                 response = self.session.get(url, headers=headers, verify=verify, params=params)
             elif method.upper() == 'POST':
-                headers['Content-Type'] = 'application/json'
-                response = self.session.post(url, headers=headers, json=body, verify=verify, params=params)
+                if 'Content-Type' not in headers and not isinstance(body, (bytes, bytearray)):
+                    headers['Content-Type'] = 'application/json'
+                if isinstance(body, (bytes, bytearray)):
+                    response = self.session.post(url, headers=headers, data=body, verify=verify, params=params)
+                else:
+                    response = self.session.post(url, headers=headers, json=body, verify=verify, params=params)
             elif method.upper() == 'PUT':
-                headers['Content-Type'] = 'application/json'
-                response = self.session.put(url, headers=headers, json=body, verify=verify, params=params)
+                if 'Content-Type' not in headers and not isinstance(body, (bytes, bytearray)):
+                    headers['Content-Type'] = 'application/json'
+                if isinstance(body, (bytes, bytearray)):
+                    response = self.session.put(url, headers=headers, data=body, verify=verify, params=params)
+                else:
+                    response = self.session.put(url, headers=headers, json=body, verify=verify, params=params)
             elif method.upper() == 'DELETE':
                 response = self.session.delete(url, headers=headers, verify=verify, params=params)
             else:
