@@ -386,33 +386,42 @@ def upload_agent_certificate(
     """Upload a certificate file for the specified agent."""
 
     certificate_file = resolve_certificate_path(certificate_path)
-
-    certificate_bytes = certificate_file.read_bytes()
-    if not certificate_bytes:
-        raise ValueError(f"Certificate file {certificate_path} is empty")
-
     certificate_ext = certificate_file.suffix.lstrip('.').lower() or 'crt'
-    logger.info(
-        "Uploading %s certificate for agent %s from %s (%d bytes)",
-        certificate_type,
-        agent_id,
-        certificate_path,
-        len(certificate_bytes),
-    )
+    
+    # Read and parse certificate file based on extension
+    if certificate_ext == 'json':
+        with open(certificate_file, 'r') as f:
+            certificate_data = json.load(f)
+        logger.info(
+            "Uploading %s certificate for agent %s from %s (JSON)",
+            certificate_type,
+            agent_id,
+            certificate_path,
+        )
+    else:
+        # For non-JSON certificates, read as bytes
+        certificate_data = certificate_file.read_bytes()
+        if not certificate_data:
+            raise ValueError(f"Certificate file {certificate_path} is empty")
+        logger.info(
+            "Uploading %s certificate for agent %s from %s (%d bytes)",
+            certificate_type,
+            agent_id,
+            certificate_path,
+            len(certificate_data),
+        )
     
     logger.debug(f"Certificate upload details:")
     logger.debug(f"  - Path: /pipelines/{pipeline_id}/agents/{agent_id}/config/certificate/{certificate_type}")
     logger.debug(f"  - Certificate type: {certificate_type}")
     logger.debug(f"  - Certificate extension: {certificate_ext}")
-    logger.debug(f"  - Body type: {type(certificate_bytes).__name__}")
-    logger.debug(f"  - Body length: {len(certificate_bytes)} bytes")
-    logger.debug(f"  - First 100 chars: {certificate_bytes[:100]}")
+    logger.debug(f"  - Body type: {type(certificate_data).__name__}")
 
     response = fetch_core_hub(
         f"/pipelines/{pipeline_id}/agents/{agent_id}/config/certificate/{certificate_type}",
         method='PUT',
         token=token,
-        body=certificate_bytes,
+        body=certificate_data,
         headers={'Certificate-Ext': certificate_ext},
     )
     
