@@ -415,6 +415,10 @@ def resolve_certificate_path(certificate_path: str) -> Path:
     normalized = certificate_path.strip()
     path_obj = Path(normalized).expanduser()
 
+    logger.debug(f"Resolving certificate path: '{normalized}'")
+    logger.debug(f"CONFIG_BASE_DIR: {CONFIG_BASE_DIR}")
+    logger.debug(f"Current working directory: {Path.cwd()}")
+
     candidates = []
     if path_obj.is_absolute():
         candidates.append(path_obj)
@@ -433,7 +437,10 @@ def resolve_certificate_path(certificate_path: str) -> Path:
         if candidate in seen:
             continue
         seen.append(candidate)
-        if candidate.is_file():
+        exists = candidate.exists()
+        is_file = candidate.is_file()
+        logger.debug(f"Checking: {candidate} (exists={exists}, is_file={is_file})")
+        if is_file:
             logger.info("Resolved certificate path '%s' to '%s'", normalized, candidate)
             return candidate
 
