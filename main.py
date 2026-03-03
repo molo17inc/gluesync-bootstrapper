@@ -117,9 +117,9 @@ def wait_for_corehub_ready(max_retries=30, initial_delay=2):
     raise RuntimeError(f"CoreHub connection check failed after {max_retries} attempts")
 
 
-def fetch_core_hub(path, method='GET', token=None, body=None, params=None):
+def fetch_core_hub(path, method='GET', token=None, body=None, params=None, headers=None):
     client = get_core_hub_client()
-    return client.request(path, method, token, body, params)
+    return client.request(path, method, token, body, params, headers=headers)
 
 fake = Faker()
 
