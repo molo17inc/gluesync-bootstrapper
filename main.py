@@ -412,33 +412,33 @@ def upload_agent_certificate(
 def resolve_certificate_path(certificate_path: str) -> Path:
     """Resolve certificate path, supporting relative paths to the config directory."""
 
-    path_obj = Path(certificate_path).expanduser()
-    candidates = []
+    normalized = certificate_path.strip()
+    path_obj = Path(normalized).expanduser()
 
+    candidates = []
     if path_obj.is_absolute():
         candidates.append(path_obj)
         candidates.append((CONFIG_BASE_DIR / path_obj.name).resolve())
-        stripped = Path(path_obj.as_posix().lstrip('/'))
-        if stripped and not stripped.is_absolute():
-            candidates.append((CONFIG_BASE_DIR / stripped).resolve())
     else:
         candidates.append((CONFIG_BASE_DIR / path_obj).resolve())
         candidates.append(path_obj.resolve())
 
-    # Always ensure CONFIG_BASE_DIR candidate is included even if duplicates
-    candidates.append((CONFIG_BASE_DIR / path_obj.name).resolve())
+    # Always check CONFIG_BASE_DIR root with original name as final fallback
+    base_fallback = (CONFIG_BASE_DIR / path_obj.name).resolve()
+    if base_fallback not in candidates:
+        candidates.append(base_fallback)
 
-    seen = set()
+    seen = []
     for candidate in candidates:
         if candidate in seen:
             continue
-        seen.add(candidate)
+        seen.append(candidate)
         if candidate.is_file():
-            logger.info("Resolved certificate path '%s' to '%s'", certificate_path, candidate)
+            logger.info("Resolved certificate path '%s' to '%s'", normalized, candidate)
             return candidate
 
     raise FileNotFoundError(
-        f"Certificate file not found at {certificate_path}. Checked: "
+        f"Certificate file not found at {normalized}. Checked: "
         f"{', '.join(str(c) for c in seen)}"
     )
 
