@@ -89,18 +89,22 @@ class CoreHubClient:
             if method.upper() == 'GET':
                 response = self.session.get(url, headers=headers, verify=verify, params=params)
             elif method.upper() == 'POST':
-                if 'Content-Type' not in headers and not isinstance(body, (bytes, bytearray)):
-                    headers['Content-Type'] = 'application/json'
                 if isinstance(body, (bytes, bytearray)):
+                    # For binary data, don't set Content-Type - send raw bytes
                     response = self.session.post(url, headers=headers, data=body, verify=verify, params=params)
                 else:
+                    # For JSON data, set Content-Type if not already set
+                    if 'Content-Type' not in headers:
+                        headers['Content-Type'] = 'application/json'
                     response = self.session.post(url, headers=headers, json=body, verify=verify, params=params)
             elif method.upper() == 'PUT':
-                if 'Content-Type' not in headers and not isinstance(body, (bytes, bytearray)):
-                    headers['Content-Type'] = 'application/json'
                 if isinstance(body, (bytes, bytearray)):
+                    # For binary data, don't set Content-Type - send raw bytes
                     response = self.session.put(url, headers=headers, data=body, verify=verify, params=params)
                 else:
+                    # For JSON data, set Content-Type if not already set
+                    if 'Content-Type' not in headers:
+                        headers['Content-Type'] = 'application/json'
                     response = self.session.put(url, headers=headers, json=body, verify=verify, params=params)
             elif method.upper() == 'DELETE':
                 response = self.session.delete(url, headers=headers, verify=verify, params=params)
