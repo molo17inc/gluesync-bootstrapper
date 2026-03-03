@@ -1125,16 +1125,7 @@ def main():
         certificate_path = host_credentials.pop('certificatePath', None)
         certificate_type = host_credentials.pop('certificateType', None)
 
-        fetch_core_hub(
-            f"/pipelines/{pipeline_id}/agents/{agent['agentId']}/config/credentials",
-            method='PUT',
-            token=token,
-            body={
-                'hostCredentials': host_credentials,
-                'customHostCredentials': custom_host_credentials
-            }
-        )
-
+        # Upload certificate first (if present)
         if certificate_path and certificate_type:
             try:
                 upload_agent_certificate(
@@ -1150,6 +1141,17 @@ def main():
                     f"Failed to upload certificate for agent {agent['agentId']}: {cert_error}"
                 )
                 raise
+
+        # Then upload credentials
+        fetch_core_hub(
+            f"/pipelines/{pipeline_id}/agents/{agent['agentId']}/config/credentials",
+            method='PUT',
+            token=token,
+            body={
+                'hostCredentials': host_credentials,
+                'customHostCredentials': custom_host_credentials
+            }
+        )
 
     # Apply agent specific configuration
     for agent in agents_to_conf:
