@@ -245,6 +245,7 @@ def load_config_from_file(path):
 
 # Environment variables and constants
 file_conf_path = os.getenv('FILE_CONF_PATH', './config.json')
+CONFIG_BASE_DIR = Path(file_conf_path).expanduser().resolve().parent
 
 # Retrieve CoreHub URL from SDK if not specified
 core_hub_url = os.getenv('CORE_HUB_URL')
@@ -384,9 +385,7 @@ def upload_agent_certificate(
 ):
     """Upload a certificate file for the specified agent."""
 
-    certificate_file = Path(certificate_path)
-    if not certificate_file.is_file():
-        raise FileNotFoundError(f"Certificate file not found at {certificate_path}")
+    certificate_file = resolve_certificate_path(certificate_path)
 
     certificate_bytes = certificate_file.read_bytes()
     if not certificate_bytes:
@@ -407,6 +406,40 @@ def upload_agent_certificate(
         token=token,
         body=certificate_bytes,
         headers={'Certificate-Ext': certificate_ext},
+    )
+
+
+def resolve_certificate_path(certificate_path: str) -> Path:
+    """Resolve certificate path, supporting relative paths to the config directory."""
+
+    path_obj = Path(certificate_path).expanduser()
+    candidates = []
+
+    if path_obj.is_absolute():
+        candidates.append(path_obj)
+        candidates.append((CONFIG_BASE_DIR / path_obj.name).resolve())
+        stripped = Path(path_obj.as_posix().lstrip('/'))
+        if stripped and not stripped.is_absolute():
+            candidates.append((CONFIG_BASE_DIR / stripped).resolve())
+    else:
+        candidates.append((CONFIG_BASE_DIR / path_obj).resolve())
+        candidates.append(path_obj.resolve())
+
+    # Always ensure CONFIG_BASE_DIR candidate is included even if duplicates
+    candidates.append((CONFIG_BASE_DIR / path_obj.name).resolve())
+
+    seen = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if candidate.is_file():
+            logger.info("Resolved certificate path '%s' to '%s'", certificate_path, candidate)
+            return candidate
+
+    raise FileNotFoundError(
+        f"Certificate file not found at {certificate_path}. Checked: "
+        f"{', '.join(str(c) for c in seen)}"
     )
 
 def generate_random_password() -> str:
