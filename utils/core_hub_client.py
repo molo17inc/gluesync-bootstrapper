@@ -100,7 +100,9 @@ class CoreHubClient:
             elif method.upper() == 'PUT':
                 if isinstance(body, (bytes, bytearray)):
                     # For binary data, don't set Content-Type - send raw bytes
+                    logger.debug(f"Sending binary PUT: {len(body)} bytes, headers: {headers}")
                     response = self.session.put(url, headers=headers, data=body, verify=verify, params=params)
+                    logger.debug(f"Binary PUT response status: {response.status_code}")
                 else:
                     # For JSON data, set Content-Type if not already set
                     if 'Content-Type' not in headers:

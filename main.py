@@ -399,14 +399,24 @@ def upload_agent_certificate(
         certificate_path,
         len(certificate_bytes),
     )
+    
+    logger.debug(f"Certificate upload details:")
+    logger.debug(f"  - Path: /pipelines/{pipeline_id}/agents/{agent_id}/config/certificate/{certificate_type}")
+    logger.debug(f"  - Certificate type: {certificate_type}")
+    logger.debug(f"  - Certificate extension: {certificate_ext}")
+    logger.debug(f"  - Body type: {type(certificate_bytes).__name__}")
+    logger.debug(f"  - Body length: {len(certificate_bytes)} bytes")
+    logger.debug(f"  - First 100 chars: {certificate_bytes[:100]}")
 
-    fetch_core_hub(
+    response = fetch_core_hub(
         f"/pipelines/{pipeline_id}/agents/{agent_id}/config/certificate/{certificate_type}",
         method='PUT',
         token=token,
         body=certificate_bytes,
         headers={'Certificate-Ext': certificate_ext},
     )
+    
+    logger.debug(f"Certificate upload response: {response}")
 
 
 def resolve_certificate_path(certificate_path: str) -> Path:
