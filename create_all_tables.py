@@ -116,7 +116,7 @@ def table_exists(pipeline_id: str, schema_name: str, table_name: str, token: str
         )
         logger.info(f"Table {table_name} exists in schema {schema_name}")
         return True
-    except requests.exceptions.RequestException as e:
+    except (requests.exceptions.RequestException, RuntimeError) as e:
         error_msg = str(e)
         logger.info(f"Initial table existence check failed for {table_name}: {error_msg}")
         
@@ -143,7 +143,7 @@ def table_exists(pipeline_id: str, schema_name: str, table_name: str, token: str
             )
             logger.info(f"Table {alternate_table_name} exists in schema {schema_name} (using alternate casing)")
             return True
-        except requests.exceptions.RequestException as e2:
+        except (requests.exceptions.RequestException, RuntimeError) as e2:
             error_msg2 = str(e2)
             logger.info(f"Alternate casing check also failed for {alternate_table_name}: {error_msg2}")
         
