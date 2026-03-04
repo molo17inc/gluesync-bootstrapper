@@ -621,11 +621,18 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
         # Build columns definition with IDs
         columns_def = []
-        if custom_config.get('columns'):
-            # Custom column mappings (source→target). Metadata-style columns (with a
-            # 'name' field but no source→target mapping) are ignored here and will
-            # fall back to the discovery-based behavior below when no mappings are
-            # resolved.
+        
+        # Check if we have column mappings (format: [{source: target}]) vs column definitions (format: [{name: ..., type: ...}])
+        has_column_mappings = False
+        if custom_config.get('columns') and len(custom_config['columns']) > 0:
+            first_col = custom_config['columns'][0]
+            # Column mappings are dicts with simple key-value pairs (source: target)
+            # Column definitions have 'name', 'type', etc. fields
+            if isinstance(first_col, dict) and 'name' not in first_col and 'type' not in first_col:
+                has_column_mappings = True
+        
+        if has_column_mappings:
+            # Custom column mappings (source→target)
             for col in columns["columns"]:
                 # Use the id field from CoreHub API as the column ID
                 col_id = col.get('id')
@@ -635,9 +642,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     raise ValueError(error_msg)
 
                 for column_map in custom_config.get('columns', []):
-                    # Simple mapping entries look like {SOURCE_NAME: TARGET_NAME}.
-                    # Metadata entries contain keys like 'name', 'type', etc. and
-                    # will not match any real column name here.
                     for source_name, target_name in column_map.items():
                         if source_name == col["name"]:
                             columns_def.append({
@@ -649,7 +653,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
         # If there are no column mappings or none of them matched, fall back to
         # using discovery columns as-is (one-to-one source→target mapping).
-        if not custom_config.get('columns') or not columns_def:
+        if not has_column_mappings or not columns_def:
             columns_def = []
             for col in columns["columns"]:
                 # Use the id field from CoreHub API as the column ID
@@ -673,8 +677,16 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         if custom_config and 'keys' in custom_config:
             keys = []
             
-            # Check if we have column mappings
-            if custom_config.get('columns'):
+            # Check if we have column mappings (format: [{source: target}]) vs column definitions (format: [{name: ..., type: ...}])
+            has_column_mappings = False
+            if custom_config.get('columns') and len(custom_config['columns']) > 0:
+                first_col = custom_config['columns'][0]
+                # Column mappings are dicts with simple key-value pairs (source: target)
+                # Column definitions have 'name', 'type', etc. fields
+                if isinstance(first_col, dict) and 'name' not in first_col and 'type' not in first_col:
+                    has_column_mappings = True
+            
+            if has_column_mappings:
                 # Use column mappings for keys
                 for col in columns["columns"]:
                     # Use the id field from CoreHub API as the column ID
@@ -695,8 +707,11 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                 })
             else:
                 # No column mappings, use keys directly from source columns
+                logger.debug(f"Processing keys for {table_name}: {custom_config['keys']}")
+                logger.debug(f"Available columns: {[col['name'] for col in columns['columns']]}")
                 for key_name in custom_config['keys']:
                     # Find the column and its index (case-insensitive to handle cross-db scenarios like pgsql→oracle)
+                    found = False
                     for col in columns["columns"]:
                         if col["name"].lower() == key_name.lower():
                             # Use the id field from CoreHub API as the column ID
@@ -712,8 +727,10 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                 "alias": col["name"],
                                 "type": col["type"]
                             })
+                            found = True
+                            logger.debug(f"Found key '{key_name}' in columns with id={col_id}")
                             break
-                    else:
+                    if not found:
                         logger.warning(f"Warning: Key '{key_name}' not found in columns for table '{table_name}'")
             
             logger.debug(f"Using custom keys for {table_name}: {keys}")
@@ -936,7 +953,16 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         target_columns_def = []
         max_target_col_id = 0
         
-        if custom_config.get('columns'):
+        # Check if we have column mappings (format: [{source: target}]) vs column definitions (format: [{name: ..., type: ...}])
+        has_column_mappings_target = False
+        if custom_config.get('columns') and len(custom_config['columns']) > 0:
+            first_col = custom_config['columns'][0]
+            # Column mappings are dicts with simple key-value pairs (source: target)
+            # Column definitions have 'name', 'type', etc. fields
+            if isinstance(first_col, dict) and 'name' not in first_col and 'type' not in first_col:
+                has_column_mappings_target = True
+        
+        if has_column_mappings_target:
             # Custom column mappings for target
             for col in columns["columns"]:
                 # Use the id field from CoreHub API as the column ID
@@ -965,7 +991,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                 "alias": target_name,
                                 "type": resolved_target_type
                             })
-        else:
+        
+        if not has_column_mappings_target or not target_columns_def:
             # No column mappings - use columns as-is with mapped types
             for col in columns["columns"]:
                 # Use the id field from CoreHub API as the column ID
@@ -1085,8 +1112,16 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         # Process target keys with proper IDs
         target_keys = []
         if custom_config and 'keys' in custom_config:
-            # Check if we have column mappings
-            if custom_config.get('columns'):
+            # Check if we have column mappings (format: [{source: target}]) vs column definitions (format: [{name: ..., type: ...}])
+            has_column_mappings = False
+            if custom_config.get('columns') and len(custom_config['columns']) > 0:
+                first_col = custom_config['columns'][0]
+                # Column mappings are dicts with simple key-value pairs (source: target)
+                # Column definitions have 'name', 'type', etc. fields
+                if isinstance(first_col, dict) and 'name' not in first_col and 'type' not in first_col:
+                    has_column_mappings = True
+            
+            if has_column_mappings:
                 # Use column mappings for keys - map source key names to target key names
                 for col in columns["columns"]:
                     # Use the id field from CoreHub API as the column ID
@@ -1750,10 +1785,18 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
         for i, multi_entity in enumerate(multi_table_entities):
             try:
-                logger.info(f"Creating MultiTable entity {i+1}/{total_multi_tables}: {multi_entity['entities'][0]['entityName']}")
+                entity_name = multi_entity['entities'][0]['entityName']
+                logger.info(f"Creating MultiTable entity {i+1}/{total_multi_tables}: {entity_name}")
 
-                # Log the final tables ordering in payload before sending
-                for agent_entity in multi_entity['entities'][0].get('agentEntities', []):
+                # Log keys for each agent entity before sending
+                for idx, agent_entity in enumerate(multi_entity['entities'][0].get('agentEntities', [])):
+                    agent_type = "source" if idx == 0 else "target"
+                    keys = agent_entity.get('keys', [])
+                    logger.info(f"  {agent_type} keys: {keys}")
+                    if not keys:
+                        logger.warning(f"  WARNING: No keys for {agent_type} in MultiTable {entity_name}")
+                    
+                    # Log the final tables ordering in payload before sending
                     if 'tables' in agent_entity:
                         logger.info(f"Final tables order in payload for {agent_entity.get('entityName')}:")
                         for idx, table in enumerate(agent_entity.get('tables', [])):
@@ -1791,9 +1834,18 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
             logger.info(f"\nProcessing chunk {chunk_start}-{chunk_end} of {total_entities} entities...")
 
-            # Log the final tables ordering in payload before sending
+            # Log keys for each entity before sending
             for entity_payload in chunk_data.get('entities', []):
-                for agent_entity in entity_payload.get('agentEntities', []):
+                entity_name = entity_payload.get('entityName', 'unknown')
+                logger.info(f"Entity: {entity_name}")
+                for idx, agent_entity in enumerate(entity_payload.get('agentEntities', [])):
+                    agent_type = "source" if idx == 0 else "target"
+                    keys = agent_entity.get('keys', [])
+                    logger.info(f"  {agent_type} keys: {keys}")
+                    if not keys:
+                        logger.warning(f"  WARNING: No keys for {agent_type} in {entity_name}")
+                    
+                    # Log the final tables ordering in payload before sending
                     if 'tables' in agent_entity:
                         logger.info(f"Final tables order in payload for {agent_entity.get('entityName')}:")
                         for idx, table in enumerate(agent_entity.get('tables', [])):

@@ -246,9 +246,10 @@ def run_create_entities(
         root_logger.addHandler(handler)
 
     buffer = io.StringIO()
+    result_payload: Dict[str, Any] | None = None
     try:
         with redirect_stdout(buffer):
-            create_entities_main(
+            result_payload = create_entities_main(
                 pipeline_id,
                 source_schema,
                 target_schema,
@@ -277,13 +278,28 @@ def run_create_entities(
             os.environ.pop('CREATE_TABLE_IF_NOT_EXISTS', None)
         set_create_table_if_not_exists(prev_flag_create_tables)
 
+    logs = buffer.getvalue().splitlines()
     if log_callback is not None:
-        for line in buffer.getvalue().splitlines():
+        for line in logs:
             log_callback(line)
-    return {
-        "success": True,
-        "logs": buffer.getvalue().splitlines(),
+
+    result_payload = result_payload or {}
+    success = bool(result_payload.get("success", True))
+    errors = result_payload.get("errors") or []
+    if errors:
+        success = False
+    payload: Dict[str, Any] = {
+        "success": success,
+        "logs": logs,
+        "result": result_payload,
     }
+    if not success:
+        summary_error = result_payload.get("error")
+        if not summary_error and errors:
+            summary_error = "; ".join(errors)
+        if summary_error:
+            payload["error"] = summary_error
+    return payload
 
 
 def run_create_entities_for_tables(
@@ -1455,6 +1471,109 @@ def export_all_pipelines_yaml(
     return zip_buffer.read()
 
 
+def _normalize_agent_type_for_add(agent_type: str) -> str:
+    normalized = str(agent_type or "").strip().lower()
+    if normalized in {"source", "target"}:
+        return normalized
+    raise ValueError(f"Unsupported agentType {agent_type!r}. Expected SOURCE or TARGET")
+
+
+def _add_agent_to_pipeline_via_corehub(
+    *,
+    token: str,
+    pipeline_id: str,
+    agent_type: str,
+    agent_user_tag: str,
+    agent_internal_name: str,
+) -> str:
+    """Create/attach an agent using CoreHub's /agents/add endpoint."""
+
+    normalized_type = _normalize_agent_type_for_add(agent_type)
+    response = fetch_core_hub(
+        f"/pipelines/{pipeline_id}/agents/add",
+        method="GET",
+        token=token,
+        params={
+            "agentType": normalized_type,
+            "agentUserTag": agent_user_tag,
+            "agentInternalName": agent_internal_name,
+        },
+    )
+
+    if not isinstance(response, dict):
+        raise RuntimeError(
+            f"Unexpected response while adding {normalized_type} agent "
+            f"{agent_user_tag!r}/{agent_internal_name!r}: {response}"
+        )
+
+    raw_agent_id = response.get("agentId") or response.get("id")
+    if not raw_agent_id:
+        raise RuntimeError(
+            f"CoreHub did not return an agentId for {normalized_type} agent "
+            f"{agent_user_tag!r}/{agent_internal_name!r}: {response}"
+        )
+
+    agent_id = str(raw_agent_id)
+    logger.info(
+        "Agent created via /agents/add: %s agent %s (id=%s)",
+        normalized_type,
+        agent_user_tag,
+        agent_id,
+    )
+
+    fetch_core_hub(
+        f"/pipelines/{pipeline_id}/agents/{agent_id}",
+        method="PUT",
+        token=token,
+        params={"agentType": normalized_type.upper()},
+    )
+    logger.info(
+        "Successfully attached %s agent %s (id=%s) to pipeline %s",
+        normalized_type,
+        agent_user_tag,
+        agent_id,
+        pipeline_id,
+    )
+    return agent_id
+
+
+def _fetch_agent_credentials(
+    *,
+    token: str,
+    pipeline_id: str,
+    agent: Dict[str, Any],
+) -> tuple[dict, dict]:
+    """Retrieve host/custom credentials for a specific agent, falling back to config."""
+
+    fallback_host = (agent.get("hostCredentials") or {}).copy()
+    fallback_custom = (
+        agent.get("customHostCredentials")
+        or agent.get("hostCredentialsCustomProperties")
+        or {}
+    ).copy()
+
+    agent_id = agent.get("agentId") or agent.get("id")
+    if not agent_id:
+        return fallback_host, fallback_custom
+
+    try:
+        response = fetch_core_hub(
+            f"/pipelines/{pipeline_id}/agents/{agent_id}/config/credentials",
+            token=token,
+        )
+        if isinstance(response, dict):
+            host_creds = response.get("hostCredentials") or fallback_host
+            custom_creds = response.get("customHostCredentials") or fallback_custom
+            return host_creds, custom_creds
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning(
+            "Failed to fetch credentials for agent %s: %s",
+            agent_id,
+            exc,
+        )
+    return fallback_host, fallback_custom
+
+
 def import_pipeline_config_only(
     *,
     token: str,
@@ -1535,38 +1654,25 @@ def import_pipeline_config_only(
         raise RuntimeError("Pipeline creation succeeded but no ID was returned")
     pipeline_id = str(raw_id)
 
-    # Discover unassigned agents so we can bind them to the new pipeline
-    unassigned = fetch_core_hub("/unassigned-agents", token=token)
-    if not isinstance(unassigned, list):
-        raise RuntimeError("Failed to retrieve unassigned agents from Core Hub")
-
-    def _find_matching_agent(agent_type: str, agent_tag: str) -> Dict[str, Any]:
-        for item in unassigned:
-            if not isinstance(item, dict):
-                continue
-            if item.get("agentType") == agent_type and item.get("agentTag") == agent_tag:
-                return item
-        raise RuntimeError(
-            f"No unassigned agent found with agentType={agent_type!r}, agentTag={agent_tag!r}"
-        )
-
     # Bind each configured agent to the pipeline and apply its settings
     for conf_agent in agents_cfg:
         if not isinstance(conf_agent, dict):
             continue
 
-        agent_type = conf_agent.get("agentType")
+        agent_type = conf_agent.get("agentType") or ""
         agent_tag = conf_agent.get("agentTag")
+        agent_user_tag = conf_agent.get("agentUserTag") or agent_tag
+        agent_internal_name = conf_agent.get("agentInternalName") or agent_tag
         if not agent_type or not agent_tag:
             raise RuntimeError("Each agent must declare 'agentType' and 'agentTag'")
 
-        match = _find_matching_agent(agent_type, agent_tag)
-        raw_agent_id = match.get("agentId") or match.get("id")
-        if not raw_agent_id:
-            raise RuntimeError(
-                f"Matched agent for tag={agent_tag!r}, type={agent_type!r} is missing an ID"
-            )
-        agent_id = str(raw_agent_id)
+        agent_id = _add_agent_to_pipeline_via_corehub(
+            token=token,
+            pipeline_id=pipeline_id,
+            agent_type=str(agent_type).upper(),
+            agent_user_tag=str(agent_user_tag),
+            agent_internal_name=str(agent_internal_name),
+        )
 
         # Attach agent to pipeline
         fetch_core_hub(
@@ -1616,6 +1722,13 @@ def duplicate_pipeline(
     clone_entities: bool,
     use_ssl: Optional[bool],
     skip_verify: Optional[bool],
+    source_host_override: Optional[str] = None,
+    target_host_override: Optional[str] = None,
+    source_port_override: Optional[int] = None,
+    target_port_override: Optional[int] = None,
+    override_schemas: bool = False,
+    override_source_schema: Optional[str] = None,
+    override_target_schema: Optional[str] = None,
     cancel_checker: Optional[Callable[[], bool]] = None,
 ) -> Dict[str, Any]:
     """Duplicate a pipeline with new source and target agent tags (keeping same agent types).
@@ -1724,15 +1837,16 @@ def duplicate_pipeline(
     def _convert_agent_payload(
         agent_template: dict,
         new_tag: str,
-        internal_name: str,
         password: str,
         label: str,
         host_override: Optional[str],
         port_override: Optional[int],
+        base_host_credentials: dict,
+        base_custom_credentials: dict,
     ) -> dict:
         if not password:
             raise RuntimeError(f"{label} agent password is required to duplicate the pipeline.")
-        base_host_credentials = (agent_template.get("hostCredentials") or {}).copy()
+        base_host_credentials = (base_host_credentials or {}).copy()
         if host_override:
             logger.info("Overriding %s host to %s", label.lower(), host_override)
             base_host_credentials["host"] = host_override
@@ -1746,9 +1860,7 @@ def duplicate_pipeline(
                 **base_host_credentials,
                 "password": password,
             },
-            "customHostCredentials": agent_template.get("customHostCredentials")
-            or agent_template.get("hostCredentialsCustomProperties")
-            or {},
+            "customHostCredentials": (base_custom_credentials or {}).copy(),
             "specificConfiguration": agent_template.get("specificConfiguration") or {},
         }
         return payload
@@ -1761,6 +1873,11 @@ def duplicate_pipeline(
             "Source",
             source_host_override,
             source_port_override,
+            *_fetch_agent_credentials(
+                token=token,
+                pipeline_id=pipeline_id,
+                agent=source_agent,
+            ),
         ),
         _convert_agent_payload(
             target_agent,
@@ -1769,6 +1886,11 @@ def duplicate_pipeline(
             "Target",
             target_host_override,
             target_port_override,
+            *_fetch_agent_credentials(
+                token=token,
+                pipeline_id=pipeline_id,
+                agent=target_agent,
+            ),
         ),
     ]
 
@@ -1800,6 +1922,7 @@ def duplicate_pipeline(
     logger.info("clone_entities parameter value: %s", clone_entities)
     if clone_entities:
         logger.info("ENTERING clone_entities block - will clone entities and UDFs")
+        detailed_entity_errors: list[str] = []
         try:
             _raise_if_cancelled()
             snapshot_path = _write_temp_yaml(yaml_config)
@@ -1855,8 +1978,16 @@ def duplicate_pipeline(
                     )
                     if not result.get("success"):
                         entity_clone_status = "failed"
-                        error_msg = result.get("error") or "Unknown error during entity creation"
-                        entity_clone_errors.append(f"{source_schema}->{target_schema}: {error_msg}")
+                        result_data = result.get("result") or {}
+                        errors = []
+                        if isinstance(result_data, dict):
+                            errors = result_data.get("errors") or []
+                        if not errors:
+                            errors = result.get("errors") or []
+                        error_msg = result.get("error") or "; ".join(errors) if errors else "Unknown error during entity creation"
+                        formatted = f"{source_schema}->{target_schema}: {error_msg}"
+                        entity_clone_errors.append(formatted)
+                        detailed_entity_errors.append(formatted)
                         logger.warning("Entity creation failed for %s -> %s: %s", source_schema, target_schema, error_msg)
                 
                 # After ALL entities are created, discover and compile UDFs
@@ -2093,6 +2224,16 @@ def duplicate_pipeline(
 
     logger.info("Successfully duplicated pipeline %s to %s (%s)", pipeline_id, new_pipeline_name, new_pipeline_id)
 
+    # Raise exception if entity cloning failed
+    if entity_clone_status == "failed":
+        error_detail = "Entity cloning failed"
+        if entity_clone_errors:
+            error_detail = f"Entity cloning failed: {'; '.join(entity_clone_errors)}"
+        elif detailed_entity_errors:
+            error_detail = f"Entity cloning failed: {'; '.join(detailed_entity_errors)}"
+        logger.error(error_detail)
+        raise Exception(error_detail)
+
     return {
         "originalPipelineId": pipeline_id,
         "newPipelineId": new_pipeline_id,
@@ -2105,6 +2246,7 @@ def duplicate_pipeline(
         "entityCloneErrors": entity_clone_errors or None,
         "udfCloneStatus": udf_clone_status,
         "udfCloneErrors": udf_clone_errors or None,
+        "entityCloneDetailedErrors": detailed_entity_errors or None,
     }
 
 

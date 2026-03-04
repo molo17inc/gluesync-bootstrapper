@@ -145,14 +145,24 @@ def fetch_core_hub(path, method='GET', token=None, body=None, params=None, heade
 
     except Exception as e:
         logger.error(f"API request failed: {str(e)}")
+        error_payload = None
         if hasattr(e, 'response') and e.response is not None:
             try:
-                error_body = e.response.json()
-                logger.error(f"Error response: {json.dumps(error_body, indent=2)}")
-            except:
-                logger.error(f"Error response: {e.response.text}")
+                error_payload = e.response.json()
+                logger.error(f"Error response: {json.dumps(error_payload, indent=2)}")
+            except Exception:
+                error_payload = e.response.text
+                logger.error(f"Error response: {error_payload}")
         logger.debug("=" * 80 + "\n")
-        raise
+
+        message = f"CoreHub request {method.upper()} {path} failed: {e}"
+        if error_payload:
+            if isinstance(error_payload, (dict, list)):
+                message += f" | Response: {json.dumps(error_payload, ensure_ascii=False)}"
+            else:
+                message += f" | Response: {error_payload}"
+
+        raise RuntimeError(message) from e
 
 
 def generate_short_guid():
