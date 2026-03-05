@@ -1682,9 +1682,14 @@ def import_pipeline_config_only(
             params={"agentType": agent_type.upper()}  # agentType is a query parameter, not body
         )
 
-        # Apply credentials
-        host_credentials = conf_agent.get("hostCredentials") or {}
+        # Apply credentials (extract certificate info before sending)
+        host_credentials = dict(conf_agent.get("hostCredentials") or {})
         custom_host_credentials = conf_agent.get("customHostCredentials") or {}
+        
+        # Extract certificate path and type (will be handled separately)
+        certificate_path = host_credentials.pop("certificatePath", None)
+        certificate_type = host_credentials.pop("certificateType", None)
+        
         fetch_core_hub(
             f"/pipelines/{pipeline_id}/agents/{agent_id}/config/credentials",
             method="PUT",
@@ -1694,6 +1699,12 @@ def import_pipeline_config_only(
                 "customHostCredentials": custom_host_credentials,
             },
         )
+        
+        # Store certificate info for later upload (after ZIP extraction)
+        if certificate_path and certificate_type:
+            conf_agent["_certificate_path"] = certificate_path
+            conf_agent["_certificate_type"] = certificate_type
+            conf_agent["_agent_id"] = agent_id
 
         # Apply specific configuration if present
         specific_conf = conf_agent.get("specificConfiguration") or {}
@@ -2461,3 +2472,45 @@ def validate_token(token: str) -> bool:
     except Exception:  # pylint: disable=broad-except
         logger.exception("Token validation failed")
         return False
+
+
+def upload_agent_certificate(
+    *,
+    token: str,
+    pipeline_id: str,
+    agent_id: str,
+    certificate_type: str,
+    certificate_data: bytes,
+    certificate_ext: str,
+) -> dict:
+    """Upload a certificate file for the specified agent.
+    
+    Args:
+        token: Authentication token
+        pipeline_id: Pipeline ID
+        agent_id: Agent ID
+        certificate_type: Type of certificate (e.g., 'truststore', 'keystore', 'certificate')
+        certificate_data: Certificate file content as bytes
+        certificate_ext: Certificate file extension (e.g., 'crt', 'pem', 'jks', 'json')
+    
+    Returns:
+        Response from CoreHub API
+    """
+    logger.info(
+        "Uploading %s certificate for agent %s (%d bytes, ext: %s)",
+        certificate_type,
+        agent_id,
+        len(certificate_data),
+        certificate_ext,
+    )
+    
+    response = fetch_core_hub(
+        f"/pipelines/{pipeline_id}/agents/{agent_id}/config/certificate/{certificate_type}",
+        method='PUT',
+        token=token,
+        body=certificate_data,
+        headers={'Certificate-Ext': certificate_ext},
+    )
+    
+    logger.debug(f"Certificate upload response: {response}")
+    return response

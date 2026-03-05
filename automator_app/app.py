@@ -282,6 +282,15 @@ class PipelineAgentsResponse(BaseModel):
         allow_population_by_field_name = True
 
 
+class UploadCertificateRequest(BaseModel):
+    pipeline_id: str = Field(..., alias="pipelineId")
+    agent_id: str = Field(..., alias="agentId")
+    certificate_type: str = Field(..., alias="certificateType")
+
+    class Config:
+        allow_population_by_field_name = True
+
+
 def _ensure_static_assets() -> None:
     static_directory = _static_dir()
     if not static_directory.exists():
@@ -1216,6 +1225,62 @@ def create_app() -> FastAPI:
                     new_pipeline_name = result.get("pipelineName")
                     created_pipelines.append(result)
 
+                    # Upload certificates for agents if specified
+                    for agent_cfg in agents_for_pipeline:
+                        cert_path = agent_cfg.get("_certificate_path")
+                        cert_type = agent_cfg.get("_certificate_type")
+                        agent_id = agent_cfg.get("_agent_id")
+                        
+                        if cert_path and cert_type and agent_id:
+                            try:
+                                # Extract certificate from ZIP
+                                with zipfile.ZipFile(io.BytesIO(contents)) as zf_cert:
+                                    # Try to find the certificate file in the ZIP
+                                    # Support both absolute and relative paths
+                                    cert_filename = cert_path.lstrip("./")
+                                    cert_data = None
+                                    
+                                    # Try exact match first
+                                    if cert_filename in zf_cert.namelist():
+                                        cert_data = zf_cert.read(cert_filename)
+                                    else:
+                                        # Try case-insensitive search
+                                        for zip_name in zf_cert.namelist():
+                                            if zip_name.lower() == cert_filename.lower():
+                                                cert_data = zf_cert.read(zip_name)
+                                                break
+                                    
+                                    if not cert_data:
+                                        errors.append(
+                                            f"{name}: Certificate file '{cert_path}' not found in ZIP for agent {agent_id}"
+                                        )
+                                        continue
+                                    
+                                    # Determine certificate extension
+                                    cert_ext = Path(cert_filename).suffix.lstrip('.').lower() or 'crt'
+                                    
+                                    # Upload certificate to CoreHub
+                                    corehub.upload_agent_certificate(
+                                        token=state.token,
+                                        pipeline_id=new_pipeline_id,
+                                        agent_id=agent_id,
+                                        certificate_type=cert_type,
+                                        certificate_data=cert_data,
+                                        certificate_ext=cert_ext,
+                                    )
+                                    logger.info(
+                                        f"Uploaded certificate for agent {agent_id} in pipeline {new_pipeline_id}"
+                                    )
+                            except Exception as cert_exc:  # pylint: disable=broad-except
+                                logger.exception(
+                                    "Failed to upload certificate for agent %s in pipeline %s",
+                                    agent_id,
+                                    new_pipeline_id,
+                                )
+                                errors.append(
+                                    f"{name}: Failed to upload certificate for agent {agent_id}: {cert_exc}"
+                                )
+
                     # Write YAML to a temporary file for schema extraction and entity creation
                     try:
                         temp_dir = Path(tempfile.gettempdir()) / "gluesync_automator_restore"
@@ -1686,6 +1751,59 @@ def create_app() -> FastAPI:
 
         asyncio.create_task(_execute_run(run_status.run_id, request))
         return ApiMessage(message="Entity creation started")
+
+    @app.post("/api/agent/certificate/upload", response_model=ApiMessage)
+    async def upload_certificate(
+        pipeline_id: str = Form(..., alias="pipelineId"),
+        agent_id: str = Form(..., alias="agentId"),
+        certificate_type: str = Form(..., alias="certificateType"),
+        file: UploadFile = File(...)
+    ) -> ApiMessage:
+        """Upload a certificate file for an agent.
+        
+        Args:
+            pipeline_id: Pipeline ID
+            agent_id: Agent ID
+            certificate_type: Type of certificate (truststore, keystore, certificate)
+            file: Certificate file to upload
+        
+        Returns:
+            ApiMessage with success status
+        """
+        if not state.token or not state.base_url:
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="No file provided")
+
+        # Extract file extension
+        certificate_ext = Path(file.filename).suffix.lstrip('.').lower() or 'crt'
+        
+        # Read file content
+        certificate_data = await file.read()
+        if not certificate_data:
+            raise HTTPException(status_code=400, detail="Certificate file is empty")
+
+        try:
+            corehub.upload_agent_certificate(
+                token=state.token,
+                pipeline_id=pipeline_id,
+                agent_id=agent_id,
+                certificate_type=certificate_type,
+                certificate_data=certificate_data,
+                certificate_ext=certificate_ext,
+            )
+            
+            return ApiMessage(
+                success=True,
+                message=f"Certificate uploaded successfully for agent {agent_id}"
+            )
+        except Exception as e:
+            logger.error(f"Failed to upload certificate: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to upload certificate: {str(e)}"
+            ) from e
 
     return app
 
