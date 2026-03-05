@@ -883,12 +883,11 @@ def export_pipeline_yaml(
     pipeline_id: str,
     use_ssl: Optional[bool],
     skip_verify: Optional[bool],
-) -> str | List[Tuple[str, str]]:
+) -> str:
     """Export a single pipeline configuration to YAML text for download.
     
-    Returns:
-        - Single YAML string if no duplicate tables detected
-        - List of (filename, yaml_content) tuples if duplicate tables require multiple files
+    Duplicate source tables are handled by creating unique keys (e.g., table@@2, table@@3)
+    within the same YAML file to avoid key conflicts.
     """
 
     configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
@@ -913,41 +912,22 @@ def export_pipeline_yaml(
     jobs = fetch_pipeline_jobs(pipeline_id)
     attach_schedules_from_jobs(jobs, entities_by_id, schemas, group_id_to_name)
 
-    # Check if we need to split into multiple files due to duplicate tables
-    from export_template_from_corehub import split_schemas_with_duplicates
-    schema_groups = split_schemas_with_duplicates(schemas)
-    
-    if len(schema_groups) == 1:
-        # No duplicates - return single YAML
-        yaml_data = build_yaml_structure(schema_groups[0], groups_by_name)
-        buffer = io.StringIO()
-        yaml.safe_dump(
-            yaml_data or {},
-            buffer,
-            sort_keys=False,
-            allow_unicode=True,
-        )
-        return buffer.getvalue()
-    else:
-        # Duplicates detected - return multiple YAML files
-        logger.warning(
-            f"Duplicate source tables detected in pipeline {pipeline_id}. "
-            f"Generating {len(schema_groups)} separate YAML files."
-        )
-        result_files: List[Tuple[str, str]] = []
-        for idx, schema_group in enumerate(schema_groups, start=1):
-            yaml_data = build_yaml_structure(schema_group, groups_by_name)
-            buffer = io.StringIO()
-            yaml.safe_dump(
-                yaml_data or {},
-                buffer,
-                sort_keys=False,
-                allow_unicode=True,
-            )
-            filename = f"backup_part_{idx}.yaml"
-            result_files.append((filename, buffer.getvalue()))
-        
-        return result_files
+    # Clean up internal metadata before export
+    for schema_cfg in schemas.values():
+        # Remove duplicate tracking metadata (internal use only)
+        schema_cfg.pop("has_duplicates", None)
+        # Note: sourceTableName is preserved as it's needed during import
+
+    yaml_data = build_yaml_structure(schemas, groups_by_name)
+
+    buffer = io.StringIO()
+    yaml.safe_dump(
+        yaml_data or {},
+        buffer,
+        sort_keys=False,
+        allow_unicode=True,
+    )
+    return buffer.getvalue()
 
 
 def export_pipeline_full_backup(
@@ -990,7 +970,7 @@ def export_pipeline_full_backup(
         pipelines_meta.append(pipeline_meta)
 
         # Export pipeline YAML configuration
-        yaml_result = export_pipeline_yaml(
+        yaml_content = export_pipeline_yaml(
             token=token,
             base_url=base_url,
             pipeline_id=pipeline_id,
@@ -1002,24 +982,9 @@ def export_pipeline_full_backup(
         if not safe_name:
             safe_name = pipeline_id
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        # Handle both single YAML and multiple YAML files
-        if isinstance(yaml_result, str):
-            # Single YAML file
-            filename = f"{root_prefix}backup_{safe_name}_{pipeline_id}_{timestamp}.yaml"
-            zip_file.writestr(filename, yaml_result)
-            logger.info("Exported pipeline %s (%s) YAML", pipeline_name, pipeline_id)
-        else:
-            # Multiple YAML files due to duplicate tables
-            logger.info(
-                "Exported pipeline %s (%s) as %d separate YAML files due to duplicate source tables",
-                pipeline_name,
-                pipeline_id,
-                len(yaml_result)
-            )
-            for part_filename, yaml_content in yaml_result:
-                filename = f"{root_prefix}backup_{safe_name}_{pipeline_id}_{timestamp}_{part_filename}"
-                zip_file.writestr(filename, yaml_content)
+        filename = f"{root_prefix}backup_{safe_name}_{pipeline_id}_{timestamp}.yaml"
+        zip_file.writestr(filename, yaml_content)
+        logger.info("Exported pipeline %s (%s) YAML", pipeline_name, pipeline_id)
 
         # Discover mapping functions (UDFs) referenced by this pipeline
         try:

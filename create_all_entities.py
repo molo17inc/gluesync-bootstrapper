@@ -529,7 +529,19 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
         columns = get_table_columns(token, pipeline_id, source_agent_id, source_schema, table_name)
 
+        # Find custom config - handle both direct key match and sourceTableName match
         custom_config = custom_tables.get(table_name, {})
+        yaml_table_key = table_name  # Track which YAML key we're using
+        
+        # If no direct match, check if any custom config has sourceTableName matching this table
+        if not custom_config:
+            for key, config in custom_tables.items():
+                if isinstance(config, dict) and config.get('sourceTableName') == table_name:
+                    custom_config = config
+                    yaml_table_key = key
+                    logger.info(f"Found custom config for table {table_name} under YAML key '{key}' (duplicate table)")
+                    break
+        
         if custom_config is None:
             custom_config = {}
             logger.warning(f"Warning: Custom config for table {table_name} is present but empty in YAML. Converting to empty dict.")
@@ -1325,21 +1337,26 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
         # Process each table in the chain (in YAML order)
         for table_key, table_data in tables_list:
-            source_table_id = resolve_table_id(source_schema, table_key, source_tables_lookup, "source")
-            # Get columns for this table
-            columns = get_table_columns(token, pipeline_id, source_agent_id, source_schema, table_key)
+            # Use sourceTableName if present (for duplicate tables with unique YAML keys)
+            # Otherwise use table_key as the actual table name
+            actual_table_name = table_data.get('sourceTableName', table_key) if table_data else table_key
+            
+            source_table_id = resolve_table_id(source_schema, actual_table_name, source_tables_lookup, "source")
+            # Get columns for this table using the actual table name
+            columns = get_table_columns(token, pipeline_id, source_agent_id, source_schema, actual_table_name)
 
-            # Add table to the list
+            # Add table to the list (use actual table name, not YAML key)
             table_obj = {
                 "id": str(source_table_id),
-                "name": table_key,
+                "name": actual_table_name,
                 "schema": source_schema
             }
             multi_tables.append(table_obj)
             chain_source_ids[table_key] = source_table_id
 
             # Add table to tables_properties with optional whereClause
-            source_table_key = f"{source_schema}.{table_key}"
+            # Use actual table name for the key
+            source_table_key = f"{source_schema}.{actual_table_name}"
             table_properties = {}
             if table_data and 'whereClause' in table_data:
                 where_clause = table_data['whereClause']
@@ -1481,8 +1498,11 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
         # Process each table for the target (in YAML order)
         for table_key, table_data in tables_list:
+            # Use sourceTableName if present (for duplicate tables with unique YAML keys)
+            actual_table_name = table_data.get('sourceTableName', table_key) if table_data else table_key
+            
             target_table_id = resolve_table_id(yaml_target_schema, table_key, target_tables_lookup, "target")
-            # Add table to the list
+            # Add table to the list (use table_key for target, as it may have custom target name)
             target_table_obj = {
                 "id": str(target_table_id),
                 "name": table_key,
@@ -1494,8 +1514,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             # Add table to tables_properties
             target_tables_properties[f"{target_schema}.{table_key}"] = {}
 
-            # Get columns for this table
-            columns = get_table_columns(token, pipeline_id, source_agent_id, source_schema, table_key)
+            # Get columns for this table using actual source table name
+            columns = get_table_columns(token, pipeline_id, source_agent_id, source_schema, actual_table_name)
 
             # Process columns for target
             target_table_columns = []
@@ -1667,17 +1687,20 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         
         # Create table mapping matrix for MultiTable entities
         columns_mapping_matrix = []
-        for table_key, _ in tables_list:
+        for table_key, table_data in tables_list:
+            # Use sourceTableName if present (for duplicate tables with unique YAML keys)
+            actual_table_name = table_data.get('sourceTableName', table_key) if table_data else table_key
+            
             source_table_id = chain_source_ids.get(table_key) or resolve_table_id(
-                source_schema, table_key, source_tables_lookup, "source"
+                source_schema, actual_table_name, source_tables_lookup, "source"
             )
             target_table_id = chain_target_ids.get(table_key) or resolve_table_id(
                 yaml_target_schema, table_key, target_tables_lookup, "target"
             )
             logger.info(f"Table mapping for {table_key}: source_id={source_table_id}, target_id={target_table_id}")
 
-            # Get columns for this table to create mappings for each column
-            columns = get_table_columns(token, pipeline_id, source_agent_id, source_schema, table_key)
+            # Get columns for this table to create mappings for each column (use actual table name)
+            columns = get_table_columns(token, pipeline_id, source_agent_id, source_schema, actual_table_name)
             if columns and 'columns' in columns:
                 for col in columns['columns']:
                     # Use the id field from CoreHub API as the column ID
