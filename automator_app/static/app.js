@@ -1719,7 +1719,7 @@ function bindEvents() {
       ui.setConfigMessage('Importing full backup…');
       logActivity('Config', `Importing full backup ${file.name}…`);
       try {
-        const result = await api.importAll(file, autoDeployAgents);
+        const result = await api.importAll(file, true);
         
         // Display logs if present
         if (result.logs && Array.isArray(result.logs)) {
