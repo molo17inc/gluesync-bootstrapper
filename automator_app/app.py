@@ -758,13 +758,17 @@ def create_app() -> FastAPI:
 
     @app.get("/api/export/pipeline/{pipeline_id}")
     async def export_pipeline(pipeline_id: str):
-        """Export only the YAML metadata for a single pipeline."""
+        """Export only the YAML metadata for a single pipeline.
+        
+        Returns a single YAML file if no duplicate tables are detected,
+        or a ZIP file containing multiple YAML files if duplicates are found.
+        """
 
         if not state.token or not state.base_url:
             raise HTTPException(status_code=401, detail="Authentication required")
 
         try:
-            yaml_text = corehub.export_pipeline_yaml(
+            yaml_result = corehub.export_pipeline_yaml(
                 token=state.token,
                 base_url=state.base_url,
                 pipeline_id=pipeline_id,
@@ -776,14 +780,33 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"backup_{pipeline_id}_{timestamp}.yaml"
-        return StreamingResponse(
-            io.BytesIO(yaml_text.encode("utf-8")),
-            media_type="application/x-yaml",
-            headers={
-                "Content-Disposition": f'attachment; filename="{filename}"',
-            },
-        )
+        
+        if isinstance(yaml_result, str):
+            # Single YAML file
+            filename = f"backup_{pipeline_id}_{timestamp}.yaml"
+            return StreamingResponse(
+                io.BytesIO(yaml_result.encode("utf-8")),
+                media_type="application/x-yaml",
+                headers={
+                    "Content-Disposition": f'attachment; filename="{filename}"',
+                },
+            )
+        else:
+            # Multiple YAML files - create a ZIP
+            zip_buffer = io.BytesIO()
+            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+                for part_filename, yaml_content in yaml_result:
+                    zf.writestr(part_filename, yaml_content)
+            
+            zip_buffer.seek(0)
+            filename = f"backup_{pipeline_id}_{timestamp}.zip"
+            return StreamingResponse(
+                zip_buffer,
+                media_type="application/zip",
+                headers={
+                    "Content-Disposition": f'attachment; filename="{filename}"',
+                },
+            )
 
     @app.get("/api/export/pipeline/{pipeline_id}/full")
     async def export_pipeline_full_backup(pipeline_id: str):

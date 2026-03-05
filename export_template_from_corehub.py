@@ -377,14 +377,42 @@ def _process_single_entity(
     schema_cfg["tables"]["whitelist"].add(source_table_name)
 
     custom_tables: Dict[str, Any] = schema_cfg["tables"]["custom"]
-    table_cfg = custom_tables.get(source_table_name)
-    if not table_cfg:
-        table_cfg = {}
-        custom_tables[source_table_name] = table_cfg
+    
+    # Check if this table already exists with different configuration
+    # If so, create a unique key by appending a suffix
+    table_key = source_table_name
+    existing_table_cfg = custom_tables.get(table_key)
+    
+    if existing_table_cfg:
+        # Table already exists - check if it's a duplicate with different config
+        existing_entity_name = existing_table_cfg.get("entityName", "")
+        if existing_entity_name and existing_entity_name != entity_name:
+            # This is a duplicate table with different entity - create unique key
+            suffix_num = 2
+            while f"{source_table_name}_{suffix_num}" in custom_tables:
+                suffix_num += 1
+            table_key = f"{source_table_name}_{suffix_num}"
+            logger.warning(
+                f"Duplicate source table detected: {source_schema}.{source_table_name} "
+                f"used in multiple entities ({existing_entity_name}, {entity_name}). "
+                f"Creating separate entry as '{table_key}'"
+            )
+            # Mark schema as having duplicates for later splitting
+            if "has_duplicates" not in schema_cfg:
+                schema_cfg["has_duplicates"] = []
+            schema_cfg["has_duplicates"].append({
+                "original_table": source_table_name,
+                "unique_key": table_key,
+                "entity_name": entity_name
+            })
+    
+    table_cfg = {}
+    custom_tables[table_key] = table_cfg
 
     # Table name (target name / collection)
     table_cfg["name"] = target_table_name
     table_cfg["entityName"] = entity_name
+    table_cfg["_original_table_name"] = source_table_name  # Store original name for reference
 
     # Group mapping
     group_id = ent.get("groupId")
@@ -828,6 +856,84 @@ def attach_schedules_from_jobs(
         if task_type.startswith("pipeline_"):
             primary_schema_cfg.setdefault("schedules", []).append(sched.copy())
             continue
+
+
+def split_schemas_with_duplicates(
+    schemas: Dict[str, Dict[str, Any]],
+) -> List[Dict[str, Dict[str, Any]]]:
+    """Split schemas containing duplicate tables into separate schema groups.
+    
+    When a source table is used in multiple entities, we need to create separate
+    YAML files to avoid key conflicts in the YAML structure.
+    
+    Returns:
+        List of schema dictionaries, each representing a separate YAML file to generate.
+    """
+    result_groups: List[Dict[str, Dict[str, Any]]] = []
+    
+    for schema_name, schema_cfg in schemas.items():
+        has_duplicates = schema_cfg.get("has_duplicates", [])
+        
+        if not has_duplicates:
+            # No duplicates - add to first group or create new one
+            if not result_groups:
+                result_groups.append({})
+            result_groups[0][schema_name] = schema_cfg
+            continue
+        
+        # Schema has duplicates - need to split into multiple files
+        custom_tables = schema_cfg["tables"]["custom"]
+        
+        # Group tables by their original name
+        tables_by_original: Dict[str, List[str]] = {}
+        for table_key, table_cfg in custom_tables.items():
+            original_name = table_cfg.get("_original_table_name", table_key)
+            if original_name not in tables_by_original:
+                tables_by_original[original_name] = []
+            tables_by_original[original_name].append(table_key)
+        
+        # Create separate schema configs for each duplicate
+        for original_table, table_keys in tables_by_original.items():
+            if len(table_keys) == 1:
+                # Not a duplicate - add to first group
+                if not result_groups:
+                    result_groups.append({})
+                if schema_name not in result_groups[0]:
+                    result_groups[0][schema_name] = init_schema_cfg(schema_cfg.get("target", schema_name))
+                    result_groups[0][schema_name]["sourceType"] = schema_cfg.get("sourceType")
+                    result_groups[0][schema_name]["targetType"] = schema_cfg.get("targetType")
+                
+                table_key = table_keys[0]
+                result_groups[0][schema_name]["tables"]["custom"][table_key] = custom_tables[table_key]
+                result_groups[0][schema_name]["tables"]["whitelist"].add(original_table)
+            else:
+                # Multiple entries for same table - create separate file for each
+                for table_key in table_keys:
+                    # Create new schema group for this duplicate
+                    new_group = {}
+                    new_schema_cfg = init_schema_cfg(schema_cfg.get("target", schema_name))
+                    new_schema_cfg["sourceType"] = schema_cfg.get("sourceType")
+                    new_schema_cfg["targetType"] = schema_cfg.get("targetType")
+                    
+                    # Add only this table (using original name as key)
+                    table_cfg = custom_tables[table_key].copy()
+                    # Remove internal metadata
+                    table_cfg.pop("_original_table_name", None)
+                    new_schema_cfg["tables"]["custom"][original_table] = table_cfg
+                    new_schema_cfg["tables"]["whitelist"].add(original_table)
+                    
+                    # Copy schedules if present
+                    if schema_cfg.get("schedules"):
+                        new_schema_cfg["schedules"] = schema_cfg["schedules"]
+                    if schema_cfg.get("group_schedules"):
+                        new_schema_cfg["group_schedules"] = schema_cfg["group_schedules"]
+                    if schema_cfg.get("customProperties"):
+                        new_schema_cfg["customProperties"] = schema_cfg["customProperties"]
+                    
+                    new_group[schema_name] = new_schema_cfg
+                    result_groups.append(new_group)
+    
+    return result_groups if result_groups else [schemas]
 
 
 def build_yaml_structure(
