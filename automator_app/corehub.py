@@ -1692,7 +1692,7 @@ def import_pipeline_config_only(
             params={"agentType": agent_type.upper()}  # agentType is a query parameter, not body
         )
 
-        # Apply credentials (extract certificate info before sending)
+        # Extract certificate info before processing credentials
         host_credentials = dict(conf_agent.get("hostCredentials") or {})
         custom_host_credentials = conf_agent.get("customHostCredentials") or {}
         
@@ -1700,21 +1700,30 @@ def import_pipeline_config_only(
         certificate_path = host_credentials.pop("certificatePath", None)
         certificate_type = host_credentials.pop("certificateType", None)
         
-        fetch_core_hub(
-            f"/pipelines/{pipeline_id}/agents/{agent_id}/config/credentials",
-            method="PUT",
-            token=token,
-            body={
-                "hostCredentials": host_credentials,
-                "customHostCredentials": custom_host_credentials,
-            },
-        )
-        
-        # Store certificate info for later upload (after ZIP extraction)
+        # Store certificate info and credentials for later processing
+        # IMPORTANT: If certificate is present, credentials MUST be sent AFTER certificate upload
+        # Order: 1. Add agent, 2. Upload certificate, 3. Send credentials
         if certificate_path and certificate_type:
+            logger.info(
+                f"Agent {agent_id} has certificate - deferring credential upload until after certificate"
+            )
             conf_agent["_certificate_path"] = certificate_path
             conf_agent["_certificate_type"] = certificate_type
             conf_agent["_agent_id"] = agent_id
+            # Store credentials to send later (after certificate upload)
+            conf_agent["_host_credentials"] = host_credentials
+            conf_agent["_custom_host_credentials"] = custom_host_credentials
+        else:
+            # No certificate - send credentials immediately
+            fetch_core_hub(
+                f"/pipelines/{pipeline_id}/agents/{agent_id}/config/credentials",
+                method="PUT",
+                token=token,
+                body={
+                    "hostCredentials": host_credentials,
+                    "customHostCredentials": custom_host_credentials,
+                },
+            )
 
         # Apply specific configuration if present
         specific_conf = conf_agent.get("specificConfiguration") or {}
@@ -2494,7 +2503,7 @@ def upload_agent_certificate(
     certificate_ext: str,
 ) -> dict:
     """Upload a certificate file for the specified agent.
-    
+
     Args:
         token: Authentication token
         pipeline_id: Pipeline ID
@@ -2502,25 +2511,38 @@ def upload_agent_certificate(
         certificate_type: Type of certificate (e.g., 'truststore', 'keystore', 'certificate')
         certificate_data: Certificate file content as bytes
         certificate_ext: Certificate file extension (e.g., 'crt', 'pem', 'jks', 'json')
-    
+
     Returns:
         Response from CoreHub API
     """
     logger.info(
-        "Uploading %s certificate for agent %s (%d bytes, ext: %s)",
+        "Uploading %s certificate for agent %s in pipeline %s (%d bytes, ext: %s)",
         certificate_type,
         agent_id,
+        pipeline_id,
         len(certificate_data),
         certificate_ext,
     )
     
-    response = fetch_core_hub(
-        f"/pipelines/{pipeline_id}/agents/{agent_id}/config/certificate/{certificate_type}",
-        method='PUT',
-        token=token,
-        body=certificate_data,
-        headers={'Certificate-Ext': certificate_ext},
-    )
-    
-    logger.debug(f"Certificate upload response: {response}")
-    return response
+    endpoint = f"/pipelines/{pipeline_id}/agents/{agent_id}/config/certificate/{certificate_type}"
+    logger.debug(f"Certificate upload endpoint: {endpoint}")
+    logger.debug(f"Certificate-Ext header: {certificate_ext}")
+
+    try:
+        response = fetch_core_hub(
+            endpoint,
+            method='PUT',
+            token=token,
+            body=certificate_data,
+            headers={'Certificate-Ext': certificate_ext},
+        )
+        
+        logger.info(f"Certificate upload successful for agent {agent_id}")
+        logger.debug(f"Certificate upload response: {response}")
+        return response
+    except Exception as e:
+        logger.error(
+            f"Certificate upload failed for agent {agent_id} in pipeline {pipeline_id}: {e}",
+            exc_info=True
+        )
+        raise

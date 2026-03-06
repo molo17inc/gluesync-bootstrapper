@@ -1230,38 +1230,50 @@ def create_app() -> FastAPI:
                     created_pipelines.append(result)
 
                     # Upload certificates for agents if specified
+                    logger.debug(f"Checking {len(agents_for_pipeline)} agents for certificate uploads")
                     for agent_cfg in agents_for_pipeline:
                         cert_path = agent_cfg.get("_certificate_path")
                         cert_type = agent_cfg.get("_certificate_type")
                         agent_id = agent_cfg.get("_agent_id")
                         
                         if cert_path and cert_type and agent_id:
+                            logger.info(
+                                f"Processing certificate upload for agent {agent_id}: "
+                                f"path={cert_path}, type={cert_type}"
+                            )
                             try:
                                 # Extract certificate from ZIP
                                 with zipfile.ZipFile(io.BytesIO(contents)) as zf_cert:
                                     # Try to find the certificate file in the ZIP
                                     # Support both absolute and relative paths
                                     cert_filename = cert_path.lstrip("./")
+                                    logger.debug(f"Looking for certificate file: {cert_filename}")
+                                    logger.debug(f"Available files in ZIP: {zf_cert.namelist()}")
                                     cert_data = None
                                     
                                     # Try exact match first
                                     if cert_filename in zf_cert.namelist():
                                         cert_data = zf_cert.read(cert_filename)
+                                        logger.debug(f"Found certificate via exact match: {cert_filename}")
                                     else:
                                         # Try case-insensitive search
                                         for zip_name in zf_cert.namelist():
                                             if zip_name.lower() == cert_filename.lower():
                                                 cert_data = zf_cert.read(zip_name)
+                                                logger.debug(f"Found certificate via case-insensitive match: {zip_name}")
                                                 break
                                     
                                     if not cert_data:
-                                        errors.append(
-                                            f"{name}: Certificate file '{cert_path}' not found in ZIP for agent {agent_id}"
-                                        )
+                                        error_msg = f"{name}: Certificate file '{cert_path}' not found in ZIP for agent {agent_id}"
+                                        logger.error(error_msg)
+                                        errors.append(error_msg)
                                         continue
                                     
                                     # Determine certificate extension
                                     cert_ext = Path(cert_filename).suffix.lstrip('.').lower() or 'crt'
+                                    logger.debug(
+                                        f"Certificate extracted: {len(cert_data)} bytes, extension: {cert_ext}"
+                                    )
                                     
                                     # Upload certificate to CoreHub
                                     corehub.upload_agent_certificate(
@@ -1273,8 +1285,29 @@ def create_app() -> FastAPI:
                                         certificate_ext=cert_ext,
                                     )
                                     logger.info(
-                                        f"Uploaded certificate for agent {agent_id} in pipeline {new_pipeline_id}"
+                                        f"Successfully uploaded {cert_type} certificate ({len(cert_data)} bytes) "
+                                        f"for agent {agent_id} in pipeline {new_pipeline_id}"
                                     )
+                                    
+                                    # Now send credentials AFTER certificate upload
+                                    host_creds = agent_cfg.get("_host_credentials")
+                                    custom_host_creds = agent_cfg.get("_custom_host_credentials")
+                                    if host_creds is not None or custom_host_creds is not None:
+                                        logger.info(
+                                            f"Sending credentials for agent {agent_id} after certificate upload"
+                                        )
+                                        corehub.fetch_core_hub(
+                                            f"/pipelines/{new_pipeline_id}/agents/{agent_id}/config/credentials",
+                                            method="PUT",
+                                            token=state.token,
+                                            body={
+                                                "hostCredentials": host_creds or {},
+                                                "customHostCredentials": custom_host_creds or {},
+                                            },
+                                        )
+                                        logger.info(
+                                            f"Successfully sent credentials for agent {agent_id}"
+                                        )
                             except Exception as cert_exc:  # pylint: disable=broad-except
                                 logger.exception(
                                     "Failed to upload certificate for agent %s in pipeline %s",
