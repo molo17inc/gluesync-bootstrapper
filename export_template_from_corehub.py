@@ -444,9 +444,11 @@ def _process_single_entity(
             table_cfg["whereClause"] = str(where_clause)
             logger.debug(f"Exported whereClause for {source_table_name}: {where_clause}")
 
-    # Columns: Export full metadata including id and ordinalPosition
-    column_payload = source_ae.get("columns", []) or []
-    if column_payload:
+    # Columns: Export source->target column mappings
+    source_columns = source_ae.get("columns", []) or []
+    target_columns = target_ae.get("columns", []) or []
+    
+    if source_columns and target_columns:
         def _column_sort_key(col: Dict[str, Any], idx: int) -> int:
             raw_id = col.get("ordinalPosition") or col.get("id")
             try:
@@ -454,37 +456,103 @@ def _process_single_entity(
             except (TypeError, ValueError):
                 return idx
 
-        ordered_columns = sorted(
-            enumerate(column_payload, start=1),
+        # Sort both source and target columns by ordinalPosition/id
+        ordered_source = sorted(
+            enumerate(source_columns, start=1),
+            key=lambda pair: _column_sort_key(pair[1], pair[0]),
+        )
+        ordered_target = sorted(
+            enumerate(target_columns, start=1),
             key=lambda pair: _column_sort_key(pair[1], pair[0]),
         )
         
-        # Export full column metadata with id and ordinalPosition
-        column_metadata: List[Dict[str, Any]] = []
-        for _, col in ordered_columns:
-            name = col.get("name")
-            if not name:
+        # Build mapping by matching column IDs from columnsMappingMatrix
+        columns_mapping_matrix = ent.get("columnsMappingMatrix", []) or []
+        if not columns_mapping_matrix:
+            columns_mapping_matrix = (
+                target_ae.get("entityType", {}).get("columnsMappingMatrix", []) or []
+            )
+        has_mapping_matrix = len(columns_mapping_matrix) > 0
+        logger.info(
+            f"Table {source_table_name}: columnsMappingMatrix has {len(columns_mapping_matrix)} entries"
+        )
+        
+        # Create ID-based lookup for target columns
+        target_by_id = {}
+        for idx, (_, tcol) in enumerate(ordered_target):
+            tid = tcol.get("id")
+            tname = tcol.get("name")
+            if tid is not None:
+                target_by_id[tid] = tcol
+                if idx < 3:  # Log only first 3 to avoid spam
+                    logger.info(f"Target column: id={tid}, name={tname}")
+        
+        # Build column mappings with full metadata: [{source_name: target_name, type, dataLength, ...}]
+        column_mappings = []
+        
+        # Use index in sorted array as ordinalPosition (1-based)
+        for col_index, scol in ordered_source:
+            source_name = scol.get("name")
+            source_id = scol.get("id")
+            if not source_name or source_id is None:
                 continue
             
-            # Use the actual id from the entity column data
-            col_id = col.get("id")
-            # Use ordinalPosition from entity if available, otherwise use id
-            ordinal = col.get("ordinalPosition", col_id)
-            
-            col_meta: Dict[str, Any] = {
-                "name": name,
-                "type": col.get("type"),
-                "dataLength": col.get("dataLength", 0),
-                "numericPrecision": col.get("numericPrecision", 0),
-                "numericScale": col.get("numericScale", 0),
-                "isNullable": col.get("isNullable", False),
-                "id": col_id,
-                "ordinalPosition": ordinal,
-            }
-            column_metadata.append(col_meta)
+            # Find corresponding target column ID from mapping matrix
+            target_col_id = None
+            if has_mapping_matrix:
+                for mapping in columns_mapping_matrix:
+                    if mapping.get("sourceColumnId") == source_id:
+                        target_col_id = mapping.get("targetColumnId")
+                        break
 
-        if column_metadata:
-            table_cfg["columns"] = column_metadata
+            # Get target column and its metadata
+            target_name = source_name  # Default to same name
+            target_type = scol.get("type")
+            if target_col_id is not None and target_col_id in target_by_id:
+                target_col = target_by_id[target_col_id]
+                target_name = target_col.get("name", source_name)
+                target_type = target_col.get("type", scol.get("type"))
+                if target_name != source_name:
+                    logger.info(f"Column mapping: {source_name} -> {target_name}")
+            else:
+                # Fallback: pair source/target columns by order when mapping matrix missing
+                if not has_mapping_matrix:
+                    target_idx = col_index - 1
+                    if target_idx < len(ordered_target):
+                        _, fallback_target_col = ordered_target[target_idx]
+                        target_name = fallback_target_col.get("name", source_name)
+                        target_type = fallback_target_col.get("type", scol.get("type"))
+                        if target_name != source_name:
+                            logger.info(
+                                f"Fallback column mapping by position: {source_name} -> {target_name}"
+                            )
+                    if col_index == 1:
+                        logger.info(
+                            f"No columnsMappingMatrix for {source_table_name}; using positional fallback"
+                        )
+                elif col_index == 1:  # Log only once when matrix exists but id missing
+                    logger.info(
+                        f"No target mapping found for {source_name} (using same name)"
+                    )
+            
+            # Build column mapping with metadata
+            # Use column index in sorted array as ordinalPosition (1-based)
+            col_mapping = {
+                source_name: target_name,
+                "type": target_type,
+                "dataLength": scol.get("dataLength", 0),
+                "numericPrecision": scol.get("numericPrecision", 0),
+                "numericScale": scol.get("numericScale", 0),
+                "isNullable": scol.get("isNullable", False),
+                "id": source_id,
+                "ordinalPosition": col_index  # Use 1-based index from sorted array
+            }
+            column_mappings.append(col_mapping)
+        
+        # Always export column mappings with full metadata
+        if column_mappings:
+            table_cfg["columns"] = column_mappings
+            logger.debug(f"Exported {len(column_mappings)} column mappings with metadata for {source_table_name}")
 
     # Filters on target entityType
     target_et = target_ae.get("entityType", {}) or {}
