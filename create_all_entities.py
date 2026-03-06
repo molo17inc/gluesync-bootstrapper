@@ -510,6 +510,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         logger.warning(f"Could not retrieve target tables for schema {yaml_target_schema}: {str(e)}")
 
     pending_partition_requests = []
+    
+    # Track which YAML keys have been processed to avoid duplicates
+    processed_yaml_keys = set()
 
     for table in tables:
         if isinstance(table, str):
@@ -546,6 +549,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             custom_config = {}
             logger.warning(f"Warning: Custom config for table {table_name} is present but empty in YAML. Converting to empty dict.")
         logger.debug(f"Custom config for {table_name}: {custom_config}")
+        
+        # Mark this YAML key as processed
+        processed_yaml_keys.add(yaml_table_key)
 
         # Get snapshot write method configuration (UPSERT or INSERT, default is UPSERT)
         snapshot_write_method = custom_config.get('snapshotWriteMethod', 'UPSERT').upper()
@@ -1306,6 +1312,434 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     raise
         else:
             logger.debug(f"No UDFs defined for table {table_name}")
+
+    # Second loop: process duplicate table configurations with @@ that weren't processed in first loop
+    logger.info(f"First loop completed. Processed {len(processed_yaml_keys)} YAML keys.")
+    logger.info(f"Checking for unprocessed duplicate tables with @@ separator...")
+    
+    unprocessed_count = 0
+    for yaml_table_key, custom_config in custom_tables.items():
+        # Skip if already processed in first loop
+        if yaml_table_key in processed_yaml_keys:
+            continue
+        
+        # Skip if not a dict
+        if not isinstance(custom_config, dict):
+            logger.warning(f"Skipping {yaml_table_key}: not a dict")
+            continue
+        
+        # Get the actual source table name (should have sourceTableName for @@ tables)
+        table_name = custom_config.get('sourceTableName', yaml_table_key)
+        
+        # Skip system tables and blacklisted tables
+        if table_name.startswith("sys") or (blacklist and table_name in blacklist):
+            logger.info(f"Skipping duplicate table {yaml_table_key}: system or blacklisted")
+            continue
+        
+        # Check whitelist using the actual table name
+        if whitelist and table_name not in whitelist:
+            logger.info(f"Skipping duplicate table {yaml_table_key}: not in whitelist")
+            continue
+        
+        # Check if this is part of a chain - if so, skip (will be processed in chain loop)
+        if custom_config.get('chainId'):
+            logger.info(f"Skipping duplicate table {yaml_table_key}: part of chain {custom_config.get('chainId')}")
+            processed_yaml_keys.add(yaml_table_key)
+            continue
+        
+        unprocessed_count += 1
+        logger.info(f"Processing duplicate table #{unprocessed_count}: {yaml_table_key} (source table: {table_name})")
+        
+        # Get columns using the actual source table name
+        try:
+            columns = get_table_columns(token, pipeline_id, source_agent_id, source_schema, table_name)
+        except Exception as e:
+            logger.error(f"Failed to get columns for duplicate table {yaml_table_key}: {str(e)}")
+            if not skip_errors:
+                raise
+            continue
+        
+        # Process this duplicate table with the same logic as the first loop
+        # (The rest of the entity creation logic is identical to the first loop)
+        
+        # Get snapshot write method configuration
+        snapshot_write_method = custom_config.get('snapshotWriteMethod', 'UPSERT').upper()
+        if snapshot_write_method not in ['UPSERT', 'INSERT']:
+            logger.warning(f"Invalid snapshotWriteMethod '{snapshot_write_method}' for {yaml_table_key}. Using 'UPSERT'")
+        logger.info(f"Snapshot write method for {yaml_table_key}: {snapshot_write_method}")
+        
+        # Get table-specific custom properties
+        table_custom_properties = custom_config.get('customProperties', {})
+        source_custom_properties = {**global_source_custom_properties, **table_custom_properties.get('source', {})}
+        target_custom_properties = {**global_target_custom_properties, **table_custom_properties.get('target', {})}
+
+        partition_config = source_custom_properties.pop('partitions', None)
+        partition_column_name, partition_max_partitions = parse_partition_config(partition_config)
+        
+        udf_config = target_custom_properties.pop('udf', None)
+        is_unlocked_schema = custom_config.get('unlockedSchema', False)
+        
+        if is_unlocked_schema and not udf_config:
+            logger.error(f"Table {yaml_table_key} has unlockedSchema=true but no UDF. Skipping.")
+            if not skip_errors:
+                raise ValueError(f"UDF is mandatory for table {yaml_table_key} with unlocked schema")
+            continue
+        
+        target_table_name = custom_config.get('name', table_name)
+        logger.info(f"Using target table name: {target_table_name} for duplicate table {yaml_table_key}")
+
+        # Get filter configurations
+        filter_config = custom_config.get('filter')
+        snapshot_delete_filter_config = custom_config.get('snapshotDeleteFilter')
+        
+        processed_filters = process_filter_clauses(filter_config, columns) if filter_config else None
+        processed_snapshot_delete_filters = process_filter_clauses(snapshot_delete_filter_config, columns) if snapshot_delete_filter_config else None
+
+        # Process document key if exists
+        document_key = None
+        if custom_config and 'documentKey' in custom_config:
+            doc_key_config = custom_config['documentKey']
+            key_ids = []
+            if 'keys' in doc_key_config:
+                for key_name in doc_key_config['keys']:
+                    column_id = None
+                    for col in columns["columns"]:
+                        if col.get('name') == key_name:
+                            column_id = col.get('id')
+                            if column_id is None:
+                                error_msg = f"Column '{key_name}' in {yaml_table_key} missing 'id' field"
+                                logger.error(error_msg)
+                                raise ValueError(error_msg)
+                            break
+                    if column_id is not None:
+                        key_ids.append(column_id)
+            
+            document_key = {
+                "prefix": doc_key_config.get('prefix', ''),
+                "suffix": doc_key_config.get('suffix', ''),
+                "separator": doc_key_config.get('separator', '-'),
+                "keys": key_ids
+            }
+
+        # Build columns definition
+        columns_def = []
+        has_column_mappings = False
+        if custom_config.get('columns') and len(custom_config['columns']) > 0:
+            first_col = custom_config['columns'][0]
+            if isinstance(first_col, dict) and 'name' not in first_col and 'type' not in first_col:
+                has_column_mappings = True
+        
+        if has_column_mappings:
+            for col in columns["columns"]:
+                col_id = col.get('id')
+                if col_id is None:
+                    raise ValueError(f"Column '{col.get('name')}' in {yaml_table_key} missing 'id' field")
+                for column_map in custom_config.get('columns', []):
+                    for source_name, target_name in column_map.items():
+                        if source_name == col["name"]:
+                            columns_def.append({
+                                "id": col_id,
+                                "name": col["name"],
+                                "alias": target_name,
+                                "type": col["type"],
+                            })
+        
+        if not has_column_mappings or not columns_def:
+            for col in columns["columns"]:
+                col_id = col.get('id')
+                if col_id is None:
+                    raise ValueError(f"Column '{col.get('name')}' in {yaml_table_key} missing 'id' field")
+                columns_def.append({
+                    "id": col_id,
+                    "name": col["name"],
+                    "alias": col["name"],
+                    "type": col["type"],
+                })
+
+        # Process keys
+        if custom_config and 'keys' in custom_config:
+            keys = []
+            if has_column_mappings:
+                for col in columns["columns"]:
+                    col_id = col.get('id')
+                    if col_id is None:
+                        raise ValueError(f"Column '{col.get('name')}' in {yaml_table_key} missing 'id' field")
+                    for column_map in custom_config['columns']:
+                        for source_name, target_name in column_map.items():
+                            if col["name"] == source_name and col["name"] in custom_config["keys"]:
+                                keys.append({
+                                    "id": col_id,
+                                    "name": col["name"],
+                                    "alias": target_name,
+                                    "type": col["type"]
+                                })
+            else:
+                for key_name in custom_config['keys']:
+                    for col in columns["columns"]:
+                        if col["name"].lower() == key_name.lower():
+                            col_id = col.get('id')
+                            if col_id is None:
+                                raise ValueError(f"Key '{key_name}' in {yaml_table_key} missing 'id' field")
+                            keys.append({
+                                "id": col_id,
+                                "name": col["name"],
+                                "alias": col["name"],
+                                "type": col["type"]
+                            })
+                            break
+        else:
+            keys = []
+            for col in columns["columns"]:
+                if col.get("isPrimaryKey"):
+                    col_id = col.get('id')
+                    if col_id is None:
+                        raise ValueError(f"Primary key column '{col.get('name')}' in {yaml_table_key} missing 'id' field")
+                    keys.append({
+                        "id": col_id,
+                        "name": col["name"],
+                        "alias": col["name"],
+                        "type": col["type"]
+                    })
+
+        if not keys:
+            logger.warning(f"No keys specified for duplicate table {yaml_table_key}")
+
+        # Generate table IDs
+        source_table_id = None
+        if isinstance(table, dict):
+            source_table_id = table.get('id')
+        if source_table_id is None:
+            discovered_source_table = find_discovered_table(source_tables_lookup, source_schema, table_name)
+            if discovered_source_table:
+                source_table_id = discovered_source_table.get('id')
+        if source_table_id is None:
+            source_table_id = get_table_id(source_schema, table_name)
+
+        target_table_id = None
+        discovered_target_table = find_discovered_table(target_tables_lookup, yaml_target_schema, target_table_name)
+        if discovered_target_table:
+            target_table_id = discovered_target_table.get('id')
+        if target_table_id is None:
+            target_table_id = get_table_id(yaml_target_schema, target_table_name)
+
+        source_table_key = f"{source_schema}.{table_name}"
+        target_table_key = f"{yaml_target_schema}.{target_table_name}"
+
+        partition_settings = None
+        if partition_column_name:
+            partition_settings = build_partition_settings(
+                partition_column_name,
+                columns.get("columns"),
+                source_schema,
+                table_name,
+                source_table_id
+            )
+
+        source_entity_type = {**source_custom_properties, "type": "Source"}
+        is_source_nosql = source_type and "nosql" in source_type.lower()
+        source_entity_type_name = "NoSqlEntity" if is_source_nosql else "SingleTable"
+
+        source_table_properties = {}
+        if custom_config and 'whereClause' in custom_config:
+            where_clause = custom_config['whereClause']
+            if where_clause:
+                source_table_properties["whereClause"] = str(where_clause)
+        
+        source_entity = {
+            "type": source_entity_type_name,
+            "entityType": source_entity_type,
+            "agentId": source_agent_id,
+            "entityObject": {
+                "id": str(source_table_id),
+                "scope": source_schema,
+                "collection": table_name
+            },
+            "table": {
+                "id": str(source_table_id),
+                "name": table_name,
+                "schema": source_schema
+            },
+            "columns": columns_def,
+            "keys": keys,
+            "customProperties": source_custom_properties,
+            "tablesProperties": {source_table_key: source_table_properties}
+        }
+
+        allowed_operations = get_allowed_operations(target_custom_properties)
+
+        target_entity_type = {
+            "type": "Target",
+            "allowedOperations": allowed_operations,
+            "snapshotWritingConcurrency": target_custom_properties.get('snapshotWritingConcurrency', 1),
+            "useBulkOperationsDuringCDC": target_custom_properties.get('useBulkOperationsDuringCDC', False),
+            "useBulkOperationsWhileSnapshot": target_custom_properties.get('useBulkOperationsWhileSnapshot', False)
+        }
+
+        if processed_filters:
+            target_entity_type["filter"] = processed_filters
+        if processed_snapshot_delete_filters:
+            target_entity_type["snapshotDeleteFilter"] = processed_snapshot_delete_filters
+        
+        if udf_config:
+            target_entity_type["udf"] = udf_config
+            target_entity_type["mappingFunctionInfo"] = udf_config[0]
+        
+        # Generate columnsMappingMatrix
+        columns_mapping_matrix = []
+        
+        if is_unlocked_schema:
+            columns_mapping_matrix.append({
+                "sourceTableObjectId": source_table_id,
+                "targetTableObjectId": target_table_id,
+                "sourceColumnId": 0,
+                "targetColumnId": 0
+            })
+            target_entity_type["tablesWithUnlockedSchema"] = [target_table_id]
+            target_entity_type["tablesWithUnlockedDataTypes"] = []
+        else:
+            if 'columns' in columns and isinstance(columns['columns'], list):
+                for col in columns['columns']:
+                    source_col_id = col.get('id')
+                    if source_col_id is None:
+                        raise ValueError(f"Column '{col.get('name')}' in {yaml_table_key} missing 'id' field")
+                    target_col_id = source_col_id
+                    columns_mapping_matrix.append({
+                        "sourceTableObjectId": source_table_id,
+                        "targetTableObjectId": target_table_id,
+                        "sourceColumnId": source_col_id,
+                        "targetColumnId": target_col_id
+                    })
+            target_entity_type["tablesWithUnlockedSchema"] = []
+            target_entity_type["tablesWithUnlockedDataTypes"] = []
+
+        target_entity_type["columnsMappingMatrix"] = columns_mapping_matrix
+
+        # Build target columns (simplified - using source columns with type mapping)
+        target_columns_def = []
+        for col in columns["columns"]:
+            col_id = col.get('id')
+            if col_id is None:
+                raise ValueError(f"Column '{col.get('name')}' in {yaml_table_key} missing 'id' field")
+            
+            resolved_target_type = map_data_type(col["type"], source_node_info, target_node_info,
+                                                 source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
+            target_columns_def.append({
+                "id": col_id,
+                "name": col["name"],
+                "alias": col["name"],
+                "type": resolved_target_type
+            })
+
+        # Build target keys
+        target_keys = []
+        if custom_config and 'keys' in custom_config:
+            for key_name in custom_config['keys']:
+                for col in columns["columns"]:
+                    if col["name"].lower() == key_name.lower():
+                        col_id = col.get('id')
+                        if col_id is None:
+                            raise ValueError(f"Key '{key_name}' in {yaml_table_key} missing 'id' field")
+                        
+                        resolved_target_type = map_data_type(col["type"], source_node_info, target_node_info,
+                                                             source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
+                        target_keys.append({
+                            "id": col_id,
+                            "name": col["name"],
+                            "alias": col["name"],
+                            "type": resolved_target_type
+                        })
+                        break
+        else:
+            for col in columns["columns"]:
+                if col.get("isPrimaryKey"):
+                    col_id = col.get('id')
+                    if col_id is None:
+                        raise ValueError(f"Primary key '{col.get('name')}' in {yaml_table_key} missing 'id' field")
+                    
+                    resolved_target_type = map_data_type(col["type"], source_node_info, target_node_info,
+                                                         source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
+                    target_keys.append({
+                        "id": col_id,
+                        "name": col["name"],
+                        "alias": col["name"],
+                        "type": resolved_target_type
+                    })
+
+        is_target_nosql = target_type and "nosql" in target_type.lower()
+        target_entity_type_name = "NoSqlEntity" if is_target_nosql else "SingleTable"
+
+        target_table_properties = {}
+        if document_key:
+            target_table_properties["documentKey"] = document_key
+
+        target_entity = {
+            "type": target_entity_type_name,
+            "entityType": target_entity_type,
+            "agentId": target_agent_id,
+            "entityObject": {
+                "id": str(target_table_id),
+                "scope": yaml_target_schema,
+                "collection": target_table_name
+            },
+            "table": {
+                "id": str(target_table_id),
+                "name": target_table_name,
+                "schema": yaml_target_schema
+            },
+            "columns": target_columns_def,
+            "keys": target_keys,
+            "customProperties": target_custom_properties,
+            "tablesProperties": {target_table_key: target_table_properties}
+        }
+
+        # Get entity name from custom config
+        entity_name = custom_config.get('entityName', f"{target_table_name} - {source_schema}.{table_name}")
+        
+        # Get group ID
+        group_name = custom_config.get('group')
+        group_id = None
+        if group_name and groups_by_name:
+            group_id = groups_by_name.get(group_name, {}).get('id')
+            if not group_id:
+                logger.warning(f"Group '{group_name}' not found for duplicate table {yaml_table_key}")
+
+        entity = {
+            "entityName": entity_name,
+            "agentEntities": [source_entity, target_entity],
+            "columnsMappingMatrix": columns_mapping_matrix
+        }
+        
+        if group_id and group_id != '_default':
+            entity["groupId"] = group_id
+        
+        entities.append(entity)
+        logger.info(f"Created entity for duplicate table {yaml_table_key}: {entity_name}")
+
+        if partition_settings:
+            pending_partition_requests.append({
+                "entity_name": entity["entityName"],
+                "column": partition_settings["column"],
+                "max_partitions": partition_max_partitions,
+                "source_agent_id": source_agent_id
+            })
+        
+        # Process UDFs
+        table_udfs = target_custom_properties.get('udf', [])
+        if table_udfs:
+            logger.info(f"Found UDFs for duplicate table {yaml_table_key}: {table_udfs}")
+            try:
+                handle_udf_function_definition(table_name, pipeline_id, table_udfs, token)
+                logger.info(f"Successfully processed UDFs for duplicate table {yaml_table_key}")
+            except Exception as e:
+                logger.error(f"Failed to process UDFs for duplicate table {yaml_table_key}: {str(e)}")
+                if not skip_errors:
+                    raise
+        
+        # Mark as processed
+        processed_yaml_keys.add(yaml_table_key)
+    
+    logger.info(f"Second loop completed. Processed {unprocessed_count} duplicate tables with @@ separator.")
+    logger.info(f"Total YAML keys processed: {len(processed_yaml_keys)}")
 
     # Track discovered table IDs for chain processing
     chain_source_ids = {}
