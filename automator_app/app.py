@@ -1256,16 +1256,28 @@ def create_app() -> FastAPI:
                                         cert_data = zf_cert.read(cert_filename)
                                         logger.debug(f"Found certificate via exact match: {cert_filename}")
                                     else:
-                                        # Try case-insensitive search
-                                        for zip_name in zf_cert.namelist():
-                                            if zip_name.lower() == cert_filename.lower():
-                                                cert_data = zf_cert.read(zip_name)
-                                                logger.debug(f"Found certificate via case-insensitive match: {zip_name}")
-                                                break
+                                        # Try with pipeline folder prefix (e.g., pipeline_xxx/certificate.txt)
+                                        # Extract pipeline folder from the YAML name
+                                        pipeline_folder = name.split('/')[0] if '/' in name else None
+                                        if pipeline_folder:
+                                            prefixed_path = f"{pipeline_folder}/{cert_filename}"
+                                            if prefixed_path in zf_cert.namelist():
+                                                cert_data = zf_cert.read(prefixed_path)
+                                                logger.debug(f"Found certificate with pipeline prefix: {prefixed_path}")
+                                        
+                                        # Try case-insensitive search as fallback
+                                        if not cert_data:
+                                            for zip_name in zf_cert.namelist():
+                                                # Match by filename only (ignore path)
+                                                if zip_name.lower().endswith(cert_filename.lower()):
+                                                    cert_data = zf_cert.read(zip_name)
+                                                    logger.debug(f"Found certificate via filename match: {zip_name}")
+                                                    break
                                     
                                     if not cert_data:
                                         error_msg = f"{name}: Certificate file '{cert_path}' not found in ZIP for agent {agent_id}"
                                         logger.error(error_msg)
+                                        logger.error(f"Searched for: {cert_filename}, {pipeline_folder}/{cert_filename if pipeline_folder else 'N/A'}")
                                         errors.append(error_msg)
                                         continue
                                     
