@@ -751,7 +751,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         raise ValueError(error_msg)
                         
                     for column_map in custom_config['columns']:
-                        for source_name, target_name in column_map.items():
+                        # Extract source:target pairs, ignoring metadata fields
+                        mapping_pairs = _extract_mapping_pairs(column_map)
+                        for source_name, target_name in mapping_pairs:
                             if col["name"] == source_name and col["name"] in custom_config["keys"]:
                                 keys.append({
                                     "id": col_id,  # Use actual ordinal position from database
@@ -1507,7 +1509,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     if col_id is None:
                         raise ValueError(f"Column '{col.get('name')}' in {yaml_table_key} missing 'id' field")
                     for column_map in custom_config['columns']:
-                        for source_name, target_name in column_map.items():
+                        # Extract source:target pairs, ignoring metadata fields
+                        mapping_pairs = _extract_mapping_pairs(column_map)
+                        for source_name, target_name in mapping_pairs:
                             if col["name"] == source_name and col["name"] in custom_config["keys"]:
                                 keys.append({
                                     "id": col_id,
