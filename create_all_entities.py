@@ -23,6 +23,7 @@ import json
 import urllib3
 import argparse
 import copy
+import itertools
 from commons import get_node_info, get_table_columns, fetch_core_hub, get_pipeline_config, get_pipeline_agents, \
     get_agent_tables, create_entity_schedules, map_data_type, create_pipeline_schedules, create_group_schedules, load_yaml_config, \
     process_filter_clauses, create_group, assign_entities_to_group, get_table_id
@@ -32,6 +33,38 @@ from utils.log import get_logger, create_log_file, log_success, log_failure, loc
 from utils.core_hub_client import CoreHubClient
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# Column metadata fields that should be ignored when extracting source:target mappings
+COLUMN_METADATA_FIELDS = {
+    "type",
+    "dataLength",
+    "numericPrecision",
+    "numericScale",
+    "isNullable",
+    "id",
+    "ordinalPosition",
+}
+
+
+def _extract_mapping_pairs(column_entry):
+    """
+    Extract (source_name, target_name) pairs from column entry dict.
+    Ignores metadata fields and returns only the mapping pairs.
+    
+    Args:
+        column_entry: Dict with format {source: target, type: ..., id: ..., ...}
+        
+    Returns:
+        List of (source_name, target_name) tuples
+    """
+    if not isinstance(column_entry, dict):
+        return []
+    return [
+        (key, value)
+        for key, value in column_entry.items()
+        if key not in COLUMN_METADATA_FIELDS
+    ]
+
 
 # Initialize logger
 log_file = create_log_file()
@@ -660,7 +693,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     raise ValueError(error_msg)
 
                 for column_map in custom_config.get('columns', []):
-                    for source_name, target_name in column_map.items():
+                    # Extract source:target pairs, ignoring metadata fields
+                    mapping_pairs = _extract_mapping_pairs(column_map)
+                    for source_name, target_name in mapping_pairs:
                         if source_name == col["name"]:
                             columns_def.append({
                                 "id": col_id,  # Use actual ordinal position from database
@@ -668,6 +703,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                 "alias": target_name,
                                 "type": col["type"],
                             })
+                            break
 
         # If there are no column mappings or none of them matched, fall back to
         # using discovery columns as-is (one-to-one source→target mapping).
@@ -993,7 +1029,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 max_target_col_id = max(max_target_col_id, col_id)
                 
                 for column_map in custom_config.get('columns', []):
-                    for source_name, target_name in column_map.items():
+                    # Extract source:target pairs, ignoring metadata fields
+                    mapping_pairs = _extract_mapping_pairs(column_map)
+                    for source_name, target_name in mapping_pairs:
                         if source_name == col["name"]:
                             discovered_target_col = target_discovered_columns_by_name.get(target_name.lower())
                             resolved_target_type = None
@@ -1150,7 +1188,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         raise ValueError(error_msg)
 
                     for column_map in custom_config.get('columns', []):
-                        for source_name, target_name in column_map.items():
+                        # Extract source:target pairs, ignoring metadata fields
+                        mapping_pairs = _extract_mapping_pairs(column_map)
+                        for source_name, target_name in mapping_pairs:
                             if source_name == col["name"] and source_name in custom_config.get('keys', []):
                                 discovered_target_col = target_discovered_columns_by_name.get(target_name.lower())
                                 resolved_target_type = None
@@ -1435,7 +1475,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 if col_id is None:
                     raise ValueError(f"Column '{col.get('name')}' in {yaml_table_key} missing 'id' field")
                 for column_map in custom_config.get('columns', []):
-                    for source_name, target_name in column_map.items():
+                    # Extract source:target pairs, ignoring metadata fields
+                    mapping_pairs = _extract_mapping_pairs(column_map)
+                    for source_name, target_name in mapping_pairs:
                         if source_name == col["name"]:
                             columns_def.append({
                                 "id": col_id,
