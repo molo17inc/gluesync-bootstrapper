@@ -564,6 +564,12 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             continue
 
         columns = get_table_columns(token, pipeline_id, source_agent_id, source_schema, table_name)
+        
+        # Debug logging for column discovery
+        if columns and columns.get('columns'):
+            logger.info(f"Discovered {len(columns['columns'])} columns for table {table_name}: {[col.get('name') for col in columns['columns']]}")
+        else:
+            logger.warning(f"No columns discovered for table {table_name}. columns={columns}")
 
         # Find custom config - handle both direct key match and sourceTableName match
         custom_config = custom_tables.get(table_name, {})
@@ -729,6 +735,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
         # Process keys and other configurations as before...
         if custom_config and 'keys' in custom_config:
+            logger.info(f"Processing keys for table {table_name}. Requested keys: {custom_config['keys']}")
+            logger.info(f"Has columns section: {bool(custom_config.get('columns'))}")
             keys = []
             
             # Check if we have column mappings (format: [{source: target}]) vs column definitions (format: [{name: ..., type: ...}])
@@ -789,7 +797,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     if not found:
                         logger.warning(f"Warning: Key '{key_name}' not found in columns for table '{table_name}'")
             
-            logger.debug(f"Using custom keys for {table_name}: {keys}")
+            logger.info(f"Final keys array for {table_name}: {keys} (count: {len(keys)})")
         else:
             keys = []
             for col in columns["columns"]:
