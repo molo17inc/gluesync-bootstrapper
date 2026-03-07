@@ -570,6 +570,14 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             logger.info(f"Discovered {len(columns['columns'])} columns for table {table_name}: {[col.get('name') for col in columns['columns']]}")
         else:
             logger.warning(f"No columns discovered for table {table_name}. columns={columns}")
+        
+        # Validate that columns were discovered
+        if not columns or not columns.get('columns') or len(columns.get('columns', [])) == 0:
+            error_msg = f"Cannot create entity for table {table_name}: No columns discovered from source. Please verify the table exists and is accessible."
+            logger.error(error_msg)
+            if not skip_errors:
+                raise ValueError(error_msg)
+            continue
 
         # Find custom config - handle both direct key match and sourceTableName match
         custom_config = custom_tables.get(table_name, {})
