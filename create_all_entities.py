@@ -34,36 +34,63 @@ from utils.core_hub_client import CoreHubClient
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Column metadata fields that should be ignored when extracting source:target mappings
-COLUMN_METADATA_FIELDS = {
-    "type",
-    "dataLength",
-    "numericPrecision",
-    "numericScale",
-    "isNullable",
-    "id",
-    "ordinalPosition",
-}
+# Metadata-only fields used in the export format {source: ..., target: ..., type: ..., ...}
+# These are never column names in the explicit export format.
+_EXPORT_METADATA_FIELDS = {"source", "target", "type", "dataLength", "numericPrecision", "numericScale", "isNullable", "id", "ordinalPosition"}
+
+
+def _is_column_mappings(columns_list):
+    """
+    Return True if the columns list contains column mappings (not column definitions).
+
+    Detects both:
+    - Export format:  [{source: "col", target: "COL", type: ..., ...}]
+    - User format:    [{col_name: "target_name"}, ...]  e.g. [{id: "ID"}]
+
+    Column *definitions* (not mappings) have a 'name' key.
+    """
+    if not columns_list:
+        return False
+    first = columns_list[0]
+    if not isinstance(first, dict):
+        return False
+    # Export format: has explicit 'source' key
+    if "source" in first:
+        return True
+    # User format: no 'name' key (column definitions always have 'name')
+    return "name" not in first
 
 
 def _extract_mapping_pairs(column_entry):
     """
-    Extract (source_name, target_name) pairs from column entry dict.
-    Ignores metadata fields and returns only the mapping pairs.
-    
-    Args:
-        column_entry: Dict with format {source: target, type: ..., id: ..., ...}
-        
+    Extract (source_name, target_name) pairs from a column entry dict.
+
+    Supports two formats:
+
+    1. Explicit export format (from export_template_from_corehub.py):
+       {source: "col", target: "COL", type: ..., id: ..., ordinalPosition: ...}
+       -> returns [("col", "COL")]
+
+    2. Legacy user format (hand-written YAML):
+       {col_name: "target_name"}  e.g. {id: "ID", firstName: "first_name"}
+       -> returns [("col_name", "target_name")]
+
     Returns:
         List of (source_name, target_name) tuples
     """
     if not isinstance(column_entry, dict):
         return []
-    return [
-        (key, value)
-        for key, value in column_entry.items()
-        if key not in COLUMN_METADATA_FIELDS
-    ]
+    # Detect explicit export format by presence of 'source' key
+    if "source" in column_entry:
+        src = column_entry.get("source")
+        tgt = column_entry.get("target", src)
+        if src is not None:
+            return [(src, tgt)]
+        return []
+    # Legacy user format: every key that is not a known metadata field is a mapping
+    # In this format metadata fields (type, id, etc.) are never present, so this
+    # simply returns all key-value pairs.
+    return list(column_entry.items())
 
 
 # Initialize logger
@@ -687,14 +714,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         # Build columns definition with IDs
         columns_def = []
         
-        # Check if we have column mappings (format: [{source: target}]) vs column definitions (format: [{name: ..., type: ...}])
-        has_column_mappings = False
-        if custom_config.get('columns') and len(custom_config['columns']) > 0:
-            first_col = custom_config['columns'][0]
-            # Column mappings are dicts with simple key-value pairs (source: target)
-            # Column definitions have 'name', 'type', etc. fields
-            if isinstance(first_col, dict) and 'name' not in first_col and 'type' not in first_col:
-                has_column_mappings = True
+        has_column_mappings = _is_column_mappings(custom_config.get('columns', []))
         
         if has_column_mappings:
             # Custom column mappings (source→target)
@@ -747,17 +767,11 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             logger.info(f"Has columns section: {bool(custom_config.get('columns'))}")
             keys = []
             
-            # Check if we have column mappings (format: [{source: target}]) vs column definitions (format: [{name: ..., type: ...}])
-            has_column_mappings = False
-            if custom_config.get('columns') and len(custom_config['columns']) > 0:
-                first_col = custom_config['columns'][0]
-                # Column mappings are dicts with simple key-value pairs (source: target)
-                # Column definitions have 'name', 'type', etc. fields
-                if isinstance(first_col, dict) and 'name' not in first_col and 'type' not in first_col:
-                    has_column_mappings = True
+            has_column_mappings = _is_column_mappings(custom_config.get('columns', []))
             
             if has_column_mappings:
                 # Use column mappings for keys
+                logger.info(f"Key extraction via column mappings for {table_name}. Keys to find: {custom_config['keys']}")
                 for col in columns["columns"]:
                     # Use the id field from CoreHub API as the column ID
                     col_id = col.get('id')
@@ -770,13 +784,18 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         # Extract source:target pairs, ignoring metadata fields
                         mapping_pairs = _extract_mapping_pairs(column_map)
                         for source_name, target_name in mapping_pairs:
-                            if col["name"] == source_name and col["name"] in custom_config["keys"]:
+                            name_match = col["name"] == source_name
+                            in_keys = col["name"] in custom_config["keys"]
+                            if name_match and in_keys:
                                 keys.append({
                                     "id": col_id,  # Use actual ordinal position from database
                                     "name": col["name"],
                                     "alias": target_name,
                                     "type": col["type"]
                                 })
+                                logger.info(f"Key matched: col={col['name']!r}, source_name={source_name!r}, target_name={target_name!r}")
+                            elif col["name"] in custom_config["keys"]:
+                                logger.warning(f"Key col={col['name']!r} is in keys list but source_name={source_name!r} did not match (name_match={name_match}, in_keys={in_keys})")
             else:
                 # No column mappings, use keys directly from source columns
                 logger.debug(f"Processing keys for {table_name}: {custom_config['keys']}")
@@ -1025,14 +1044,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         target_columns_def = []
         max_target_col_id = 0
         
-        # Check if we have column mappings (format: [{source: target}]) vs column definitions (format: [{name: ..., type: ...}])
-        has_column_mappings_target = False
-        if custom_config.get('columns') and len(custom_config['columns']) > 0:
-            first_col = custom_config['columns'][0]
-            # Column mappings are dicts with simple key-value pairs (source: target)
-            # Column definitions have 'name', 'type', etc. fields
-            if isinstance(first_col, dict) and 'name' not in first_col and 'type' not in first_col:
-                has_column_mappings_target = True
+        has_column_mappings_target = _is_column_mappings(custom_config.get('columns', []))
         
         if has_column_mappings_target:
             # Custom column mappings for target
@@ -1186,14 +1198,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         # Process target keys with proper IDs
         target_keys = []
         if custom_config and 'keys' in custom_config:
-            # Check if we have column mappings (format: [{source: target}]) vs column definitions (format: [{name: ..., type: ...}])
-            has_column_mappings = False
-            if custom_config.get('columns') and len(custom_config['columns']) > 0:
-                first_col = custom_config['columns'][0]
-                # Column mappings are dicts with simple key-value pairs (source: target)
-                # Column definitions have 'name', 'type', etc. fields
-                if isinstance(first_col, dict) and 'name' not in first_col and 'type' not in first_col:
-                    has_column_mappings = True
+            has_column_mappings = _is_column_mappings(custom_config.get('columns', []))
             
             if has_column_mappings:
                 # Use column mappings for keys - map source key names to target key names
@@ -1481,11 +1486,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
         # Build columns definition
         columns_def = []
-        has_column_mappings = False
-        if custom_config.get('columns') and len(custom_config['columns']) > 0:
-            first_col = custom_config['columns'][0]
-            if isinstance(first_col, dict) and 'name' not in first_col and 'type' not in first_col:
-                has_column_mappings = True
+        has_column_mappings = _is_column_mappings(custom_config.get('columns', []))
         
         if has_column_mappings:
             for col in columns["columns"]:

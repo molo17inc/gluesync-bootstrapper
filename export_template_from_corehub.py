@@ -535,10 +535,11 @@ def _process_single_entity(
                         f"No target mapping found for {source_name} (using same name)"
                     )
             
-            # Build column mapping with metadata
+            # Build column mapping with metadata using explicit source/target keys
             # Use column index in sorted array as ordinalPosition (1-based)
             col_mapping = {
-                source_name: target_name,
+                "source": source_name,
+                "target": target_name,
                 "type": target_type,
                 "dataLength": scol.get("dataLength", 0),
                 "numericPrecision": scol.get("numericPrecision", 0),
