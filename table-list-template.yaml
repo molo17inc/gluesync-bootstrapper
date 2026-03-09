@@ -224,7 +224,7 @@ dbo:
         # Snapshot write method - controls how records are written during snapshot
         # UPSERT: Update existing records or insert new ones (default)
         # INSERT: Only insert new records, skip existing ones
-        snapshotWriteMethod: "UPSERT"
+        snapshotWriteMethod: "INSERT"
         customProperties:
           target:
             ttlValue: 20000000
