@@ -947,8 +947,15 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         # Get allowed operations for the target entity
         allowed_operations = get_allowed_operations(target_custom_properties)
 
+        # Keys explicitly handled - exclude them from the passthrough spread
+        _target_handled_keys = {'allowedOperations', 'skipDeletion', 'snapshotWritingConcurrency',
+                                'useBulkOperationsDuringCDC', 'useBulkOperationsWhileSnapshot', 'udf'}
+        _target_extra = {k: v for k, v in target_custom_properties.items() if k not in _target_handled_keys}
+
         # Create target entity type with allowedOperations and bulk operations settings
+        # Any unknown customProperties.target keys are spread in dynamically
         target_entity_type = {
+            **_target_extra,
             "type": "Target",
             "allowedOperations": allowed_operations,
             "snapshotWritingConcurrency": target_custom_properties.get('snapshotWritingConcurrency', 1),
@@ -1630,7 +1637,14 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
         allowed_operations = get_allowed_operations(target_custom_properties)
 
+        # Keys explicitly handled - exclude them from the passthrough spread
+        _target_handled_keys = {'allowedOperations', 'skipDeletion', 'snapshotWritingConcurrency',
+                                'useBulkOperationsDuringCDC', 'useBulkOperationsWhileSnapshot', 'udf'}
+        _target_extra = {k: v for k, v in target_custom_properties.items() if k not in _target_handled_keys}
+
+        # Any unknown customProperties.target keys are spread in dynamically
         target_entity_type = {
+            **_target_extra,
             "type": "Target",
             "allowedOperations": allowed_operations,
             "snapshotWritingConcurrency": target_custom_properties.get('snapshotWritingConcurrency', 1),
