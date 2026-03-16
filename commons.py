@@ -19,15 +19,17 @@
 # Copyright (C) 2025 MOLO17. All rights reserved.
 
 import colorsys
-import os
 import json
+import os
 import random
 import re
 import time
 import traceback
 import uuid
-import yaml
 from datetime import datetime
+from pathlib import Path
+
+import yaml
 from typing import Dict, List, Optional, Tuple, Union, Any
 from utils.log import get_logger, log_success, log_failure
 from utils.chronos_client import ChronosClient
@@ -81,6 +83,46 @@ def set_scheduling_enabled(enabled: bool):
     logger.info("Scheduling feature set to %s", ENABLE_SCHEDULING)
 
 logger = get_logger()
+
+_ORACLE_AGENT_TAGS: set[str] | None = None
+
+
+def get_oracle_agent_tags() -> set[str]:
+    """Return a cached set of agent tags that map to Oracle from agents.json."""
+
+    global _ORACLE_AGENT_TAGS
+    if _ORACLE_AGENT_TAGS is not None:
+        return _ORACLE_AGENT_TAGS
+
+    oracle_tags: set[str] = set()
+    try:
+        json_path = Path(__file__).resolve().parent / "agents.json"
+        if not json_path.exists():
+            _ORACLE_AGENT_TAGS = oracle_tags
+            return oracle_tags
+
+        with json_path.open("r", encoding="utf-8") as fh:
+            raw = json.load(fh)
+
+        items = raw.get("data") if isinstance(raw, dict) else None
+        if not isinstance(items, list):
+            _ORACLE_AGENT_TAGS = oracle_tags
+            return oracle_tags
+
+        for entry in items:
+            if not isinstance(entry, dict):
+                continue
+            name = str(entry.get("internalName") or "").strip().lower()
+            database_name = str(entry.get("databaseName") or "").strip().lower()
+            if not name:
+                continue
+            if "oracle" in name or "oracle" in database_name:
+                oracle_tags.add(name)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Failed to load Oracle agent tags from agents.json: %s", exc)
+
+    _ORACLE_AGENT_TAGS = oracle_tags
+    return oracle_tags
 
 
 def fetch_core_hub(path, method='GET', token=None, body=None, params=None, headers=None):
@@ -449,12 +491,36 @@ def map_data_type(source_type, source_node_info, target_node_info,
     2. API-provided ``dataTypesMatrix`` from node_info (original behaviour) as
        fallback when agent tags are unknown or not present in the registry.
     """
-    source_tag = source_agent_tag or (source_node_info or {}).get('agentTag', '')
-    target_tag = target_agent_tag or (target_node_info or {}).get('agentTag', '')
-    source_tag_lower = source_tag.lower() if source_tag else ''
-    target_tag_lower = target_tag.lower() if target_tag else ''
-    source_is_postgres = source_tag_lower.startswith('postgres')
-    target_is_oracle = target_tag_lower.startswith('oracle')
+    source_node_info = source_node_info or {}
+    target_node_info = target_node_info or {}
+    source_tag = source_agent_tag or source_node_info.get('agentTag') or source_node_info.get('internalName', '')
+    target_tag = target_agent_tag or target_node_info.get('agentTag') or target_node_info.get('internalName', '')
+
+    source_hint = " ".join(
+        filter(
+            None,
+            [
+                source_tag,
+                source_node_info.get('databaseName'),
+                source_node_info.get('agentName'),
+                source_node_info.get('name'),
+            ],
+        )
+    ).lower()
+    target_hint = " ".join(
+        filter(
+            None,
+            [
+                target_tag,
+                target_node_info.get('databaseName'),
+                target_node_info.get('agentName'),
+                target_node_info.get('name'),
+            ],
+        )
+    ).lower()
+    source_is_postgres = 'postgres' in source_hint
+    oracle_tags = get_oracle_agent_tags()
+    target_is_oracle = (str(target_tag or '').lower() in oracle_tags) or ('oracle' in target_hint)
 
     kotlin_source_matrix = get_matrix_for_agent(source_tag) if source_tag else []
     kotlin_target_matrix = get_matrix_for_agent(target_tag) if target_tag else []
@@ -530,9 +596,9 @@ def map_data_type(source_type, source_node_info, target_node_info,
         supported_types_map = {t.lower(): t for t in target_item['supportedTypes']}
 
         if normalized_source_type in supported_types_map:
-            if source_is_postgres and target_is_oracle and normalized_source_type == 'smallint':
+            if target_is_oracle and normalized_source_type == 'smallint':
                 logger.warning(
-                    "PostgreSQL smallint cannot be created on Oracle; forcing INTEGER mapping.")
+                    "Oracle target does not accept SMALLINT; forcing INTEGER mapping.")
                 return 'INTEGER'
 
             server_type = supported_types_map[normalized_source_type]
@@ -602,9 +668,9 @@ def map_data_type(source_type, source_node_info, target_node_info,
     print(
         f"Warning: No target mapping found for Gluesync type {source_gluesync_type}. Using source type {source_type} as is.")
 
-    if source_is_postgres and target_is_oracle and normalized_source_type == 'smallint':
+    if target_is_oracle and normalized_source_type == 'smallint':
         logger.warning(
-            "PostgreSQL smallint could not be mapped to Oracle; forcing INTEGER fallback for table creation context.")
+            "Oracle target does not accept SMALLINT; forcing INTEGER fallback for table creation context.")
         return 'INTEGER'
 
     return source_type

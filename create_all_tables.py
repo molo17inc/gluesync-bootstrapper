@@ -29,7 +29,7 @@ from utils.log import get_logger, create_log_file, log_success, log_failure, loc
 from utils.core_hub_client import CoreHubClient
 from commons import get_node_info, get_table_columns, fetch_core_hub, get_pipeline_config, get_pipeline_agents, \
     get_agent_tables, map_data_type, load_yaml_config, create_group, \
-    process_filter_clauses
+    process_filter_clauses, get_oracle_agent_tags
 from pydantic import BaseModel
 from typing import List
 
@@ -428,6 +428,29 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                     return default
                 return bool(value)
 
+            target_hint = " ".join(
+                filter(
+                    None,
+                    [
+                        target_agent_tag,
+                        target_node_info.get('databaseName'),
+                        target_node_info.get('agentName'),
+                        target_node_info.get('name'),
+                    ],
+                )
+            ).lower()
+            oracle_tags = get_oracle_agent_tags()
+            target_tag = str(target_agent_tag or '').lower()
+            target_is_oracle = (target_tag in oracle_tags) or ('oracle' in target_hint)
+
+            def _normalize_oracle_smallint(mapped_type: str) -> str:
+                if target_is_oracle and str(mapped_type).strip().lower() == 'smallint':
+                    logger.warning(
+                        "Oracle target does not accept SMALLINT; forcing INTEGER mapping for table creation."
+                    )
+                    return 'INTEGER'
+                return mapped_type
+
             # Check if targetOnlyColumns are defined - if so, use them instead of source columns
             if target_only_columns:
                 logger.info(f"Using targetOnlyColumns definition for table {target_table_name}")
@@ -451,8 +474,14 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                         col_is_nullable = target_col.get('isNullable', False)  # Default nullable
                     
                     # Map the column type to target node type
-                    mapped_type = map_data_type(col_type, source_node_info, target_node_info,
-                                               source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
+                    mapped_type = map_data_type(
+                        col_type,
+                        source_node_info,
+                        target_node_info,
+                        source_agent_tag=source_agent_tag,
+                        target_agent_tag=target_agent_tag,
+                    )
+                    mapped_type = _normalize_oracle_smallint(mapped_type)
                     
                     column_dtos.append(ColumnDto(
                         name=col_name,
@@ -501,8 +530,14 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                         ordinal_position = _to_int(col_meta.get('ordinalPosition'), idx)
 
                         # Map source type to target type (e.g. CHARACTER -> varchar)
-                        mapped_type = map_data_type(col_type, source_node_info, target_node_info,
-                                                   source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
+                        mapped_type = map_data_type(
+                            col_type,
+                            source_node_info,
+                            target_node_info,
+                            source_agent_tag=source_agent_tag,
+                            target_agent_tag=target_agent_tag,
+                        )
+                        mapped_type = _normalize_oracle_smallint(mapped_type)
 
                         column_dtos.append(ColumnDto(
                             name=col_name,
@@ -520,8 +555,14 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                     # When no metadata is provided, fall back to source column properties directly
                     for col in columns["columns"]:
                         # Map source type to target type (e.g. CHARACTER -> varchar)
-                        mapped_type = map_data_type(col["type"], source_node_info, target_node_info,
-                                                   source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
+                        mapped_type = map_data_type(
+                            col["type"],
+                            source_node_info,
+                            target_node_info,
+                            source_agent_tag=source_agent_tag,
+                            target_agent_tag=target_agent_tag,
+                        )
+                        mapped_type = _normalize_oracle_smallint(mapped_type)
                         column_dtos.append(ColumnDto(
                             name=col["name"],
                             type=format_column_type(mapped_type, col.get("dataLength", 0),
