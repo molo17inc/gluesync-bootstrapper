@@ -865,7 +865,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     columns,
                     custom_config,
                     source_node_info,
-                    target_node_info
+                    target_node_info,
+                    source_agent_tag=source_agent_tag,
+                    target_agent_tag=target_agent_tag,
                 )
 
         # Generate table IDs for use in entities (prefer discovered IDs)

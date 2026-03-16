@@ -440,8 +440,12 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                 )
             ).lower()
             oracle_tags = get_oracle_agent_tags()
-            target_tag = str(target_agent_tag or '').lower()
-            target_is_oracle = (target_tag in oracle_tags) or ('oracle' in target_hint)
+            if not target_agent_tag:
+                raise ValueError(
+                    "target_agent_tag is required for table creation; pass the pipeline target agent tag."
+                )
+            target_tag = str(target_agent_tag).lower()
+            target_is_oracle = target_tag in oracle_tags
 
             def _normalize_oracle_smallint(mapped_type: str) -> str:
                 if target_is_oracle and str(mapped_type).strip().lower() == 'smallint':
