@@ -428,6 +428,23 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                     return default
                 return bool(value)
 
+            def _normalize_data_length(col_type: str, data_length: int) -> int:
+                base_type = str(col_type or '').split('(')[0].strip().lower()
+                length_value = _to_int(data_length, 0)
+                length_types = {
+                    'varchar2',
+                    'varchar',
+                    'char',
+                    'nchar',
+                    'nvarchar2',
+                    'raw',
+                    'binary',
+                    'varbinary',
+                }
+                if base_type in length_types:
+                    return length_value if length_value > 0 else 1024
+                return length_value
+
             # Check if targetOnlyColumns are defined - if so, use them instead of source columns
             if target_only_columns:
                 logger.info(f"Using targetOnlyColumns definition for table {target_table_name}")
@@ -458,6 +475,7 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                         source_agent_tag=source_agent_tag,
                         target_agent_tag=target_agent_tag,
                     )
+                    col_data_length = _normalize_data_length(mapped_type, col_data_length)
                     
                     column_dtos.append(ColumnDto(
                         name=col_name,
@@ -513,6 +531,7 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                             source_agent_tag=source_agent_tag,
                             target_agent_tag=target_agent_tag,
                         )
+                        col_data_length = _normalize_data_length(mapped_type, col_data_length)
                         resolved_target_type = mapped_type
 
                         column_dtos.append(ColumnDto(
@@ -538,15 +557,16 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                             source_agent_tag=source_agent_tag,
                             target_agent_tag=target_agent_tag,
                         )
+                        col_data_length = _normalize_data_length(mapped_type, col.get("dataLength", 0))
                         column_dtos.append(ColumnDto(
                             name=col["name"],
-                            type=format_column_type(mapped_type, col.get("dataLength", 0),
+                            type=format_column_type(mapped_type, col_data_length,
                                                    col.get("numericPrecision", 0), col.get("numericScale", 0)),
                             id=col.get("ordinalPosition", col.get("id", 1)),
                             ordinalPosition=col.get("ordinalPosition", col.get("id", 1)),
                             isPrimaryKey=_is_primary_key(col["name"]),
                             isNullable=col.get("isNullable", False),
-                            dataLength=col.get("dataLength", 0),
+                            dataLength=col_data_length,
                             numericPrecision=col.get("numericPrecision", 0),
                             numericScale=col.get("numericScale", 0)
                         ))
