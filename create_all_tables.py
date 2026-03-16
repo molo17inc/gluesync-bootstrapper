@@ -447,12 +447,16 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
             target_tag = str(target_agent_tag).lower()
             target_is_oracle = target_tag in oracle_tags
 
-            def _normalize_oracle_smallint(mapped_type: str) -> str:
-                if target_is_oracle and str(mapped_type).strip().lower() == 'smallint':
+            def _normalize_oracle_numeric(mapped_type: str) -> str:
+                if not target_is_oracle:
+                    return mapped_type
+                normalized_type = str(mapped_type).strip().lower()
+                if normalized_type in {'smallint', 'integer', 'int'}:
                     logger.warning(
-                        "Oracle target does not accept SMALLINT; forcing INTEGER mapping for table creation."
+                        "Oracle target does not accept %s; forcing NUMBER mapping for table creation.",
+                        mapped_type,
                     )
-                    return 'INTEGER'
+                    return 'NUMBER'
                 return mapped_type
 
             # Check if targetOnlyColumns are defined - if so, use them instead of source columns
@@ -485,7 +489,7 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                         source_agent_tag=source_agent_tag,
                         target_agent_tag=target_agent_tag,
                     )
-                    mapped_type = _normalize_oracle_smallint(mapped_type)
+                    mapped_type = _normalize_oracle_numeric(mapped_type)
                     
                     column_dtos.append(ColumnDto(
                         name=col_name,
@@ -541,11 +545,11 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                             source_agent_tag=source_agent_tag,
                             target_agent_tag=target_agent_tag,
                         )
-                        mapped_type = _normalize_oracle_smallint(mapped_type)
+                        resolved_target_type = _normalize_oracle_numeric(mapped_type)
 
                         column_dtos.append(ColumnDto(
                             name=col_name,
-                            type=format_column_type(mapped_type, col_data_length, col_numeric_precision, col_numeric_scale),
+                            type=format_column_type(resolved_target_type, col_data_length, col_numeric_precision, col_numeric_scale),
                             id=column_id,
                             ordinalPosition=ordinal_position,
                             isPrimaryKey=_is_primary_key(col_name),
@@ -566,7 +570,7 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                             source_agent_tag=source_agent_tag,
                             target_agent_tag=target_agent_tag,
                         )
-                        mapped_type = _normalize_oracle_smallint(mapped_type)
+                        mapped_type = _normalize_oracle_numeric(mapped_type)
                         column_dtos.append(ColumnDto(
                             name=col["name"],
                             type=format_column_type(mapped_type, col.get("dataLength", 0),
