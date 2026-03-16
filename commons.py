@@ -451,6 +451,10 @@ def map_data_type(source_type, source_node_info, target_node_info,
     """
     source_tag = source_agent_tag or (source_node_info or {}).get('agentTag', '')
     target_tag = target_agent_tag or (target_node_info or {}).get('agentTag', '')
+    source_tag_lower = source_tag.lower() if source_tag else ''
+    target_tag_lower = target_tag.lower() if target_tag else ''
+    source_is_postgres = source_tag_lower.startswith('postgres')
+    target_is_oracle = target_tag_lower.startswith('oracle')
 
     kotlin_source_matrix = get_matrix_for_agent(source_tag) if source_tag else []
     kotlin_target_matrix = get_matrix_for_agent(target_tag) if target_tag else []
@@ -592,6 +596,12 @@ def map_data_type(source_type, source_node_info, target_node_info,
 
     print(
         f"Warning: No target mapping found for Gluesync type {source_gluesync_type}. Using source type {source_type} as is.")
+
+    if source_is_postgres and target_is_oracle and normalized_source_type == 'smallint':
+        logger.warning(
+            "PostgreSQL smallint could not be mapped to Oracle; forcing INTEGER fallback for table creation context.")
+        return 'INT'
+
     return source_type
 
 
