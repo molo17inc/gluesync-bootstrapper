@@ -530,6 +530,11 @@ def map_data_type(source_type, source_node_info, target_node_info,
         supported_types_map = {t.lower(): t for t in target_item['supportedTypes']}
 
         if normalized_source_type in supported_types_map:
+            if source_is_postgres and target_is_oracle and normalized_source_type == 'smallint':
+                logger.warning(
+                    "PostgreSQL smallint cannot be created on Oracle; forcing INTEGER mapping.")
+                return 'INTEGER'
+
             server_type = supported_types_map[normalized_source_type]
             print(f"Direct match found: {server_type}")
             return server_type
@@ -600,7 +605,7 @@ def map_data_type(source_type, source_node_info, target_node_info,
     if source_is_postgres and target_is_oracle and normalized_source_type == 'smallint':
         logger.warning(
             "PostgreSQL smallint could not be mapped to Oracle; forcing INTEGER fallback for table creation context.")
-        return 'INT'
+        return 'INTEGER'
 
     return source_type
 
