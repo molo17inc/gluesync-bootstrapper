@@ -519,8 +519,6 @@ def map_data_type(source_type, source_node_info, target_node_info,
         )
     ).lower()
     source_is_postgres = 'postgres' in source_hint
-    oracle_tags = get_oracle_agent_tags()
-    target_is_oracle = (str(target_tag or '').lower() in oracle_tags) or ('oracle' in target_hint)
 
     kotlin_source_matrix = get_matrix_for_agent(source_tag) if source_tag else []
     kotlin_target_matrix = get_matrix_for_agent(target_tag) if target_tag else []
@@ -596,11 +594,6 @@ def map_data_type(source_type, source_node_info, target_node_info,
         supported_types_map = {t.lower(): t for t in target_item['supportedTypes']}
 
         if normalized_source_type in supported_types_map:
-            if target_is_oracle and normalized_source_type == 'smallint':
-                logger.warning(
-                    "Oracle target does not accept SMALLINT; forcing INTEGER mapping.")
-                return 'INTEGER'
-
             server_type = supported_types_map[normalized_source_type]
             print(f"Direct match found: {server_type}")
             return server_type
@@ -667,11 +660,6 @@ def map_data_type(source_type, source_node_info, target_node_info,
 
     print(
         f"Warning: No target mapping found for Gluesync type {source_gluesync_type}. Using source type {source_type} as is.")
-
-    if target_is_oracle and normalized_source_type == 'smallint':
-        logger.warning(
-            "Oracle target does not accept SMALLINT; forcing INTEGER fallback for table creation context.")
-        return 'INTEGER'
 
     return source_type
 

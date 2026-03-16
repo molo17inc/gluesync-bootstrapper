@@ -29,7 +29,7 @@ from utils.log import get_logger, create_log_file, log_success, log_failure, loc
 from utils.core_hub_client import CoreHubClient
 from commons import get_node_info, get_table_columns, fetch_core_hub, get_pipeline_config, get_pipeline_agents, \
     get_agent_tables, map_data_type, load_yaml_config, create_group, \
-    process_filter_clauses, get_oracle_agent_tags
+    process_filter_clauses
 from pydantic import BaseModel
 from typing import List
 
@@ -428,37 +428,6 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                     return default
                 return bool(value)
 
-            target_hint = " ".join(
-                filter(
-                    None,
-                    [
-                        target_agent_tag,
-                        target_node_info.get('databaseName'),
-                        target_node_info.get('agentName'),
-                        target_node_info.get('name'),
-                    ],
-                )
-            ).lower()
-            oracle_tags = get_oracle_agent_tags()
-            if not target_agent_tag:
-                raise ValueError(
-                    "target_agent_tag is required for table creation; pass the pipeline target agent tag."
-                )
-            target_tag = str(target_agent_tag).lower()
-            target_is_oracle = target_tag in oracle_tags
-
-            def _normalize_oracle_numeric(mapped_type: str) -> str:
-                if not target_is_oracle:
-                    return mapped_type
-                normalized_type = str(mapped_type).strip().lower()
-                if normalized_type in {'smallint', 'integer', 'int'}:
-                    logger.warning(
-                        "Oracle target does not accept %s; forcing NUMBER mapping for table creation.",
-                        mapped_type,
-                    )
-                    return 'NUMBER'
-                return mapped_type
-
             # Check if targetOnlyColumns are defined - if so, use them instead of source columns
             if target_only_columns:
                 logger.info(f"Using targetOnlyColumns definition for table {target_table_name}")
@@ -489,7 +458,6 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                         source_agent_tag=source_agent_tag,
                         target_agent_tag=target_agent_tag,
                     )
-                    mapped_type = _normalize_oracle_numeric(mapped_type)
                     
                     column_dtos.append(ColumnDto(
                         name=col_name,
@@ -545,7 +513,7 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                             source_agent_tag=source_agent_tag,
                             target_agent_tag=target_agent_tag,
                         )
-                        resolved_target_type = _normalize_oracle_numeric(mapped_type)
+                        resolved_target_type = mapped_type
 
                         column_dtos.append(ColumnDto(
                             name=col_name,
@@ -570,7 +538,6 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                             source_agent_tag=source_agent_tag,
                             target_agent_tag=target_agent_tag,
                         )
-                        mapped_type = _normalize_oracle_numeric(mapped_type)
                         column_dtos.append(ColumnDto(
                             name=col["name"],
                             type=format_column_type(mapped_type, col.get("dataLength", 0),
