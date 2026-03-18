@@ -28,6 +28,7 @@ import time
 import subprocess
 import uuid
 import urllib3
+from typing import Optional
 import ssl
 import secrets
 import string
@@ -127,7 +128,7 @@ fake = Faker()
 log_file = create_log_file()
 logger = get_logger(log_file)
 
-_AGENT_TYPE_BY_NAME_BOOT: dict[str, str] | None = None
+_AGENT_TYPE_BY_NAME_BOOT: Optional[dict[str, str]] = None
 
 
 def _load_agent_type_catalog_for_bootstrapper() -> dict[str, str]:
@@ -196,8 +197,8 @@ def infer_pipeline_schema_types_from_config(conf: dict) -> tuple[str, str]:
     if not isinstance(agents_cfg, list):
         return "SQL", "SQL"
 
-    src_type: str | None = None
-    tgt_type: str | None = None
+    src_type: Optional[str] = None
+    tgt_type: Optional[str] = None
 
     for agent in agents_cfg:
         if not isinstance(agent, dict):

@@ -28,6 +28,7 @@ import os
 import socket
 import sys
 import threading
+from typing import Optional
 import webbrowser
 
 import uvicorn
@@ -54,7 +55,7 @@ def _show_error_dialog(title: str, message: str) -> None:
         LOGGER.error("%s: %s", title, message)
 
 
-def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the Gluesync Automator web UI")
     parser.add_argument(
         "--host",
@@ -178,7 +179,7 @@ def _open_browser(url: str) -> None:
     webbrowser.open(url)
 
 
-def _resolve_icon_path() -> str | None:
+def _resolve_icon_path() -> Optional[str]:
     """Return absolute path to the tray icon, handling PyInstaller bundles."""
     icon_rel = os.path.join('automator_app', 'static', 'favicon.ico')
     base_path = getattr(sys, '_MEIPASS', os.path.abspath(os.path.dirname(__file__)))
@@ -276,7 +277,7 @@ class GluesyncTrayApp:
             self.show_window()
 
 
-def main(argv: list[str] | None = None) -> None:
+def main(argv: Optional[list[str]] = None) -> None:
     # Filter out multiprocessing fork arguments that shouldn't be parsed
     if argv is None:
         argv = sys.argv[1:]

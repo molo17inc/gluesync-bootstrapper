@@ -22,7 +22,7 @@
 
 import argparse
 import os
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from commons import fetch_core_hub
 from export_template_from_corehub import (
@@ -72,7 +72,7 @@ def list_pipelines(token: str) -> List[Dict[str, Any]]:
     return pipelines
 
 
-def export_single_pipeline(token: str, pipeline_id: str, output_dir: str | None = None) -> str | None:
+def export_single_pipeline(token: str, pipeline_id: str, output_dir: Optional[str] = None) -> Optional[str]:
     """Export a single pipeline configuration to YAML.
 
     Returns the output file path on success, or None on failure.

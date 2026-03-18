@@ -71,7 +71,7 @@ logger = logging.getLogger(__name__)
 class DuplicateCancelledError(RuntimeError):
     """Raised when a duplicate pipeline request is cancelled by the user."""
 
-_AGENT_TYPE_BY_NAME: Dict[str, str] | None = None
+_AGENT_TYPE_BY_NAME: Optional[Dict[str, str]] = None
 
 def _get_agents_file_path() -> str:
     """Resolve path to agents.json in both dev and PyInstaller bundle."""
@@ -292,7 +292,7 @@ def run_create_entities(
         root_logger.addHandler(handler)
 
     buffer = io.StringIO()
-    result_payload: Dict[str, Any] | None = None
+    result_payload: Optional[Dict[str, Any]] = None
     try:
         with redirect_stdout(buffer):
             result_payload = create_entities_main(

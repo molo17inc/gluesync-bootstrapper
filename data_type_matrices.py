@@ -10,6 +10,8 @@ Use get_matrix_for_agent(agent_tag) to look up the matrix for a given agent.
 Use map_source_type_to_target(source_type, source_tag, target_tag) to map a type end-to-end.
 """
 
+from typing import Optional
+
 # ---------------------------------------------------------------------------
 # MySQL / MariaDB
 # ---------------------------------------------------------------------------
@@ -766,7 +768,7 @@ def get_matrix_for_agent(agent_tag: str) -> list:
     return AGENT_MATRICES.get(str(agent_tag).lower(), [])
 
 
-def _source_type_to_gs(source_type: str, source_matrix: list) -> str | None:
+def _source_type_to_gs(source_type: str, source_matrix: list) -> Optional[str]:
     """Resolve a native source type to a GlueSync canonical type name."""
     needle = source_type.lower().strip()
     for entry in source_matrix:
@@ -775,7 +777,7 @@ def _source_type_to_gs(source_type: str, source_matrix: list) -> str | None:
     return None
 
 
-def _gs_type_to_target(gs_type: str, target_matrix: list) -> str | None:
+def _gs_type_to_target(gs_type: str, target_matrix: list) -> Optional[str]:
     """Resolve a GlueSync canonical type to the default native target type."""
     for entry in target_matrix:
         if entry.get("gluesyncDataType") == gs_type:
@@ -783,7 +785,7 @@ def _gs_type_to_target(gs_type: str, target_matrix: list) -> str | None:
     return None
 
 
-def map_source_type_to_target(source_type: str, source_tag: str, target_tag: str) -> str | None:
+def map_source_type_to_target(source_type: str, source_tag: str, target_tag: str) -> Optional[str]:
     """Map *source_type* from *source_tag* agent to the equivalent type on *target_tag* agent.
 
     Returns the mapped target type string, or None if either agent is unknown

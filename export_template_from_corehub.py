@@ -24,7 +24,7 @@ import argparse
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
@@ -36,7 +36,7 @@ from utils.log import create_log_file, get_logger, log_failure, log_success
 log_file = create_log_file()
 logger = get_logger(log_file)
 
-_AGENT_TYPE_BY_NAME: Dict[str, str] | None = None
+_AGENT_TYPE_BY_NAME: Optional[Dict[str, str]] = None
 
 
 def _load_agent_type_catalog() -> Dict[str, str]:
@@ -934,7 +934,7 @@ def attach_schedules_from_jobs(
 
 def build_yaml_structure(
     schemas: Dict[str, Dict[str, Any]],
-    groups_by_name: Dict[str, Dict[str, Any]] | None = None,
+    groups_by_name: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Convert internal schema representation and group metadata to final YAML structure."""
     if not schemas:
