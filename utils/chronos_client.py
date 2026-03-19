@@ -216,7 +216,7 @@ class ChronosClient:
         if not pipeline_id:
             raise ValueError("pipeline_id is required")
             
-        if task_type not in ('pipeline_start', 'pipeline_stop', 'pipeline_snapshot', 'pipeline_redo'):
+        if task_type not in ('pipeline_start', 'pipeline_stop', 'pipeline_snapshot', 'pipeline_redo', 'pipeline_enter_maintenance', 'pipeline_exit_maintenance'):
             raise ValueError(f"Invalid task_type for pipeline: {task_type}")
             
         # Generate a name if not provided
@@ -225,7 +225,9 @@ class ChronosClient:
                 'pipeline_start': 'Start',
                 'pipeline_stop': 'Stop',
                 'pipeline_snapshot': 'Snapshot',
-                'pipeline_redo': 'Redo'
+                'pipeline_redo': 'Redo',
+                'pipeline_enter_maintenance': 'Enter Maintenance',
+                'pipeline_exit_maintenance': 'Exit Maintenance'
             }
             name = f"{task_name_map.get(task_type, 'Schedule')} for pipeline {pipeline_id}"
             

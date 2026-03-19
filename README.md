@@ -604,12 +604,66 @@ Supported task types for pipeline-level schedules:
 - `pipeline_start`: Start the entire pipeline
 - `pipeline_stop`: Stop the entire pipeline
 - `pipeline_snapshot`: Create a snapshot of the entire pipeline
+- `pipeline_redo`: Trigger redo (snapshot + CDC restart) for the entire pipeline
+- `pipeline_enter_maintenance`: Enter maintenance mode for the pipeline
+- `pipeline_exit_maintenance`: Exit maintenance mode for the pipeline
 
 Supported task types for entity-level schedules:
 
 - `entity_start`: Start a specific entity
 - `entity_stop`: Stop a specific entity
 - `entity_snapshot`: Create a snapshot of a specific entity
+
+#### Maintenance Mode Scheduling
+
+Maintenance mode allows you to schedule when a pipeline enters and exits maintenance mode. This is useful for:
+
+- **Planned maintenance windows**: Schedule regular maintenance periods (e.g., weekends, overnight)
+- **System updates**: Automatically enter maintenance mode before system updates
+- **Resource management**: Reduce system load during specific time periods
+- **Data consistency**: Ensure data consistency during backup or migration operations
+
+**Example: Weekend Maintenance Window**
+
+```yaml
+schedules:
+  - name: "Weekend maintenance mode - enter"
+    description: "Enter maintenance mode every Saturday at midnight"
+    task_type: "pipeline_enter_maintenance"
+    schedule:
+      days_of_week: ["saturday"]
+      hour: 0
+      minute: 0
+    enabled: true
+  
+  - name: "Weekend maintenance mode - exit"
+    description: "Exit maintenance mode every Monday at 6:00 AM"
+    task_type: "pipeline_exit_maintenance"
+    schedule:
+      days_of_week: ["monday"]
+      hour: 6
+      minute: 0
+    enabled: true
+```
+
+**Example: Nightly Maintenance Window**
+
+```yaml
+schedules:
+  - name: "Nightly maintenance - enter"
+    description: "Enter maintenance mode every night at 11 PM"
+    task_type: "pipeline_enter_maintenance"
+    cron_expression: "0 23 * * 1-5"  # Weekdays at 11 PM
+    enabled: true
+  
+  - name: "Nightly maintenance - exit"
+    description: "Exit maintenance mode every morning at 6 AM"
+    task_type: "pipeline_exit_maintenance"
+    cron_expression: "0 6 * * 2-6"  # Tuesday-Saturday at 6 AM
+    enabled: true
+```
+
+**Note**: When scheduling maintenance mode, ensure that the exit schedule is properly aligned with the enter schedule to avoid leaving the pipeline in maintenance mode indefinitely.
 
 ## Advanced Features
 

@@ -72,6 +72,23 @@ dbo:
       with_snapshot: true
       snapshot_write_method: "UPSERT"
       enabled: true
+    # Maintenance mode schedules
+    - name: "Weekend maintenance mode - enter"
+      description: "Enter maintenance mode every Saturday at midnight"
+      task_type: "pipeline_enter_maintenance"
+      schedule:
+        days_of_week: ["saturday"]
+        hour: 0
+        minute: 0
+      enabled: true
+    - name: "Weekend maintenance mode - exit"
+      description: "Exit maintenance mode every Monday at 6:00 AM"
+      task_type: "pipeline_exit_maintenance"
+      schedule:
+        days_of_week: ["monday"]
+        hour: 6
+        minute: 0
+      enabled: true
   # Group schedules can be defined in two ways:
   # 1. As a list of schedule configurations that can apply to multiple groups (recommended)
   # 2. As a dictionary mapping group IDs to their schedules (legacy format)
