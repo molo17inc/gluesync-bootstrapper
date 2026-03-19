@@ -21,6 +21,7 @@
 import os
 import requests
 import json
+import time
 from urllib.parse import urljoin, urlparse, urlunparse
 from utils.log import get_logger, log_success, log_failure
 
@@ -62,6 +63,45 @@ class ChronosClient:
                 self.base_url = updated_url
         
         logger.info(f"Initializing Chronos client with base URL: {self.base_url}, SSL={self.use_ssl}, verify={self.verify_ssl}")
+    
+    def wait_for_chronos(self, max_retries=30, retry_delay=2):
+        """
+        Wait for Chronos to be available before attempting operations.
+        
+        Args:
+            max_retries (int): Maximum number of connection attempts (default: 30)
+            retry_delay (int): Seconds to wait between retries (default: 2)
+            
+        Returns:
+            bool: True if Chronos is available, False otherwise
+        """
+        health_endpoint = 'api/health'
+        url = urljoin(self.base_url, health_endpoint)
+        verify = self.verify_ssl if self.use_ssl else False
+        
+        logger.info(f"Waiting for Chronos to be available at {self.base_url} (max {max_retries} retries, {retry_delay}s delay)")
+        
+        for attempt in range(1, max_retries + 1):
+            try:
+                response = requests.get(url, verify=verify, timeout=5)
+                if response.status_code == 200:
+                    logger.info(f"Chronos is available (attempt {attempt}/{max_retries})")
+                    return True
+                else:
+                    logger.warning(f"Chronos health check returned status {response.status_code} (attempt {attempt}/{max_retries})")
+            except requests.exceptions.ConnectionError as e:
+                logger.warning(f"Connection refused to Chronos (attempt {attempt}/{max_retries}): {str(e)}")
+            except requests.exceptions.Timeout:
+                logger.warning(f"Timeout connecting to Chronos (attempt {attempt}/{max_retries})")
+            except Exception as e:
+                logger.warning(f"Error checking Chronos health (attempt {attempt}/{max_retries}): {str(e)}")
+            
+            if attempt < max_retries:
+                logger.info(f"Retrying in {retry_delay} seconds...")
+                time.sleep(retry_delay)
+        
+        logger.error(f"Chronos is not available after {max_retries} attempts")
+        return False
         
     def _request(self, endpoint, method='GET', data=None, params=None):
         """Make a request to the Chronos API."""
