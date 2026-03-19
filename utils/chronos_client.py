@@ -75,26 +75,28 @@ class ChronosClient:
         Returns:
             bool: True if Chronos is available, False otherwise
         """
-        health_endpoint = 'api/health'
-        url = urljoin(self.base_url, health_endpoint)
+        # Use the jobs endpoint to check if Chronos is available
+        check_endpoint = 'api/jobs/'
+        url = urljoin(self.base_url, check_endpoint)
         verify = self.verify_ssl if self.use_ssl else False
         
         logger.info(f"Waiting for Chronos to be available at {self.base_url} (max {max_retries} retries, {retry_delay}s delay)")
         
         for attempt in range(1, max_retries + 1):
             try:
-                response = requests.get(url, verify=verify, timeout=5)
+                response = requests.get(url, verify=verify, timeout=5, params={'limit': 1})
+                # Accept 200 (success) as a sign that Chronos is available
                 if response.status_code == 200:
                     logger.info(f"Chronos is available (attempt {attempt}/{max_retries})")
                     return True
                 else:
-                    logger.warning(f"Chronos health check returned status {response.status_code} (attempt {attempt}/{max_retries})")
+                    logger.warning(f"Chronos returned status {response.status_code} (attempt {attempt}/{max_retries})")
             except requests.exceptions.ConnectionError as e:
-                logger.warning(f"Connection refused to Chronos (attempt {attempt}/{max_retries}): {str(e)}")
+                logger.warning(f"Connection refused to Chronos (attempt {attempt}/{max_retries})")
             except requests.exceptions.Timeout:
                 logger.warning(f"Timeout connecting to Chronos (attempt {attempt}/{max_retries})")
             except Exception as e:
-                logger.warning(f"Error checking Chronos health (attempt {attempt}/{max_retries}): {str(e)}")
+                logger.warning(f"Error checking Chronos availability (attempt {attempt}/{max_retries}): {str(e)}")
             
             if attempt < max_retries:
                 logger.info(f"Retrying in {retry_delay} seconds...")
