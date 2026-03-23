@@ -978,6 +978,23 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             # Also add mappingFunctionInfo for the first UDF
             target_entity_type["mappingFunctionInfo"] = udf_config[0]
         
+        # Discover target columns first (needed for columnsMappingMatrix)
+        target_discovered_columns = None
+        target_discovered_columns_by_name = {}
+        try:
+            target_discovered_columns = get_table_columns(token, pipeline_id, target_agent_id, yaml_target_schema, target_table_name)
+            if target_discovered_columns and isinstance(target_discovered_columns.get('columns'), list):
+                target_discovered_columns_by_name = {
+                    c.get('name').lower(): c
+                    for c in target_discovered_columns['columns']
+                    if c.get('name')
+                }
+                logger.debug(
+                    f"Found {len(target_discovered_columns_by_name)} existing columns in target table {yaml_target_schema}.{target_table_name}"
+                )
+        except Exception as e:
+            logger.debug(f"Could not get target columns for {yaml_target_schema}.{target_table_name}: {str(e)}")
+
         # Generate columnsMappingMatrix
         columns_mapping_matrix = []
         
@@ -997,7 +1014,14 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             logger.info(f"Table {table_name} configured with unlocked schema. Target table ID: {target_table_id}")
         else:
             # For locked schema, create mapping for each column
-            # Get the actual columns from the discovery API response
+            # Build a map of source column name -> target column name from columns_def
+            source_to_target_name_map = {}
+            for col_def in columns_def:
+                source_name = col_def.get('name')
+                target_name = col_def.get('alias', source_name)
+                if source_name:
+                    source_to_target_name_map[source_name] = target_name
+            
             max_target_col_id = 0
             if 'columns' in columns and isinstance(columns['columns'], list):
                 for col in columns['columns']:
@@ -1008,8 +1032,18 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         logger.error(error_msg)
                         raise ValueError(error_msg)
                     
-                    # For target column ID, it's the same as source unless there's a mapping
-                    target_col_id = source_col_id
+                    # Look up the target column name from the mapping
+                    source_col_name = col.get('name')
+                    target_col_name = source_to_target_name_map.get(source_col_name, source_col_name)
+                    
+                    # Find the target column ID from discovered target columns
+                    target_col_id = source_col_id  # Default to source ID
+                    target_col = target_discovered_columns_by_name.get(target_col_name.lower())
+                    if target_col and target_col.get('id') is not None:
+                        target_col_id = target_col.get('id')
+                        logger.debug(f"Mapped column: {source_col_name} (ID={source_col_id}) -> {target_col_name} (ID={target_col_id})")
+                    else:
+                        logger.debug(f"No target column found for {target_col_name}, using source ID {source_col_id}")
                     
                     columns_mapping_matrix.append({
                         "sourceTableObjectId": source_table_id,
@@ -1032,22 +1066,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
         # Add columnsMappingMatrix to entityType
         target_entity_type["columnsMappingMatrix"] = columns_mapping_matrix
-
-        target_discovered_columns = None
-        target_discovered_columns_by_name = {}
-        try:
-            target_discovered_columns = get_table_columns(token, pipeline_id, target_agent_id, yaml_target_schema, target_table_name)
-            if target_discovered_columns and isinstance(target_discovered_columns.get('columns'), list):
-                target_discovered_columns_by_name = {
-                    c.get('name').lower(): c
-                    for c in target_discovered_columns['columns']
-                    if c.get('name')
-                }
-                logger.debug(
-                    f"Found {len(target_discovered_columns_by_name)} existing columns in target table {yaml_target_schema}.{target_table_name}"
-                )
-        except Exception as e:
-            logger.debug(f"Could not get target columns for {yaml_target_schema}.{target_table_name}: {str(e)}")
 
         # Build target columns definition with IDs
         target_columns_def = []
