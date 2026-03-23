@@ -1231,8 +1231,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 # Use column mappings for keys - map source key names to target key names
                 for col in columns["columns"]:
                     # Use the id field from CoreHub API as the column ID
-                    col_id = col.get('id')
-                    if col_id is None:
+                    source_col_id = col.get('id')
+                    if source_col_id is None:
                         error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
                         logger.error(error_msg)
                         raise ValueError(error_msg)
@@ -1244,18 +1244,24 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             if source_name == col["name"] and source_name in custom_config.get('keys', []):
                                 discovered_target_col = target_discovered_columns_by_name.get(target_name.lower())
                                 resolved_target_type = None
-                                if discovered_target_col and discovered_target_col.get('type'):
-                                    resolved_target_type = discovered_target_col.get('type')
+                                target_col_id = source_col_id  # Default to source ID
+                                
+                                if discovered_target_col:
+                                    if discovered_target_col.get('type'):
+                                        resolved_target_type = discovered_target_col.get('type')
+                                    if discovered_target_col.get('id') is not None:
+                                        target_col_id = discovered_target_col.get('id')
                                 else:
                                     resolved_target_type = map_data_type(col["type"], source_node_info, target_node_info,
                                                                          source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
 
                                 target_keys.append({
-                                    "id": col_id,  # Use actual ordinal position from database
+                                    "id": target_col_id,  # Use target column ID
                                     "name": target_name,
                                     "alias": target_name,
                                     "type": resolved_target_type
                                 })
+                                logger.debug(f"Target key: {source_name} -> {target_name} (source ID={source_col_id}, target ID={target_col_id})")
                                 break
             else:
                 # No column mappings, use keys directly from source columns
@@ -1264,16 +1270,21 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     for col in columns["columns"]:
                         if col["name"].lower() == key_name.lower():
                             # Use the id field from CoreHub API as the column ID
-                            col_id = col.get('id')
-                            if col_id is None:
+                            source_col_id = col.get('id')
+                            if source_col_id is None:
                                 error_msg = f"CRITICAL ERROR: Column '{key_name}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
                                 logger.error(error_msg)
                                 raise ValueError(error_msg)
 
                             discovered_target_col = target_discovered_columns_by_name.get(key_name.lower())
                             resolved_target_type = None
-                            if discovered_target_col and discovered_target_col.get('type'):
-                                resolved_target_type = discovered_target_col.get('type')
+                            target_col_id = source_col_id  # Default to source ID
+                            
+                            if discovered_target_col:
+                                if discovered_target_col.get('type'):
+                                    resolved_target_type = discovered_target_col.get('type')
+                                if discovered_target_col.get('id') is not None:
+                                    target_col_id = discovered_target_col.get('id')
                             else:
                                 resolved_target_type = map_data_type(col["type"], source_node_info, target_node_info,
                                                                      source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
@@ -1282,11 +1293,12 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             # Fall back to source column name if target column not found
                             target_key_name = discovered_target_col.get('name') if discovered_target_col else col["name"]
                             target_keys.append({
-                                "id": col_id,  # Use actual ordinal position from database
+                                "id": target_col_id,  # Use target column ID
                                 "name": target_key_name,
                                 "alias": target_key_name,
                                 "type": resolved_target_type
                             })
+                            logger.debug(f"Target key: {key_name} (source ID={source_col_id}, target ID={target_col_id})")
                             break
                     else:
                         logger.warning(f"Key '{key_name}' not found in columns for table '{table_name}'")
