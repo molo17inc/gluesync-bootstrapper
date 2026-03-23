@@ -1076,14 +1076,12 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         if has_column_mappings_target:
             # Custom column mappings for target
             for col in columns["columns"]:
-                # Use the id field from CoreHub API as the column ID
-                col_id = col.get('id')
-                if col_id is None:
+                # Use the id field from CoreHub API as the source column ID
+                source_col_id = col.get('id')
+                if source_col_id is None:
                     error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
                     logger.error(error_msg)
                     raise ValueError(error_msg)
-                
-                max_target_col_id = max(max_target_col_id, col_id)
                 
                 for column_map in custom_config.get('columns', []):
                     # Extract source:target pairs, ignoring metadata fields
@@ -1092,44 +1090,56 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         if source_name == col["name"]:
                             discovered_target_col = target_discovered_columns_by_name.get(target_name.lower())
                             resolved_target_type = None
-                            if discovered_target_col and discovered_target_col.get('type'):
-                                resolved_target_type = discovered_target_col.get('type')
+                            target_col_id = source_col_id  # Default to source ID
+                            
+                            if discovered_target_col:
+                                if discovered_target_col.get('type'):
+                                    resolved_target_type = discovered_target_col.get('type')
+                                if discovered_target_col.get('id') is not None:
+                                    target_col_id = discovered_target_col.get('id')
                             else:
                                 resolved_target_type = map_data_type(col["type"], source_node_info, target_node_info,
                                                                      source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
 
+                            max_target_col_id = max(max_target_col_id, target_col_id)
                             target_columns_def.append({
-                                "id": col_id,  # Use actual ordinal position from database
+                                "id": target_col_id,  # Use target column ID
                                 "name": target_name,
                                 "alias": target_name,
                                 "type": resolved_target_type
                             })
+                            break
         
         if not has_column_mappings_target or not target_columns_def:
             # No column mappings - use columns as-is with mapped types
             for col in columns["columns"]:
-                # Use the id field from CoreHub API as the column ID
-                col_id = col.get('id')
-                if col_id is None:
+                # Use the id field from CoreHub API as the source column ID
+                source_col_id = col.get('id')
+                if source_col_id is None:
                     error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
                     logger.error(error_msg)
                     raise ValueError(error_msg)
-                
-                max_target_col_id = max(max_target_col_id, col_id)
 
                 discovered_target_col = target_discovered_columns_by_name.get(col["name"].lower())
                 resolved_target_type = None
-                if discovered_target_col and discovered_target_col.get('type'):
-                    resolved_target_type = discovered_target_col.get('type')
+                target_col_id = source_col_id  # Default to source ID
+                
+                if discovered_target_col:
+                    if discovered_target_col.get('type'):
+                        resolved_target_type = discovered_target_col.get('type')
+                    if discovered_target_col.get('id') is not None:
+                        target_col_id = discovered_target_col.get('id')
                 else:
                     resolved_target_type = map_data_type(col["type"], source_node_info, target_node_info,
                                                          source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
 
+                max_target_col_id = max(max_target_col_id, target_col_id)
+                
                 # Use the target-discovered column name (preserves original case from target DB)
                 # Fall back to source column name if target column not found
                 target_col_name = discovered_target_col.get('name') if discovered_target_col else col["name"]
                 target_columns_def.append({
-                    "id": col_id,  # Use actual ordinal position from database
+                    "id": target_col_id,  # Use target column ID
                     "name": target_col_name,
                     "alias": target_col_name,
                     "type": resolved_target_type
