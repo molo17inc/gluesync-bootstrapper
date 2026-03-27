@@ -84,7 +84,7 @@ def set_scheduling_enabled(enabled: bool):
 
 logger = get_logger()
 
-_ORACLE_AGENT_TAGS: set[str] | None = None
+_ORACLE_AGENT_TAGS: Optional[set[str]] = None
 
 
 def get_oracle_agent_tags() -> set[str]:

@@ -19,6 +19,7 @@
 # Copyright (C) 2025 MOLO17. All rights reserved.
 
 stages:
+  - validate
   - build
   - deploy
 
@@ -31,7 +32,33 @@ variables:
   AWS_REGION: us-east-1
   STACK_NAME: dbmoto-xml-converter
   RESULTS_BUCKET_PREFIX: gluesync-conversion-results
-  HOSTED_ZONE_ID: ""  # Route 53 hosted zone ID for molo17.com - set in GitLab CI/CD variables
+  HOSTED_ZONE_ID: "" # Route 53 hosted zone ID for molo17.com - set in GitLab CI/CD variables
+
+# Run syntax check on every commit to catch PyInstaller issues early
+pyinstaller_syntax_check:
+  stage: validate
+  image: python:3.9-bullseye
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: always
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: always
+    - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
+      when: always
+    - when: never
+  variables:
+    PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    PYTHONDONTWRITEBYTECODE: "1"
+  before_script:
+    - python3 --version
+    - pip3 install --break-system-packages --upgrade pip
+    - pip3 install --break-system-packages -r requirements.txt
+  script:
+    - echo "Running PyInstaller compatibility syntax check..."
+    - python3 integration-tests/test_pyinstaller_compatibility.py --quick-check
+    - echo "Running full unit test suite..."
+    - python3 -m unittest integration-tests.test_pyinstaller_compatibility -v
+  allow_failure: false
 
 automator_build:
   stage: build
@@ -137,9 +164,9 @@ automator_publish:
       artifacts: true
     - job: automator_build_windows
       artifacts: true
-    - job: automator_build_macos  # Uncomment when macOS CI is enabled
+    - job: automator_build_macos # Uncomment when macOS CI is enabled
       artifacts: true
-      optional: true  # Make it optional since macOS build might be disabled
+      optional: true # Make it optional since macOS build might be disabled
   rules:
     - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
       when: always
@@ -149,8 +176,7 @@ automator_publish:
   script:
     - echo "Checking available build artifacts..."
     - ls -la .automator-build/dist/ || echo "No .automator-build/dist directory found"
-    - 
-      |
+    - |
       cd .automator-build/dist
       lftp -c "open -u $FTP_USER,$FTP_PASSWORD $FTP_SITE; put gluesync-automator-windows.exe -o /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-windows.exe" 
       lftp -c "open -u $FTP_USER,$FTP_PASSWORD $FTP_SITE; put gluesync-automator-linux -o /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-linux" 
@@ -178,13 +204,12 @@ deploy:
     - echo "Building & deploying started..."
 
     - apk add --no-cache bash git
-    
+
     # Initialize and update the Git submodule
     - git submodule init
     - git submodule update
 
-    - 
-      | 
+    - |
       MODULE_NAME=${CI_COMMIT_TAG#tag-}  # Removes everything before "tag-"
       MODULE_NAME=${MODULE_NAME%-v*}  # Removes everything after the last "-"
 
@@ -239,10 +264,10 @@ deploy_lambda:
       # Set operation type for later use
       export OPERATION="create-stack"
       export WAIT_OPERATION="stack-create-complete"
-      
+
       # Load template body once
       TEMPLATE_BODY=$(cat cloudformation-template.yaml)
-      
+
       # Check if we need to update or create the stack
       if aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
         echo "🔍 Checking for stack updates..."
@@ -348,7 +373,7 @@ deploy_lambda:
       WAIT_START=$(date +%s)
       TIMEOUT=300
       LAMBDA_READY=false
-      
+
       while [ $(( $(date +%s) - WAIT_START )) -lt $TIMEOUT ]; do
         if aws lambda get-function --function-name dbmoto-xml-converter --region "$AWS_REGION" >/dev/null 2>&1; then
           LAMBDA_READY=true
@@ -357,12 +382,12 @@ deploy_lambda:
         echo "⏱️  Waiting for Lambda function to be available... ($(( $(date +%s) - WAIT_START ))s elapsed)"
         sleep 10
       done
-      
+
       if [[ "$LAMBDA_READY" == "false" ]]; then
         echo "❌ Timeout waiting for Lambda function to be available"
         exit 1
       fi
-      
+
       echo "📦 Updating Lambda function code..."
       aws lambda update-function-code \
         --function-name dbmoto-xml-converter \
@@ -376,7 +401,7 @@ deploy_lambda:
     - |
       CURRENT_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].StackStatus' --output text)
       echo "📊 Current stack status: $CURRENT_STATUS"
-      
+
       if [[ "$CURRENT_STATUS" == "CREATE_COMPLETE" ]] || [[ "$CURRENT_STATUS" == "UPDATE_COMPLETE" ]]; then
         echo "✅ Stack is already complete, skipping wait!"
       elif [[ "$CURRENT_STATUS" == *"FAILED"* ]] || [[ "$CURRENT_STATUS" == "ROLLBACK_COMPLETE" ]]; then
@@ -563,7 +588,7 @@ update_budibase_version:
     - apk add --no-cache bash curl jq
     - |
       set -euo pipefail
-      
+
       if [ -z "${CI_COMMIT_TAG:-}" ]; then
         echo "[ERROR] Not a tracked tag"
         exit 1
@@ -586,7 +611,7 @@ update_budibase_version:
       esac
 
       echo "[INFO] Updating Budibase version: BUILD_TAG=$BUILD_TAG, MODULE_VERSION=$MODULE_VERSION"
-      
+
       SEARCH_PAYLOAD="{
         \"query\": {
           \"equal\": {
@@ -650,6 +675,6 @@ update_budibase_version:
       fi
   rules:
     - if: '$CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/'
-    - if: '$CI_COMMIT_TAG =~ /^release-/'
-    - if: '$CI_COMMIT_TAG =~ /^beta-/'
-    - if: '$CI_COMMIT_TAG =~ /^tag-/'
+    - if: "$CI_COMMIT_TAG =~ /^release-/"
+    - if: "$CI_COMMIT_TAG =~ /^beta-/"
+    - if: "$CI_COMMIT_TAG =~ /^tag-/"
