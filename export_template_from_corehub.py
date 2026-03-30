@@ -622,7 +622,21 @@ def _process_single_entity(
         if k not in source_excluded
     }
 
-    target_cp = (target_ae.get("customProperties") or {}).copy()
+    target_et = target_ae.get("entityType", {}) or {}
+
+    # Internal/system keys that should not be exported as custom properties
+    target_internal_keys = {
+        "type", "filter", "snapshotDeleteFilter", "udf", "mappingFunctionInfo",
+        "allowedOperations", "columnsMappingMatrix", "tablesWithUnlockedSchema",
+        "tablesWithUnlockedDataTypes"
+    }
+
+    # Start with all properties from entityType (dynamic export like import)
+    target_cp = {
+        k: v
+        for k, v in target_et.items()
+        if k not in target_internal_keys and v is not None
+    }
 
     # UDFs are stored on entityType, but YAML expects them in customProperties.target.udf.
     # Prefer the explicit "udf" array when present; otherwise, fall back to
@@ -640,20 +654,6 @@ def _process_single_entity(
                 udf_cfg = [udf_entry]
     if udf_cfg:
         target_cp["udf"] = udf_cfg
-
-    # Snapshot concurrency: expose only when different from default 1
-    snapshot_conc = target_et.get("snapshotWritingConcurrency")
-    if isinstance(snapshot_conc, int) and snapshot_conc != 1:
-        target_cp["snapshotWritingConcurrency"] = snapshot_conc
-
-    # Bulk operations flags (default False) - include only when enabled
-    bulk_cdc = target_et.get("useBulkOperationsDuringCDC")
-    if isinstance(bulk_cdc, bool) and bulk_cdc:
-        target_cp["useBulkOperationsDuringCDC"] = bulk_cdc
-
-    bulk_snapshot = target_et.get("useBulkOperationsWhileSnapshot")
-    if isinstance(bulk_snapshot, bool) and bulk_snapshot:
-        target_cp["useBulkOperationsWhileSnapshot"] = bulk_snapshot
 
     # allowedOperations: expose effective operations when different from default
     allowed_ops = target_et.get("allowedOperations")
