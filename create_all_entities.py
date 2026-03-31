@@ -577,18 +577,41 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
     for table in tables:
         if isinstance(table, str):
             table_name = table
+            table_schema = None  # Unknown schema for string-only tables
         else:
             table_name = table.get("name")
+            table_schema = table.get("schema")  # Get schema from table object if available
 
         if not table_name:
             logger.warning(f"Warning: Table without name encountered. Skipping.")
             continue
 
-        if (table_name.startswith("sys") or
-                (blacklist and table_name in blacklist) or
-                (whitelist and table_name not in whitelist)):
-            logger.info(f"Skipping table: {table_name}")
+        # Validate that the table belongs to the requested source schema
+        # The API may return tables from all schemas, so we need to filter
+        if table_schema and table_schema.lower() != source_schema.lower():
+            logger.debug(f"Skipping table {table_name}: belongs to schema '{table_schema}' but processing schema '{source_schema}'")
             continue
+
+        # Skip system tables
+        if table_name.startswith("sys"):
+            logger.info(f"Skipping system table: {table_name}")
+            continue
+
+        # Skip blacklisted tables
+        if blacklist and table_name in blacklist:
+            logger.info(f"Skipping blacklisted table: {table_name}")
+            continue
+
+        # STRICT WHITELIST ENFORCEMENT:
+        # If whitelist is defined and not empty, ONLY process tables in the whitelist
+        if whitelist:
+            if table_name not in whitelist:
+                logger.info(f"Skipping table {table_name}: not in whitelist for schema {source_schema}")
+                continue
+            else:
+                logger.debug(f"Table {table_name} is in whitelist for schema {source_schema} - processing")
+        else:
+            logger.debug(f"No whitelist defined for schema {source_schema}, allowing table {table_name}")
 
         columns = get_table_columns(token, pipeline_id, source_agent_id, source_schema, table_name)
         
@@ -1870,6 +1893,19 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
     for chain_id, tables_list in chained_tables.items():
         if not tables_list:
             continue
+
+        # FILTER: Only include tables that are in the whitelist for the current schema
+        # This prevents tables from other schemas (collected globally) from being included
+        if whitelist:
+            filtered_tables_list = [(table_key, table_data) for table_key, table_data in tables_list if table_key in whitelist]
+            if not filtered_tables_list:
+                logger.info(f"Skipping chain '{chain_id}' - no tables in whitelist for schema '{source_schema}'")
+                continue
+            if len(filtered_tables_list) != len(tables_list):
+                skipped_tables = [tk for tk, _ in tables_list if tk not in whitelist]
+                logger.info(f"For chain '{chain_id}', filtered out tables not in whitelist for schema '{source_schema}': {skipped_tables}")
+                logger.info(f"Remaining tables in chain: {[tk for tk, _ in filtered_tables_list]}")
+            tables_list = filtered_tables_list
 
         # Tables are processed in the order they appear in the YAML file
         # Log table ordering for debugging
