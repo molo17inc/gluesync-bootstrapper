@@ -559,6 +559,56 @@ def parse_xml():
     
     print(f"Found {len(source_to_target_schemas)} unique source-to-target schema mappings")
     
+    # Extract field mappings from DBMMFieldMappings
+    print("\nExtracting field mappings...")
+    field_mappings = {}  # Structure: {replication_id: {src_field_id: {target_field_id, target_expression, src_expression}}}
+    
+    for mapping_elem in root.findall("./tables/DBMMFieldMappings"):
+        mapping_id = mapping_elem.findtext("FieldMappingID")
+        repl_id = mapping_elem.findtext("ReplicationID")
+        src_field_id = mapping_elem.findtext("SrcFieldID")
+        trg_field_id = mapping_elem.findtext("TrgFieldID")
+        src_expression = mapping_elem.findtext("SrcExpression")
+        is_forth = mapping_elem.findtext("IsForth", "Y").upper() == "Y"
+        
+        if repl_id and is_forth:  # Only process forward mappings
+            if repl_id not in field_mappings:
+                field_mappings[repl_id] = {}
+            
+            if src_field_id:
+                # Direct field-to-field mapping
+                field_mappings[repl_id][src_field_id] = {
+                    "target_field_id": trg_field_id,
+                    "src_expression": src_expression,
+                    "type": "direct"
+                }
+            elif src_expression:
+                # Expression-based mapping - store with None src_field_id
+                if trg_field_id:
+                    field_mappings[repl_id][f"expr_{trg_field_id}"] = {
+                        "target_field_id": trg_field_id,
+                        "src_expression": src_expression,
+                        "type": "expression"
+                    }
+    
+    total_mappings = sum(len(m) for m in field_mappings.values())
+    print(f"Found {total_mappings} field mappings across {len(field_mappings)} replications")
+    
+    # Build field ID to name lookup for resolving target field names
+    print("\nBuilding field ID to name lookup...")
+    field_id_to_name = {}
+    for field_elem in root.findall("./tables/DBMMFields"):
+        field_id = field_elem.findtext("FieldID")
+        table_id = field_elem.findtext("TableID")
+        field_name = None
+        for name_tag in ["n", "Name", "name"]:
+            field_name = field_elem.findtext(name_tag)
+            if field_name:
+                break
+        if field_id and table_id and field_name:
+            field_id_to_name[(table_id, field_id)] = field_name
+    print(f"Built lookup with {len(field_id_to_name)} field ID entries")
+    
     # Print summary of groups and chains
     print(f"\nFound {len(groups)} groups and {len(chains)} chains in the DBMoto configuration")
     print(f"Found {len(replications)} replications with group/chain assignments")
@@ -578,9 +628,9 @@ def parse_xml():
     conversion_stats['replications'] = len(replications)
     conversion_stats['schema_mappings'] = len(source_to_target_schemas)
     
-    return connections, groups, chains, replications, source_to_target_schemas
+    return connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name
 
-def export_as_yaml(connections, groups, chains, replications, source_to_target_schemas, output_dir=None, template_file=None):
+def export_as_yaml(connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name, output_dir=None, template_file=None):
     # Use environment variables if parameters are not provided (Lambda mode)
     if output_dir is None:
         output_dir = os.environ.get('OUTPUT_DIR')
@@ -686,11 +736,11 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                 }
     
     source_to_target_tables = {}
-    for repl in replications.values():
+    for repl_id, repl in replications.items():
         src_id = repl.get("src_table_id")
         trg_id = repl.get("trg_table_id")
         if src_id and trg_id:
-            source_to_target_tables.setdefault(src_id, []).append(trg_id)
+            source_to_target_tables.setdefault(src_id, []).append((trg_id, repl_id))
     
     # Process each connection and schema
     for conn in connections.values():
@@ -718,22 +768,66 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                 for table_name, table in tables_with_fields.items():
                     # Convert field list to column definitions matching template format
                     columns = []
+                    
+                    # Find the replication and target info for this table
+                    target_ids = source_to_target_tables.get(table["id"], [])
+                    target_info = None
+                    repl_id_for_table = None
+                    target_table_id = None
+                    
+                    for target_id, repl_id in target_ids:
+                        target_info = table_lookup.get(target_id)
+                        if target_info and not target_info["is_source"]:
+                            repl_id_for_table = repl_id
+                            target_table_id = target_id
+                            break
+                    
+                    # Get field mappings for this replication
+                    table_field_mappings = field_mappings.get(repl_id_for_table, {}) if repl_id_for_table else {}
+                    
                     for field in table["fields"]:
-                        columns.append({
-                            "name": field["name"],
+                        # Determine target field name using field mappings
+                        target_field_name = field["name"]
+                        target_field = None
+                        
+                        # Find source field ID by looking up in the field_id_to_name dict
+                        src_field_id = None
+                        for (tid, fid), fname in field_id_to_name.items():
+                            if tid == table["id"] and fname == field["name"]:
+                                src_field_id = fid
+                                break
+                        
+                        # If we found the source field ID and have mappings, look up the target
+                        if src_field_id and table_field_mappings:
+                            mapping = table_field_mappings.get(src_field_id)
+                            if mapping and mapping.get("target_field_id"):
+                                # Look up target field name from target table
+                                target_field_id = mapping["target_field_id"]
+                                target_field_name = field_id_to_name.get((target_table_id, target_field_id), field["name"])
+                                if target_field_name != field["name"]:
+                                    print(f"        Mapped field: {field['name']} -> {target_field_name}")
+                        
+                        col_def = {
+                            "name": target_field_name,
                             "type": field.get("type") or "VARCHAR",
                             "dataLength": field.get("data_length", 0),
                             "numericPrecision": field.get("numeric_precision", 0),
                             "numericScale": field.get("numeric_scale", 0),
                             "isNullable": field.get("allow_null", True)
-                        })
+                        }
+                        
+                        # Store source field name if it differs from target (for GlueSync column mapping)
+                        if target_field_name != field["name"]:
+                            col_def["sourceName"] = field["name"]
+                        
+                        columns.append(col_def)
                     
                     # Determine the mapped target table name if available
                     export_table_name = table_name
                     target_schema_name = None
                     target_conn_name = None
-                    target_ids = source_to_target_tables.get(table["id"], [])
-                    for target_id in target_ids:
+                    target_ids_with_repl = source_to_target_tables.get(table["id"], [])
+                    for target_id, repl_id in target_ids_with_repl:
                         target_info = table_lookup.get(target_id)
                         if target_info and not target_info["is_source"]:
                             export_table_name = target_info["table"]["name"]
@@ -741,8 +835,8 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                             target_conn_name = target_info["connection_name"]
                             break
                     else:
-                        if target_ids:
-                            print(f"      Warning: Could not resolve target table IDs {target_ids} for source table {table_name}")
+                        if target_ids_with_repl:
+                            print(f"      Warning: Could not resolve target table IDs {[t[0] for t in target_ids_with_repl]} for source table {table_name}")
                     
                     whitelist_name = table["name"]
                     if whitelist_name not in whitelist:
@@ -1011,8 +1105,8 @@ if __name__ == "__main__":
             # Ensure output directory exists
             os.makedirs(args.output_dir, exist_ok=True)
             
-            # Parse the XML and get connections, groups, chains, replications, and schema mappings
-            connections, groups, chains, replications, source_to_target_schemas = parse_xml()
+            # Parse the XML and get connections, groups, chains, replications, schema mappings, and field mappings
+            connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name = parse_xml()
             
             # Print hierarchy summary
             print("\n=== Database Structure ===")
@@ -1024,7 +1118,7 @@ if __name__ == "__main__":
             
             # Export as YAML files
             print("\nExporting to YAML files...")
-            exported = export_as_yaml(connections, groups, chains, replications, source_to_target_schemas)
+            exported = export_as_yaml(connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name)
             print(f"\nDone! {exported} YAML files created in {os.path.abspath(args.output_dir)}/")
             print("These files match the structure needed for table-list-template.yaml in gluesync-bootstrapper.")
             
