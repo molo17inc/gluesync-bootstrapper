@@ -21,6 +21,7 @@
 stages:
   - validate
   - build
+  - build-sonar
   - deploy
 
 default:
@@ -32,7 +33,9 @@ variables:
   AWS_REGION: us-east-1
   STACK_NAME: dbmoto-xml-converter
   RESULTS_BUCKET_PREFIX: gluesync-conversion-results
-  HOSTED_ZONE_ID: "" # Route 53 hosted zone ID for molo17.com - set in GitLab CI/CD variables
+  HOSTED_ZONE_ID: ""
+  SONAR_USER_HOME: "${CI_PROJECT_DIR}/.sonar"
+  GIT_DEPTH: "0"
 
 # Run syntax check on every commit to catch PyInstaller issues early
 pyinstaller_syntax_check:
@@ -223,9 +226,27 @@ deploy:
     - docker tag $DEFAULT_NAME:latest "$ADDITIONAL_TAG"
     - docker push "$ADDITIONAL_TAG"
   rules:
-    - if: $CI_COMMIT_TAG =~ /^tag-/
+    - if: "$CI_COMMIT_TAG =~ /^tag-/"
+build-sonar:
+  stage: build-sonar
+  image:
+    name: sonarsource/sonar-scanner-cli:11
+    entrypoint: [""]
+  cache:
+    policy: pull-push
+    key: "sonar-cache-$CI_COMMIT_REF_SLUG"
+    paths:
+      - "${SONAR_USER_HOME}/cache"
+      - sonar-scanner/
+  script:
+    - sonar-scanner -Dsonar.host.url="${SONAR_HOST_URL}"
+  allow_failure: true
+  rules:
+    - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
+    - if: $CI_COMMIT_BRANCH == 'master'
+    - if: $CI_COMMIT_BRANCH == 'main'
+    - if: $CI_COMMIT_BRANCH == 'develop'
 
-# Deploy Lambda function on changes to dbmoto-converter or related files
 deploy_lambda:
   stage: deploy
   image: python:3.9
