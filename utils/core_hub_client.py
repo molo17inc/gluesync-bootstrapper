@@ -122,9 +122,21 @@ class CoreHubClient:
             except ValueError:
                 return response.text
         except requests.exceptions.RequestException as e:
-            logger.error(f"CoreHub API request failed: {str(e)}")
-            # Include response details if available
+            # Check if this is a 401 Unauthorized error - these are expected during
+            # initial authentication attempts and should be warnings, not errors
+            is_401 = False
             if hasattr(e, 'response') and e.response is not None:
-                logger.error(f"Status code: {e.response.status_code}")
-                logger.error(f"Response: {e.response.text}")
+                is_401 = e.response.status_code == 401
+            
+            if is_401:
+                logger.warning(f"CoreHub API request failed: {str(e)}")
+                if hasattr(e, 'response') and e.response is not None:
+                    logger.warning(f"Status code: {e.response.status_code}")
+                    logger.warning(f"Response: {e.response.text}")
+            else:
+                logger.error(f"CoreHub API request failed: {str(e)}")
+                # Include response details if available
+                if hasattr(e, 'response') and e.response is not None:
+                    logger.error(f"Status code: {e.response.status_code}")
+                    logger.error(f"Response: {e.response.text}")
             raise
