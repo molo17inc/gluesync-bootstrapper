@@ -41,7 +41,7 @@ dbo:
   targetType: NoSQL
   transactionsAudit:
     enabled: true
-    targetAgentId: "target-agent-uuid-here" # Replace with actual target agent ID
+    targetAgentId: "target-agent-alias" # Can be the UUID or the agentTag (alias)
     deepTrace: false
   customProperties:
     source:
