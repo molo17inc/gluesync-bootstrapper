@@ -26,8 +26,9 @@ Gluesync Bootstrapper is a configuration tool for setting up database schema map
 
 ## Features
 
-- Real-time data synchronization between source and target databases
-- Support for multiple database systems (MS SQL Server, Couchbase, etc.)
+- **Real-time data synchronization**: Between source and target databases
+- **Transactions Auditing**: Automated end-to-end tracking of data movement (records processed, duration, metrics) into a dedicated audit table
+- **Support for multiple database systems**: MS SQL Server, Couchbase, etc.
 - Configurable filtering and transformation rules
 - Customizable document key generation
 - Flexible polling intervals and batch processing
@@ -552,6 +553,44 @@ Available environment variables:
 - `TARGET_TYPE`: Target agent type (default: `NoSQL`)
 
 **Note**: Source and target schema information is now automatically read from the `table-list-template.yaml` file in the `schemas` section, eliminating the need for `CREATE_ENTITIES_FROM_SCHEMA` and `TARGET_SCHEMA` environment variables.
+
+### Transactions Auditing
+
+The bootstrapper supports configuring the **Transactions Auditing** feature via YAML. This feature allows you to track every transaction synchronized by Gluesync into a dedicated `GLUESYNC.TRANSACTIONS_AUDIT` table on a target agent of your choice.
+
+#### Configuration
+
+To enable auditing for a pipeline, add the `transactionsAudit` block to your schema configuration in `table-list-template.yaml`:
+
+```yaml
+transactionsAudit:
+  enabled: true
+  targetAgentId: "target-db-alias" # Can be the UUID or the agentTag (alias)
+  deepTrace: false                # Optional: log full query statements (default: false)
+```
+
+#### Target Agent Resolution
+
+When auditing is enabled, the bootstrapper resolves the `targetAgentId` using the following logic:
+
+1.  **By UUID**: Matches against the unique internal identifier of the agent.
+2.  **By Alias (agentTag)**: Matches against the human-readable tag (e.g., `mssql-target`) defined in your configuration.
+3.  **Automatic Fallback**: If `targetAgentId` is missing or not found, but the pipeline has exactly **one** target agent, that agent is automatically selected as the audit target.
+
+#### What is Audited?
+
+When enabled, Gluesync records the following for every transaction:
+- Timestamp (nanoseconds)
+- Pipeline and Entity IDs/Names
+- Source and Target table names
+- Number of records processed
+- End-to-end duration (latency)
+- Affected keys
+- Detailed performance metrics (JSON)
+- Success status and error details (if any)
+- Full SQL query (if `deepTrace` is enabled)
+
+The `GLUESYNC.TRANSACTIONS_AUDIT` table is automatically provisioned on the target database during the bootstrap process.
 
 Parameters:
 
