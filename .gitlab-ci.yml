@@ -227,6 +227,7 @@ deploy:
     - docker push "$ADDITIONAL_TAG"
   rules:
     - if: "$CI_COMMIT_TAG =~ /^tag-/"
+    - if: "$CI_COMMIT_TAG =~ /^beta-/"
 build-sonar:
   stage: build-sonar
   image:
