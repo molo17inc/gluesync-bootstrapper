@@ -41,6 +41,7 @@ from urllib.parse import urlparse
 from utils.log import get_logger, create_log_file, log_success, log_failure, lockfile_failure, exit_on_fail, lockfile_complete
 from utils.gluesync_sdk_client import initialize_gluesync_sdk, get_token, get_gluesync_client
 from utils.core_hub_client import CoreHubClient
+from utils.transactions_audit_client import TransactionsAuditClient
 from commons import extract_schemas_from_yaml, extract_all_schemas_from_yaml, extract_schema_types_from_yaml, configure_core_hub
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -1229,6 +1230,30 @@ def main():
         time.sleep(ENTITY_START_TIMEOUT)
 
         start_entity_syncs(token, pipeline_id)
+
+        # Configure transactions auditing if present in YAML
+        try:
+            with open(TABLE_LIST_YAML, 'r') as file:
+                yaml_content = yaml.safe_load(file)
+                # We need to find the correct schema config in the YAML
+                # For simplicity, if transactionsAudit is at the top level or inside the first schema, we use it
+                audit_config = None
+                if isinstance(yaml_content, dict):
+                    if 'transactionsAudit' in yaml_content:
+                        audit_config = yaml_content
+                    else:
+                        # Check inside schemas
+                        for key, value in yaml_content.items():
+                            if isinstance(value, dict) and 'transactionsAudit' in value:
+                                audit_config = value
+                                break
+                
+                if audit_config:
+                    logger.info("Transactions audit configuration found in YAML, applying...")
+                    audit_client = TransactionsAuditClient(get_core_hub_client())
+                    audit_client.configure_from_yaml(pipeline_id, token, audit_config)
+        except Exception as e:
+            logger.warning(f"Could not process transactions audit configuration from YAML: {e}")
 
         # Log successful completion
         log_success(logger, f"Pipeline {pipeline_id} successfully configured and started")

@@ -39,6 +39,10 @@ dbo:
   # SQL ~ RDBMS, NoSQL for document / non-relational targets
   sourceType: SQL
   targetType: NoSQL
+  transactionsAudit:
+    enabled: true
+    targetAgentId: "target-agent-uuid-here" # Replace with actual target agent ID
+    deepTrace: false
   customProperties:
     source:
       maxItemsCountPerIteration: 1000
