@@ -674,11 +674,21 @@ update_budibase_version:
         exit 1
       fi
 
-      UPDATE_PAYLOAD="{
-        \"latestVersionAlpha\": \"$MODULE_VERSION\",
-        \"latestVersionBeta\": \"$MODULE_VERSION\",
-        \"latestVersionGA\": \"$MODULE_VERSION\"
-      }"
+      case "$CI_COMMIT_TAG" in
+        beta-*)
+          UPDATE_PAYLOAD="{
+            \"latestVersionAlpha\": \"$MODULE_VERSION\",
+            \"latestVersionBeta\": \"$MODULE_VERSION\"
+          }"
+          ;;
+        *)
+          UPDATE_PAYLOAD="{
+            \"latestVersionAlpha\": \"$MODULE_VERSION\",
+            \"latestVersionBeta\": \"$MODULE_VERSION\",
+            \"latestVersionGA\": \"$MODULE_VERSION\"
+          }"
+          ;;
+      esac
 
       UPDATE_RESPONSE=$(curl -s -w "\n%{http_code}" -X PUT \
         -H "x-budibase-app-id: $BUDIBASE_APP_ID" \
