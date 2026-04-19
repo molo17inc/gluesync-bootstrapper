@@ -56,20 +56,55 @@ class TransactionsAuditClient:
             return
 
         enabled = audit_config.get('enabled', False)
-        target_agent_id = audit_config.get('targetAgentId')
+        target_agent_identifier = audit_config.get('targetAgentId')
         deep_trace = audit_config.get('deepTrace', False)
 
-        if enabled and not target_agent_id:
-            logger.warning(f"Transactions auditing enabled for pipeline {pipeline_id} but no targetAgentId provided. Skipping.")
+        if not enabled:
+            logger.info(f"Transactions auditing explicitly disabled for pipeline {pipeline_id}")
+            self.upsert_configuration(pipeline_id, token, enabled=False)
             return
 
-        logger.info(f"Configuring transactions auditing for pipeline {pipeline_id}: enabled={enabled}, target={target_agent_id}, deepTrace={deep_trace}")
+        # Try to resolve the target agent ID
+        resolved_target_id = None
+        
+        # Fetch pipeline config to look for agents
+        try:
+            pipeline_info = self.client.request(f"/pipelines/{pipeline_id}", method='GET', token=token)
+            target_agents = pipeline_info.get('targetAgentsInfo', [])
+            
+            if target_agent_identifier:
+                # 1. Try matching by agentId (UUID)
+                for agent in target_agents:
+                    if agent.get('agentId') == target_agent_identifier:
+                        resolved_target_id = agent.get('agentId')
+                        break
+                
+                # 2. Try matching by agentTag (alias)
+                if not resolved_target_id:
+                    for agent in target_agents:
+                        if agent.get('agentTag') == target_agent_identifier:
+                            resolved_target_id = agent.get('agentId')
+                            break
+            
+            # 3. Fallback: if only one target agent exists, use it
+            if not resolved_target_id and len(target_agents) == 1:
+                resolved_target_id = target_agents[0].get('agentId')
+                logger.info(f"Automatically selected the only available target agent for auditing: {resolved_target_id}")
+
+        except Exception as e:
+            logger.warning(f"Could not fetch pipeline info to resolve target agent: {e}")
+
+        if not resolved_target_id:
+            logger.error(f"Could not resolve target agent for auditing in pipeline {pipeline_id}. identifier: {target_agent_identifier}")
+            return
+
+        logger.info(f"Configuring transactions auditing for pipeline {pipeline_id}: enabled={enabled}, target={resolved_target_id}, deepTrace={deep_trace}")
         try:
             self.upsert_configuration(
                 pipeline_id=pipeline_id,
                 token=token,
                 enabled=enabled,
-                target_agent_id=target_agent_id,
+                target_agent_id=resolved_target_id,
                 deep_trace=deep_trace,
                 confirm_table_creation=True
             )
