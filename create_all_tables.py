@@ -394,8 +394,11 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
             column_entries = custom_config.get('columns') or []
             target_only_columns = custom_config.get('targetOnlyColumns', [])
 
+            # Build key lookup from keys parameter (for backward compatibility)
+            # and from column isPrimaryKey property (preferred for GlueSync 2.2.6.0+)
             key_names = set()
-            for key in keys:
+            key_names_lower = set()
+            for key in (keys or []):
                 if isinstance(key, dict):
                     if key.get("name"):
                         key_names.add(key["name"])
@@ -403,12 +406,15 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                         key_names.add(key["alias"])
                 else:
                     key_names.add(key)
-
             key_names_lower = {
                 key_name.lower() for key_name in key_names if isinstance(key_name, str)
             }
 
-            def _is_primary_key(column_name: str) -> bool:
+            def _is_primary_key(column_name: str, col_is_primary_key: bool = None) -> bool:
+                # Prefer isPrimaryKey from column if available (GlueSync 2.2.6.0+)
+                if col_is_primary_key is not None:
+                    return col_is_primary_key
+                # Fall back to keys-based check for backward compatibility
                 if column_name in key_names:
                     return True
                 return isinstance(column_name, str) and column_name.lower() in key_names_lower
@@ -482,7 +488,7 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                         type=format_column_type(mapped_type, col_data_length, col_numeric_precision, col_numeric_scale),
                         id=idx,  # Use sequential IDs for target-only columns
                         ordinalPosition=idx,
-                        isPrimaryKey=_is_primary_key(col_name),
+                        isPrimaryKey=False,  # Target-only columns are not primary keys
                         isNullable=col_is_nullable,
                         dataLength=col_data_length,
                         numericPrecision=col_numeric_precision,
@@ -534,12 +540,16 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                         col_data_length = _normalize_data_length(mapped_type, col_data_length)
                         resolved_target_type = mapped_type
 
+                        # Get isPrimaryKey from column metadata or fall back to keys-based check
+                        col_is_pk = col_meta.get('isPrimaryKey', col_meta.get('is_primary_key'))
+                        if col_is_pk is None:
+                            col_is_pk = _is_primary_key(col_name)
                         column_dtos.append(ColumnDto(
                             name=col_name,
                             type=format_column_type(resolved_target_type, col_data_length, col_numeric_precision, col_numeric_scale),
                             id=column_id,
                             ordinalPosition=ordinal_position,
-                            isPrimaryKey=_is_primary_key(col_name),
+                            isPrimaryKey=col_is_pk,
                             isNullable=col_is_nullable,
                             dataLength=col_data_length,
                             numericPrecision=col_numeric_precision,
@@ -558,13 +568,17 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                             target_agent_tag=target_agent_tag,
                         )
                         col_data_length = _normalize_data_length(mapped_type, col.get("dataLength", 0))
+                        # Use isPrimaryKey from column data (GlueSync 2.2.6.0+) or fall back to keys-based check
+                        col_is_pk = col.get("isPrimaryKey")
+                        if col_is_pk is None:
+                            col_is_pk = _is_primary_key(col["name"])
                         column_dtos.append(ColumnDto(
                             name=col["name"],
                             type=format_column_type(mapped_type, col_data_length,
                                                    col.get("numericPrecision", 0), col.get("numericScale", 0)),
                             id=col.get("ordinalPosition", col.get("id", 1)),
                             ordinalPosition=col.get("ordinalPosition", col.get("id", 1)),
-                            isPrimaryKey=_is_primary_key(col["name"]),
+                            isPrimaryKey=col_is_pk,
                             isNullable=col.get("isNullable", False),
                             dataLength=col_data_length,
                             numericPrecision=col.get("numericPrecision", 0),
