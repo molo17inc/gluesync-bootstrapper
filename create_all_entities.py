@@ -772,7 +772,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         if source_name == col["name"]:
                             columns_def.append({
                                 "id": col_id,  # Use actual ordinal position from database
-                                "tableId": int(source_table_id),
                                 "position": col.get("position", col_id),
                                 "name": col["name"],
                                 "alias": target_name,
@@ -795,7 +794,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
                 columns_def.append({
                     "id": col_id,  # Use actual ordinal position from database
-                    "tableId": int(source_table_id),
                     "position": col.get("position", col_id),
                     "name": col["name"],
                     "alias": col["name"],
@@ -833,7 +831,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             if name_match and in_keys:
                                 keys.append({
                                     "id": col_id,  # Use actual ordinal position from database
-                                    "tableId": int(source_table_id),
                                     "position": col.get("position", col_id),
                                     "name": col["name"],
                                     "alias": target_name,
@@ -860,7 +857,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
                             keys.append({
                                 "id": col_id,  # Use actual ordinal position from database
-                                "tableId": int(source_table_id),
                                 "position": col.get("position", col_id),
                                 "name": col["name"],
                                 "alias": col["name"],
@@ -886,7 +882,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         
                     keys.append({
                         "id": col_id,  # Use actual ordinal position from database
-                        "tableId": int(source_table_id),
                         "position": col.get("position", col_id),
                         "name": col["name"],
                         "alias": col["name"],
@@ -1155,7 +1150,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             target_is_primary_key = discovered_target_col.get("isPK") if discovered_target_col else col.get("isPK", False)
                             target_columns_def.append({
                                 "id": target_col_id,  # Use target column ID
-                                "tableId": int(target_table_id),
                                 "position": target_col_id,
                                 "name": target_name,
                                 "alias": target_name,
@@ -1196,7 +1190,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 target_is_primary_key = discovered_target_col.get("isPK") if discovered_target_col else col.get("isPK", False)
                 target_columns_def.append({
                     "id": target_col_id,  # Use target column ID
-                    "tableId": int(target_table_id),
                     "position": target_col_id,
                     "name": target_col_name,
                     "alias": target_col_name,
@@ -1279,7 +1272,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
                     target_columns_def.append({
                         "id": max_target_col_id,  # Continue from last target column ID
-                        "tableId": int(target_table_id),
                         "position": max_target_col_id,
                         "name": col_name,
                         "alias": col_name,
@@ -1329,7 +1321,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
                                 target_keys.append({
                                     "id": target_col_id,  # Use target column ID
-                                    "tableId": int(target_table_id),
                                     "position": target_col_id,
                                     "name": target_name,
                                     "alias": target_name,
@@ -1389,7 +1380,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         
                     target_keys.append({
                         "id": col_id,  # Use actual ordinal position from database
-                        "tableId": int(source_table_id),
                         "position": col.get("position", col_id),
                         "name": col["name"],
                         "alias": col["name"],
@@ -1614,7 +1604,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         if source_name == col["name"]:
                             columns_def.append({
                                 "id": col_id,
-                                "tableId": int(source_table_id),
                                 "position": col.get("position", col_id),
                                 "name": col["name"],
                                 "alias": target_name,
@@ -1629,7 +1618,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     raise ValueError(f"Column '{col.get('name')}' in {yaml_table_key} missing 'id' field")
                 columns_def.append({
                     "id": col_id,
-                    "tableId": int(source_table_id),
                     "position": col.get("position", col_id),
                     "name": col["name"],
                     "alias": col["name"],
@@ -1652,7 +1640,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             if col["name"] == source_name and col["name"] in custom_config["keys"]:
                                 keys.append({
                                     "id": col_id,
-                                    "tableId": int(source_table_id),
                                     "position": col.get("position", col_id),
                                     "name": col["name"],
                                     "alias": target_name,
@@ -1667,7 +1654,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                 raise ValueError(f"Key '{key_name}' in {yaml_table_key} missing 'id' field")
                             keys.append({
                                 "id": col_id,
-                                "tableId": int(source_table_id),
                                 "position": col.get("position", col_id),
                                 "name": col["name"],
                                 "alias": col["name"],
@@ -1683,7 +1669,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         raise ValueError(f"Primary key column '{col.get('name')}' in {yaml_table_key} missing 'id' field")
                     keys.append({
                         "id": col_id,
-                        "tableId": int(source_table_id),
                         "position": col.get("position", col_id),
                         "name": col["name"],
                         "alias": col["name"],
@@ -1820,7 +1805,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                                  source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
             target_columns_def.append({
                 "id": col_id,
-                "tableId": int(source_table_id),
                 "position": col.get("position", col_id),
                 "name": col["name"],
                 "alias": col["name"],
@@ -1842,7 +1826,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                                              source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
                         target_keys.append({
                             "id": col_id,
-                            "tableId": int(source_table_id),
                             "position": col.get("position", col_id),
                             "name": col["name"],
                             "alias": col["name"],
@@ -1860,7 +1843,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                                          source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
                     target_keys.append({
                         "id": col_id,
-                        "tableId": int(source_table_id),
                         "position": col.get("position", col_id),
                         "name": col["name"],
                         "alias": col["name"],
@@ -2025,7 +2007,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
                 table_columns.append({
                     "id": col_id,
-                    "tableId": int(source_table_id),
                     "position": col.get("position", col_id),
                     "name": col["name"],
                     "alias": col["name"],
@@ -2076,7 +2057,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
                             keys.append({
                                 "id": col_id,  # Use actual ordinal position from database
-                                "tableId": int(source_table_id),
                                 "position": col.get("position", col_id),
                                 "name": col["name"],
                                 "alias": key_alias if key_alias.lower() != key_name.lower() else col["name"],
@@ -2103,7 +2083,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             
                         keys.append({
                             "id": col_id,  # Use actual ordinal position from database
-                            "tableId": int(source_table_id),
                             "position": col.get("position", col_id),
                             "name": col["name"],
                             "alias": col["name"],
@@ -2187,7 +2166,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 max_target_col_id = max(max_target_col_id, col_id)
                 target_table_columns.append({
                     "id": col_id,  # Use actual ordinal position from database
-                    "tableId": int(source_table_id),
                     "position": col.get("position", col_id),
                     "name": col["name"],
                     "type": map_data_type(col.get("dataType"), source_node_info, target_node_info,
@@ -2268,7 +2246,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
                     target_table_columns.append({
                         "id": max_target_col_id,  # Continue from last target column ID
-                        "tableId": int(target_table_id),
                         "position": max_target_col_id,
                         "name": col_name,
                         "type": mapped_type,
@@ -2310,7 +2287,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                 
                             keys.append({
                                 "id": col_id,  # Use actual ordinal position from database
-                                "tableId": int(source_table_id),
                                 "position": col.get("position", col_id),
                                 "name": col["name"],
                                 "type": map_data_type(col.get("dataType"), source_node_info, target_node_info,
@@ -2331,7 +2307,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             
                         keys.append({
                             "id": col_id,  # Use actual ordinal position from database
-                            "tableId": int(source_table_id),
                             "position": col.get("position", col_id),
                             "name": col["name"],
                             "type": map_data_type(col.get("dataType"), source_node_info, target_node_info,
@@ -2537,12 +2512,25 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         for idx, table in enumerate(agent_entity.get('tables', [])):
                             logger.info(f"  {idx+1}. {table.get('schema')}.{table.get('name')}")
 
-            # Strip 'alias' from payload
+            # Clean up payload before sending
             for entity_payload in chunk_data.get('entities', []):
                 for agent_entity in entity_payload.get('agentEntities', []):
-                    for table in agent_entity.get('tables', []):
-                        for col in table.get('columns', []):
+                    # Handle SingleTable (columns are at agent_entity level)
+                    if 'table' in agent_entity and 'columns' in agent_entity:
+                        table_id = int(agent_entity['table'].get('id', 0))
+                        for col in agent_entity['columns']:
                             col.pop('alias', None)
+                            if table_id:
+                                col['tableId'] = table_id
+                    
+                    # Handle MultiTable/NoSql (columns are inside tables array)
+                    for table_item in agent_entity.get('tables', []):
+                        if 'table' in table_item and 'columns' in table_item:
+                            table_id = int(table_item['table'].get('id', 0))
+                            for col in table_item['columns']:
+                                col.pop('alias', None)
+                                if table_id:
+                                    col['tableId'] = table_id
 
             try:
                 logger.debug(f"Payload sent to /pipelines/{pipeline_id}/config/entities:")
