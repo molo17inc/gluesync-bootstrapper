@@ -30,7 +30,8 @@ from utils.core_hub_client import CoreHubClient
 from commons import get_node_info, get_table_columns, fetch_core_hub, get_pipeline_config, get_pipeline_agents, \
     get_agent_tables, map_data_type, load_yaml_config, create_group, \
     process_filter_clauses
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from typing import Optional
 from typing import List
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -51,22 +52,32 @@ CREATE_TABLE_IF_NOT_EXISTS = os.getenv('CREATE_TABLE_IF_NOT_EXISTS', 'true').low
 # Initialize the CoreHub client
 core_hub_client = CoreHubClient(CORE_HUB_URL)
 
-class ColumnDto(BaseModel):
-    name: str
-    type: str
+class Column(BaseModel):
     id: int
-    ordinalPosition: int
-    isPrimaryKey: bool = False
+    tableId: int
+    name: str
+    position: int
+    dataType: str
+    charMaxLength: Optional[int] = None
+    charOctetLength: Optional[int] = None
+    charSet: Optional[str] = None
+    collationName: Optional[str] = Field(default=None, alias="collation")
+    numPrec: Optional[int] = None
+    numPrecRadix: Optional[int] = None
+    numScale: Optional[int] = None
+    datetimePrec: Optional[int] = None
+    isPK: bool = False
+    isIdentity: bool = False
     isNullable: bool = False
-    dataLength: int = 0
-    numericPrecision: int = 0
-    numericScale: int = 0
+    columnDefault: Optional[str] = Field(default=None, alias="default")
+    udtCategory: Optional[str] = None
+    udtName: Optional[str] = None
 
 class GenerateTableStatementRequest(BaseModel):
-    columns: List[ColumnDto]
+    columns: List[Column]
 
 class GenerateCreateTargetTableStatementRequest(BaseModel):
-    columns: List[ColumnDto]
+    columns: List[Column]
 
 class CreateTableRequest(BaseModel):
     statement: str
@@ -317,7 +328,7 @@ def create_tables(token, pipeline_id, source_schema, target_schema, tables, sour
                     key_alias = key_config.get('name', key_name)
 
                     # Get the key type from the config or find it in the columns
-                    key_type = key_config.get('type')
+                    key_type = key_config.get('dataType')
                 else:
                     # Simple string format - use the string as both name and alias
                     key_name = key_def
@@ -331,7 +342,7 @@ def create_tables(token, pipeline_id, source_schema, target_schema, tables, sour
                     keys.append({
                         "name": key_name,
                         "alias": key_alias,
-                        "type": key_type or key_column["type"]
+                        "type": key_type or key_column.get("dataType")
                     })
                 else:
                     logger.info(
@@ -347,8 +358,8 @@ def create_tables(token, pipeline_id, source_schema, target_schema, tables, sour
                 {
                     "name": col["name"],
                     "alias": col["name"],
-                    "type": col["type"]
-                } for col in columns["columns"] if col.get("isPrimaryKey")
+                    "type": col.get("dataType")
+                } for col in columns["columns"] if col.get("isPK")
             ]
             logger.info(f"Using primary keys for {table_name}: {keys}")
 
@@ -366,7 +377,7 @@ def create_tables(token, pipeline_id, source_schema, target_schema, tables, sour
                             keys.append({
                                 "name": key_column["name"],
                                 "alias": key_column["name"],
-                                "type": key_column["type"]
+                                "type": key_column.get("dataType")
                             })
                         else:
                             logger.warning(f"Fallback key '{key_name}' not found in columns for table '{table_name}'")
@@ -467,10 +478,10 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                     else:
                         # Object format with user-defined properties
                         col_name = target_col.get('name')
-                        col_type = target_col.get('type', 'varchar')  # Default to varchar if not specified
+                        col_type = target_col.get('dataType', target_col.get('type', 'varchar'))  # Default to varchar if not specified
                         col_data_length = target_col.get('dataLength', 1024)  # Default data length
-                        col_numeric_precision = target_col.get('numericPrecision', 0)  # Default numeric precision
-                        col_numeric_scale = target_col.get('numericScale', 0)  # Default numeric scale
+                        col_numeric_precision = target_col.get('numPrec', 0)  # Default numeric precision
+                        col_numeric_scale = target_col.get('numScale', 0)  # Default numeric scale
                         col_is_nullable = target_col.get('isNullable', False)  # Default nullable
                     
                     # Map the column type to target node type
@@ -483,16 +494,17 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                     )
                     col_data_length = _normalize_data_length(mapped_type, col_data_length)
                     
-                    column_dtos.append(ColumnDto(
+                    column_dtos.append(Column(
                         name=col_name,
-                        type=format_column_type(mapped_type, col_data_length, col_numeric_precision, col_numeric_scale),
+                        dataType=format_column_type(mapped_type, col_data_length, col_numeric_precision, col_numeric_scale),
                         id=idx,  # Use sequential IDs for target-only columns
-                        ordinalPosition=idx,
-                        isPrimaryKey=False,  # Target-only columns are not primary keys
+                        tableId=0,
+                        position=idx,
+                        isPK=False,  # Target-only columns are not primary keys
                         isNullable=col_is_nullable,
-                        dataLength=col_data_length,
-                        numericPrecision=col_numeric_precision,
-                        numericScale=col_numeric_scale
+                        charMaxLength=col_data_length,
+                        numPrec=col_numeric_precision,
+                        numScale=col_numeric_scale
                     ))
             else:
                 metadata_columns = []
@@ -519,7 +531,7 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                                 f"Warning: Column metadata entry missing 'name' for table {target_table_name}. Skipping entry: {col_meta}")
                             continue
 
-                        col_type = col_meta.get('type', 'varchar')
+                        col_type = col_meta.get('dataType', col_meta.get('type', 'varchar'))
                         col_data_length = _to_int(col_meta.get('dataLength', col_meta.get('data_length')))
                         col_numeric_precision = _to_int(col_meta.get('numericPrecision', col_meta.get('numeric_precision')))
                         col_numeric_scale = _to_int(col_meta.get('numericScale', col_meta.get('numeric_scale')))
@@ -541,19 +553,21 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                         resolved_target_type = mapped_type
 
                         # Get isPrimaryKey from column metadata or fall back to keys-based check
-                        col_is_pk = col_meta.get('isPrimaryKey', col_meta.get('is_primary_key'))
+                        col_is_pk = col_meta.get('isPK', col_meta.get('is_primary_key'))
                         if col_is_pk is None:
                             col_is_pk = _is_primary_key(col_name)
-                        column_dtos.append(ColumnDto(
+                        column_dtos.append(Column(
                             name=col_name,
-                            type=format_column_type(resolved_target_type, col_data_length, col_numeric_precision, col_numeric_scale),
+                            dataType=format_column_type(resolved_target_type, col_data_length, col_numeric_precision, col_numeric_scale),
                             id=column_id,
-                            ordinalPosition=ordinal_position,
-                            isPrimaryKey=col_is_pk,
+                            tableId=0,
+                            
+                            position=ordinal_position,
+                            isPK=col_is_pk,
                             isNullable=col_is_nullable,
-                            dataLength=col_data_length,
-                            numericPrecision=col_numeric_precision,
-                            numericScale=col_numeric_scale
+                            charMaxLength=col_data_length,
+                            numPrec=col_numeric_precision,
+                            numScale=col_numeric_scale
                         ))
 
                 if not column_dtos:
@@ -561,28 +575,29 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                     for col in columns["columns"]:
                         # Map source type to target type (e.g. CHARACTER -> varchar)
                         mapped_type = map_data_type(
-                            col["type"],
+                            col.get("dataType"),
                             source_node_info,
                             target_node_info,
                             source_agent_tag=source_agent_tag,
                             target_agent_tag=target_agent_tag,
                         )
-                        col_data_length = _normalize_data_length(mapped_type, col.get("dataLength", 0))
+                        col_data_length = _normalize_data_length(mapped_type, col.get("charMaxLength", 0))
                         # Use isPrimaryKey from column data (GlueSync 2.2.6.0+) or fall back to keys-based check
-                        col_is_pk = col.get("isPrimaryKey")
+                        col_is_pk = col.get("isPK")
                         if col_is_pk is None:
                             col_is_pk = _is_primary_key(col["name"])
-                        column_dtos.append(ColumnDto(
+                        column_dtos.append(Column(
                             name=col["name"],
-                            type=format_column_type(mapped_type, col_data_length,
-                                                   col.get("numericPrecision", 0), col.get("numericScale", 0)),
-                            id=col.get("ordinalPosition", col.get("id", 1)),
-                            ordinalPosition=col.get("ordinalPosition", col.get("id", 1)),
-                            isPrimaryKey=col_is_pk,
+                            dataType=format_column_type(mapped_type, col_data_length,
+                                                   col.get("numPrec", 0), col.get("numScale", 0)),
+                            id=col.get("position", col.get("id", 1)),
+                            tableId=0,
+                            position=col.get("position", col.get("id", 1)),
+                            isPK=col_is_pk,
                             isNullable=col.get("isNullable", False),
-                            dataLength=col_data_length,
-                            numericPrecision=col.get("numericPrecision", 0),
-                            numericScale=col.get("numericScale", 0)
+                            charMaxLength=col_data_length,
+                            numPrec=col.get("numPrec", 0),
+                            numScale=col.get("numScale", 0)
                         ))
             
             table_data = GenerateCreateTargetTableStatementRequest(columns=column_dtos)
