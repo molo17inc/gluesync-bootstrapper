@@ -1253,7 +1253,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                 "name": target_name,
                                 "alias": target_name,
                                 "dataType": resolved_target_type,
-                                "isPK": target_is_primary_key, "isIdentity": False, "isNullable": target_col.get("isNullable", False) if "target_col" in locals() and target_col else False
+                                "isPK": target_is_primary_key, "isIdentity": (discovered_target_col.get("isIdentity") if discovered_target_col else None) or col.get("isIdentity", False), "isNullable": discovered_target_col.get("isNullable") if discovered_target_col and "isNullable" in discovered_target_col else col.get("isNullable", False)
                             }, discovered_target_col if 'discovered_target_col' in locals() and discovered_target_col else col))
                             break
         elif is_column_whitelist_target:
@@ -1336,7 +1336,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     "name": target_col_name,
                     "alias": target_col_name,
                     "dataType": resolved_target_type,
-                    "isPK": target_is_primary_key, "isIdentity": False, "isNullable": target_col.get("isNullable", False) if "target_col" in locals() and target_col else False
+                    "isPK": target_is_primary_key, "isIdentity": (discovered_target_col.get("isIdentity") if discovered_target_col else None) or col.get("isIdentity", False), "isNullable": discovered_target_col.get("isNullable") if discovered_target_col and "isNullable" in discovered_target_col else col.get("isNullable", False)
                 }, discovered_target_col if 'discovered_target_col' in locals() and discovered_target_col else col))
         
         # Add target-only columns if specified (only supported with unlocked schema)
@@ -1951,7 +1951,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 "name": col["name"],
                 "alias": col["name"],
                 "dataType": resolved_target_type,
-                "isPK": col.get("isPK", False), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
+                "isPK": col.get("isPK", False), "isIdentity": (discovered_target_col.get("isIdentity") if discovered_target_col else None) or col.get("isIdentity", False), "isNullable": discovered_target_col.get("isNullable") if discovered_target_col and "isNullable" in discovered_target_col else col.get("isNullable", False)
             }, discovered_target_col if 'discovered_target_col' in locals() and discovered_target_col else col))
 
         # Build target keys
