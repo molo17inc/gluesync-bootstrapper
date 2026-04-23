@@ -1147,7 +1147,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
                             max_target_col_id = max(max_target_col_id, target_col_id)
                             # Get isPrimaryKey from discovered target column or fall back to source column
-                            target_is_primary_key = discovered_target_col.get("isPK") if discovered_target_col else col.get("isPK", False)
+                            target_is_primary_key = (discovered_target_col.get("isPK") if discovered_target_col else False) or col.get("isPK", False)
                             target_columns_def.append({
                                 "id": target_col_id,  # Use target column ID
                                 "position": 0,
@@ -1187,7 +1187,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 # Fall back to source column name if target column not found
                 target_col_name = discovered_target_col.get('name') if discovered_target_col else col["name"]
                 # Get isPrimaryKey from discovered target column or fall back to source column
-                target_is_primary_key = discovered_target_col.get("isPK") if discovered_target_col else col.get("isPK", False)
+                target_is_primary_key = (discovered_target_col.get("isPK") if discovered_target_col else False) or col.get("isPK", False)
                 target_columns_def.append({
                     "id": target_col_id,  # Use target column ID
                     "position": 0,
