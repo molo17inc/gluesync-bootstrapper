@@ -40,6 +40,21 @@ _EXPORT_METADATA_FIELDS = {"source", "target", "type", "dataLength", "numericPre
 
 
 
+
+def _is_in_keys(col_name, custom_config):
+    if not custom_config or 'keys' not in custom_config:
+        return False
+    keys = custom_config['keys']
+    for k in keys:
+        if isinstance(k, str) and k.lower() == col_name.lower():
+            return True
+        elif isinstance(k, dict):
+            # keys can be like [{'id': {'name': 'ID'}}] or something else, but let's handle the common case
+            key_name = next(iter(k)) if not k.get('name') else k['name']
+            if str(key_name).lower() == col_name.lower():
+                return True
+    return False
+
 def _enrich_column(col_dict, source_col):
     if not source_col:
         return col_dict
@@ -807,7 +822,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                 "name": col["name"],
                                 "alias": target_name,
                                 "dataType": col.get("dataType"),
-                                "isPK": col.get("isPK", False), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
+                                "isPK": col.get("isPK", False) or _is_in_keys(col["name"], custom_config), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
                             }, col))
                             break
         elif is_column_whitelist:
@@ -861,7 +876,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     "name": col["name"],
                     "alias": col["name"],
                     "dataType": col.get("dataType"),
-                    "isPK": col.get("isPK", False), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
+                    "isPK": col.get("isPK", False) or _is_in_keys(col["name"], custom_config), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
                 }, col))
 
         logger.debug(f"Columns definition for {table_name}: {columns_def}")
@@ -1246,7 +1261,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
                             max_target_col_id = max(max_target_col_id, target_col_id)
                             # Get isPrimaryKey from discovered target column or fall back to source column
-                            target_is_primary_key = (discovered_target_col.get("isPK") if discovered_target_col else False) or col.get("isPK", False)
+                            target_is_primary_key = (discovered_target_col.get("isPK") if discovered_target_col else False) or col.get("isPK", False) or _is_in_keys(col["name"], custom_config)
                             target_columns_def.append(_enrich_column({
                                 "id": target_col_id,  # Use target column ID
                                 "position": 0,
@@ -1329,7 +1344,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 # Fall back to source column name if target column not found
                 target_col_name = discovered_target_col.get('name') if discovered_target_col else col["name"]
                 # Get isPrimaryKey from discovered target column or fall back to source column
-                target_is_primary_key = (discovered_target_col.get("isPK") if discovered_target_col else False) or col.get("isPK", False)
+                target_is_primary_key = (discovered_target_col.get("isPK") if discovered_target_col else False) or col.get("isPK", False) or _is_in_keys(col["name"], custom_config)
                 target_columns_def.append(_enrich_column({
                     "id": target_col_id,  # Use target column ID
                     "position": 0,
@@ -1750,7 +1765,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                 "name": col["name"],
                                 "alias": target_name,
                                 "dataType": col.get("dataType"),
-                                "isPK": col.get("isPK", False), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
+                                "isPK": col.get("isPK", False) or _is_in_keys(col["name"], custom_config), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
                             }, col))
         
         if not has_column_mappings or not columns_def:
@@ -1764,7 +1779,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     "name": col["name"],
                     "alias": col["name"],
                     "dataType": col.get("dataType"),
-                    "isPK": col.get("isPK", False), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
+                    "isPK": col.get("isPK", False) or _is_in_keys(col["name"], custom_config), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
                 }, col))
 
         # Process keys
@@ -1951,7 +1966,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 "name": col["name"],
                 "alias": col["name"],
                 "dataType": resolved_target_type,
-                "isPK": col.get("isPK", False), "isIdentity": (discovered_target_col.get("isIdentity") if discovered_target_col else None) or col.get("isIdentity", False), "isNullable": discovered_target_col.get("isNullable") if discovered_target_col and "isNullable" in discovered_target_col else col.get("isNullable", False)
+                "isPK": col.get("isPK", False) or _is_in_keys(col["name"], custom_config), "isIdentity": (discovered_target_col.get("isIdentity") if discovered_target_col else None) or col.get("isIdentity", False), "isNullable": discovered_target_col.get("isNullable") if discovered_target_col and "isNullable" in discovered_target_col else col.get("isNullable", False)
             }, discovered_target_col if 'discovered_target_col' in locals() and discovered_target_col else col))
 
         # Build target keys
@@ -2158,7 +2173,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         "schema": source_schema
                     },
                     "type": col.get("dataType"),
-                    "isPK": col.get("isPK", False), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
+                    "isPK": col.get("isPK", False) or _is_in_keys(col["name"], custom_config), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
                 }, col))
 
             # Add table header metadata followed by the columns for this table
@@ -2348,7 +2363,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     "name": target_name,
                     "type": map_data_type(col.get("dataType"), source_node_info, target_node_info,
                                          source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag),
-                    "isPK": col.get("isPK", False), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
+                    "isPK": col.get("isPK", False) or _is_in_keys(col["name"], custom_config), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
                 }, col))
 
             # Add target-only columns for this table if specified
