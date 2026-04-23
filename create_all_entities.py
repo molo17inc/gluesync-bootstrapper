@@ -39,6 +39,15 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 _EXPORT_METADATA_FIELDS = {"source", "target", "type", "dataLength", "numericPrecision", "numericScale", "isNullable", "id", "ordinalPosition"}
 
 
+
+def _enrich_column(col_dict, source_col):
+    if not source_col:
+        return col_dict
+    for field in ['charMaxLength', 'charOctetLength', 'charSet', 'collation', 'numPrec', 'numPrecRadix', 'numScale', 'datetimePrec', 'udtCategory', 'udtName']:
+        if field in source_col and source_col[field] is not None:
+            col_dict[field] = source_col[field]
+    return col_dict
+
 def _is_column_mappings(columns_list):
     """
     Return True if the columns list contains column mappings (not column definitions).
@@ -792,14 +801,14 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     mapping_pairs = _extract_mapping_pairs(column_map)
                     for source_name, target_name in mapping_pairs:
                         if source_name == col["name"]:
-                            columns_def.append({
+                            columns_def.append(_enrich_column({
                                 "id": col_id,  # Use actual ordinal position from database
                                 "position": col.get("position", 0),
                                 "name": col["name"],
                                 "alias": target_name,
                                 "dataType": col.get("dataType"),
                                 "isPK": col.get("isPK", False), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
-                            })
+                            }, col))
                             break
         elif is_column_whitelist:
             # Column whitelist format: only use specified columns, not all discovered
@@ -846,14 +855,14 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     logger.error(error_msg)
                     raise ValueError(error_msg)
 
-                columns_def.append({
+                columns_def.append(_enrich_column({
                     "id": col_id,  # Use actual ordinal position from database
                     "position": col.get("position", 0),
                     "name": col["name"],
                     "alias": col["name"],
                     "dataType": col.get("dataType"),
                     "isPK": col.get("isPK", False), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
-                })
+                }, col))
 
         logger.debug(f"Columns definition for {table_name}: {columns_def}")
 
@@ -883,13 +892,13 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             name_match = col["name"] == source_name
                             in_keys = col["name"] in custom_config["keys"]
                             if name_match and in_keys:
-                                keys.append({
+                                keys.append(_enrich_column({
                                     "id": col_id,  # Use actual ordinal position from database
                                     "position": col.get("position", 0),
                                     "name": col["name"],
                                     "alias": target_name,
                                     "dataType": col.get("dataType")
-                                })
+                                }, col))
                                 logger.info(f"Key matched: col={col['name']!r}, source_name={source_name!r}, target_name={target_name!r}")
                             elif col["name"] in custom_config["keys"]:
                                 logger.warning(f"Key col={col['name']!r} is in keys list but source_name={source_name!r} did not match (name_match={name_match}, in_keys={in_keys})")
@@ -909,13 +918,13 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                 logger.error(error_msg)
                                 raise ValueError(error_msg)
 
-                            keys.append({
+                            keys.append(_enrich_column({
                                 "id": col_id,  # Use actual ordinal position from database
                                 "position": col.get("position", 0),
                                 "name": col["name"],
                                 "alias": col["name"],
                                 "dataType": col.get("dataType")
-                            })
+                            }, col))
                             found = True
                             logger.debug(f"Found key '{key_name}' in columns with id={col_id}")
                             break
@@ -934,13 +943,13 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         logger.error(error_msg)
                         raise ValueError(error_msg)
                         
-                    keys.append({
+                    keys.append(_enrich_column({
                         "id": col_id,  # Use actual ordinal position from database
                         "position": col.get("position", 0),
                         "name": col["name"],
                         "alias": col["name"],
                         "dataType": col.get("dataType")
-                    })
+                    }, col))
             logger.debug(f"Using primary keys for {table_name}: {keys}")
 
         if not keys:
@@ -1238,14 +1247,14 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             max_target_col_id = max(max_target_col_id, target_col_id)
                             # Get isPrimaryKey from discovered target column or fall back to source column
                             target_is_primary_key = (discovered_target_col.get("isPK") if discovered_target_col else False) or col.get("isPK", False)
-                            target_columns_def.append({
+                            target_columns_def.append(_enrich_column({
                                 "id": target_col_id,  # Use target column ID
                                 "position": 0,
                                 "name": target_name,
                                 "alias": target_name,
                                 "dataType": resolved_target_type,
                                 "isPK": target_is_primary_key, "isIdentity": False, "isNullable": target_col.get("isNullable", False) if "target_col" in locals() and target_col else False
-                            })
+                            }, discovered_target_col if 'discovered_target_col' in locals() and discovered_target_col else col))
                             break
         elif is_column_whitelist_target:
             # Column whitelist format: only use specified columns
@@ -1321,14 +1330,14 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 target_col_name = discovered_target_col.get('name') if discovered_target_col else col["name"]
                 # Get isPrimaryKey from discovered target column or fall back to source column
                 target_is_primary_key = (discovered_target_col.get("isPK") if discovered_target_col else False) or col.get("isPK", False)
-                target_columns_def.append({
+                target_columns_def.append(_enrich_column({
                     "id": target_col_id,  # Use target column ID
                     "position": 0,
                     "name": target_col_name,
                     "alias": target_col_name,
                     "dataType": resolved_target_type,
                     "isPK": target_is_primary_key, "isIdentity": False, "isNullable": target_col.get("isNullable", False) if "target_col" in locals() and target_col else False
-                })
+                }, discovered_target_col if 'discovered_target_col' in locals() and discovered_target_col else col))
         
         # Add target-only columns if specified (only supported with unlocked schema)
         target_only_columns = custom_config.get('targetOnlyColumns', [])
@@ -1403,7 +1412,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     mapped_type = map_data_type(col_type, source_node_info, target_node_info,
                                                source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
 
-                    target_columns_def.append({
+                    target_columns_def.append(_enrich_column({
                         "id": max_target_col_id,  # Continue from last target column ID
                         "position": 0,
                         "name": col_name,
@@ -1414,7 +1423,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         "numScale": col_numeric_scale,
                         "isNullable": col_is_nullable, "isIdentity": False,
                         "isPK": False  # Target-only columns are not primary keys
-                    })
+                    }, discovered_target_col if 'discovered_target_col' in locals() and discovered_target_col else col))
                     logger.debug(f"Added target-only column: {col_name} (type: {mapped_type}, id: {max_target_col_id})")
 
         print(f"Columns definition for {table_name}: {columns_def}")
@@ -1452,13 +1461,13 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                     resolved_target_type = map_data_type(col.get("dataType"), source_node_info, target_node_info,
                                                                          source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
 
-                                target_keys.append({
+                                target_keys.append(_enrich_column({
                                     "id": target_col_id,  # Use target column ID
                                     "position": 0,
                                     "name": target_name,
                                     "alias": target_name,
                                     "dataType": resolved_target_type
-                                })
+                                }, discovered_target_col if 'discovered_target_col' in locals() and discovered_target_col else col))
                                 logger.debug(f"Target key: {source_name} -> {target_name} (source ID={source_col_id}, target ID={target_col_id})")
                                 break
             else:
@@ -1490,12 +1499,12 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             # Use the target-discovered column name (preserves original case from target DB)
                             # Fall back to source column name if target column not found
                             target_key_name = discovered_target_col.get('name') if discovered_target_col else col["name"]
-                            target_keys.append({
+                            target_keys.append(_enrich_column({
                                 "id": target_col_id,  # Use target column ID
                                 "name": target_key_name,
                                 "alias": target_key_name,
                                 "dataType": resolved_target_type
-                            })
+                            }, discovered_target_col if 'discovered_target_col' in locals() and discovered_target_col else col))
                             logger.debug(f"Target key: {key_name} (source ID={source_col_id}, target ID={target_col_id})")
                             break
                     else:
@@ -1511,14 +1520,14 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         logger.error(error_msg)
                         raise ValueError(error_msg)
                         
-                    target_keys.append({
+                    target_keys.append(_enrich_column({
                         "id": col_id,  # Use actual ordinal position from database
                         "position": col.get("position", 0),
                         "name": col["name"],
                         "alias": col["name"],
                         "dataType": target_discovered_columns_by_name.get(col["name"].lower(), {}).get('type') or map_data_type(col.get("dataType"), source_node_info, target_node_info,
                                                                                                                                     source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
-                    })
+                    }, discovered_target_col if 'discovered_target_col' in locals() and discovered_target_col else col))
             logger.debug(f"Using primary target keys for {table_name}: {target_keys}")
 
         # Determine target entity type based on target_type
@@ -1735,28 +1744,28 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     mapping_pairs = _extract_mapping_pairs(column_map)
                     for source_name, target_name in mapping_pairs:
                         if source_name == col["name"]:
-                            columns_def.append({
+                            columns_def.append(_enrich_column({
                                 "id": col_id,
                                 "position": col.get("position", 0),
                                 "name": col["name"],
                                 "alias": target_name,
                                 "dataType": col.get("dataType"),
                                 "isPK": col.get("isPK", False), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
-                            })
+                            }, col))
         
         if not has_column_mappings or not columns_def:
             for col in columns["columns"]:
                 col_id = col.get('id')
                 if col_id is None:
                     raise ValueError(f"Column '{col.get('name')}' in {yaml_table_key} missing 'id' field")
-                columns_def.append({
+                columns_def.append(_enrich_column({
                     "id": col_id,
                     "position": col.get("position", 0),
                     "name": col["name"],
                     "alias": col["name"],
                     "dataType": col.get("dataType"),
                     "isPK": col.get("isPK", False), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
-                })
+                }, col))
 
         # Process keys
         if custom_config and 'keys' in custom_config:
@@ -1771,13 +1780,13 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         mapping_pairs = _extract_mapping_pairs(column_map)
                         for source_name, target_name in mapping_pairs:
                             if col["name"] == source_name and col["name"] in custom_config["keys"]:
-                                keys.append({
+                                keys.append(_enrich_column({
                                     "id": col_id,
                                     "position": col.get("position", 0),
                                     "name": col["name"],
                                     "alias": target_name,
                                     "dataType": col.get("dataType")
-                                })
+                                }, col))
             else:
                 for key_name in custom_config['keys']:
                     for col in columns["columns"]:
@@ -1785,13 +1794,13 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             col_id = col.get('id')
                             if col_id is None:
                                 raise ValueError(f"Key '{key_name}' in {yaml_table_key} missing 'id' field")
-                            keys.append({
+                            keys.append(_enrich_column({
                                 "id": col_id,
                                 "position": col.get("position", 0),
                                 "name": col["name"],
                                 "alias": col["name"],
                                 "dataType": col.get("dataType")
-                            })
+                            }, col))
                             break
         else:
             keys = []
@@ -1800,13 +1809,13 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     col_id = col.get('id')
                     if col_id is None:
                         raise ValueError(f"Primary key column '{col.get('name')}' in {yaml_table_key} missing 'id' field")
-                    keys.append({
+                    keys.append(_enrich_column({
                         "id": col_id,
                         "position": col.get("position", 0),
                         "name": col["name"],
                         "alias": col["name"],
                         "dataType": col.get("dataType")
-                    })
+                    }, col))
 
         if not keys:
             logger.warning(f"No keys specified for duplicate table {yaml_table_key}")
@@ -1936,14 +1945,14 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             
             resolved_target_type = map_data_type(col.get("dataType"), source_node_info, target_node_info,
                                                  source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
-            target_columns_def.append({
+            target_columns_def.append(_enrich_column({
                 "id": col_id,
                 "position": col.get("position", 0),
                 "name": col["name"],
                 "alias": col["name"],
                 "dataType": resolved_target_type,
                 "isPK": col.get("isPK", False), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
-            })
+            }, discovered_target_col if 'discovered_target_col' in locals() and discovered_target_col else col))
 
         # Build target keys
         target_keys = []
@@ -1957,13 +1966,13 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         
                         resolved_target_type = map_data_type(col.get("dataType"), source_node_info, target_node_info,
                                                              source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
-                        target_keys.append({
+                        target_keys.append(_enrich_column({
                             "id": col_id,
                             "position": col.get("position", 0),
                             "name": col["name"],
                             "alias": col["name"],
                             "dataType": resolved_target_type
-                        })
+                        }, discovered_target_col if 'discovered_target_col' in locals() and discovered_target_col else col))
                         break
         else:
             for col in columns["columns"]:
@@ -1974,13 +1983,13 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     
                     resolved_target_type = map_data_type(col.get("dataType"), source_node_info, target_node_info,
                                                          source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
-                    target_keys.append({
+                    target_keys.append(_enrich_column({
                         "id": col_id,
                         "position": col.get("position", 0),
                         "name": col["name"],
                         "alias": col["name"],
                         "dataType": resolved_target_type
-                    })
+                    }, discovered_target_col if 'discovered_target_col' in locals() and discovered_target_col else col))
 
         is_target_nosql = target_type and "nosql" in target_type.lower()
         target_entity_type_name = "NoSqlEntity" if is_target_nosql else "SingleTable"
@@ -2138,7 +2147,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     logger.error(error_msg)
                     raise ValueError(error_msg)
 
-                table_columns.append({
+                table_columns.append(_enrich_column({
                     "id": col_id,
                     "position": col.get("position", 0),
                     "name": col["name"],
@@ -2150,7 +2159,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     },
                     "type": col.get("dataType"),
                     "isPK": col.get("isPK", False), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
-                })
+                }, col))
 
             # Add table header metadata followed by the columns for this table
             multi_columns.append({
@@ -2188,7 +2197,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                 logger.error(error_msg)
                                 raise ValueError(error_msg)
 
-                            keys.append({
+                            keys.append(_enrich_column({
                                 "id": col_id,  # Use actual ordinal position from database
                                 "position": col.get("position", 0),
                                 "name": col["name"],
@@ -2199,7 +2208,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                     "schema": source_schema
                                 },
                                 "type": key_type or col.get("dataType")
-                            })
+                            }, col))
                             break
                     else:
                         logger.warning(f"Warning: Key {key_name} not found in columns for table {table_key}")
@@ -2214,7 +2223,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             logger.error(error_msg)
                             raise ValueError(error_msg)
                             
-                        keys.append({
+                        keys.append(_enrich_column({
                             "id": col_id,  # Use actual ordinal position from database
                             "position": col.get("position", 0),
                             "name": col["name"],
@@ -2225,14 +2234,14 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                 "schema": source_schema
                             },
                             "type": col.get("dataType")
-                        })
+                        }, col))
 
             # Add keys for this table
-            multi_keys.append({
+            multi_keys.append(_enrich_column({
                 "id": str(source_table_id),
                 "name": table_key,
                 "schema": source_schema
-            })
+            }, col))
             multi_keys.append(keys)
 
         # Create source entity for MultiTable
@@ -2333,14 +2342,14 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 target_name = mapping_info['target_name'] if mapping_info else col["name"]
                     
                 max_target_col_id = max(max_target_col_id, col_id)
-                target_table_columns.append({
+                target_table_columns.append(_enrich_column({
                     "id": col_id,  # Use actual ordinal position from database
                     "position": col.get("position", 0),
                     "name": target_name,
                     "type": map_data_type(col.get("dataType"), source_node_info, target_node_info,
                                          source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag),
                     "isPK": col.get("isPK", False), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
-                })
+                }, col))
 
             # Add target-only columns for this table if specified
             table_custom_config = table_data.get('customProperties', {}).get('target', {}) if table_data else {}
@@ -2413,7 +2422,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     mapped_type = map_data_type(col_type, source_node_info, target_node_info,
                                                source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
 
-                    target_table_columns.append({
+                    target_table_columns.append(_enrich_column({
                         "id": max_target_col_id,  # Continue from last target column ID
                         "position": 0,
                         "name": col_name,
@@ -2423,7 +2432,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         "numScale": col_numeric_scale,
                         "isNullable": col_is_nullable, "isIdentity": False,
                         "isPK": False  # Target-only columns are not primary keys
-                    })
+                    }, col))
                     logger.debug(f"Added target-only column to MultiTable: {col_name} (type: {mapped_type}, id: {max_target_col_id})")
 
             # Add columns for this table
@@ -2458,13 +2467,13 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             key_mapping_info = source_to_target_mapping.get(col["name"].lower())
                             target_key_name = key_mapping_info['target_name'] if key_mapping_info else col["name"]
                                 
-                            keys.append({
+                            keys.append(_enrich_column({
                                 "id": col_id,  # Use actual ordinal position from database
                                 "position": col.get("position", 0),
                                 "name": target_key_name,
                                 "type": map_data_type(col.get("dataType"), source_node_info, target_node_info,
                                                      source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
-                            })
+                            }, col))
                             break
                     else:
                         logger.warning(f"Warning: Key {key_name} not found in columns for table {table_key}")
@@ -2478,20 +2487,20 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             # Fallback to finding position if not provided
                             col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
                             
-                        keys.append({
+                        keys.append(_enrich_column({
                             "id": col_id,  # Use actual ordinal position from database
                             "position": col.get("position", 0),
                             "name": col["name"],
                             "type": map_data_type(col.get("dataType"), source_node_info, target_node_info,
                                                  source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
-                        })
+                        }, col))
 
             # Add keys for this table
-            target_keys.append({
+            target_keys.append(_enrich_column({
                 "id": str(target_table_id),
                 "name": table_key,
                 "schema": target_schema
-            })
+            }, discovered_target_col if 'discovered_target_col' in locals() and discovered_target_col else col))
             target_keys.append(keys)
 
         # Get allowed operations for the target entity
