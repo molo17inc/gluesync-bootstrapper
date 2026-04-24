@@ -815,7 +815,10 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
         # If there are no column mappings or whitelist, fall back to
         # using discovery columns as-is (one-to-one source→target mapping).
-        if not has_column_mappings and not is_column_whitelist or not columns_def:
+        # IMPORTANT: Only fall back when NO filter was specified. If a whitelist
+        # or mapping was explicitly specified but columns_def is empty, do NOT
+        # fall back to all columns - that would silently include unwanted columns.
+        if not has_column_mappings and not is_column_whitelist:
             columns_def = []
             for col in columns["columns"]:
                 # Use the id field from CoreHub API as the column ID
@@ -1088,27 +1091,30 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             logger.info(f"Table {table_name} configured with unlocked schema. Target table ID: {target_table_id}")
         else:
             # For locked schema, create mapping for each column
-            # Build a map of source column name -> target column name from columns_def
-            source_to_target_name_map = {}
-            for col_def in columns_def:
-                source_name = col_def.get('name')
-                target_name = col_def.get('alias', source_name)
-                if source_name:
-                    source_to_target_name_map[source_name] = target_name
+            # IMPORTANT: When a whitelist or mapping is specified, only include
+            # columns from columns_def, NOT all discovered source columns.
+            # Otherwise, GlueSync would flag all source columns for syncing.
+            has_filter = has_column_mappings or is_column_whitelist
+            
+            # Build a lookup of discovered source columns by name (case-insensitive)
+            source_columns_by_name = {
+                c.get('name', '').lower(): c
+                for c in columns.get('columns', [])
+                if c.get('name')
+            }
             
             max_target_col_id = 0
-            if 'columns' in columns and isinstance(columns['columns'], list):
-                for col in columns['columns']:
-                    # Use the id field from CoreHub API as the column ID
-                    source_col_id = col.get('id')
-                    if source_col_id is None:
-                        error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
-                        logger.error(error_msg)
-                        raise ValueError(error_msg)
+            
+            if has_filter:
+                # Only iterate over the filtered columns_def
+                for col_def in columns_def:
+                    source_col_name = col_def.get('name')
+                    target_col_name = col_def.get('alias', source_col_name)
+                    source_col_id = col_def.get('id')
                     
-                    # Look up the target column name from the mapping
-                    source_col_name = col.get('name')
-                    target_col_name = source_to_target_name_map.get(source_col_name, source_col_name)
+                    if source_col_id is None or not source_col_name:
+                        logger.warning(f"Skipping mapping matrix entry with missing id/name: {col_def}")
+                        continue
                     
                     # Find the target column ID from discovered target columns
                     target_col_id = source_col_id  # Default to source ID
@@ -1126,6 +1132,38 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         "targetColumnId": target_col_id
                     })
                     max_target_col_id = max(max_target_col_id, target_col_id)
+                
+                logger.info(f"columnsMappingMatrix for {table_name}: using filtered columns ({len(columns_mapping_matrix)} entries from {len(columns.get('columns', []))} discovered)")
+            else:
+                # No filter defined - map all discovered source columns
+                if 'columns' in columns and isinstance(columns['columns'], list):
+                    for col in columns['columns']:
+                        # Use the id field from CoreHub API as the column ID
+                        source_col_id = col.get('id')
+                        if source_col_id is None:
+                            error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
+                            logger.error(error_msg)
+                            raise ValueError(error_msg)
+                        
+                        source_col_name = col.get('name')
+                        target_col_name = source_col_name
+                        
+                        # Find the target column ID from discovered target columns
+                        target_col_id = source_col_id  # Default to source ID
+                        target_col = target_discovered_columns_by_name.get(target_col_name.lower())
+                        if target_col and target_col.get('id') is not None:
+                            target_col_id = target_col.get('id')
+                            logger.debug(f"Mapped column: {source_col_name} (ID={source_col_id}) -> {target_col_name} (ID={target_col_id})")
+                        else:
+                            logger.debug(f"No target column found for {target_col_name}, using source ID {source_col_id}")
+                        
+                        columns_mapping_matrix.append({
+                            "sourceTableObjectId": source_table_id,
+                            "targetTableObjectId": target_table_id,
+                            "sourceColumnId": source_col_id,
+                            "targetColumnId": target_col_id
+                        })
+                        max_target_col_id = max(max_target_col_id, target_col_id)
             
             # Add empty arrays for locked schema
             target_entity_type["tablesWithUnlockedSchema"] = []
@@ -1228,7 +1266,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             
             logger.info(f"Using column whitelist for target {table_name}: {len(target_columns_def)} of {len(yaml_columns)} specified columns matched")
         
-        if not has_column_mappings_target and not is_column_whitelist_target or not target_columns_def:
+        if not has_column_mappings_target and not is_column_whitelist_target:
             # No column mappings - use columns as-is with mapped types
             for col in columns["columns"]:
                 # Use the id field from CoreHub API as the source column ID
