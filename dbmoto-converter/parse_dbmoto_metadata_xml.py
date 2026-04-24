@@ -562,6 +562,7 @@ def parse_xml():
     # Extract field mappings from DBMMFieldMappings
     print("\nExtracting field mappings...")
     field_mappings = {}  # Structure: {replication_id: {src_field_id: {target_field_id, target_expression, src_expression}}}
+    record_id_mappings = {}  # Structure: {replication_id: {target_field_id: src_expression}} for [!RecordID] expressions
     
     for mapping_elem in root.findall("./tables/DBMMFieldMappings"):
         mapping_id = mapping_elem.findtext("FieldMappingID")
@@ -590,6 +591,12 @@ def parse_xml():
                         "src_expression": src_expression,
                         "type": "expression"
                     }
+                    # Check for [!RecordID] expression
+                    if "[!RecordID]" in src_expression:
+                        if repl_id not in record_id_mappings:
+                            record_id_mappings[repl_id] = {}
+                        record_id_mappings[repl_id][trg_field_id] = src_expression
+                        print(f"    Found [!RecordID] mapping: replication {repl_id}, target field {trg_field_id}")
     
     total_mappings = sum(len(m) for m in field_mappings.values())
     print(f"Found {total_mappings} field mappings across {len(field_mappings)} replications")
@@ -628,9 +635,9 @@ def parse_xml():
     conversion_stats['replications'] = len(replications)
     conversion_stats['schema_mappings'] = len(source_to_target_schemas)
     
-    return connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name
+    return connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name, record_id_mappings
 
-def export_as_yaml(connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name, output_dir=None, template_file=None):
+def export_as_yaml(connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name, record_id_mappings=None, output_dir=None, template_file=None):
     # Use environment variables if parameters are not provided (Lambda mode)
     if output_dir is None:
         output_dir = os.environ.get('OUTPUT_DIR')
@@ -821,6 +828,23 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                             col_def["sourceName"] = field["name"]
                         
                         columns.append(col_def)
+                    
+                    # Add special _RRN column if there's a [!RecordID] mapping for this replication
+                    if record_id_mappings and repl_id_for_table in record_id_mappings:
+                        for trg_field_id, src_expr in record_id_mappings[repl_id_for_table].items():
+                            # Look up target field name
+                            target_field_name = field_id_to_name.get((target_table_id, trg_field_id), "ID")
+                            rrn_col = {
+                                "name": "_RRN",
+                                "type": "DECIMAL",
+                                "dataLength": 15,
+                                "numericPrecision": 0,
+                                "numericScale": 0,
+                                "isNullable": False,
+                                "sourceName": target_field_name
+                            }
+                            columns.append(rrn_col)
+                            print(f"      Added _RRN column (RecordID mapping) -> target field '{target_field_name}'")
                     
                     # Determine the mapped target table name if available
                     export_table_name = table_name
@@ -1105,8 +1129,8 @@ if __name__ == "__main__":
             # Ensure output directory exists
             os.makedirs(args.output_dir, exist_ok=True)
             
-            # Parse the XML and get connections, groups, chains, replications, schema mappings, and field mappings
-            connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name = parse_xml()
+            # Parse the XML and get connections, groups, chains, replications, schema mappings, field mappings, and record ID mappings
+            connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name, record_id_mappings = parse_xml()
             
             # Print hierarchy summary
             print("\n=== Database Structure ===")
@@ -1118,7 +1142,7 @@ if __name__ == "__main__":
             
             # Export as YAML files
             print("\nExporting to YAML files...")
-            exported = export_as_yaml(connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name)
+            exported = export_as_yaml(connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name, record_id_mappings)
             print(f"\nDone! {exported} YAML files created in {os.path.abspath(args.output_dir)}/")
             print("These files match the structure needed for table-list-template.yaml in gluesync-bootstrapper.")
             
