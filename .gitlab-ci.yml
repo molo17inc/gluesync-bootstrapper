@@ -180,11 +180,23 @@ automator_publish:
     - echo "Checking available build artifacts..."
     - ls -la .automator-build/dist/ || echo "No .automator-build/dist directory found"
     - |
+      # Extract version from tag (e.g., automator-2.1.0-beta -> 2.1.0-beta)
+      AUTOMATOR_VERSION="${CI_COMMIT_TAG#automator-}"
+
+      # Determine if this is a pre-release (contains -beta, -alpha, -rc, etc.)
+      if echo "$AUTOMATOR_VERSION" | grep -qE '(-beta|-alpha|-rc|-preview|-dev)'; then
+        VERSION_SUFFIX="-$AUTOMATOR_VERSION"
+        echo "Pre-release detected: $AUTOMATOR_VERSION"
+      else
+        VERSION_SUFFIX=""
+        echo "GA release detected: $AUTOMATOR_VERSION"
+      fi
+
       cd .automator-build/dist
-      lftp -c "open -u $FTP_USER,$FTP_PASSWORD $FTP_SITE; put gluesync-automator-windows.exe -o /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-windows.exe" 
-      lftp -c "open -u $FTP_USER,$FTP_PASSWORD $FTP_SITE; put gluesync-automator-linux -o /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-linux" 
+      lftp -c "open -u $FTP_USER,$FTP_PASSWORD $FTP_SITE; put gluesync-automator-windows.exe -o /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-windows${VERSION_SUFFIX}.exe" 
+      lftp -c "open -u $FTP_USER,$FTP_PASSWORD $FTP_SITE; put gluesync-automator-linux -o /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-linux${VERSION_SUFFIX}" 
       if [ -f "gluesync-automator-macos" ]; then
-        lftp -c "open -u $FTP_USER,$FTP_PASSWORD $FTP_SITE; put gluesync-automator-macos -o /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-macos"
+        lftp -c "open -u $FTP_USER,$FTP_PASSWORD $FTP_SITE; put gluesync-automator-macos -o /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-macos${VERSION_SUFFIX}"
         echo "Uploaded macOS executable"
       else
         echo "macOS executable not available (built locally)"
