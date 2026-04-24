@@ -2243,7 +2243,34 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             target_table_columns = []
             max_target_col_id = 0
             
-            # First add all source columns mapped to target with their actual ordinal positions
+            # Check if this table has column mappings or whitelist
+            table_yaml_columns = table_data.get('columns', []) if table_data else []
+            table_has_mappings = _is_column_mappings(table_yaml_columns)
+            table_has_whitelist = _is_column_whitelist(table_yaml_columns)
+            
+            # Build lookup from source column name -> (target_name, yaml_type)
+            source_to_target_mapping = {}
+            if table_has_mappings:
+                for column_map in table_yaml_columns:
+                    mapping_pairs = _extract_mapping_pairs(column_map)
+                    for source_name, target_name in mapping_pairs:
+                        source_to_target_mapping[source_name.lower()] = {
+                            'target_name': target_name,
+                            'yaml_type': column_map.get('type') if isinstance(column_map, dict) else None
+                        }
+            elif table_has_whitelist:
+                for yaml_col in table_yaml_columns:
+                    source_name = yaml_col.get('sourceName') or yaml_col.get('name')
+                    target_name = yaml_col.get('name')
+                    if source_name:
+                        source_to_target_mapping[source_name.lower()] = {
+                            'target_name': target_name,
+                            'yaml_type': yaml_col.get('type')
+                        }
+            
+            has_filter = table_has_mappings or table_has_whitelist
+            
+            # First add source columns mapped to target with their actual ordinal positions
             for col in columns["columns"]:
                 # Use the id field from CoreHub API as the column ID
                 col_id = col.get('id')
@@ -2251,11 +2278,20 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
                     logger.error(error_msg)
                     raise ValueError(error_msg)
+                
+                # When filter is active, skip columns not in the whitelist/mapping
+                mapping_info = source_to_target_mapping.get(col["name"].lower())
+                if has_filter and not mapping_info:
+                    logger.debug(f"Skipping column {col['name']} for MultiTable target: not in whitelist/mapping for table {table_key}")
+                    continue
+                
+                # Use target name from mapping if available, otherwise source name
+                target_name = mapping_info['target_name'] if mapping_info else col["name"]
                     
                 max_target_col_id = max(max_target_col_id, col_id)
                 target_table_columns.append({
                     "id": col_id,  # Use actual ordinal position from database
-                    "name": col["name"],
+                    "name": target_name,
                     "type": map_data_type(col["type"], source_node_info, target_node_info,
                                          source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
                 })
@@ -2369,10 +2405,14 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                 error_msg = f"CRITICAL ERROR: Column '{key_name}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
                                 logger.error(error_msg)
                                 raise ValueError(error_msg)
+                            
+                            # Use target name from mapping if available, otherwise source name
+                            key_mapping_info = source_to_target_mapping.get(col["name"].lower())
+                            target_key_name = key_mapping_info['target_name'] if key_mapping_info else col["name"]
                                 
                             keys.append({
                                 "id": col_id,  # Use actual ordinal position from database
-                                "name": col["name"],
+                                "name": target_key_name,
                                 "type": map_data_type(col["type"], source_node_info, target_node_info,
                                                      source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
                             })
