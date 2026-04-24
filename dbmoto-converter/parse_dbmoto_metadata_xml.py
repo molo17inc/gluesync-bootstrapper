@@ -874,14 +874,26 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                     if export_table_name != table_name:
                         print(f"      Mapped source table '{table_name}' -> target table '{export_table_name}' (schema: {target_schema_name}, connection: {target_conn_name})")
                     
-                    # Add primary keys if found, otherwise let engine autodiscover
+                    # Add primary keys if found, otherwise fallback:
+                    # - If _RRN column exists, use it as the only key
+                    # - Otherwise, use ALL columns as keys (composite key)
                     if table.get("primary_keys"):
                         # Use simple string array format to match template
                         table_config["keys"] = table["primary_keys"]
                         print(f"      Added {len(table['primary_keys'])} primary key(s) to table {table_name}: {table['primary_keys']}")
                     else:
-                        # No primary keys found - let engine autodiscover them
-                        print(f"      No primary keys found for table {table_name}, will be autodiscovered by engine")
+                        # No primary keys found - apply fallback strategy
+                        # Check if _RRN column was added (RecordID mapping)
+                        has_rrn = any(col.get("name") == "_RRN" for col in columns)
+                        if has_rrn:
+                            table_config["keys"] = ["_RRN"]
+                            print(f"      No primary keys found for table {table_name}, using _RRN as key (fallback)")
+                        else:
+                            # Use all source column names as composite key
+                            # Use sourceName if present, otherwise name (which equals source name in that case)
+                            all_column_keys = [col.get("sourceName") or col.get("name") for col in columns if (col.get("sourceName") or col.get("name"))]
+                            table_config["keys"] = all_column_keys
+                            print(f"      No primary keys found for table {table_name}, using all {len(all_column_keys)} columns as composite key (fallback)")
                     
                     # Add group/chain assignments if this table is in any replication
                     if table["id"] in table_assignments:
