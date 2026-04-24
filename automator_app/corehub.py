@@ -130,9 +130,7 @@ def _normalize_agent_category(agent_category: Optional[str]) -> Optional[str]:
     normalized = agent_category.strip().upper()
     if normalized in {"RDBMS", "SQL"}:
         return "SQL"
-    if normalized == "NOSQL":
-        return "NoSQL"
-    return agent_category
+    return "NoSQL"
 
 
 def _infer_schema_types_from_agents_list(agents: Any) -> Tuple[Optional[str], Optional[str]]:
