@@ -884,7 +884,7 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                     else:
                         # No primary keys found - apply fallback strategy
                         # Check if _RRN column was added (RecordID mapping)
-                        has_rrn = any(col.get("name") == "_RRN" for col in columns)
+                        has_rrn = any(col.get("sourceName") == "_RRN" for col in columns)
                         if has_rrn:
                             table_config["keys"] = ["_RRN"]
                             print(f"      No primary keys found for table {table_name}, using _RRN as key (fallback)")
