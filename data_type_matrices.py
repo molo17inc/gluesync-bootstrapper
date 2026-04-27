@@ -645,6 +645,50 @@ _ORACLE_CDC = [
 ]
 
 # ---------------------------------------------------------------------------
+# Amazon Redshift  (RedshiftDataTypeMapping.kt)
+# ---------------------------------------------------------------------------
+_REDSHIFT = [
+    {"gluesyncDataType": "SHORT",           "defaultType": "smallint",              "supportedTypes": ["smallint", "int2"]},
+    {"gluesyncDataType": "INT",             "defaultType": "integer",               "supportedTypes": ["integer", "int", "int4"]},
+    {"gluesyncDataType": "LONG",            "defaultType": "bigint",                "supportedTypes": ["bigint", "int8"]},
+    {"gluesyncDataType": "FLOAT",           "defaultType": "real",                  "supportedTypes": ["real", "float4"]},
+    {"gluesyncDataType": "DOUBLE",          "defaultType": "double precision",      "supportedTypes": ["double precision", "float", "float8"]},
+    {"gluesyncDataType": "BIG_DECIMAL",     "defaultType": "decimal",               "supportedTypes": ["decimal", "numeric"]},
+    {"gluesyncDataType": "BOOLEAN",         "defaultType": "boolean",               "supportedTypes": ["boolean", "bool"]},
+    {"gluesyncDataType": "STRING",          "defaultType": "varchar",               "supportedTypes": [
+        "varchar", "char", "character", "character varying", "nchar", "nvarchar", "bpchar", "text",
+        "super", "geometry", "geography", "hllsketch"
+    ]},
+    {"gluesyncDataType": "BYTE_ARRAY",      "defaultType": "varbyte",               "supportedTypes": ["varbyte"]},
+    {"gluesyncDataType": "LOCAL_DATE",      "defaultType": "date",                  "supportedTypes": ["date"]},
+    {"gluesyncDataType": "LOCAL_TIME",      "defaultType": "time",                  "supportedTypes": ["time", "time without time zone"]},
+    {"gluesyncDataType": "LOCAL_DATE_TIME", "defaultType": "timestamp",             "supportedTypes": ["timestamp", "timestamp without time zone"]},
+    {"gluesyncDataType": "OFFSET_DATE_TIME","defaultType": "timestamptz",           "supportedTypes": ["timestamptz", "timestamp with time zone"]},
+    {"gluesyncDataType": "OFFSET_TIME",     "defaultType": "timetz",                "supportedTypes": ["timetz", "time with time zone"]},
+]
+
+# ---------------------------------------------------------------------------
+# SAP HANA  (SapHanaDataTypeMapping.kt)
+# ---------------------------------------------------------------------------
+_SAPHANA = [
+    {"gluesyncDataType": "SHORT",           "defaultType": "SMALLINT",  "supportedTypes": ["SMALLINT", "TINYINT"]},
+    {"gluesyncDataType": "INT",             "defaultType": "INTEGER",   "supportedTypes": ["INTEGER"]},
+    {"gluesyncDataType": "LONG",            "defaultType": "BIGINT",    "supportedTypes": ["BIGINT"]},
+    {"gluesyncDataType": "BIG_DECIMAL",     "defaultType": "DECIMAL",   "supportedTypes": ["DECIMAL", "SMALLDECIMAL"]},
+    {"gluesyncDataType": "FLOAT",           "defaultType": "REAL",      "supportedTypes": ["REAL", "FLOAT"]},
+    {"gluesyncDataType": "DOUBLE",          "defaultType": "DOUBLE",    "supportedTypes": ["DOUBLE"]},
+    {"gluesyncDataType": "STRING",          "defaultType": "VARCHAR",   "supportedTypes": [
+        "VARCHAR", "NVARCHAR", "ALPHANUM", "SHORTTEXT", "CHAR", "NCHAR", "CLOB", "NCLOB",
+        "ST_GEOMETRY", "ST_POINT"
+    ]},
+    {"gluesyncDataType": "BYTE_ARRAY",      "defaultType": "VARBINARY", "supportedTypes": ["VARBINARY", "BLOB"]},
+    {"gluesyncDataType": "LOCAL_DATE",      "defaultType": "DATE",      "supportedTypes": ["DATE"]},
+    {"gluesyncDataType": "LOCAL_TIME",      "defaultType": "TIME",      "supportedTypes": ["TIME"]},
+    {"gluesyncDataType": "LOCAL_DATE_TIME", "defaultType": "TIMESTAMP", "supportedTypes": ["TIMESTAMP", "SECONDDATE"]},
+    {"gluesyncDataType": "BOOLEAN",         "defaultType": "BOOLEAN",   "supportedTypes": ["BOOLEAN"]},
+]
+
+# ---------------------------------------------------------------------------
 # Master registry  —  key: agent internalName (lowercase, matches agents.json)
 # ---------------------------------------------------------------------------
 AGENT_MATRICES: dict = {
@@ -732,6 +776,12 @@ AGENT_MATRICES: dict = {
     # Azure Data Lake
     "azure-data-lake":            _AZURE_DATA_LAKE,
     "azuredatalake":              _AZURE_DATA_LAKE,
+    # Amazon Redshift
+    "redshift":                   _REDSHIFT,
+    # SAP HANA
+    "saphana":                    _SAPHANA,
+    "sap-hana":                   _SAPHANA,
+    "sap_hana":                   _SAPHANA,
     # HBase — no Kotlin DataTypeMapping source found; falls back to API-provided matrix
     # ClickHouse — no Kotlin DataTypeMapping source found; falls back to API-provided matrix
 }
