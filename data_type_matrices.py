@@ -166,20 +166,18 @@ _SYBASE = [
 # Vertica
 # ---------------------------------------------------------------------------
 _VERTICA = [
-    {"gluesyncDataType": "STRING",          "defaultType": "varchar",                 "supportedTypes": ["varchar", "char", "geometry"]},
-    {"gluesyncDataType": "BYTE_ARRAY",      "defaultType": "varbinary",               "supportedTypes": ["varbinary"]},
-    {"gluesyncDataType": "OFFSET_DATE_TIME","defaultType": "timestamptz",             "supportedTypes": ["timestamptz", "timestamp with time zone"]},
-    {"gluesyncDataType": "LOCAL_DATE_TIME", "defaultType": "timestamp",               "supportedTypes": ["timestamp"]},
-    {"gluesyncDataType": "OFFSET_TIME",     "defaultType": "timetz",                  "supportedTypes": ["timetz", "time with timezone"]},
-    {"gluesyncDataType": "LOCAL_TIME",      "defaultType": "time",                    "supportedTypes": ["time"]},
-    {"gluesyncDataType": "LOCAL_DATE",      "defaultType": "date",                    "supportedTypes": ["date"]},
-    {"gluesyncDataType": "BIG_DECIMAL",     "defaultType": "numeric",                 "supportedTypes": ["numeric", "decimal"]},
-    {"gluesyncDataType": "INT",             "defaultType": "int",                     "supportedTypes": ["int", "integer"]},
-    {"gluesyncDataType": "SHORT",           "defaultType": "smallint",                "supportedTypes": ["smallint", "tinyint"]},
-    {"gluesyncDataType": "FLOAT",           "defaultType": "float",                   "supportedTypes": ["float"]},
-    {"gluesyncDataType": "DOUBLE",          "defaultType": "double precision",        "supportedTypes": ["double precision"]},
-    {"gluesyncDataType": "BOOLEAN",         "defaultType": "boolean",                 "supportedTypes": ["boolean"]},
-    {"gluesyncDataType": "LONG",            "defaultType": "bigint",                  "supportedTypes": ["bigint"]},
+    {"gluesyncDataType": "STRING",           "defaultType": "varchar",      "supportedTypes": ["varchar", "char", "geometry"]},
+    {"gluesyncDataType": "BYTE_ARRAY",       "defaultType": "varbinary",    "supportedTypes": ["varbinary"]},
+    {"gluesyncDataType": "OFFSET_DATE_TIME", "defaultType": "timestamptz",  "supportedTypes": ["timestamptz"]},
+    {"gluesyncDataType": "LOCAL_DATE_TIME",  "defaultType": "timestamp",    "supportedTypes": ["timestamp"]},
+    {"gluesyncDataType": "OFFSET_TIME",      "defaultType": "timetz",       "supportedTypes": ["timetz"]},
+    {"gluesyncDataType": "LOCAL_TIME",       "defaultType": "time",         "supportedTypes": ["time"]},
+    {"gluesyncDataType": "LOCAL_DATE",       "defaultType": "date",         "supportedTypes": ["date"]},
+    {"gluesyncDataType": "BIG_DECIMAL",      "defaultType": "numeric",      "supportedTypes": ["numeric"]},
+    {"gluesyncDataType": "INT",              "defaultType": "int",          "supportedTypes": ["int", "tinyint", "smallint"]},
+    {"gluesyncDataType": "FLOAT",            "defaultType": "float",        "supportedTypes": ["float"]},
+    {"gluesyncDataType": "BOOLEAN",          "defaultType": "boolean",      "supportedTypes": ["boolean"]},
+    {"gluesyncDataType": "LONG",             "defaultType": "bigint",       "supportedTypes": ["bigint"]},
 ]
 
 # ---------------------------------------------------------------------------
