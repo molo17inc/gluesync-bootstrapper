@@ -975,6 +975,12 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                         }
                     }
                     disabled_yaml_str = yaml.dump(disabled_data, sort_keys=False, default_flow_style=False, allow_unicode=True)
+                    disabled_yaml_str = re.sub(
+                        r'^(\s+)chainId:(.*)$',
+                        r'\1# Chains usage detected, you can enable it by uncommenting this\n\1# chainId:\2',
+                        disabled_yaml_str,
+                        flags=re.MULTILINE
+                    )
                     disabled_yaml_block = "\n# THE FOLLOWING TABLES ARE DISABLED IN DBMOTO (ReplStatus=3)\n"
                     disabled_yaml_block += "# They are included here for reference but commented out.\n#\n"
                     for line in disabled_yaml_str.splitlines():
@@ -997,7 +1003,14 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                         f.write(f"# Tables disabled (commented out): {len(disabled_whitelist)}\n")
                     f.write("\n")
                     
-                    yaml.dump(yaml_data, f, sort_keys=False, default_flow_style=False, allow_unicode=True)
+                    yaml_str = yaml.dump(yaml_data, sort_keys=False, default_flow_style=False, allow_unicode=True)
+                    yaml_str = re.sub(
+                        r'^(\s+)chainId:(.*)$',
+                        r'\1# Chains usage detected, you can enable it by uncommenting this\n\1# chainId:\2',
+                        yaml_str,
+                        flags=re.MULTILINE
+                    )
+                    f.write(yaml_str)
                     
                     if disabled_yaml_block:
                         f.write(disabled_yaml_block)
