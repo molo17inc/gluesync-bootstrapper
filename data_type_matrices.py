@@ -308,7 +308,7 @@ _KAFKA = [
     {"gluesyncDataType": "BIG_DECIMAL",     "defaultType": "big_decimal", "supportedTypes": ["big_decimal"]},
     {"gluesyncDataType": "LOCAL_DATE",      "defaultType": "date",        "supportedTypes": ["date"]},
     {"gluesyncDataType": "LOCAL_TIME",      "defaultType": "time",        "supportedTypes": ["time"]},
-    {"gluesyncDataType": "LOCAL_DATE_TIME", "defaultType": "date_time",   "supportedTypes": ["date_time"]},
+    {"gluesyncDataType": "LOCAL_DATE_TIME", "defaultType": "datetime",   "supportedTypes": ["datetime"]},
     {"gluesyncDataType": "ARRAY",           "defaultType": "array",       "supportedTypes": ["array"]},
     {"gluesyncDataType": "MAP",             "defaultType": "map",         "supportedTypes": ["map"]},
 ]
