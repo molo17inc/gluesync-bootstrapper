@@ -109,20 +109,15 @@ _COCKROACHDB = [
 # Oracle
 # ---------------------------------------------------------------------------
 _ORACLE = [
-    {"gluesyncDataType": "SHORT",           "defaultType": "number",                   "supportedTypes": ["number"]},
-    {"gluesyncDataType": "INT",             "defaultType": "number",                   "supportedTypes": ["number"]},
-    {"gluesyncDataType": "LONG",            "defaultType": "number",                   "supportedTypes": ["number"]},
-    {"gluesyncDataType": "BIG_DECIMAL",     "defaultType": "number",                   "supportedTypes": ["number", "decimal", "numeric", "float"]},
-    {"gluesyncDataType": "FLOAT",           "defaultType": "float",                    "supportedTypes": ["float", "binary_float"]},
-    {"gluesyncDataType": "DOUBLE",          "defaultType": "float",                    "supportedTypes": ["float", "binary_double"]},
-    {"gluesyncDataType": "BOOLEAN",         "defaultType": "number",                   "supportedTypes": ["number"]},
-    {"gluesyncDataType": "STRING",          "defaultType": "varchar2",                 "supportedTypes": ["varchar2", "varchar", "char", "nchar", "nvarchar2", "clob", "nclob", "xmltype"]},
-    {"gluesyncDataType": "LOCAL_DATE",      "defaultType": "date",                     "supportedTypes": ["date"]},
-    {"gluesyncDataType": "LOCAL_TIME",      "defaultType": "timestamp",                "supportedTypes": ["timestamp"]},
-    {"gluesyncDataType": "LOCAL_DATE_TIME", "defaultType": "timestamp",                "supportedTypes": ["timestamp", "date"]},
+    {"gluesyncDataType": "INT",             "defaultType": "int",                      "supportedTypes": ["int"]},
+    {"gluesyncDataType": "FLOAT",           "defaultType": "float",                    "supportedTypes": ["float"]},
+    {"gluesyncDataType": "DOUBLE",          "defaultType": "double",                   "supportedTypes": ["double"]},
+    {"gluesyncDataType": "BIG_DECIMAL",     "defaultType": "decimal",                  "supportedTypes": ["decimal", "numeric", "number"]},
+    {"gluesyncDataType": "STRING",          "defaultType": "varchar2",                 "supportedTypes": ["char", "nchar", "varchar", "nvarchar", "varchar2", "nvarchar2", "long", "json", "clob", "urowid", "rowid"]},
+    {"gluesyncDataType": "BYTE_ARRAY",      "defaultType": "raw",                      "supportedTypes": ["blob", "raw", "long_raw", "BFILE"]},
+    {"gluesyncDataType": "LOCAL_TIME",      "defaultType": "time",                     "supportedTypes": ["time"]},
     {"gluesyncDataType": "OFFSET_DATE_TIME","defaultType": "timestamp with time zone", "supportedTypes": ["timestamp with time zone", "timestamp with local time zone"]},
-    {"gluesyncDataType": "OFFSET_TIME",     "defaultType": "timestamp with time zone", "supportedTypes": ["timestamp with time zone", "timestamp with local time zone"]},
-    {"gluesyncDataType": "BYTE_ARRAY",      "defaultType": "raw",                      "supportedTypes": ["raw", "long raw", "blob", "bfile"]},
+    {"gluesyncDataType": "LOCAL_DATE_TIME", "defaultType": "date",                     "supportedTypes": ["date", "timestamp"]},
 ]
 
 # ---------------------------------------------------------------------------
@@ -270,6 +265,11 @@ _AEROSPIKE = [
     {"gluesyncDataType": "BYTE_ARRAY",  "defaultType": "bytearray", "supportedTypes": ["bytearray"]},
     {"gluesyncDataType": "ARRAY",       "defaultType": "any_array",  "supportedTypes": ["any_array", "number_array", "string_array", "binary_array"]},
     {"gluesyncDataType": "MAP",         "defaultType": "object",     "supportedTypes": ["object"]},
+    {"gluesyncDataType": "LOCAL_DATE",       "defaultType": "date",             "supportedTypes": ["date"]},
+    {"gluesyncDataType": "LOCAL_TIME",       "defaultType": "time",             "supportedTypes": ["time"]},
+    {"gluesyncDataType": "LOCAL_DATE_TIME",  "defaultType": "datetime",         "supportedTypes": ["datetime"]},
+    {"gluesyncDataType": "OFFSET_DATE_TIME", "defaultType": "offset_date_time", "supportedTypes": ["offset_date_time"]},
+    {"gluesyncDataType": "OFFSET_TIME",      "defaultType": "offset_time",      "supportedTypes": ["offset_time"]},
 ]
 
 # ---------------------------------------------------------------------------
@@ -632,19 +632,15 @@ _YUGABYTEDB = [
 # Oracle CDC  (oracle/cdc/OracleDataTypeMapping.kt) — same matrix as triggers
 # ---------------------------------------------------------------------------
 _ORACLE_CDC = [
-    {"gluesyncDataType": "SHORT",           "defaultType": "number",                   "supportedTypes": ["number"]},
-    {"gluesyncDataType": "INT",             "defaultType": "number",                   "supportedTypes": ["number"]},
-    {"gluesyncDataType": "LONG",            "defaultType": "number",                   "supportedTypes": ["number"]},
+    {"gluesyncDataType": "INT",             "defaultType": "int",                      "supportedTypes": ["int"]},
     {"gluesyncDataType": "FLOAT",           "defaultType": "float",                    "supportedTypes": ["float"]},
     {"gluesyncDataType": "DOUBLE",          "defaultType": "double",                   "supportedTypes": ["double"]},
     {"gluesyncDataType": "BIG_DECIMAL",     "defaultType": "decimal",                  "supportedTypes": ["decimal", "numeric", "number"]},
     {"gluesyncDataType": "STRING",          "defaultType": "varchar2",                 "supportedTypes": ["char", "nchar", "varchar", "nvarchar", "varchar2", "nvarchar2", "long", "json", "clob", "urowid", "rowid"]},
-    {"gluesyncDataType": "BYTE_ARRAY",      "defaultType": "raw",                      "supportedTypes": ["blob", "raw", "long raw", "bfile"]},
-    {"gluesyncDataType": "LOCAL_DATE",      "defaultType": "date",                     "supportedTypes": ["date"]},
-    {"gluesyncDataType": "LOCAL_TIME",      "defaultType": "timestamp",                "supportedTypes": ["timestamp"]},
-    {"gluesyncDataType": "LOCAL_DATE_TIME", "defaultType": "timestamp",                "supportedTypes": ["date", "timestamp"]},
+    {"gluesyncDataType": "BYTE_ARRAY",      "defaultType": "raw",                      "supportedTypes": ["blob", "raw", "long_raw", "BFILE"]},
+    {"gluesyncDataType": "LOCAL_TIME",      "defaultType": "time",                     "supportedTypes": ["time"]},
     {"gluesyncDataType": "OFFSET_DATE_TIME","defaultType": "timestamp with time zone", "supportedTypes": ["timestamp with time zone", "timestamp with local time zone"]},
-    {"gluesyncDataType": "OFFSET_TIME",     "defaultType": "timestamp with time zone", "supportedTypes": ["timestamp with time zone", "timestamp with local time zone"]},
+    {"gluesyncDataType": "LOCAL_DATE_TIME", "defaultType": "date",                     "supportedTypes": ["date", "timestamp"]},
 ]
 
 # ---------------------------------------------------------------------------
