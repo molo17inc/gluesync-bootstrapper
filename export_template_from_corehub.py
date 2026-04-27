@@ -39,6 +39,37 @@ logger = get_logger(log_file)
 _AGENT_TYPE_BY_NAME: Optional[Dict[str, str]] = None
 
 
+def _column_data_type(col: Dict[str, Any]) -> Any:
+    """Read a column's data type, preferring the 2.2.6.0 'dataType' field but
+    falling back to the legacy 'type' field for backward compatibility."""
+    return col.get("dataType") if col.get("dataType") is not None else col.get("type")
+
+
+def _column_attr(col: Dict[str, Any], new_key: str, legacy_key: str, default: Any = 0) -> Any:
+    """Return a column attribute preferring the 2.2.6.0 name then the legacy one."""
+    val = col.get(new_key)
+    if val is None:
+        val = col.get(legacy_key)
+    return default if val is None else val
+
+
+def _keys_from_columns(columns: List[Dict[str, Any]]) -> List[str]:
+    """Derive primary-key column names from a flat list of column dicts where
+    isPK is true. This is the 2.2.6.0 replacement for the removed 'keys' array
+    on agent entities. Order is preserved as encountered."""
+    out: List[str] = []
+    seen: set = set()
+    for col in columns or []:
+        if not isinstance(col, dict):
+            continue
+        is_pk = col.get("isPK") or col.get("isPrimaryKey")
+        name = col.get("name")
+        if is_pk and name and name not in seen:
+            seen.add(name)
+            out.append(str(name))
+    return out
+
+
 def _load_agent_type_catalog() -> Dict[str, str]:
     """Load agents.json catalog and normalize types to SQL/NoSQL."""
 
@@ -425,12 +456,15 @@ def _process_single_entity(
         group_name = group_id_to_name.get(str(group_id), str(group_id))
         table_cfg["groupId"] = group_name
 
-    # Keys (use source keys by column name)
-    keys = []
+    # Keys: prefer the legacy 'keys' array if present (older CoreHub versions),
+    # otherwise derive from columns where isPK == true (2.2.6.0+ column model).
+    keys: List[str] = []
     for key in source_ae.get("keys", []) or []:
         name = key.get("name")
         if name:
             keys.append(name)
+    if not keys:
+        keys = _keys_from_columns(source_ae.get("columns", []) or [])
     if keys:
         table_cfg["keys"] = keys
 
@@ -507,11 +541,11 @@ def _process_single_entity(
 
             # Get target column and its metadata
             target_name = source_name  # Default to same name
-            target_type = scol.get("type")
+            target_type = _column_data_type(scol)
             if target_col_id is not None and target_col_id in target_by_id:
                 target_col = target_by_id[target_col_id]
                 target_name = target_col.get("name", source_name)
-                target_type = target_col.get("type", scol.get("type"))
+                target_type = _column_data_type(target_col) or _column_data_type(scol)
                 if target_name != source_name:
                     logger.info(f"Column mapping: {source_name} -> {target_name}")
             else:
@@ -521,7 +555,7 @@ def _process_single_entity(
                     if target_idx < len(ordered_target):
                         _, fallback_target_col = ordered_target[target_idx]
                         target_name = fallback_target_col.get("name", source_name)
-                        target_type = fallback_target_col.get("type", scol.get("type"))
+                        target_type = _column_data_type(fallback_target_col) or _column_data_type(scol)
                         if target_name != source_name:
                             logger.info(
                                 f"Fallback column mapping by position: {source_name} -> {target_name}"
@@ -541,10 +575,11 @@ def _process_single_entity(
                 "source": source_name,
                 "target": target_name,
                 "type": target_type,
-                "dataLength": scol.get("dataLength", 0),
-                "numericPrecision": scol.get("numericPrecision", 0),
-                "numericScale": scol.get("numericScale", 0),
+                "dataLength": _column_attr(scol, "charMaxLength", "dataLength", 0),
+                "numericPrecision": _column_attr(scol, "numPrec", "numericPrecision", 0),
+                "numericScale": _column_attr(scol, "numScale", "numericScale", 0),
                 "isNullable": scol.get("isNullable", False),
+                "isPK": bool(scol.get("isPK") or scol.get("isPrimaryKey")),
                 "id": source_id,
                 "ordinalPosition": col_index  # Use 1-based index from sorted array
             }
@@ -742,6 +777,17 @@ def _process_multitable_entity(
 
     column_groups = _group_entries(source_ae.get("columns"))
     key_groups = _group_entries(source_ae.get("keys"))
+
+    # In 2.2.6.0 the 'keys' array is removed from MultiTable agent entities; the
+    # primary-key information is encoded as isPK on each column. Derive a
+    # fallback {table_name: [pk_col_name, ...]} mapping so that downstream code
+    # can still emit a 'keys' list per chained table.
+    keys_by_table_from_isPK: Dict[str, List[str]] = {}
+    if not key_groups and column_groups:
+        for tname, cols in column_groups.items():
+            pk_names = _keys_from_columns(cols)
+            if pk_names:
+                keys_by_table_from_isPK[tname] = pk_names
     
     # Build a mapping from source table names to target table names
     source_to_target_name = {}
@@ -785,15 +831,16 @@ def _process_multitable_entity(
                 # Use the actual id from the entity column data
                 col_id = col.get("id")
                 # Use ordinalPosition from entity if available, otherwise use id
-                ordinal = col.get("ordinalPosition", col_id)
+                ordinal = col.get("ordinalPosition") or col.get("position") or col_id
                 
                 col_meta: Dict[str, Any] = {
                     "name": name,
-                    "type": col.get("type"),
-                    "dataLength": col.get("dataLength", 0),
-                    "numericPrecision": col.get("numericPrecision", 0),
-                    "numericScale": col.get("numericScale", 0),
+                    "type": _column_data_type(col),
+                    "dataLength": _column_attr(col, "charMaxLength", "dataLength", 0),
+                    "numericPrecision": _column_attr(col, "numPrec", "numericPrecision", 0),
+                    "numericScale": _column_attr(col, "numScale", "numericScale", 0),
                     "isNullable": col.get("isNullable", False),
+                    "isPK": bool(col.get("isPK") or col.get("isPrimaryKey")),
                     "id": col_id,
                     "ordinalPosition": ordinal,
                 }
@@ -802,13 +849,18 @@ def _process_multitable_entity(
             if column_metadata:
                 table_cfg["columns"] = column_metadata
 
-        # Restore key names if missing
-        if table_name in key_groups and "keys" not in table_cfg:
+        # Restore key names if missing.
+        # Prefer the legacy per-table key array; if absent (2.2.6.0+), fall back
+        # to the isPK-derived list computed above.
+        if "keys" not in table_cfg:
             key_names: List[str] = []
-            for key in key_groups[table_name]:
-                name = key.get("name")
-                if name and name not in key_names:
-                    key_names.append(str(name))
+            if table_name in key_groups:
+                for key in key_groups[table_name]:
+                    name = key.get("name")
+                    if name and name not in key_names:
+                        key_names.append(str(name))
+            if not key_names and table_name in keys_by_table_from_isPK:
+                key_names = list(keys_by_table_from_isPK[table_name])
             if key_names:
                 table_cfg["keys"] = key_names
 
