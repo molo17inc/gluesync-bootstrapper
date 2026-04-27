@@ -267,7 +267,7 @@ _AEROSPIKE = [
     {"gluesyncDataType": "DOUBLE",      "defaultType": "double",     "supportedTypes": ["double"]},
     {"gluesyncDataType": "FLOAT",       "defaultType": "float",      "supportedTypes": ["float"]},
     {"gluesyncDataType": "BIG_DECIMAL", "defaultType": "decimal",    "supportedTypes": ["decimal"]},
-    {"gluesyncDataType": "BYTE_ARRAY",  "defaultType": "byte_array", "supportedTypes": ["byte_array"]},
+    {"gluesyncDataType": "BYTE_ARRAY",  "defaultType": "bytearray", "supportedTypes": ["bytearray"]},
     {"gluesyncDataType": "ARRAY",       "defaultType": "any_array",  "supportedTypes": ["any_array", "number_array", "string_array", "binary_array"]},
     {"gluesyncDataType": "MAP",         "defaultType": "object",     "supportedTypes": ["object"]},
 ]
@@ -432,8 +432,10 @@ _SNOWFLAKE = [
 _MONGODB = [
     {"gluesyncDataType": "STRING",          "defaultType": "STRING",     "supportedTypes": ["STRING", "REGULAR_EXPRESSION", "OBJECT_ID"]},
     {"gluesyncDataType": "BOOLEAN",         "defaultType": "BOOLEAN",    "supportedTypes": ["BOOLEAN"]},
+    {"gluesyncDataType": "SHORT",           "defaultType": "INT32",      "supportedTypes": ["INT32"]},
     {"gluesyncDataType": "INT",             "defaultType": "INT32",      "supportedTypes": ["INT32"]},
     {"gluesyncDataType": "LONG",            "defaultType": "INT64",      "supportedTypes": ["INT64"]},
+    {"gluesyncDataType": "FLOAT",           "defaultType": "DOUBLE",     "supportedTypes": ["DOUBLE"]},
     {"gluesyncDataType": "DOUBLE",          "defaultType": "DOUBLE",     "supportedTypes": ["DOUBLE"]},
     {"gluesyncDataType": "BIG_DECIMAL",     "defaultType": "DECIMAL128", "supportedTypes": ["DECIMAL128"]},
     {"gluesyncDataType": "LOCAL_DATE_TIME", "defaultType": "DATE_TIME",  "supportedTypes": ["DATE_TIME"]},
