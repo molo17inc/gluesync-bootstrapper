@@ -949,7 +949,7 @@ def process_filter_clauses(filter_config, columns_info):
             "column": {
                 "id": column_id,
                 "name": column_name,
-                "type": column_type  # Use discovered type from database
+                "dataType": column_type  # Use discovered type from database (2.2.6.0 column model)
             },
             "operation": {
                 "type": operation_type

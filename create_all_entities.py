@@ -603,14 +603,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         partition_column["isPK"] = matched_column.get('isPK', False)
         if 'default' in matched_column:
             partition_column["default"] = matched_column['default']
-            
-        # Backward compatibility
-        partition_column["table"] = {
-            "id": str(table_id),
-            "schema": schema_name,
-            "name": table_name
-        }
-        partition_column["type"] = matched_column.get('dataType')
 
         partition_settings = {
             "column": partition_column,
