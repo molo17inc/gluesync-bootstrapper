@@ -620,7 +620,8 @@ _YUGABYTEDB = [
         "pg_lsn", "txid_snapshot",
         "uuid", "xml",
         "int4range", "int8range", "numrange", "tsrange", "tstzrange", "daterange",
-        "interval", "enum"
+        "interval", "enum",
+        "geometry", "geography"
     ]},
     {"gluesyncDataType": "BYTE_ARRAY",      "defaultType": "bytea",                "supportedTypes": ["bytea"]},
 ]
