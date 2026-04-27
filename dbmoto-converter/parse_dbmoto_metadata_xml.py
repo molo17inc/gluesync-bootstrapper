@@ -268,6 +268,7 @@ def parse_xml():
         repl_id = repl_elem.findtext("ReplicationID")
         group_id = repl_elem.findtext("GroupID")
         name = repl_elem.findtext("Name")
+        repl_status = repl_elem.findtext("ReplStatus")
         properties = {}
         
         # Parse properties string into a dictionary
@@ -281,6 +282,7 @@ def parse_xml():
             replications[repl_id] = {
                 "name": name,
                 "group_id": group_id,
+                "repl_status": repl_status,
                 "src_table_id": repl_elem.findtext("SrcTableID"),
                 "trg_table_id": repl_elem.findtext("TrgTableID"),
                 "group_priority": int(properties.get('GroupPriority', '0')) if group_id in chains else 0
@@ -769,9 +771,12 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
             if tables_with_fields:
                 # Create whitelist of all table names (prefer target names when available)
                 whitelist = []
+                disabled_whitelist = []
                 
                 # Create custom table definitions with column details
                 custom_tables = {}
+                disabled_custom_tables = {}
+
                 for table_name, table in tables_with_fields.items():
                     # Convert field list to column definitions matching template format
                     columns = []
@@ -782,11 +787,17 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                     repl_id_for_table = None
                     target_table_id = None
                     
+                    # Determine if the table has a disabled replication
+                    is_disabled = False
                     for target_id, repl_id in target_ids:
                         target_info = table_lookup.get(target_id)
                         if target_info and not target_info["is_source"]:
                             repl_id_for_table = repl_id
                             target_table_id = target_id
+                            
+                            # Check ReplStatus: '3' means disabled
+                            if replications.get(repl_id, {}).get("repl_status") == '3':
+                                is_disabled = True
                             break
                     
                     # Get field mappings for this replication
@@ -863,8 +874,6 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                             print(f"      Warning: Could not resolve target table IDs {[t[0] for t in target_ids_with_repl]} for source table {table_name}")
                     
                     whitelist_name = table["name"]
-                    if whitelist_name not in whitelist:
-                        whitelist.append(whitelist_name)
                     
                     # Create the table entry with column definitions
                     table_config = {
@@ -899,7 +908,15 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                     if table["id"] in table_assignments:
                         table_config.update(table_assignments[table["id"]])
                     
-                    custom_tables[table_name] = table_config
+                    # Separate active and disabled tables
+                    if is_disabled:
+                        if whitelist_name not in disabled_whitelist:
+                            disabled_whitelist.append(whitelist_name)
+                        disabled_custom_tables[table_name] = table_config
+                    else:
+                        if whitelist_name not in whitelist:
+                            whitelist.append(whitelist_name)
+                        custom_tables[table_name] = table_config
                 
                 # Find matching template for this schema
                 template_schema = find_matching_template_schema(schema_name)
@@ -946,6 +963,23 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                 if schedules:
                     yaml_data[schema_name]["schedules"] = schedules
                 
+                # Create the schema structure for disabled tables (if any)
+                disabled_yaml_block = ""
+                if disabled_whitelist or disabled_custom_tables:
+                    disabled_data = {
+                        schema_name: {
+                            "tables": {
+                                "whitelist": disabled_whitelist,
+                                "custom": disabled_custom_tables
+                            }
+                        }
+                    }
+                    disabled_yaml_str = yaml.dump(disabled_data, sort_keys=False, default_flow_style=False, allow_unicode=True)
+                    disabled_yaml_block = "\n# THE FOLLOWING TABLES ARE DISABLED IN DBMOTO (ReplStatus=3)\n"
+                    disabled_yaml_block += "# They are included here for reference but commented out.\n#\n"
+                    for line in disabled_yaml_str.splitlines():
+                        disabled_yaml_block += f"# {line}\n"
+
                 # Create filename and write YAML
                 filename = f"{conn_name}__{schema_name}.yaml".replace("/", "_")
                 filepath = os.path.join(output_dir, filename)
@@ -958,13 +992,19 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                     f.write(f"# Conversion timestamp: {timestamp}\n")
                     f.write(f"# Source database connection: {conn_name}\n")
                     f.write(f"# Schema: {schema_name}\n")
-                    f.write(f"# Tables converted: {len(whitelist)}\n\n")
+                    f.write(f"# Tables converted: {len(whitelist)}\n")
+                    if disabled_whitelist:
+                        f.write(f"# Tables disabled (commented out): {len(disabled_whitelist)}\n")
+                    f.write("\n")
                     
                     yaml.dump(yaml_data, f, sort_keys=False, default_flow_style=False, allow_unicode=True)
+                    
+                    if disabled_yaml_block:
+                        f.write(disabled_yaml_block)
                 
                 exported_count += 1
                 conversion_stats['tables_exported'] += len(whitelist)
-                print(f"Exported: {filename} ({len(whitelist)} tables)")
+                print(f"Exported: {filename} ({len(whitelist)} tables active, {len(disabled_whitelist)} tables disabled)")
             else:
                 print(f"Skipped: {conn_name}.{schema_name} (no tables with fields)")
     
