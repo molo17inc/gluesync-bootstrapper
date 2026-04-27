@@ -305,12 +305,14 @@ _KAFKA = [
     {"gluesyncDataType": "LONG",            "defaultType": "long",        "supportedTypes": ["long"]},
     {"gluesyncDataType": "FLOAT",           "defaultType": "float",       "supportedTypes": ["float"]},
     {"gluesyncDataType": "DOUBLE",          "defaultType": "double",      "supportedTypes": ["double"]},
-    {"gluesyncDataType": "BIG_DECIMAL",     "defaultType": "big_decimal", "supportedTypes": ["big_decimal"]},
-    {"gluesyncDataType": "LOCAL_DATE",      "defaultType": "date",        "supportedTypes": ["date"]},
-    {"gluesyncDataType": "LOCAL_TIME",      "defaultType": "time",        "supportedTypes": ["time"]},
-    {"gluesyncDataType": "LOCAL_DATE_TIME", "defaultType": "date_time",    "supportedTypes": ["datetime"]},
-    {"gluesyncDataType": "ARRAY",           "defaultType": "array",       "supportedTypes": ["array"]},
-    {"gluesyncDataType": "MAP",             "defaultType": "map",         "supportedTypes": ["map"]},
+    {"gluesyncDataType": "BIG_DECIMAL",      "defaultType": "bigdecimal",        "supportedTypes": ["bigdecimal"]},
+    {"gluesyncDataType": "LOCAL_DATE",       "defaultType": "date",              "supportedTypes": ["date"]},
+    {"gluesyncDataType": "LOCAL_TIME",       "defaultType": "time",              "supportedTypes": ["time"]},
+    {"gluesyncDataType": "LOCAL_DATE_TIME",  "defaultType": "datetime",          "supportedTypes": ["datetime"]},
+    {"gluesyncDataType": "OFFSET_DATE_TIME", "defaultType": "offset_date_time",  "supportedTypes": ["offset_date_time"]},
+    {"gluesyncDataType": "OFFSET_TIME",      "defaultType": "offset_time",       "supportedTypes": ["offset_time"]},
+    {"gluesyncDataType": "ARRAY",            "defaultType": "array",             "supportedTypes": ["array"]},
+    {"gluesyncDataType": "MAP",              "defaultType": "map",               "supportedTypes": ["map"]},
 ]
 
 # ---------------------------------------------------------------------------
