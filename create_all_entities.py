@@ -2134,7 +2134,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
             # Add table to the list (use actual table name, not YAML key)
             table_obj = {
-                "id": str(source_table_id),
+                "id": int(source_table_id),
                 "name": actual_table_name,
                 "schema": source_schema
             }
@@ -2167,18 +2167,13 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     "position": col.get("position", 0),
                     "name": col["name"],
                     "alias": col["name"],
-                    "table": {
-                        "id": str(source_table_id),
-                        "name": table_key,
-                        "schema": source_schema
-                    },
-                    "type": col.get("dataType"),
-                    "isPK": col.get("isPK", False) or _is_in_keys(col["name"], custom_config), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
+                    "dataType": col.get("dataType"),
+                    "isPK": col.get("isPK", False) or _is_in_keys(col["name"], table_data), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
                 }, col))
 
             # Add table header metadata followed by the columns for this table
             multi_columns.append({
-                "id": str(source_table_id),
+                "id": int(source_table_id),
                 "name": table_key,
                 "schema": source_schema
             })
@@ -2274,6 +2269,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 "unchangedDataFilterType": "ENTIRE_ROW"
             },
             "agentId": source_agent_id,
+            "orderIndex": 0,
             "customProperties": {},
             "tablesProperties": tables_properties,
             "tables": multi_tables,
@@ -2294,7 +2290,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             target_table_id = resolve_table_id(yaml_target_schema, table_key, target_tables_lookup, "target")
             # Add table to the list (use table_key for target, as it may have custom target name)
             target_table_obj = {
-                "id": str(target_table_id),
+                "id": int(target_table_id),
                 "name": table_key,
                 "schema": target_schema
             }
@@ -2361,9 +2357,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     "id": col_id,  # Use actual ordinal position from database
                     "position": col.get("position", 0),
                     "name": target_name,
-                    "type": map_data_type(col.get("dataType"), source_node_info, target_node_info,
+                    "dataType": map_data_type(col.get("dataType"), source_node_info, target_node_info,
                                          source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag),
-                    "isPK": col.get("isPK", False) or _is_in_keys(col["name"], custom_config), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
+                    "isPK": col.get("isPK", False) or _is_in_keys(col["name"], table_data), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
                 }, col))
 
             # Add target-only columns for this table if specified
@@ -2452,7 +2448,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
             # Add columns for this table
             target_columns.append({
-                "id": str(target_table_id),
+                "id": int(target_table_id),
                 "name": table_key,
                 "schema": target_schema
             })
@@ -2518,8 +2514,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             }, discovered_target_col if 'discovered_target_col' in locals() and discovered_target_col else col))
             target_keys.append(keys)
 
-        # Get allowed operations for the target entity
-        allowed_operations = get_allowed_operations(table_data.get('customProperties', {}).get('target', {}))
+        # Get allowed operations and other target settings
+        mt_target_props = table_data.get('customProperties', {}).get('target', {}) if table_data else {}
+        allowed_operations = get_allowed_operations(mt_target_props)
         
         # Create table mapping matrix for MultiTable entities
         columns_mapping_matrix = []
@@ -2573,10 +2570,15 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             "entityType": {
                 "type": "Target",
                 "allowedOperations": allowed_operations,
-                "snapshotWritingConcurrency": table_data.get('customProperties', {}).get('target', {}).get('snapshotWritingConcurrency', 1),
-                "columnsMappingMatrix": columns_mapping_matrix
+                "snapshotWritingConcurrency": mt_target_props.get('snapshotWritingConcurrency', 1),
+                "columnsMappingMatrix": columns_mapping_matrix,
+                "tablesWithUnlockedSchema": [],
+                "tablesWithUnlockedDataTypes": [],
+                "useBulkOperationsDuringCDC": mt_target_props.get('useBulkOperationsDuringCDC', False),
+                "useBulkOperationsWhileSnapshot": mt_target_props.get('useBulkOperationsWhileSnapshot', False)
             },
             "agentId": target_agent_id,
+            "orderIndex": 0,
             "customProperties": target_custom_properties,
             "tablesProperties": target_tables_properties,
             "tables": target_tables,
@@ -2659,6 +2661,29 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         logger.info(f"Final tables order in payload for {agent_entity.get('entityName')}:")
                         for idx, table in enumerate(agent_entity.get('tables', [])):
                             logger.info(f"  {idx+1}. {table.get('schema')}.{table.get('name')}")
+
+                # Clean up payload before sending: strip 'alias' and inject 'tableId' into columns
+                # MultiTable 'columns' is an alternating list: [header_dict, [col, col, ...], header_dict, [col, ...], ...]
+                for entity_payload in multi_entity.get('entities', []):
+                    for agent_entity in entity_payload.get('agentEntities', []):
+                        mt_columns = agent_entity.get('columns', [])
+                        current_table_id = 0
+                        for item in mt_columns:
+                            if isinstance(item, dict):
+                                # Table header: capture the table id for the columns that follow
+                                try:
+                                    current_table_id = int(item.get('id', 0))
+                                except (TypeError, ValueError):
+                                    current_table_id = 0
+                            elif isinstance(item, list):
+                                for col in item:
+                                    if isinstance(col, dict):
+                                        col.pop('alias', None)
+                                        if current_table_id:
+                                            col['tableId'] = current_table_id
+
+                logger.debug(f"MultiTable payload sent to /pipelines/{pipeline_id}/config/entities:")
+                logger.debug(json.dumps(multi_entity, indent=2))
 
                 response = fetch_core_hub(
                     f"/pipelines/{pipeline_id}/config/entities",
