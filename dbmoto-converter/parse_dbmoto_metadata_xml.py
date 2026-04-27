@@ -832,19 +832,19 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                     # Add special _RRN column if there's a [!RecordID] mapping for this replication
                     if record_id_mappings and repl_id_for_table in record_id_mappings:
                         for trg_field_id, src_expr in record_id_mappings[repl_id_for_table].items():
-                            # Look up target field name
+                            # Look up target field name - this becomes the column name (target side)
                             target_field_name = field_id_to_name.get((target_table_id, trg_field_id), "ID")
                             rrn_col = {
-                                "name": "_RRN",
+                                "name": target_field_name,
                                 "type": "DECIMAL",
                                 "dataLength": 15,
                                 "numericPrecision": 0,
                                 "numericScale": 0,
                                 "isNullable": False,
-                                "sourceName": target_field_name
+                                "sourceName": "_RRN"
                             }
                             columns.append(rrn_col)
-                            print(f"      Added _RRN column (RecordID mapping) -> target field '{target_field_name}'")
+                            print(f"      Added _RRN source column mapped to target field '{target_field_name}'")
                     
                     # Determine the mapped target table name if available
                     export_table_name = table_name
