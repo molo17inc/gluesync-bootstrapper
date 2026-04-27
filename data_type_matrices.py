@@ -500,19 +500,19 @@ _COSMOSDB = [
 # RavenDB  (RavenDBDataTypeMapping.kt)
 # ---------------------------------------------------------------------------
 _RAVENDB = [
-    {"gluesyncDataType": "STRING",          "defaultType": "string",         "supportedTypes": ["string", "regularexpression", "objectid"]},
-    {"gluesyncDataType": "BOOLEAN",         "defaultType": "boolean",        "supportedTypes": ["boolean"]},
-    {"gluesyncDataType": "SHORT",           "defaultType": "smallint",       "supportedTypes": ["smallint", "tinyint"]},
-    {"gluesyncDataType": "INT",             "defaultType": "int32",          "supportedTypes": ["int32"]},
-    {"gluesyncDataType": "LONG",            "defaultType": "int64",          "supportedTypes": ["int64"]},
-    {"gluesyncDataType": "DOUBLE",          "defaultType": "double",         "supportedTypes": ["double"]},
-    {"gluesyncDataType": "BIG_DECIMAL",     "defaultType": "decimal128",     "supportedTypes": ["decimal128"]},
-    {"gluesyncDataType": "LOCAL_DATE_TIME", "defaultType": "localdatetime",  "supportedTypes": ["localdatetime"]},
-    {"gluesyncDataType": "LOCAL_DATE",      "defaultType": "localdate",      "supportedTypes": ["localdate"]},
-    {"gluesyncDataType": "LOCAL_TIME",      "defaultType": "localtime",      "supportedTypes": ["localtime"]},
-    {"gluesyncDataType": "OFFSET_TIME",     "defaultType": "offsettime",     "supportedTypes": ["offsettime"]},
-    {"gluesyncDataType": "OFFSET_DATE_TIME","defaultType": "offsetdatetime", "supportedTypes": ["offsetdatetime"]},
-    {"gluesyncDataType": "BYTE_ARRAY",      "defaultType": "binary",         "supportedTypes": ["binary"]},
+    {"gluesyncDataType": "STRING",          "defaultType": "STRING",         "supportedTypes": ["STRING", "REGULAREXPRESSION", "OBJECTID"]},
+    {"gluesyncDataType": "BOOLEAN",         "defaultType": "BOOLEAN",        "supportedTypes": ["BOOLEAN"]},
+    {"gluesyncDataType": "SHORT",           "defaultType": "SMALLINT",       "supportedTypes": ["SMALLINT", "TINYINT"]},
+    {"gluesyncDataType": "INT",             "defaultType": "INT32",          "supportedTypes": ["INT32"]},
+    {"gluesyncDataType": "LONG",            "defaultType": "INT64",          "supportedTypes": ["INT64"]},
+    {"gluesyncDataType": "DOUBLE",          "defaultType": "DOUBLE",         "supportedTypes": ["DOUBLE"]},
+    {"gluesyncDataType": "BIG_DECIMAL",     "defaultType": "DECIMAL128",     "supportedTypes": ["DECIMAL128"]},
+    {"gluesyncDataType": "LOCAL_DATE_TIME", "defaultType": "LOCALDATETIME",  "supportedTypes": ["LOCALDATETIME"]},
+    {"gluesyncDataType": "LOCAL_DATE",      "defaultType": "LOCALDATE",      "supportedTypes": ["LOCALDATE"]},
+    {"gluesyncDataType": "LOCAL_TIME",      "defaultType": "LOCALTIME",      "supportedTypes": ["LOCALTIME"]},
+    {"gluesyncDataType": "OFFSET_TIME",     "defaultType": "OFFSETTIME",     "supportedTypes": ["OFFSETTIME"]},
+    {"gluesyncDataType": "OFFSET_DATE_TIME","defaultType": "OFFSETDATETIME", "supportedTypes": ["OFFSETDATETIME"]},
+    {"gluesyncDataType": "BYTE_ARRAY",      "defaultType": "BINARY",         "supportedTypes": ["BINARY"]},
 ]
 
 # ---------------------------------------------------------------------------
