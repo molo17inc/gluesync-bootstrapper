@@ -87,25 +87,6 @@ _DB2_LUW = [
 ]
 
 # ---------------------------------------------------------------------------
-# PostgreSQL
-# ---------------------------------------------------------------------------
-_POSTGRESQL = [
-    {"gluesyncDataType": "SHORT",           "defaultType": "smallint",         "supportedTypes": ["smallint"]},
-    {"gluesyncDataType": "INT",             "defaultType": "integer",          "supportedTypes": ["integer", "int"]},
-    {"gluesyncDataType": "LONG",            "defaultType": "bigint",           "supportedTypes": ["bigint", "serial", "smallserial", "bigserial"]},
-    {"gluesyncDataType": "BOOLEAN",         "defaultType": "boolean",          "supportedTypes": ["boolean", "bool"]},
-    {"gluesyncDataType": "BIG_DECIMAL",     "defaultType": "decimal",          "supportedTypes": ["decimal", "numeric"]},
-    {"gluesyncDataType": "FLOAT",           "defaultType": "float",            "supportedTypes": ["float", "real"]},
-    {"gluesyncDataType": "DOUBLE",          "defaultType": "double precision", "supportedTypes": ["double precision"]},
-    {"gluesyncDataType": "LOCAL_DATE",      "defaultType": "date",             "supportedTypes": ["date"]},
-    {"gluesyncDataType": "LOCAL_DATE_TIME", "defaultType": "timestamp",        "supportedTypes": ["timestamp"]},
-    {"gluesyncDataType": "OFFSET_DATE_TIME","defaultType": "timestamptz",      "supportedTypes": ["timestamptz"]},
-    {"gluesyncDataType": "OFFSET_TIME",     "defaultType": "time",             "supportedTypes": ["time", "timetz"]},
-    {"gluesyncDataType": "STRING",          "defaultType": "varchar",          "supportedTypes": ["varchar", "char", "text", "citext", "enum", "json", "jsonb", "uuid", "inet", "geometry", "geography", "box2d", "vector", "string"]},
-    {"gluesyncDataType": "BYTE_ARRAY",      "defaultType": "bytea",            "supportedTypes": ["bytea", "bit"]},
-]
-
-# ---------------------------------------------------------------------------
 # CockroachDB  (PostgreSQL wire-compatible)
 # ---------------------------------------------------------------------------
 _COCKROACHDB = [
@@ -202,21 +183,21 @@ _SINGLESTORE = [
 # Google BigQuery
 # ---------------------------------------------------------------------------
 _BIGQUERY = [
-    {"gluesyncDataType": "STRING",          "defaultType": "STRING",    "supportedTypes": ["string", "json"]},
-    {"gluesyncDataType": "BOOLEAN",         "defaultType": "BOOLEAN",   "supportedTypes": ["boolean"]},
-    {"gluesyncDataType": "BYTE_ARRAY",      "defaultType": "BYTES",     "supportedTypes": ["bytes"]},
-    {"gluesyncDataType": "SHORT",           "defaultType": "INT64",     "supportedTypes": ["int64"]},
-    {"gluesyncDataType": "INT",             "defaultType": "INT64",     "supportedTypes": ["int64"]},
-    {"gluesyncDataType": "LONG",            "defaultType": "INT64",     "supportedTypes": ["int64"]},
-    {"gluesyncDataType": "FLOAT",           "defaultType": "FLOAT64",   "supportedTypes": ["float64"]},
-    {"gluesyncDataType": "DOUBLE",          "defaultType": "FLOAT64",   "supportedTypes": ["float64"]},
-    {"gluesyncDataType": "BIG_DECIMAL",     "defaultType": "NUMERIC",   "supportedTypes": ["numeric", "bignumeric"]},
-    {"gluesyncDataType": "LOCAL_DATE",      "defaultType": "DATE",      "supportedTypes": ["date"]},
-    {"gluesyncDataType": "LOCAL_TIME",      "defaultType": "TIME",      "supportedTypes": ["time"]},
-    {"gluesyncDataType": "LOCAL_DATE_TIME", "defaultType": "TIMESTAMP", "supportedTypes": ["timestamp", "datetime"]},
-    {"gluesyncDataType": "OFFSET_DATE_TIME","defaultType": "TIMESTAMP", "supportedTypes": ["timestamp"]},
-    {"gluesyncDataType": "MAP",             "defaultType": "STRUCT",    "supportedTypes": ["struct"]},
-    {"gluesyncDataType": "ARRAY",           "defaultType": "ARRAY",     "supportedTypes": ["array"]},
+    {"gluesyncDataType": "STRING",          "defaultType": "STRING",    "supportedTypes": ["STRING", "JSON"]},
+    {"gluesyncDataType": "BOOLEAN",         "defaultType": "BOOLEAN",   "supportedTypes": ["BOOLEAN"]},
+    {"gluesyncDataType": "BYTE_ARRAY",      "defaultType": "BYTES",     "supportedTypes": ["BYTES"]},
+    {"gluesyncDataType": "SHORT",           "defaultType": "INT64",     "supportedTypes": ["INT64"]},
+    {"gluesyncDataType": "INT",             "defaultType": "INT64",     "supportedTypes": ["INT64"]},
+    {"gluesyncDataType": "LONG",            "defaultType": "INT64",     "supportedTypes": ["INT64"]},
+    {"gluesyncDataType": "FLOAT",           "defaultType": "FLOAT64",   "supportedTypes": ["FLOAT64"]},
+    {"gluesyncDataType": "DOUBLE",          "defaultType": "FLOAT64",   "supportedTypes": ["FLOAT64"]},
+    {"gluesyncDataType": "BIG_DECIMAL",     "defaultType": "NUMERIC",   "supportedTypes": ["NUMERIC", "BIGNUMERIC"]},
+    {"gluesyncDataType": "LOCAL_DATE",      "defaultType": "DATE",      "supportedTypes": ["DATE"]},
+    {"gluesyncDataType": "LOCAL_TIME",      "defaultType": "TIME",      "supportedTypes": ["TIME"]},
+    {"gluesyncDataType": "LOCAL_DATE_TIME", "defaultType": "TIMESTAMP", "supportedTypes": ["TIMESTAMP", "DATETIME"]},
+    {"gluesyncDataType": "OFFSET_DATE_TIME","defaultType": "TIMESTAMP", "supportedTypes": ["TIMESTAMP"]},
+    {"gluesyncDataType": "MAP",             "defaultType": "STRUCT",    "supportedTypes": ["STRUCT"]},
+    {"gluesyncDataType": "ARRAY",           "defaultType": "ARRAY",     "supportedTypes": ["ARRAY"]},
 ]
 
 # ---------------------------------------------------------------------------
@@ -411,17 +392,19 @@ _POSTGRESQL = [
     {"gluesyncDataType": "LOCAL_DATE",      "defaultType": "date",                  "supportedTypes": ["date"]},
     {"gluesyncDataType": "LOCAL_TIME",      "defaultType": "time without time zone","supportedTypes": ["time", "time without time zone"]},
     {"gluesyncDataType": "LOCAL_DATE_TIME", "defaultType": "timestamp without time zone", "supportedTypes": ["timestamp without time zone", "timestamp"]},
-    {"gluesyncDataType": "OFFSET_DATE_TIME","defaultType": "timestamp with time zone",    "supportedTypes": ["timestamp with time zone"]},
-    {"gluesyncDataType": "OFFSET_TIME",     "defaultType": "time with time zone",   "supportedTypes": ["time with time zone"]},
+    {"gluesyncDataType": "OFFSET_DATE_TIME","defaultType": "timestamp with time zone",    "supportedTypes": ["timestamp with time zone", "timestamptz"]},
+    {"gluesyncDataType": "OFFSET_TIME",     "defaultType": "time with time zone",   "supportedTypes": ["time with time zone", "timetz"]},
     {"gluesyncDataType": "STRING",          "defaultType": "varchar",               "supportedTypes": [
         "varchar", "char", "character", "character varying", "text",
         "json", "jsonb", "xml", "inet", "uuid", "cidr", "macaddr", "macaddr8",
         "interval", "hstore", "int4range", "int8range", "numrange",
         "tsrange", "tstzrange", "daterange", "money",
         "bit", "bit varying", "point", "lseg", "line", "circle", "box", "path",
-        "polygon", "tsvector", "tsquery", "txid_snapshot", "pg_lsn", "pg_snapshot", "enum"
+        "polygon", "tsvector", "tsquery", "txid_snapshot", "pg_lsn", "pg_snapshot", "enum",
+        "geometry", "geography"
     ]},
-    {"gluesyncDataType": "BYTE_ARRAY",      "defaultType": "bytea",                "supportedTypes": ["bytea"]},
+    {"gluesyncDataType": "BYTE_ARRAY",      "defaultType": "bytea",                 "supportedTypes": ["bytea"]},
+    {"gluesyncDataType": "ARRAY",           "defaultType": "array",                 "supportedTypes": ["array"]},
 ]
 
 # ---------------------------------------------------------------------------
@@ -447,18 +430,18 @@ _SNOWFLAKE = [
 # MongoDB  (MongoDataTypeMapping.kt)
 # ---------------------------------------------------------------------------
 _MONGODB = [
-    {"gluesyncDataType": "STRING",          "defaultType": "string",       "supportedTypes": ["string", "regularexpression", "objectid"]},
-    {"gluesyncDataType": "BOOLEAN",         "defaultType": "boolean",      "supportedTypes": ["boolean"]},
-    {"gluesyncDataType": "INT",             "defaultType": "int32",        "supportedTypes": ["int32"]},
-    {"gluesyncDataType": "LONG",            "defaultType": "int64",        "supportedTypes": ["int64"]},
-    {"gluesyncDataType": "DOUBLE",          "defaultType": "double",       "supportedTypes": ["double"]},
-    {"gluesyncDataType": "BIG_DECIMAL",     "defaultType": "decimal128",   "supportedTypes": ["decimal128"]},
-    {"gluesyncDataType": "LOCAL_DATE_TIME", "defaultType": "localdatetime","supportedTypes": ["localdatetime"]},
-    {"gluesyncDataType": "LOCAL_DATE",      "defaultType": "localdate",    "supportedTypes": ["localdate"]},
-    {"gluesyncDataType": "LOCAL_TIME",      "defaultType": "localtime",    "supportedTypes": ["localtime"]},
-    {"gluesyncDataType": "BYTE_ARRAY",      "defaultType": "binary",       "supportedTypes": ["binary"]},
-    {"gluesyncDataType": "MAP",             "defaultType": "document",     "supportedTypes": ["document"]},
-    {"gluesyncDataType": "ARRAY",           "defaultType": "array",        "supportedTypes": ["array"]},
+    {"gluesyncDataType": "STRING",          "defaultType": "STRING",     "supportedTypes": ["STRING", "REGULAR_EXPRESSION", "OBJECT_ID"]},
+    {"gluesyncDataType": "BOOLEAN",         "defaultType": "BOOLEAN",    "supportedTypes": ["BOOLEAN"]},
+    {"gluesyncDataType": "INT",             "defaultType": "INT32",      "supportedTypes": ["INT32"]},
+    {"gluesyncDataType": "LONG",            "defaultType": "INT64",      "supportedTypes": ["INT64"]},
+    {"gluesyncDataType": "DOUBLE",          "defaultType": "DOUBLE",     "supportedTypes": ["DOUBLE"]},
+    {"gluesyncDataType": "BIG_DECIMAL",     "defaultType": "DECIMAL128", "supportedTypes": ["DECIMAL128"]},
+    {"gluesyncDataType": "LOCAL_DATE_TIME", "defaultType": "DATE_TIME",  "supportedTypes": ["DATE_TIME"]},
+    {"gluesyncDataType": "LOCAL_DATE",      "defaultType": "DATE",       "supportedTypes": ["DATE"]},
+    {"gluesyncDataType": "LOCAL_TIME",      "defaultType": "TIME",       "supportedTypes": ["TIME"]},
+    {"gluesyncDataType": "BYTE_ARRAY",      "defaultType": "BINARY",     "supportedTypes": ["BINARY"]},
+    {"gluesyncDataType": "MAP",             "defaultType": "DOCUMENT",   "supportedTypes": ["DOCUMENT"]},
+    {"gluesyncDataType": "ARRAY",           "defaultType": "ARRAY",      "supportedTypes": ["ARRAY"]},
 ]
 
 # ---------------------------------------------------------------------------
@@ -685,7 +668,6 @@ AGENT_MATRICES: dict = {
     "db2-luw-log":                _DB2_LUW,
     # PostgreSQL family
     "postgresql-cdc":             _POSTGRESQL,
-    "postgresql-triggers":        _POSTGRESQL,
     # YugabyteDB (PostgreSQL-compatible)
     "yugabytedb":                 _YUGABYTEDB,
     # CockroachDB
