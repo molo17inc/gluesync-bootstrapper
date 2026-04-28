@@ -798,28 +798,45 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         
         if has_column_mappings:
             # Custom column mappings (source→target)
-            for col in columns["columns"]:
-                # Use the id field from CoreHub API as the column ID
-                col_id = col.get('id')
-                if col_id is None:
-                    error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
-                    logger.error(error_msg)
-                    raise ValueError(error_msg)
+            yaml_columns = custom_config.get('columns', [])
+            for idx, column_map in enumerate(yaml_columns, 1):
+                # Extract source:target pairs, ignoring metadata fields
+                mapping_pairs = _extract_mapping_pairs(column_map)
+                for source_name, target_name in mapping_pairs:
+                    # Find the matching column from discovered columns
+                    matched_col = next((c for c in columns["columns"] if c.get("name") == source_name), None)
+                    
+                    if matched_col:
+                        col_id = matched_col.get('id')
+                        if col_id is None:
+                            error_msg = f"CRITICAL ERROR: Column '{matched_col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response."
+                            logger.error(error_msg)
+                            raise ValueError(error_msg)
 
-                for column_map in custom_config.get('columns', []):
-                    # Extract source:target pairs, ignoring metadata fields
-                    mapping_pairs = _extract_mapping_pairs(column_map)
-                    for source_name, target_name in mapping_pairs:
-                        if source_name == col["name"]:
-                            columns_def.append(_enrich_column({
-                                "id": col_id,  # Use actual ordinal position from database
-                                "position": col.get("position", 0),
-                                "name": col["name"],
-                                "alias": target_name,
-                                "dataType": col.get("dataType"),
-                                "isPK": col.get("isPK", False) or _is_in_keys(col["name"], custom_config), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
-                            }, col))
-                            break
+                        columns_def.append(_enrich_column({
+                            "id": col_id,  # Use actual ordinal position from database
+                            "position": matched_col.get("position", 0),
+                            "name": matched_col["name"],
+                            "alias": target_name,
+                            "dataType": matched_col.get("dataType"),
+                            "isPK": matched_col.get("isPK", False) or _is_in_keys(matched_col["name"], custom_config), 
+                            "isIdentity": matched_col.get("isIdentity", False), 
+                            "isNullable": matched_col.get("isNullable", False)
+                        }, matched_col))
+                    else:
+                        logger.warning(f"Warning: Column '{source_name}' from YAML mapping not found in discovery for table {table_name}. Using YAML metadata.")
+                        # Fallback for when discovery didn't find the column
+                        # (e.g. table creation pending or discovery glitch)
+                        columns_def.append({
+                            "id": get_table_id(source_schema, source_name), # Generated ID
+                            "position": idx,
+                            "name": source_name,
+                            "alias": target_name,
+                            "dataType": "VARCHAR", # Fallback type
+                            "isPK": _is_in_keys(source_name, custom_config),
+                            "isIdentity": False,
+                            "isNullable": True
+                        })
         elif is_column_whitelist:
             # Column whitelist format: only use specified columns, not all discovered
             # Format: [{name: "col", type: "VARCHAR", sourceName: "SOURCE_COL"}, ...]
@@ -939,7 +956,23 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             logger.debug(f"Found key '{key_name}' in columns with id={col_id}")
                             break
                     if not found:
-                        logger.warning(f"Warning: Key '{key_name}' not found in columns for table '{table_name}'")
+                        logger.warning(f"Warning: Key '{key_name}' not found in columns for table '{table_name}'. Searching in columns_def...")
+                        # Try to find it in the already built columns_def (which might have come from YAML metadata)
+                        for col_def in columns_def:
+                            if col_def.get('name', '').lower() == key_name.lower():
+                                keys.append(copy.deepcopy(col_def))
+                                found = True
+                                logger.info(f"Found key '{key_name}' in columns_def")
+                                break
+                    
+                    if not found:
+                        logger.warning(f"Warning: Key '{key_name}' still not found for table '{table_name}'. Adding dummy key entry.")
+                        keys.append({
+                            "id": get_table_id(source_schema, key_name), # Generate a deterministic ID
+                            "name": key_name,
+                            "alias": key_name,
+                            "dataType": "VARCHAR" # Fallback type
+                        })
             
             logger.info(f"Final keys array for {table_name}: {keys} (count: {len(keys)})")
         else:
@@ -1507,8 +1540,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                 resolved_target_type = map_data_type(col.get("dataType"), source_node_info, target_node_info,
                                                                      source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
 
-                            # Use the target-discovered column name (preserves original case from target DB)
-                            # Fall back to source column name if target column not found
                             target_key_name = discovered_target_col.get('name') if discovered_target_col else col["name"]
                             target_keys.append(_enrich_column({
                                 "id": target_col_id,  # Use target column ID
@@ -1516,10 +1547,26 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                 "alias": target_key_name,
                                 "dataType": resolved_target_type
                             }, discovered_target_col if 'discovered_target_col' in locals() and discovered_target_col else col))
+                            found = True
                             logger.debug(f"Target key: {key_name} (source ID={source_col_id}, target ID={target_col_id})")
                             break
-                    else:
-                        logger.warning(f"Key '{key_name}' not found in columns for table '{table_name}'")
+                    if not found:
+                        logger.warning(f"Warning: Target key '{key_name}' not found in columns for table '{table_name}'. Searching in target_columns_def...")
+                        for col_def in target_columns_def:
+                            if col_def.get('name', '').lower() == key_name.lower():
+                                target_keys.append(copy.deepcopy(col_def))
+                                found = True
+                                logger.info(f"Found target key '{key_name}' in target_columns_def")
+                                break
+                    
+                    if not found:
+                        logger.warning(f"Warning: Target key '{key_name}' still not found for table '{table_name}'. Adding dummy key entry.")
+                        target_keys.append({
+                            "id": get_table_id(yaml_target_schema, key_name),
+                            "name": key_name,
+                            "alias": key_name,
+                            "dataType": "varchar"
+                        })
         else:
             target_keys = []
             for col in columns["columns"]:
@@ -1750,23 +1797,40 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         has_column_mappings = _is_column_mappings(custom_config.get('columns', []))
         
         if has_column_mappings:
-            for col in columns["columns"]:
-                col_id = col.get('id')
-                if col_id is None:
-                    raise ValueError(f"Column '{col.get('name')}' in {yaml_table_key} missing 'id' field")
-                for column_map in custom_config.get('columns', []):
-                    # Extract source:target pairs, ignoring metadata fields
-                    mapping_pairs = _extract_mapping_pairs(column_map)
-                    for source_name, target_name in mapping_pairs:
-                        if source_name == col["name"]:
-                            columns_def.append(_enrich_column({
-                                "id": col_id,
-                                "position": col.get("position", 0),
-                                "name": col["name"],
-                                "alias": target_name,
-                                "dataType": col.get("dataType"),
-                                "isPK": col.get("isPK", False) or _is_in_keys(col["name"], custom_config), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
-                            }, col))
+            yaml_columns = custom_config.get('columns', [])
+            for idx, column_map in enumerate(yaml_columns, 1):
+                # Extract source:target pairs, ignoring metadata fields
+                mapping_pairs = _extract_mapping_pairs(column_map)
+                for source_name, target_name in mapping_pairs:
+                    matched_col = next((c for c in columns["columns"] if c.get("name") == source_name), None)
+                    
+                    if matched_col:
+                        col_id = matched_col.get('id')
+                        if col_id is None:
+                            raise ValueError(f"Column '{matched_col.get('name')}' in {yaml_table_key} missing 'id' field")
+
+                        columns_def.append(_enrich_column({
+                            "id": col_id,
+                            "position": matched_col.get("position", 0),
+                            "name": matched_col["name"],
+                            "alias": target_name,
+                            "dataType": matched_col.get("dataType"),
+                            "isPK": matched_col.get("isPK", False) or _is_in_keys(matched_col["name"], custom_config), 
+                            "isIdentity": matched_col.get("isIdentity", False), 
+                            "isNullable": matched_col.get("isNullable", False)
+                        }, matched_col))
+                    else:
+                        logger.warning(f"Warning: Column '{source_name}' from YAML mapping not found in discovery for duplicate table {yaml_table_key}. Using YAML metadata.")
+                        columns_def.append({
+                            "id": get_table_id(source_schema, source_name),
+                            "position": idx,
+                            "name": source_name,
+                            "alias": target_name,
+                            "dataType": "VARCHAR",
+                            "isPK": _is_in_keys(source_name, custom_config),
+                            "isIdentity": False,
+                            "isNullable": True
+                        })
         
         if not has_column_mappings or not columns_def:
             for col in columns["columns"]:
@@ -1804,6 +1868,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                 }, col))
             else:
                 for key_name in custom_config['keys']:
+                    found = False
                     for col in columns["columns"]:
                         if col["name"].lower() == key_name.lower():
                             col_id = col.get('id')
@@ -1816,7 +1881,23 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                 "alias": col["name"],
                                 "dataType": col.get("dataType")
                             }, col))
+                            found = True
                             break
+                    if not found:
+                        logger.warning(f"Warning: Key '{key_name}' not found in columns for duplicate table '{yaml_table_key}'. Searching in columns_def...")
+                        for col_def in columns_def:
+                            if col_def.get('name', '').lower() == key_name.lower():
+                                keys.append(copy.deepcopy(col_def))
+                                found = True
+                                break
+                    if not found:
+                        logger.warning(f"Warning: Key '{key_name}' still not found for duplicate table '{yaml_table_key}'. Adding dummy key entry.")
+                        keys.append({
+                            "id": get_table_id(source_schema, key_name),
+                            "name": key_name,
+                            "alias": key_name,
+                            "dataType": "VARCHAR"
+                        })
         else:
             keys = []
             for col in columns["columns"]:
@@ -1836,22 +1917,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             logger.warning(f"No keys specified for duplicate table {yaml_table_key}")
 
         # Generate table IDs
-        source_table_id = None
-        if isinstance(table, dict):
-            source_table_id = table.get('id')
-        if source_table_id is None:
-            discovered_source_table = find_discovered_table(source_tables_lookup, source_schema, table_name)
-            if discovered_source_table:
-                source_table_id = discovered_source_table.get('id')
-        if source_table_id is None:
-            source_table_id = get_table_id(source_schema, table_name)
-
-        target_table_id = None
-        discovered_target_table = find_discovered_table(target_tables_lookup, yaml_target_schema, target_table_name)
-        if discovered_target_table:
-            target_table_id = discovered_target_table.get('id')
-        if target_table_id is None:
-            target_table_id = get_table_id(yaml_target_schema, target_table_name)
+        source_table_id = resolve_table_id(source_schema, table_name, source_tables_lookup, "source")
+        target_table_id = resolve_table_id(yaml_target_schema, target_table_name, target_tables_lookup, "target")
 
         source_table_key = f"{source_schema}.{table_name}"
         target_table_key = f"{yaml_target_schema}.{target_table_name}"
@@ -1974,6 +2041,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         target_keys = []
         if custom_config and 'keys' in custom_config:
             for key_name in custom_config['keys']:
+                found = False
                 for col in columns["columns"]:
                     if col["name"].lower() == key_name.lower():
                         col_id = col.get('id')
@@ -1989,7 +2057,23 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             "alias": col["name"],
                             "dataType": resolved_target_type
                         }, discovered_target_col if 'discovered_target_col' in locals() and discovered_target_col else col))
+                        found = True
                         break
+                if not found:
+                    logger.warning(f"Warning: Target key '{key_name}' not found in columns for duplicate table '{yaml_table_key}'. Searching in target_columns_def...")
+                    for col_def in target_columns_def:
+                        if col_def.get('name', '').lower() == key_name.lower():
+                            target_keys.append(copy.deepcopy(col_def))
+                            found = True
+                            break
+                if not found:
+                    logger.warning(f"Warning: Target key '{key_name}' still not found for duplicate table '{yaml_table_key}'. Adding dummy key entry.")
+                    target_keys.append({
+                        "id": get_table_id(yaml_target_schema, key_name),
+                        "name": key_name,
+                        "alias": key_name,
+                        "dataType": "varchar"
+                    })
         else:
             for col in columns["columns"]:
                 if col.get("isPK"):
@@ -2029,6 +2113,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 "schema": yaml_target_schema
             },
             "columns": target_columns_def,
+            "keys": target_keys,
             "customProperties": target_custom_properties,
             "tablesProperties": {target_table_key: target_table_properties}
         }
@@ -2199,12 +2284,13 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         key_type = None
 
                     # Try to find the key in the columns to get its type and ID if not specified (case-insensitive)
+                    found = False
                     for col in columns["columns"]:
                         if col["name"].lower() == key_name.lower():
                             # Use the id field from CoreHub API as the column ID
                             col_id = col.get('id')
                             if col_id is None:
-                                error_msg = f"CRITICAL ERROR: Column '{key_name}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
+                                error_msg = f"CRITICAL ERROR: Column '{key_name}' in table {table_key} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
                                 logger.error(error_msg)
                                 raise ValueError(error_msg)
 
@@ -2220,9 +2306,36 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                 },
                                 "type": key_type or col.get("dataType")
                             }, col))
+                            found = True
                             break
-                    else:
-                        logger.warning(f"Warning: Key {key_name} not found in columns for table {table_key}")
+                    
+                    if not found:
+                        logger.warning(f"Warning: Key '{key_name}' not found in columns for table '{table_key}'. Searching in table_columns...")
+                        for col_def in table_columns:
+                            if col_def.get('name', '').lower() == key_name.lower():
+                                key_entry = copy.deepcopy(col_def)
+                                key_entry['table'] = {
+                                    "id": str(source_table_id),
+                                    "name": table_key,
+                                    "schema": source_schema
+                                }
+                                keys.append(key_entry)
+                                found = True
+                                break
+                    
+                    if not found:
+                        logger.warning(f"Warning: Key {key_name} still not found for table {table_key}. Adding dummy key entry.")
+                        keys.append({
+                            "id": get_table_id(source_schema, key_name),
+                            "name": key_name,
+                            "alias": key_alias,
+                            "table": {
+                                "id": str(source_table_id),
+                                "name": table_key,
+                                "schema": source_schema
+                            },
+                            "type": "VARCHAR"
+                        })
             else:
                 keys = []
                 for col in columns["columns"]:
@@ -2274,7 +2387,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             "customProperties": {},
             "tablesProperties": tables_properties,
             "tables": multi_tables,
-            "columns": multi_columns
+            "columns": multi_columns,
+            "keys": multi_keys
         }
 
         # Initialize target tables and properties
@@ -2466,12 +2580,13 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         key_name = key_def
 
                     # Try to find the key in the columns to get its type and ID (case-insensitive)
+                    found = False
                     for col in columns["columns"]:
                         if col["name"].lower() == key_name.lower():
                             # Use the id field from CoreHub API as the column ID
                             col_id = col.get('id')
                             if col_id is None:
-                                error_msg = f"CRITICAL ERROR: Column '{key_name}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
+                                error_msg = f"CRITICAL ERROR: Column '{key_name}' in table {table_key} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
                                 logger.error(error_msg)
                                 raise ValueError(error_msg)
                             
@@ -2486,9 +2601,26 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                 "type": map_data_type(col.get("dataType"), source_node_info, target_node_info,
                                                      source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
                             }, col))
+                            found = True
                             break
-                    else:
-                        logger.warning(f"Warning: Key {key_name} not found in columns for table {table_key}")
+                    
+                    if not found:
+                        logger.warning(f"Warning: Target key '{key_name}' not found in columns for table '{table_key}'. Searching in target_table_columns...")
+                        for col_def in target_table_columns:
+                            if col_def.get('name', '').lower() == key_name.lower():
+                                keys.append(copy.deepcopy(col_def))
+                                found = True
+                                break
+                    
+                    if not found:
+                        logger.warning(f"Warning: Target key {key_name} still not found for table {table_key}. Adding dummy key entry.")
+                        keys.append({
+                            "id": get_table_id(yaml_target_schema, key_name),
+                            "name": key_name,
+                            "alias": key_name,
+                            "type": "varchar"
+                        })
+
             else:
                 keys = []
                 for col in columns["columns"]:
@@ -2583,7 +2715,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             "customProperties": target_custom_properties,
             "tablesProperties": target_tables_properties,
             "tables": target_tables,
-            "columns": target_columns
+            "columns": target_columns,
+            "keys": target_keys
         }
 
         # Get group info for multi-table entity
