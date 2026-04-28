@@ -495,11 +495,58 @@ def create_pipeline_schedules(token, pipeline_id, pipeline_schedules):
             # Continue creating other schedules even if one fails
 
 
+def extract_target_column_types(discovered_target_columns):
+    """Extract the set of column dataTypes present in a discovered target table.
+
+    Accepts either:
+    - dict as returned by ``get_table_columns`` (``{"columns": [...]}``)
+    - list of column dicts
+    - dict keyed by column name with column dicts as values
+    Returns a set of lower-cased dataType strings. Returns empty set if nothing
+    usable is available.
+    """
+    if not discovered_target_columns:
+        return set()
+
+    cols = None
+    if isinstance(discovered_target_columns, dict):
+        if 'columns' in discovered_target_columns and isinstance(discovered_target_columns['columns'], list):
+            cols = discovered_target_columns['columns']
+        else:
+            cols = list(discovered_target_columns.values())
+    elif isinstance(discovered_target_columns, list):
+        cols = discovered_target_columns
+
+    if not cols:
+        return set()
+
+    result = set()
+    for c in cols:
+        if not isinstance(c, dict):
+            continue
+        dt = c.get('dataType') or c.get('type')
+        if dt:
+            result.add(dt)
+    return result
+
+
 def map_data_type(source_type, source_node_info, target_node_info,
-                  source_agent_tag=None, target_agent_tag=None):
+                  source_agent_tag=None, target_agent_tag=None,
+                  target_table_column_types=None):
     """Map a source native type to the corresponding target native type.
 
-    Uses API-provided ``dataTypesMatrix`` from node_info dynamic discovery.
+    Algorithm:
+    1. If the target table already exists and ``target_table_column_types`` is
+       provided, and the source column's ``dataType`` matches any dataType used
+       by an existing target column (case-insensitive), keep the source type
+       as-is. (Match is by data type value only, not by column name.)
+    2. Otherwise, resolve the source native type -> ``gluesyncDataType`` using
+       the source matrix, find the target matrix entry with that same
+       ``gluesyncDataType`` and return its ``defaultType``.
+    3. Fallbacks:
+       - If no source entry is found: use target matrix's ``STRING`` defaultType.
+       - If no target entry is found for the source's gluesyncDataType: return
+         ``source_item.defaultType`` as a last resort.
     """
     source_node_info = source_node_info or {}
     target_node_info = target_node_info or {}
@@ -507,140 +554,60 @@ def map_data_type(source_type, source_node_info, target_node_info,
     source_matrix = source_node_info.get('dataTypesMatrix', [])
     target_matrix = target_node_info.get('dataTypesMatrix', [])
 
-    logger.debug(
-        f"map_data_type: using dynamic discovery matrices from node info"
-    )
+    # Step 1: If target table exists, reuse source type when it's already a
+    # dataType used by an existing target column.
+    if target_table_column_types and source_type in target_table_column_types:
+        logger.debug(
+            f"map_data_type: source type '{source_type}' already present "
+            f"in target table, keeping as-is"
+        )
+        return source_type
 
-    gluesync_type_aliases = {
-        'DATE_TIME': 'LOCAL_DATE_TIME',
-        'DATETIME': 'LOCAL_DATE_TIME',
-        'TIMESTAMP_WITHOUT_TIME_ZONE': 'LOCAL_DATE_TIME',
-        'TIMESTAMP_WITH_TIME_ZONE': 'OFFSET_DATE_TIME',
-    }
-
-    native_type_aliases = {
-        'date_time': 'datetime',
-        'local_date_time': 'datetime',
-    }
-
-    def _normalize_gluesync_type(type_name):
-        normalized = str(type_name or '').strip().upper().replace('-', '_').replace(' ', '_')
-        return gluesync_type_aliases.get(normalized, normalized)
-
-    normalized_source_type = source_type.split('(')[0].strip().lower()
-    normalized_source_type = native_type_aliases.get(normalized_source_type, normalized_source_type)
-    print(f"Mapping source type: {source_type} (normalized: {normalized_source_type})")
-
-    if normalized_source_type == 'mediumblob':
-        normalized_source_type = 'blob'
-    elif normalized_source_type == 'year':
-        normalized_source_type = 'int'
-
-    # Find matching source type in matrix (case-insensitive)
-    source_type_as_gluesync = _normalize_gluesync_type(source_type)
+    # Step 2: Resolve source -> gluesyncDataType
     source_item = next(
         (
             item for item in source_matrix
-            if any(t.lower() == normalized_source_type for t in item.get('supportedTypes', []))
-            or _normalize_gluesync_type(item.get('gluesyncDataType')) == source_type_as_gluesync
+            if source_type in item.get('supportedTypes', [])
+            or item.get('gluesyncDataType') == source_type
         ),
         None
     )
 
     if not source_item:
-        print(f"Warning: No mapping found for source type {source_type}. Falling back to target's default for STRING.")
+        logger.warning(
+            f"map_data_type: no source mapping for '{source_type}'. "
+            f"Falling back to target's STRING defaultType."
+        )
         target_item_fallback = next(
-            (item for item in target_matrix if _normalize_gluesync_type(item.get('gluesyncDataType')) == 'STRING'),
+            (item for item in target_matrix if item.get('gluesyncDataType') == 'STRING'),
             None
         )
         if target_item_fallback:
             return target_item_fallback.get('defaultType', source_type)
         return source_type
 
-    source_gluesync_type = _normalize_gluesync_type(source_item.get('gluesyncDataType'))
-    print(f"Matched Gluesync data type: {source_gluesync_type}")
+    source_gluesync_type = source_item.get('gluesyncDataType')
 
-    # Find matching target type
+    # Step 3: Find target entry with the same gluesyncDataType and use its defaultType
     target_item = next(
         (
             item for item in target_matrix
-            if _normalize_gluesync_type(item.get('gluesyncDataType')) == source_gluesync_type
+            if item.get('gluesyncDataType') == source_gluesync_type
         ),
         None
     )
 
-    if target_item:
-        # Case-insensitive search but return server's exact value if found
-        supported_types_map = {t.lower(): t for t in target_item['supportedTypes']}
-
-        if normalized_source_type in supported_types_map:
-            server_type = supported_types_map[normalized_source_type]
-            print(f"Direct match found: {server_type}")
-            return server_type
-
-        # Special case mappings using server's exact values
-        if normalized_source_type == 'geometry':
-            for t in target_item['supportedTypes']:
-                if t.lower() == 'geometry':
-                    print(f"Mapping geometry type: {source_type} -> {t}")
-                    return t
-        elif normalized_source_type in ['enum', 'set']:
-            # Find first STRING type in target's supported types
-            for t in target_item['supportedTypes']:
-                if 'string' == t.lower():
-                    print(f"Mapping {normalized_source_type} to {t}")
-                    return t
-        elif normalized_source_type == 'json':
-            # Try to find JSON type first, fall back to STRING
-            for t in target_item['supportedTypes']:
-                if 'json' == t.lower():
-                    print(f"Mapping json to {t}")
-                    return t
-                elif 'clob' == t.lower():
-                    print(f"Mapping json to {t}")
-                    return t
-            for t in target_item['supportedTypes']:
-                if 'string' == t.lower():
-                    print(f"Mapping json to {t} (fallback)")
-                    return t
-        elif normalized_source_type == 'bit':
-            # Try to find BOOLEAN type first, fall back to INT
-            for t in target_item['supportedTypes']:
-                if 'boolean' == t.lower():
-                    print(f"Mapping bit to {t}")
-                    return t
-            for t in target_item['supportedTypes']:
-                if 'int' == t.lower():
-                    print(f"Mapping bit to {t} (fallback)")
-                    return t
-        elif normalized_source_type in ['tinyint', 'smallint', 'mediumint']:
-            # Find appropriate INT type
-            for t in target_item['supportedTypes']:
-                if 'int' == t.lower():
-                    print(f"Mapping {normalized_source_type} to {t}")
-                    return t
-        elif normalized_source_type in ['blob', 'smallblob', 'mediumblob']:
-            for t in target_item['supportedTypes']:
-                if 'varbinary' == t.lower():
-                    print(f"Mapping {normalized_source_type} to {t}")
-                    return t
-        elif normalized_source_type in ['longtext']:
-            for t in target_item['supportedTypes']:
-                if 'varchar' == t.lower():
-                    print(f"Mapping {normalized_source_type} to {t}")
-                    return t
-        elif normalized_source_type in ['bigint']:
-            for t in target_item['supportedTypes']:
-                if 'number' == t.lower():
-                    print(f"Mapping {normalized_source_type} to {t}")
-                    return t
-
-        print(f"Mapping {source_type} to {target_item['defaultType']} (using target's default type)")
+    if target_item and target_item.get('defaultType'):
+        logger.debug(
+            f"map_data_type: mapping '{source_type}' (gluesyncDataType={source_gluesync_type}) "
+            f"-> target defaultType '{target_item['defaultType']}'"
+        )
         return target_item['defaultType']
 
-    print(
-        f"Warning: No target mapping found for Gluesync type {source_gluesync_type}. Using source's defaultType.")
-    
+    logger.warning(
+        f"map_data_type: no target mapping for gluesyncDataType '{source_gluesync_type}'. "
+        f"Using source's defaultType."
+    )
     return source_item.get('defaultType', source_type)
 
 
