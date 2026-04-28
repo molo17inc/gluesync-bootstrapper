@@ -1059,7 +1059,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 "schema": source_schema
             },
             "columns": columns_def,
-            "keys": keys,
             "customProperties": source_custom_properties,
             "tablesProperties": {source_table_key: source_table_properties}
         }
@@ -1562,7 +1561,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 "name": target_table_name
             },
             "columns": target_columns_def,  # Use target columns definition
-            "keys": target_keys,
             "customProperties": target_custom_properties,
             "tablesProperties": {target_table_key: {}},
             "sourceAgent": source_agent_id,
@@ -1891,7 +1889,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 "schema": source_schema
             },
             "columns": columns_def,
-            "keys": keys,
             "customProperties": source_custom_properties,
             "tablesProperties": {source_table_key: source_table_properties}
         }
@@ -2029,7 +2026,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 "schema": yaml_target_schema
             },
             "columns": target_columns_def,
-            "keys": target_keys,
             "customProperties": target_custom_properties,
             "tablesProperties": {target_table_key: target_table_properties}
         }
