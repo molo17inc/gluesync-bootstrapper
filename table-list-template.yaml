@@ -292,11 +292,24 @@ dbo:
         keys:
           - VEHICLE_ID
         name: vehicles
+        # Two YAML shapes are supported for column entries:
+        #   1. Shorthand mapping:  - SOURCE_NAME: "target_name"
+        #   2. Explicit form:      - source: SOURCE_NAME
+        #                            target: target_name
+        #                            targetDataType: <native target type>   # OPTIONAL OVERRIDE
+        # The optional `targetDataType` key forces a specific target-side native data type,
+        # bypassing the automatic mapping derived from the source/target dataTypesMatrix.
+        # Use it when the target agent does not advertise a mapping for the source's
+        # gluesyncDataType (e.g. Kafka rejecting `timestamp with time zone`, or Vertica
+        # rejecting `double precision`) and you want to declare a valid alternative.
+        # Note: the shorthand format cannot carry overrides — switch to the explicit form.
         columns:
           - VEHICLE_ID: "id"
           - MODEL: "model"
           - YEAR: "year"
-          - REGISTRATION_DATE: "registrationDate"
+          - source: REGISTRATION_DATE
+            target: registrationDate
+            targetDataType: varchar(50)   # force target column to be VARCHAR(50)
         # Entity-level schedule configurations
         schedules:
           - name: "Weekly vehicles snapshot"

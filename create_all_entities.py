@@ -36,7 +36,52 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Metadata-only fields used in the export format {source: ..., target: ..., type: ..., ...}
 # These are never column names in the explicit export format.
-_EXPORT_METADATA_FIELDS = {"source", "target", "type", "dataLength", "numericPrecision", "numericScale", "isNullable", "id", "ordinalPosition"}
+_EXPORT_METADATA_FIELDS = {"source", "target", "type", "dataLength", "numericPrecision", "numericScale", "isNullable", "id", "ordinalPosition", "targetDataType"}
+
+
+def _build_target_data_type_overrides(yaml_columns):
+    """Build a lookup of user-declared target dataType overrides keyed by source column name.
+
+    Users can declare a ``targetDataType`` key alongside a column mapping or whitelist
+    entry to force a specific target native dataType, bypassing automatic mapping via
+    the gluesync data type matrix. This is useful when the target agent's matrix does
+    not advertise a mapping for the source's gluesyncDataType, or when the user wants
+    to override the computed value.
+
+    Supported YAML shapes:
+
+    1. Export/explicit mapping:
+       ``{source: COL, target: tgt, targetDataType: varchar(100)}``
+    2. Whitelist format:
+       ``{name: tgt, sourceName: COL, type: ..., targetDataType: varchar(100)}``
+
+    The legacy shorthand mapping ``{COL: "tgt"}`` has no room for extra keys and thus
+    cannot carry a ``targetDataType`` override; switch to the explicit form to use it.
+
+    Returns:
+        dict: { source_column_name_lowercased: targetDataType_string }
+    """
+    overrides = {}
+    if not isinstance(yaml_columns, list):
+        return overrides
+    for entry in yaml_columns:
+        if not isinstance(entry, dict):
+            continue
+        override_value = entry.get('targetDataType')
+        if not override_value:
+            continue
+        # Export/explicit mapping shape
+        if 'source' in entry:
+            src = entry.get('source')
+            if src:
+                overrides[str(src).lower()] = override_value
+            continue
+        # Whitelist shape
+        if 'name' in entry:
+            src = entry.get('sourceName') or entry.get('name')
+            if src:
+                overrides[str(src).lower()] = override_value
+    return overrides
 
 
 
@@ -1258,6 +1303,13 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         
         has_column_mappings_target = _is_column_mappings(custom_config.get('columns', []))
         is_column_whitelist_target = _is_column_whitelist(custom_config.get('columns', []))
+
+        # User-declared per-column target dataType overrides (by source column name, lower-cased)
+        target_data_type_overrides = _build_target_data_type_overrides(custom_config.get('columns', []))
+        if target_data_type_overrides:
+            logger.info(
+                f"Table {table_name}: applying {len(target_data_type_overrides)} user-declared targetDataType overrides"
+            )
         
         if has_column_mappings_target:
             # Custom column mappings for target
@@ -1287,6 +1339,11 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                 resolved_target_type = map_data_type(col.get("dataType"), source_node_info, target_node_info,
                                                                      source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
                                                                      target_table_column_types=target_table_column_types)
+
+                            # User-declared targetDataType override takes highest priority
+                            _override = target_data_type_overrides.get(col["name"].lower())
+                            if _override:
+                                resolved_target_type = _override
 
                             max_target_col_id = max(max_target_col_id, target_col_id)
                             # Get isPrimaryKey from discovered target column or fall back to source column
@@ -1331,6 +1388,11 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             resolved_target_type = map_data_type(col["type"], source_node_info, target_node_info,
                                                                  source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
                                                                  target_table_column_types=target_table_column_types)
+
+                        # User-declared targetDataType override takes highest priority
+                        _override = target_data_type_overrides.get(col["name"].lower())
+                        if _override:
+                            resolved_target_type = _override
                         
                         max_target_col_id = max(max_target_col_id, target_col_id)
                         target_columns_def.append({
@@ -1368,6 +1430,11 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     resolved_target_type = map_data_type(col.get("dataType"), source_node_info, target_node_info,
                                                          source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
                                                          target_table_column_types=target_table_column_types)
+
+                # User-declared targetDataType override takes highest priority
+                _override = target_data_type_overrides.get(col["name"].lower())
+                if _override:
+                    resolved_target_type = _override
 
                 max_target_col_id = max(max_target_col_id, target_col_id)
                 
@@ -1509,6 +1576,11 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                                                          source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
                                                                          target_table_column_types=target_table_column_types)
 
+                                # User-declared targetDataType override takes highest priority
+                                _override = target_data_type_overrides.get(col["name"].lower())
+                                if _override:
+                                    resolved_target_type = _override
+
                                 target_keys.append(_enrich_column({
                                     "id": target_col_id,  # Use target column ID
                                     "position": 0,
@@ -1545,6 +1617,11 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                                                      source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
                                                                      target_table_column_types=target_table_column_types)
 
+                            # User-declared targetDataType override takes highest priority
+                            _override = target_data_type_overrides.get(col["name"].lower())
+                            if _override:
+                                resolved_target_type = _override
+
                             target_key_name = discovered_target_col.get('name') if discovered_target_col else col["name"]
                             target_keys.append(_enrich_column({
                                 "id": target_col_id,  # Use target column ID
@@ -1580,14 +1657,20 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         logger.error(error_msg)
                         raise ValueError(error_msg)
                         
+                    _resolved_dt = target_discovered_columns_by_name.get(col["name"].lower(), {}).get('type') or map_data_type(
+                        col.get("dataType"), source_node_info, target_node_info,
+                        source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
+                        target_table_column_types=target_table_column_types)
+                    # User-declared targetDataType override takes highest priority
+                    _override = target_data_type_overrides.get(col["name"].lower())
+                    if _override:
+                        _resolved_dt = _override
                     target_keys.append(_enrich_column({
                         "id": col_id,  # Use actual ordinal position from database
                         "position": col.get("position", 0),
                         "name": col["name"],
                         "alias": col["name"],
-                        "dataType": target_discovered_columns_by_name.get(col["name"].lower(), {}).get('type') or map_data_type(col.get("dataType"), source_node_info, target_node_info,
-                                                                                                                                    source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
-                                                                                                                                    target_table_column_types=target_table_column_types)
+                        "dataType": _resolved_dt
                     }, discovered_target_col if 'discovered_target_col' in locals() and discovered_target_col else col))
             logger.debug(f"Using primary target keys for {table_name}: {target_keys}")
 
@@ -2417,6 +2500,11 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 table_target_columns = None
             target_table_column_types = extract_target_column_types(table_target_columns)
 
+            # Per-table user-declared targetDataType overrides (by source column name, lower-cased)
+            table_target_data_type_overrides = _build_target_data_type_overrides(
+                table_data.get('columns', []) if table_data else []
+            )
+
             # Process columns for target
             target_table_columns = []
             max_target_col_id = 0
@@ -2467,13 +2555,15 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 target_name = mapping_info['target_name'] if mapping_info else col["name"]
                     
                 max_target_col_id = max(max_target_col_id, col_id)
+                _resolved_dt = table_target_data_type_overrides.get(col["name"].lower()) or map_data_type(
+                    col.get("dataType"), source_node_info, target_node_info,
+                    source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
+                    target_table_column_types=target_table_column_types)
                 target_table_columns.append(_enrich_column({
                     "id": col_id,  # Use actual ordinal position from database
                     "position": col.get("position", 0),
                     "name": target_name,
-                    "dataType": map_data_type(col.get("dataType"), source_node_info, target_node_info,
-                                         source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
-                                         target_table_column_types=target_table_column_types),
+                    "dataType": _resolved_dt,
                     "isPK": col.get("isPK", False) or _is_in_keys(col["name"], table_data), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
                 }, col))
 
@@ -2590,13 +2680,15 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             key_mapping_info = source_to_target_mapping.get(col["name"].lower())
                             target_key_name = key_mapping_info['target_name'] if key_mapping_info else col["name"]
                                 
+                            _resolved_dt = table_target_data_type_overrides.get(col["name"].lower()) or map_data_type(
+                                col.get("dataType"), source_node_info, target_node_info,
+                                source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
+                                target_table_column_types=target_table_column_types)
                             keys.append(_enrich_column({
                                 "id": col_id,  # Use actual ordinal position from database
                                 "position": col.get("position", 0),
                                 "name": target_key_name,
-                                "type": map_data_type(col.get("dataType"), source_node_info, target_node_info,
-                                                     source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
-                                                     target_table_column_types=target_table_column_types)
+                                "type": _resolved_dt
                             }, col))
                             found = True
                             break
@@ -2625,13 +2717,15 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             # Fallback to finding position if not provided
                             col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
                             
+                        _resolved_dt = table_target_data_type_overrides.get(col["name"].lower()) or map_data_type(
+                            col.get("dataType"), source_node_info, target_node_info,
+                            source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
+                            target_table_column_types=target_table_column_types)
                         keys.append(_enrich_column({
                             "id": col_id,  # Use actual ordinal position from database
                             "position": col.get("position", 0),
                             "name": col["name"],
-                            "type": map_data_type(col.get("dataType"), source_node_info, target_node_info,
-                                                 source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
-                                                 target_table_column_types=target_table_column_types)
+                            "type": _resolved_dt
                         }, col))
 
             # Add keys for this table
