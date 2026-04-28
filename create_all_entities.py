@@ -966,13 +966,10 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                 break
                     
                     if not found:
-                        logger.warning(f"Warning: Key '{key_name}' still not found for table '{table_name}'. Adding dummy key entry.")
-                        keys.append({
-                            "id": get_table_id(source_schema, key_name), # Generate a deterministic ID
-                            "name": key_name,
-                            "alias": key_name,
-                            "dataType": "VARCHAR" # Fallback type
-                        })
+                        error_msg = f"CRITICAL ERROR: Key '{key_name}' not found in discovery or columns_def for table '{table_name}' in schema '{source_schema}'. This key is required by the YAML configuration but does not exist in the source database discovery."
+                        logger.error(error_msg)
+                        raise ValueError(error_msg)
+
             
             logger.info(f"Final keys array for {table_name}: {keys} (count: {len(keys)})")
         else:
@@ -1560,13 +1557,10 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                 break
                     
                     if not found:
-                        logger.warning(f"Warning: Target key '{key_name}' still not found for table '{table_name}'. Adding dummy key entry.")
-                        target_keys.append({
-                            "id": get_table_id(yaml_target_schema, key_name),
-                            "name": key_name,
-                            "alias": key_name,
-                            "dataType": "varchar"
-                        })
+                        error_msg = f"CRITICAL ERROR: Target key '{key_name}' not found in discovery or target_columns_def for table '{table_name}' in schema '{yaml_target_schema}'. This key is required by the YAML configuration but does not exist in the target database discovery."
+                        logger.error(error_msg)
+                        raise ValueError(error_msg)
+
         else:
             target_keys = []
             for col in columns["columns"]:
@@ -1891,13 +1885,10 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                 found = True
                                 break
                     if not found:
-                        logger.warning(f"Warning: Key '{key_name}' still not found for duplicate table '{yaml_table_key}'. Adding dummy key entry.")
-                        keys.append({
-                            "id": get_table_id(source_schema, key_name),
-                            "name": key_name,
-                            "alias": key_name,
-                            "dataType": "VARCHAR"
-                        })
+                        error_msg = f"CRITICAL ERROR: Key '{key_name}' not found in discovery or columns_def for duplicate table entry '{yaml_table_key}' (source: {table_name}, schema: {source_schema})."
+                        logger.error(error_msg)
+                        raise ValueError(error_msg)
+
         else:
             keys = []
             for col in columns["columns"]:
@@ -2067,13 +2058,10 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             found = True
                             break
                 if not found:
-                    logger.warning(f"Warning: Target key '{key_name}' still not found for duplicate table '{yaml_table_key}'. Adding dummy key entry.")
-                    target_keys.append({
-                        "id": get_table_id(yaml_target_schema, key_name),
-                        "name": key_name,
-                        "alias": key_name,
-                        "dataType": "varchar"
-                    })
+                    error_msg = f"CRITICAL ERROR: Target key '{key_name}' not found in discovery or target_columns_def for duplicate table entry '{yaml_table_key}' (target: {target_table_name}, schema: {yaml_target_schema})."
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
+
         else:
             for col in columns["columns"]:
                 if col.get("isPK"):
@@ -2324,18 +2312,10 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                 break
                     
                     if not found:
-                        logger.warning(f"Warning: Key {key_name} still not found for table {table_key}. Adding dummy key entry.")
-                        keys.append({
-                            "id": get_table_id(source_schema, key_name),
-                            "name": key_name,
-                            "alias": key_alias,
-                            "table": {
-                                "id": str(source_table_id),
-                                "name": table_key,
-                                "schema": source_schema
-                            },
-                            "type": "VARCHAR"
-                        })
+                        error_msg = f"CRITICAL ERROR: Key '{key_name}' not found in discovery or table_columns for MultiTable component '{table_key}' in schema '{source_schema}'."
+                        logger.error(error_msg)
+                        raise ValueError(error_msg)
+
             else:
                 keys = []
                 for col in columns["columns"]:
@@ -2613,13 +2593,10 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                 break
                     
                     if not found:
-                        logger.warning(f"Warning: Target key {key_name} still not found for table {table_key}. Adding dummy key entry.")
-                        keys.append({
-                            "id": get_table_id(yaml_target_schema, key_name),
-                            "name": key_name,
-                            "alias": key_name,
-                            "type": "varchar"
-                        })
+                        error_msg = f"CRITICAL ERROR: Target key '{key_name}' not found in discovery or target_table_columns for MultiTable component '{table_key}' in schema '{yaml_target_schema}'."
+                        logger.error(error_msg)
+                        raise ValueError(error_msg)
+
 
             else:
                 keys = []
