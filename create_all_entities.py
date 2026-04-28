@@ -1059,6 +1059,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 "schema": source_schema
             },
             "columns": columns_def,
+            "keys": keys,
             "customProperties": source_custom_properties,
             "tablesProperties": {source_table_key: source_table_properties}
         }
@@ -1561,6 +1562,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 "name": target_table_name
             },
             "columns": target_columns_def,  # Use target columns definition
+            "keys": target_keys,
             "customProperties": target_custom_properties,
             "tablesProperties": {target_table_key: {}},
             "sourceAgent": source_agent_id,
@@ -1889,6 +1891,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 "schema": source_schema
             },
             "columns": columns_def,
+            "keys": keys,
             "customProperties": source_custom_properties,
             "tablesProperties": {source_table_key: source_table_properties}
         }
@@ -2653,6 +2656,15 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     logger.info(f"  {agent_type} keys: {keys}")
                     if not keys:
                         logger.warning(f"  WARNING: No keys for {agent_type} in MultiTable {entity_name}")
+                        # Force fallback for MultiTable
+                        if 'tables' in agent_entity:
+                            for table_item in agent_entity.get('tables', []):
+                                if 'columns' in table_item:
+                                    table_keys = [col for col in table_item['columns'] if col.get('isPK')]
+                                    if table_keys:
+                                        logger.info(f"  Found {len(table_keys)} fallback keys for MultiTable component in {entity_name}")
+                                        agent_entity['keys'] = table_keys
+                                        break
                     
                     # Log the final tables ordering in payload before sending
                     if 'tables' in agent_entity:
@@ -2725,6 +2737,20 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     logger.info(f"  {agent_type} keys: {keys}")
                     if not keys:
                         logger.warning(f"  WARNING: No keys for {agent_type} in {entity_name}")
+                        # Force fallback to columns marked as isPK if keys array is empty
+                        if 'columns' in agent_entity:
+                            fallback_keys = [col for col in agent_entity['columns'] if col.get('isPK')]
+                            if fallback_keys:
+                                logger.info(f"  Found {len(fallback_keys)} fallback keys from columns")
+                                agent_entity['keys'] = fallback_keys
+                        elif 'tables' in agent_entity:
+                            # For MultiTable, look into each table
+                            for table_item in agent_entity.get('tables', []):
+                                if 'columns' in table_item:
+                                    table_keys = [col for col in table_item['columns'] if col.get('isPK')]
+                                    if table_keys:
+                                        logger.info(f"  Found {len(table_keys)} fallback keys for MultiTable component")
+                                        # Note: MultiTable entity structure might differ; this is a safety net
                     
                     # Log the final tables ordering in payload before sending
                     if 'tables' in agent_entity:
