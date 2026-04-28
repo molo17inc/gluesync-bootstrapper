@@ -26,7 +26,7 @@ import copy
 import itertools
 from commons import get_node_info, get_table_columns, fetch_core_hub, get_pipeline_config, get_pipeline_agents, \
     get_agent_tables, create_entity_schedules, map_data_type, create_pipeline_schedules, create_group_schedules, load_yaml_config, \
-    process_filter_clauses, create_group, assign_entities_to_group, get_table_id
+    process_filter_clauses, create_group, assign_entities_to_group, get_table_id, extract_target_column_types
 from create_all_tables import handle_table_creation
 from create_user_defined_functions import handle_udf_function_definition
 from utils.log import get_logger, create_log_file, log_success, log_failure, lockfile_failure, lockfile_complete, exit_on_fail
@@ -1142,6 +1142,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         except Exception as e:
             logger.debug(f"Could not get target columns for {yaml_target_schema}.{target_table_name}: {str(e)}")
 
+        # Build set of dataTypes already present in the target table for type-mapping fallback
+        target_table_column_types = extract_target_column_types(target_discovered_columns)
+
         # Generate columnsMappingMatrix
         columns_mapping_matrix = []
         
@@ -1282,7 +1285,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                     target_col_id = discovered_target_col.get('id')
                             else:
                                 resolved_target_type = map_data_type(col.get("dataType"), source_node_info, target_node_info,
-                                                                     source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
+                                                                     source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
+                                                                     target_table_column_types=target_table_column_types)
 
                             max_target_col_id = max(max_target_col_id, target_col_id)
                             # Get isPrimaryKey from discovered target column or fall back to source column
@@ -1325,7 +1329,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         
                         if not resolved_target_type:
                             resolved_target_type = map_data_type(col["type"], source_node_info, target_node_info,
-                                                                 source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
+                                                                 source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
+                                                                 target_table_column_types=target_table_column_types)
                         
                         max_target_col_id = max(max_target_col_id, target_col_id)
                         target_columns_def.append({
@@ -1361,7 +1366,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         target_col_id = discovered_target_col.get('id')
                 else:
                     resolved_target_type = map_data_type(col.get("dataType"), source_node_info, target_node_info,
-                                                         source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
+                                                         source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
+                                                         target_table_column_types=target_table_column_types)
 
                 max_target_col_id = max(max_target_col_id, target_col_id)
                 
@@ -1450,7 +1456,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
                     # Map the column type to target node type
                     mapped_type = map_data_type(col_type, source_node_info, target_node_info,
-                                               source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
+                                               source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
+                                               target_table_column_types=target_table_column_types)
 
                     target_columns_def.append(_enrich_column({
                         "id": max_target_col_id,  # Continue from last target column ID
@@ -1499,7 +1506,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                         target_col_id = discovered_target_col.get('id')
                                 else:
                                     resolved_target_type = map_data_type(col.get("dataType"), source_node_info, target_node_info,
-                                                                         source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
+                                                                         source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
+                                                                         target_table_column_types=target_table_column_types)
 
                                 target_keys.append(_enrich_column({
                                     "id": target_col_id,  # Use target column ID
@@ -1534,7 +1542,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                     target_col_id = discovered_target_col.get('id')
                             else:
                                 resolved_target_type = map_data_type(col.get("dataType"), source_node_info, target_node_info,
-                                                                     source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
+                                                                     source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
+                                                                     target_table_column_types=target_table_column_types)
 
                             target_key_name = discovered_target_col.get('name') if discovered_target_col else col["name"]
                             target_keys.append(_enrich_column({
@@ -1577,7 +1586,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         "name": col["name"],
                         "alias": col["name"],
                         "dataType": target_discovered_columns_by_name.get(col["name"].lower(), {}).get('type') or map_data_type(col.get("dataType"), source_node_info, target_node_info,
-                                                                                                                                    source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
+                                                                                                                                    source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
+                                                                                                                                    target_table_column_types=target_table_column_types)
                     }, discovered_target_col if 'discovered_target_col' in locals() and discovered_target_col else col))
             logger.debug(f"Using primary target keys for {table_name}: {target_keys}")
 
@@ -2002,6 +2012,14 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
         target_entity_type["columnsMappingMatrix"] = columns_mapping_matrix
 
+        # Discover target columns to enable type-mapping fallback against existing target table
+        try:
+            _dup_target_discovered = get_table_columns(token, pipeline_id, target_agent_id, yaml_target_schema, target_table_name)
+        except Exception as e:
+            logger.debug(f"Could not get target columns for duplicate table {yaml_target_schema}.{target_table_name}: {str(e)}")
+            _dup_target_discovered = None
+        target_table_column_types = extract_target_column_types(_dup_target_discovered)
+
         # Build target columns (simplified - using source columns with type mapping)
         target_columns_def = []
         for col in columns["columns"]:
@@ -2010,7 +2028,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 raise ValueError(f"Column '{col.get('name')}' in {yaml_table_key} missing 'id' field")
             
             resolved_target_type = map_data_type(col.get("dataType"), source_node_info, target_node_info,
-                                                 source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
+                                                 source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
+                                                 target_table_column_types=target_table_column_types)
             target_columns_def.append(_enrich_column({
                 "id": col_id,
                 "position": col.get("position", 0),
@@ -2032,7 +2051,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             raise ValueError(f"Key '{key_name}' in {yaml_table_key} missing 'id' field")
                         
                         resolved_target_type = map_data_type(col.get("dataType"), source_node_info, target_node_info,
-                                                             source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
+                                                             source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
+                                                             target_table_column_types=target_table_column_types)
                         target_keys.append(_enrich_column({
                             "id": col_id,
                             "position": col.get("position", 0),
@@ -2062,7 +2082,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         raise ValueError(f"Primary key '{col.get('name')}' in {yaml_table_key} missing 'id' field")
                     
                     resolved_target_type = map_data_type(col.get("dataType"), source_node_info, target_node_info,
-                                                         source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
+                                                         source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
+                                                         target_table_column_types=target_table_column_types)
                     target_keys.append(_enrich_column({
                         "id": col_id,
                         "position": col.get("position", 0),
@@ -2388,6 +2409,14 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             # Get columns for this table using actual source table name
             columns = get_table_columns(token, pipeline_id, source_agent_id, source_schema, actual_table_name)
 
+            # Discover target columns for this specific table to enable type-mapping fallback
+            try:
+                table_target_columns = get_table_columns(token, pipeline_id, target_agent_id, target_schema, table_key)
+            except Exception as e:
+                logger.debug(f"Could not get target columns for {target_schema}.{table_key}: {str(e)}")
+                table_target_columns = None
+            target_table_column_types = extract_target_column_types(table_target_columns)
+
             # Process columns for target
             target_table_columns = []
             max_target_col_id = 0
@@ -2443,7 +2472,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     "position": col.get("position", 0),
                     "name": target_name,
                     "dataType": map_data_type(col.get("dataType"), source_node_info, target_node_info,
-                                         source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag),
+                                         source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
+                                         target_table_column_types=target_table_column_types),
                     "isPK": col.get("isPK", False) or _is_in_keys(col["name"], table_data), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
                 }, col))
 
@@ -2453,14 +2483,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
             if table_target_only_columns:
                 logger.info(f"Adding {len(table_target_only_columns)} target-only columns for table {table_key} in MultiTable entity")
-
-                # Try to get target columns if the target table exists for this specific table
-                table_target_columns = None
-                try:
-                    table_target_columns = get_table_columns(token, pipeline_id, target_agent_id, target_schema, table_key)
-                    logger.debug(f"Found {len(table_target_columns.get('columns', []))} existing columns in target table {target_schema}.{table_key}")
-                except Exception as e:
-                    logger.debug(f"Could not get target columns for {target_schema}.{table_key}: {str(e)}")
+                # Reuse table_target_columns already fetched above for type-mapping fallback
+                if table_target_columns and 'columns' in table_target_columns:
+                    logger.debug(f"Reusing {len(table_target_columns.get('columns', []))} existing columns in target table {target_schema}.{table_key}")
 
                 for target_col in table_target_only_columns:
                     # Increment from the maximum target column ID
@@ -2516,7 +2541,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
                     # Map the column type to target node type
                     mapped_type = map_data_type(col_type, source_node_info, target_node_info,
-                                               source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
+                                               source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
+                                               target_table_column_types=target_table_column_types)
 
                     target_table_columns.append(_enrich_column({
                         "id": max_target_col_id,  # Continue from last target column ID
@@ -2569,7 +2595,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                 "position": col.get("position", 0),
                                 "name": target_key_name,
                                 "type": map_data_type(col.get("dataType"), source_node_info, target_node_info,
-                                                     source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
+                                                     source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
+                                                     target_table_column_types=target_table_column_types)
                             }, col))
                             found = True
                             break
@@ -2603,7 +2630,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             "position": col.get("position", 0),
                             "name": col["name"],
                             "type": map_data_type(col.get("dataType"), source_node_info, target_node_info,
-                                                 source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
+                                                 source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
+                                                 target_table_column_types=target_table_column_types)
                         }, col))
 
             # Add keys for this table
