@@ -900,12 +900,20 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             logger.error(error_msg)
                             raise ValueError(error_msg)
                         
-                        columns_def.append({
+                        # Prefer the user-declared `type` (source-side native type) and fall
+                        # back to the discovered `dataType`. Discovered columns use `dataType`,
+                        # not `type` — referencing `col["type"]` here was a bug.
+                        source_data_type = yaml_col.get('type') or col.get('dataType')
+                        columns_def.append(_enrich_column({
                             "id": col_id,
+                            "position": col.get("position", 0),
                             "name": source_col_name,
                             "alias": target_col_name,
-                            "type": col["type"],
-                        })
+                            "dataType": source_data_type,
+                            "isPK": col.get("isPK", False) or _is_in_keys(source_col_name, custom_config),
+                            "isIdentity": col.get("isIdentity", False),
+                            "isNullable": col.get("isNullable", True),
+                        }, col))
                         break
                 else:
                     logger.warning(f"Column '{source_col_name}' from YAML whitelist not found in discovered columns for table {table_name}")
@@ -1379,13 +1387,15 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         target_col_id = source_col_id  # Default to source ID
                         
                         if discovered_target_col:
-                            if discovered_target_col.get('type') and not resolved_target_type:
-                                resolved_target_type = discovered_target_col.get('type')
+                            # Discovered columns expose `dataType`, not `type`.
+                            if discovered_target_col.get('dataType') and not resolved_target_type:
+                                resolved_target_type = discovered_target_col.get('dataType')
                             if discovered_target_col.get('id') is not None:
                                 target_col_id = discovered_target_col.get('id')
                         
                         if not resolved_target_type:
-                            resolved_target_type = map_data_type(col["type"], source_node_info, target_node_info,
+                            # Discovered source column also exposes `dataType`, not `type`.
+                            resolved_target_type = map_data_type(col.get("dataType"), source_node_info, target_node_info,
                                                                  source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
                                                                  target_table_column_types=target_table_column_types)
 
