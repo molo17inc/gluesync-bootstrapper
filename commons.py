@@ -548,7 +548,13 @@ def map_data_type(source_type, source_node_info, target_node_info,
     )
 
     if not source_item:
-        print(f"Warning: No mapping found for source type {source_type}. Using as is.")
+        print(f"Warning: No mapping found for source type {source_type}. Falling back to target's default for STRING.")
+        target_item_fallback = next(
+            (item for item in target_matrix if _normalize_gluesync_type(item.get('gluesyncDataType')) == 'STRING'),
+            None
+        )
+        if target_item_fallback:
+            return target_item_fallback.get('defaultType', source_type)
         return source_type
 
     source_gluesync_type = _normalize_gluesync_type(source_item.get('gluesyncDataType'))
@@ -633,9 +639,9 @@ def map_data_type(source_type, source_node_info, target_node_info,
         return target_item['defaultType']
 
     print(
-        f"Warning: No target mapping found for Gluesync type {source_gluesync_type}. Using source type {source_type} as is.")
-
-    return source_type
+        f"Warning: No target mapping found for Gluesync type {source_gluesync_type}. Using source's defaultType.")
+    
+    return source_item.get('defaultType', source_type)
 
 
 def load_yaml_config(file_path):
