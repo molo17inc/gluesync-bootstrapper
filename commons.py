@@ -34,7 +34,6 @@ from typing import Dict, List, Optional, Tuple, Union, Any
 from utils.log import get_logger, log_success, log_failure
 from utils.chronos_client import ChronosClient
 from utils.core_hub_client import CoreHubClient
-from data_type_matrices import get_matrix_for_agent
 
 CORE_HUB_URL = os.getenv('CORE_HUB_URL', 'https://localhost:1717')
 ENABLE_SCHEDULING = os.getenv('ENABLE_SCHEDULING', 'true').lower() == 'true'
@@ -500,57 +499,17 @@ def map_data_type(source_type, source_node_info, target_node_info,
                   source_agent_tag=None, target_agent_tag=None):
     """Map a source native type to the corresponding target native type.
 
-    Resolution order:
-    1. Kotlin-derived per-agent matrices (keyed by agent internalName/tag) when
-       both *source_agent_tag* and *target_agent_tag* are known.
-    2. API-provided ``dataTypesMatrix`` from node_info (original behaviour) as
-       fallback when agent tags are unknown or not present in the registry.
+    Uses API-provided ``dataTypesMatrix`` from node_info dynamic discovery.
     """
     source_node_info = source_node_info or {}
     target_node_info = target_node_info or {}
-    source_tag = source_agent_tag or source_node_info.get('agentTag') or source_node_info.get('internalName', '')
-    target_tag = target_agent_tag or target_node_info.get('agentTag') or target_node_info.get('internalName', '')
 
-    source_hint = " ".join(
-        filter(
-            None,
-            [
-                source_tag,
-                source_node_info.get('databaseName'),
-                source_node_info.get('agentName'),
-                source_node_info.get('name'),
-            ],
-        )
-    ).lower()
-    target_hint = " ".join(
-        filter(
-            None,
-            [
-                target_tag,
-                target_node_info.get('databaseName'),
-                target_node_info.get('agentName'),
-                target_node_info.get('name'),
-            ],
-        )
-    ).lower()
-    source_is_postgres = 'postgres' in source_hint
+    source_matrix = source_node_info.get('dataTypesMatrix', [])
+    target_matrix = target_node_info.get('dataTypesMatrix', [])
 
-    kotlin_source_matrix = get_matrix_for_agent(source_tag) if source_tag else []
-    kotlin_target_matrix = get_matrix_for_agent(target_tag) if target_tag else []
-
-    if kotlin_source_matrix and kotlin_target_matrix:
-        source_matrix = kotlin_source_matrix
-        target_matrix = kotlin_target_matrix
-        logger.debug(
-            f"map_data_type: using Kotlin matrices for source={source_tag!r} target={target_tag!r}"
-        )
-    else:
-        source_matrix = (source_node_info or {}).get('dataTypesMatrix', [])
-        target_matrix = (target_node_info or {}).get('dataTypesMatrix', [])
-        logger.debug(
-            f"map_data_type: using API matrices (Kotlin matrices not found for "
-            f"source={source_tag!r} target={target_tag!r})"
-        )
+    logger.debug(
+        f"map_data_type: using dynamic discovery matrices from node info"
+    )
 
     gluesync_type_aliases = {
         'DATE_TIME': 'LOCAL_DATE_TIME',

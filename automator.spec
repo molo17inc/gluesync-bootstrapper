@@ -18,7 +18,6 @@ a = Analysis(
         'create_user_defined_functions',
         'create_all_tables',
         'create_all_entities',
-        'data_type_matrices',
         'commons',
         'utils.log',
         'utils.core_hub_client',
