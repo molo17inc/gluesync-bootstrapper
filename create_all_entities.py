@@ -743,13 +743,16 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         # Get and process filter configurations
         filter_config = custom_config.get('filter')
         snapshot_delete_filter_config = custom_config.get('snapshotDeleteFilter')
-        
+
+        # Resolve source table id early so filter columns can reference it (2.2.6.0 Column model)
+        filter_source_table_id = resolve_table_id(source_schema, table_name, source_tables_lookup, "source")
+
         # Process regular filter
-        processed_filters = process_filter_clauses(filter_config, columns) if filter_config else None
+        processed_filters = process_filter_clauses(filter_config, columns, table_id=filter_source_table_id) if filter_config else None
         logger.debug(f"Processed filters for {table_name}: {processed_filters}")
-        
+
         # Process snapshot delete filter
-        processed_snapshot_delete_filters = process_filter_clauses(snapshot_delete_filter_config, columns) if snapshot_delete_filter_config else None
+        processed_snapshot_delete_filters = process_filter_clauses(snapshot_delete_filter_config, columns, table_id=filter_source_table_id) if snapshot_delete_filter_config else None
         if processed_snapshot_delete_filters:
             logger.debug(f"Processed snapshot delete filters for {table_name}: {processed_snapshot_delete_filters}")
 
@@ -1707,9 +1710,12 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         # Get filter configurations
         filter_config = custom_config.get('filter')
         snapshot_delete_filter_config = custom_config.get('snapshotDeleteFilter')
-        
-        processed_filters = process_filter_clauses(filter_config, columns) if filter_config else None
-        processed_snapshot_delete_filters = process_filter_clauses(snapshot_delete_filter_config, columns) if snapshot_delete_filter_config else None
+
+        # Resolve source table id early so filter columns can reference it (2.2.6.0 Column model)
+        filter_source_table_id = resolve_table_id(source_schema, table_name, source_tables_lookup, "source")
+
+        processed_filters = process_filter_clauses(filter_config, columns, table_id=filter_source_table_id) if filter_config else None
+        processed_snapshot_delete_filters = process_filter_clauses(snapshot_delete_filter_config, columns, table_id=filter_source_table_id) if snapshot_delete_filter_config else None
 
         # Process document key if exists
         document_key = None

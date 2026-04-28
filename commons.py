@@ -909,10 +909,17 @@ def extract_schema_types_from_yaml(yaml_file_path):
         logger.error(f"Exception details: {traceback.format_exc()}")
         return None, None
 
-def process_filter_clauses(filter_config, columns_info):
+def process_filter_clauses(filter_config, columns_info, table_id=None):
     """
-    Process filter clauses from YAML configuration into the required format
-    All filter values are converted to strings as required by the backend
+    Process filter clauses from YAML configuration into the required format.
+
+    Builds the clause's column object as a full Column model (2.2.6.0):
+    {id, tableId, name, position, dataType, charMaxLength, charOctetLength,
+     charSet, collation, numPrec, numPrecRadix, numScale, datetimePrec,
+     isPK, isIdentity, isNullable, ...}
+
+    All filter values are converted to strings as required by the backend.
+    Pass ``table_id`` (int) so the emitted column carries the required ``tableId``.
     """
     if not filter_config or 'clauses' not in filter_config:
         return None
@@ -926,31 +933,48 @@ def process_filter_clauses(filter_config, columns_info):
 
         column_name = clause['column']
         operation_type = clause['operation']
-        
-        # Find the column ID from columns_info
-        column_id = None
-        column_type = clause.get('type', 'string')
+
+        # Find the matching column from discovery
+        matched_column = None
         if columns_info and 'columns' in columns_info:
             for col in columns_info['columns']:
                 if col.get('name') == column_name:
-                    # Use the id field from the column object
-                    column_id = col.get('id')
-                    # Also get the actual column type from discovery
-                    column_type = col.get('type', column_type)
+                    matched_column = col
                     break
-        
-        # If column ID not found, use a default
-        if column_id is None:
-            print(f"Warning: Column '{column_name}' not found in table columns, using index 1 as default")
-            column_id = 1
 
-        # Create the basic filter clause with ID
-        filter_clause = {
-            "column": {
-                "id": column_id,
+        fallback_type = clause.get('type', 'string')
+
+        if matched_column is None:
+            print(f"Warning: Column '{column_name}' not found in table columns, using minimal fallback")
+            filter_column = {
+                "id": 1,
                 "name": column_name,
-                "dataType": column_type  # Use discovered type from database (2.2.6.0 column model)
-            },
+                "dataType": fallback_type
+            }
+            if table_id is not None:
+                filter_column["tableId"] = int(table_id)
+        else:
+            # Full column object mirroring the entity's column payload (2.2.6.0 Column model)
+            filter_column = {
+                "id": matched_column.get('id'),
+                "name": column_name,
+                "position": matched_column.get('position', 0),
+                "dataType": matched_column.get('dataType', fallback_type),
+                "isPK": matched_column.get('isPK', False),
+                "isIdentity": matched_column.get('isIdentity', False),
+                "isNullable": matched_column.get('isNullable', False),
+            }
+            if table_id is not None:
+                filter_column["tableId"] = int(table_id)
+            # Copy optional metadata fields when present
+            for field in ['charMaxLength', 'charOctetLength', 'charSet', 'collation',
+                          'numPrec', 'numPrecRadix', 'numScale', 'datetimePrec',
+                          'udtCategory', 'udtName']:
+                if field in matched_column and matched_column[field] is not None:
+                    filter_column[field] = matched_column[field]
+
+        filter_clause = {
+            "column": filter_column,
             "operation": {
                 "type": operation_type
             }
