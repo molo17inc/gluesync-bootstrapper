@@ -1405,12 +1405,19 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             resolved_target_type = _override
                         
                         max_target_col_id = max(max_target_col_id, target_col_id)
-                        target_columns_def.append({
+                        # Target columns are serialised with `dataType` (not `type`) in the
+                        # UpsertEntitiesDto contract. Align with the mapping/default branches.
+                        target_is_primary_key = (discovered_target_col.get("isPK") if discovered_target_col else False) or col.get("isPK", False) or _is_in_keys(col["name"], custom_config)
+                        target_columns_def.append(_enrich_column({
                             "id": target_col_id,
+                            "position": col.get("position", 0),
                             "name": target_col_name,
                             "alias": target_col_name,
-                            "type": resolved_target_type
-                        })
+                            "dataType": resolved_target_type,
+                            "isPK": target_is_primary_key,
+                            "isIdentity": (discovered_target_col.get("isIdentity") if discovered_target_col else None) or col.get("isIdentity", False),
+                            "isNullable": discovered_target_col.get("isNullable") if discovered_target_col and "isNullable" in discovered_target_col else col.get("isNullable", False),
+                        }, discovered_target_col if discovered_target_col else col))
                         break
                 else:
                     logger.warning(f"Column '{source_col_name}' from YAML whitelist not found in discovered columns for table {table_name}")
