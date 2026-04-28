@@ -500,7 +500,7 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                         id=idx,  # Use sequential IDs for target-only columns
                         tableId=0,
                         position=idx,
-                        isPK=False,  # Target-only columns are not primary keys
+                        isPK=_is_primary_key(col_name),
                         isNullable=col_is_nullable,
                         charMaxLength=col_data_length,
                         numPrec=col_numeric_precision,
