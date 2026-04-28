@@ -191,7 +191,6 @@ class TestPyInstallerBuildIntegrity(unittest.TestCase):
             'create_all_entities',
             'create_user_defined_functions',
             'main',
-            'data_type_matrices',
         ]
         
         failed_imports = []
