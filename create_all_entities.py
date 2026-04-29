@@ -1383,26 +1383,29 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         
                         # Look up target column info
                         discovered_target_col = target_discovered_columns_by_name.get(target_col_name.lower())
-                        resolved_target_type = yaml_col.get('type')  # Use type from YAML if specified
                         target_col_id = source_col_id  # Default to source ID
-                        
-                        if discovered_target_col:
-                            # Discovered columns expose `dataType`, not `type`.
-                            if discovered_target_col.get('dataType') and not resolved_target_type:
-                                resolved_target_type = discovered_target_col.get('dataType')
-                            if discovered_target_col.get('id') is not None:
-                                target_col_id = discovered_target_col.get('id')
-                        
-                        if not resolved_target_type:
-                            # Discovered source column also exposes `dataType`, not `type`.
+                        if discovered_target_col and discovered_target_col.get('id') is not None:
+                            target_col_id = discovered_target_col.get('id')
+
+                        # Target dataType resolution order:
+                        # 1. `targetDataType:` override from YAML (highest priority, verbatim).
+                        # 2. map_data_type(<discovered source dataType>) — converts postgres
+                        #    `integer` -> BigQuery `INT64`, `character varying` -> `STRING`, etc.
+                        # 3. Discovered target column's dataType (if mapping yielded nothing useful).
+                        #
+                        # NOTE: YAML `type:` is intentionally NOT used here. It is ambiguous
+                        # (was historically interpreted as target type, but users naturally
+                        # write source-shaped values like `int`, which BigQuery rejects).
+                        # Use `targetDataType:` for explicit target overrides.
+                        _override = yaml_col.get('targetDataType') or target_data_type_overrides.get(col["name"].lower())
+                        if _override:
+                            resolved_target_type = _override
+                        else:
                             resolved_target_type = map_data_type(col.get("dataType"), source_node_info, target_node_info,
                                                                  source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
                                                                  target_table_column_types=target_table_column_types)
-
-                        # User-declared targetDataType override takes highest priority
-                        _override = target_data_type_overrides.get(col["name"].lower())
-                        if _override:
-                            resolved_target_type = _override
+                            if (not resolved_target_type) and discovered_target_col and discovered_target_col.get('dataType'):
+                                resolved_target_type = discovered_target_col.get('dataType')
                         
                         max_target_col_id = max(max_target_col_id, target_col_id)
                         # Target columns are serialised with `dataType` (not `type`) in the
