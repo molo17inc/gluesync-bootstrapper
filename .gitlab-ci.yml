@@ -68,6 +68,12 @@ fetch_agents:
   stage: fetch-agents
   image: python:3.9-bullseye
   rules:
+    - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
+      when: always
+    - if: "$CI_COMMIT_TAG =~ /^tag-/"
+      when: always
+    - if: "$CI_COMMIT_TAG =~ /^beta-/"
+      when: always
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
       when: always
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
@@ -106,6 +112,7 @@ automator_build:
   needs:
     - job: fetch_agents
       artifacts: false
+      optional: true
   rules:
     - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
       when: always
@@ -258,6 +265,7 @@ deploy:
   needs:
     - job: fetch_agents
       artifacts: false
+      optional: true
   script:
     - echo "Building & deploying started..."
 
