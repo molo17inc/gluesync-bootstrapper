@@ -1389,23 +1389,34 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
                         # Target dataType resolution order:
                         # 1. `targetDataType:` override from YAML (highest priority, verbatim).
-                        # 2. map_data_type(<discovered source dataType>) — converts postgres
-                        #    `integer` -> BigQuery `INT64`, `character varying` -> `STRING`, etc.
-                        # 3. Discovered target column's dataType (if mapping yielded nothing useful).
-                        #
-                        # NOTE: YAML `type:` is intentionally NOT used here. It is ambiguous
-                        # (was historically interpreted as target type, but users naturally
-                        # write source-shaped values like `int`, which BigQuery rejects).
-                        # Use `targetDataType:` for explicit target overrides.
+                        # 2. map_data_type(<discovered source dataType>) when it actually
+                        #    produced a target-side mapping (i.e. result != source).
+                        # 3. YAML `type:` as a target-side hint — used only when the auto
+                        #    mapping fell back (e.g. Vertica has no DOUBLE entry; user wrote
+                        #    `type: float` to indicate the desired Vertica type).
+                        # 4. Discovered target column's dataType (last-resort, if available).
+                        # 5. The mapped value (which is the source dataType verbatim if no
+                        #    mapping existed) — likely to be rejected by the target, but
+                        #    preserves observable behavior for unknown configurations.
+                        _source_dt = col.get("dataType")
                         _override = yaml_col.get('targetDataType') or target_data_type_overrides.get(col["name"].lower())
                         if _override:
                             resolved_target_type = _override
                         else:
-                            resolved_target_type = map_data_type(col.get("dataType"), source_node_info, target_node_info,
-                                                                 source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
-                                                                 target_table_column_types=target_table_column_types)
-                            if (not resolved_target_type) and discovered_target_col and discovered_target_col.get('dataType'):
+                            _mapped = map_data_type(_source_dt, source_node_info, target_node_info,
+                                                    source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
+                                                    target_table_column_types=target_table_column_types)
+                            _mapping_succeeded = bool(_mapped) and (
+                                str(_mapped).strip().lower() != str(_source_dt or '').strip().lower()
+                            )
+                            if _mapping_succeeded:
+                                resolved_target_type = _mapped
+                            elif yaml_col.get('type'):
+                                resolved_target_type = yaml_col.get('type')
+                            elif discovered_target_col and discovered_target_col.get('dataType'):
                                 resolved_target_type = discovered_target_col.get('dataType')
+                            else:
+                                resolved_target_type = _mapped or _source_dt
                         
                         max_target_col_id = max(max_target_col_id, target_col_id)
                         # Target columns are serialised with `dataType` (not `type`) in the
