@@ -82,9 +82,6 @@ fetch_agents:
   variables:
     PIP_DISABLE_PIP_VERSION_CHECK: "1"
     PYTHONDONTWRITEBYTECODE: "1"
-    BUDIBASE_API_KEY: $BUDIBASE_API_KEY
-    BUDIBASE_APP_ID: $BUDIBASE_APP_ID
-    BUDIBASE_BASE_URL: $BUDIBASE_BASE_URL
   before_script:
     - python3 --version
     - pip3 install --break-system-packages --upgrade pip
