@@ -604,6 +604,36 @@ def map_data_type(source_type, source_node_info, target_node_info,
         )
         return target_item['defaultType']
 
+    # Step 4: Compatibility-group fallback. If the target matrix has no entry
+    # for the source's gluesyncDataType, look up the target's
+    # ``dataTypeCompatibilityMatrix`` to find the category containing the
+    # source's gluesyncDataType (e.g. DOUBLE -> NUMBER), then pick the first
+    # gluesyncDataType in that category that the target matrix implements.
+    # This covers cases like source=double precision (DOUBLE) -> target Vertica
+    # which exposes only FLOAT under the NUMBER group.
+    compatibility_matrix = target_node_info.get('dataTypeCompatibilityMatrix', {}) or {}
+    target_types_by_gsd = {
+        item.get('gluesyncDataType'): item
+        for item in target_matrix
+        if item.get('gluesyncDataType')
+    }
+    for category, members in compatibility_matrix.items():
+        if not isinstance(members, list) or source_gluesync_type not in members:
+            continue
+        for candidate_gsd in members:
+            if candidate_gsd == source_gluesync_type:
+                continue
+            candidate_item = target_types_by_gsd.get(candidate_gsd)
+            if candidate_item and candidate_item.get('defaultType'):
+                logger.debug(
+                    f"map_data_type: no exact target mapping for "
+                    f"gluesyncDataType '{source_gluesync_type}'; using "
+                    f"compatibility group '{category}' member "
+                    f"'{candidate_gsd}' -> '{candidate_item['defaultType']}'"
+                )
+                return candidate_item['defaultType']
+        break
+
     logger.warning(
         f"map_data_type: no target mapping for gluesyncDataType '{source_gluesync_type}'. "
         f"Using source's defaultType."
