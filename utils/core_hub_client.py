@@ -78,9 +78,14 @@ class CoreHubClient:
     def request(self, path, method='GET', token=None, body=None, params=None, headers=None):
         url = f"{self.base_url}{path}"
         headers = headers.copy() if headers else {}
-        
+
         if token:
             headers['Authorization'] = f'Bearer {token}'
+
+        # Disable automatic gzip acceptance to avoid issues with servers that
+        # send malformed/double Content-Encoding headers
+        if 'Accept-Encoding' not in headers:
+            headers['Accept-Encoding'] = 'identity'
         
         # Use configured SSL verification setting
         verify = self.verify_ssl if self.use_ssl else False
