@@ -541,14 +541,22 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                         column_id = _to_int(col_meta.get('id'), idx)
                         ordinal_position = _to_int(col_meta.get('ordinalPosition'), idx)
 
-                        # Map source type to target type (e.g. CHARACTER -> varchar)
-                        mapped_type = map_data_type(
-                            col_type,
-                            source_node_info,
-                            target_node_info,
-                            source_agent_tag=source_agent_tag,
-                            target_agent_tag=target_agent_tag,
-                        )
+                        # User-declared targetDataType wins over both `type` and the
+                        # automatic source->target mapping. When set, use it verbatim
+                        # and skip map_data_type entirely so it lands in the CREATE TABLE
+                        # statement exactly as declared (e.g. TIMESTAMP, DATE, DATETIME).
+                        _override = col_meta.get('targetDataType')
+                        if _override:
+                            mapped_type = _override
+                        else:
+                            # Map source type to target type (e.g. CHARACTER -> varchar)
+                            mapped_type = map_data_type(
+                                col_type,
+                                source_node_info,
+                                target_node_info,
+                                source_agent_tag=source_agent_tag,
+                                target_agent_tag=target_agent_tag,
+                            )
                         col_data_length = _normalize_data_length(mapped_type, col_data_length)
                         resolved_target_type = mapped_type
 
