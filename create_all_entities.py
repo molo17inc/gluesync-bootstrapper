@@ -86,6 +86,33 @@ def _build_target_data_type_overrides(yaml_columns):
 
 
 
+def _is_target_known_type(data_type, target_node_info):
+    """Return True if ``data_type`` is advertised by the target agent's matrix.
+
+    A type is considered known when it appears (case-insensitive) as a
+    ``defaultType`` or in any entry's ``supportedTypes`` of the target's
+    ``dataTypesMatrix``. Used to detect whether ``map_data_type`` produced a
+    target-compatible value, even when that value happens to be identical to
+    the source dataType (e.g. PostgreSQL ``numeric`` -> Vertica ``numeric``).
+    """
+    if not data_type or not target_node_info:
+        return False
+    matrix = target_node_info.get('dataTypesMatrix') or []
+    needle = str(data_type).strip().lower()
+    if not needle:
+        return False
+    for entry in matrix:
+        if not isinstance(entry, dict):
+            continue
+        default_type = entry.get('defaultType')
+        if default_type and str(default_type).strip().lower() == needle:
+            return True
+        for st in entry.get('supportedTypes') or []:
+            if st and str(st).strip().lower() == needle:
+                return True
+    return False
+
+
 def _is_in_keys(col_name, custom_config):
     if not custom_config or 'keys' not in custom_config:
         return False
@@ -1389,15 +1416,13 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
                         # Target dataType resolution order:
                         # 1. `targetDataType:` override from YAML (highest priority, verbatim).
-                        # 2. map_data_type(<discovered source dataType>) when it actually
-                        #    produced a target-side mapping (i.e. result != source).
+                        # 2. map_data_type(<discovered source dataType>) when its result
+                        #    is a type the target actually advertises (defaultType or
+                        #    supportedType in the target dataTypesMatrix).
                         # 3. YAML `type:` as a target-side hint — used only when the auto
-                        #    mapping fell back (e.g. Vertica has no DOUBLE entry; user wrote
-                        #    `type: float` to indicate the desired Vertica type).
+                        #    mapping fell back to a value the target does not advertise.
                         # 4. Discovered target column's dataType (last-resort, if available).
-                        # 5. The mapped value (which is the source dataType verbatim if no
-                        #    mapping existed) — likely to be rejected by the target, but
-                        #    preserves observable behavior for unknown configurations.
+                        # 5. The mapped value as-is (preserves observable behavior).
                         _source_dt = col.get("dataType")
                         _override = yaml_col.get('targetDataType') or target_data_type_overrides.get(col["name"].lower())
                         if _override:
@@ -1406,9 +1431,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             _mapped = map_data_type(_source_dt, source_node_info, target_node_info,
                                                     source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
                                                     target_table_column_types=target_table_column_types)
-                            _mapping_succeeded = bool(_mapped) and (
-                                str(_mapped).strip().lower() != str(_source_dt or '').strip().lower()
-                            )
+                            _mapping_succeeded = bool(_mapped) and _is_target_known_type(_mapped, target_node_info)
                             if _mapping_succeeded:
                                 resolved_target_type = _mapped
                             elif yaml_col.get('type'):
