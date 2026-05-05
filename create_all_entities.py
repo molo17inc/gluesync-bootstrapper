@@ -1368,17 +1368,33 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             if discovered_target_col:
                                 if discovered_target_col.get('dataType'):
                                     resolved_target_type = discovered_target_col.get('dataType')
+                                elif isinstance(column_map, dict) and column_map.get('type'):
+                                    # YAML type captured from CoreHub API at export time — use it
+                                    # before generic map_data_type since it's the real target type
+                                    resolved_target_type = column_map.get('type')
+                                else:
+                                    resolved_target_type = map_data_type(col.get("dataType"), source_node_info, target_node_info,
+                                                                         source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
+                                                                         target_table_column_types=target_table_column_types)
                                 if discovered_target_col.get('id') is not None:
                                     target_col_id = discovered_target_col.get('id')
                             else:
-                                resolved_target_type = map_data_type(col.get("dataType"), source_node_info, target_node_info,
-                                                                     source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
-                                                                     target_table_column_types=target_table_column_types)
+                                # No live target discovery — YAML type is the authoritative source
+                                if isinstance(column_map, dict) and column_map.get('type'):
+                                    resolved_target_type = column_map.get('type')
+                                else:
+                                    resolved_target_type = map_data_type(col.get("dataType"), source_node_info, target_node_info,
+                                                                         source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
+                                                                         target_table_column_types=target_table_column_types)
 
                             # User-declared targetDataType override takes highest priority
                             _override = target_data_type_overrides.get(col["name"].lower())
                             if _override:
                                 resolved_target_type = _override
+
+                            if not resolved_target_type:
+                                logger.warning(f"No dataType resolved for target column '{target_name}' in table '{table_name}'. Defaulting to 'varchar'.")
+                                resolved_target_type = 'varchar'
 
                             max_target_col_id = max(max_target_col_id, target_col_id)
                             # Get isPrimaryKey from discovered target column or fall back to source column
@@ -1478,6 +1494,10 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 if discovered_target_col:
                     if discovered_target_col.get('dataType'):
                         resolved_target_type = discovered_target_col.get('dataType')
+                    else:
+                        resolved_target_type = map_data_type(col.get("dataType"), source_node_info, target_node_info,
+                                                             source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
+                                                             target_table_column_types=target_table_column_types)
                     if discovered_target_col.get('id') is not None:
                         target_col_id = discovered_target_col.get('id')
                 else:
@@ -1489,6 +1509,10 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 _override = target_data_type_overrides.get(col["name"].lower())
                 if _override:
                     resolved_target_type = _override
+
+                if not resolved_target_type:
+                    logger.warning(f"No dataType resolved for target column '{col['name']}' in table '{table_name}'. Defaulting to 'varchar'.")
+                    resolved_target_type = 'varchar'
 
                 max_target_col_id = max(max_target_col_id, target_col_id)
                 
@@ -1623,6 +1647,10 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                 if discovered_target_col:
                                     if discovered_target_col.get('dataType'):
                                         resolved_target_type = discovered_target_col.get('dataType')
+                                    else:
+                                        resolved_target_type = map_data_type(col.get("dataType"), source_node_info, target_node_info,
+                                                                             source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
+                                                                             target_table_column_types=target_table_column_types)
                                     if discovered_target_col.get('id') is not None:
                                         target_col_id = discovered_target_col.get('id')
                                 else:
@@ -1634,6 +1662,10 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                 _override = target_data_type_overrides.get(col["name"].lower())
                                 if _override:
                                     resolved_target_type = _override
+
+                                if not resolved_target_type:
+                                    logger.warning(f"No dataType resolved for target key '{target_name}' in table '{table_name}'. Defaulting to 'varchar'.")
+                                    resolved_target_type = 'varchar'
 
                                 target_keys.append(_enrich_column({
                                     "id": target_col_id,  # Use target column ID
@@ -1664,6 +1696,10 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             if discovered_target_col:
                                 if discovered_target_col.get('dataType'):
                                     resolved_target_type = discovered_target_col.get('dataType')
+                                else:
+                                    resolved_target_type = map_data_type(col.get("dataType"), source_node_info, target_node_info,
+                                                                         source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
+                                                                         target_table_column_types=target_table_column_types)
                                 if discovered_target_col.get('id') is not None:
                                     target_col_id = discovered_target_col.get('id')
                             else:
@@ -1675,6 +1711,10 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             _override = target_data_type_overrides.get(col["name"].lower())
                             if _override:
                                 resolved_target_type = _override
+
+                            if not resolved_target_type:
+                                logger.warning(f"No dataType resolved for target key '{col['name']}' in table '{table_name}'. Defaulting to 'varchar'.")
+                                resolved_target_type = 'varchar'
 
                             target_key_name = discovered_target_col.get('name') if discovered_target_col else col["name"]
                             target_keys.append(_enrich_column({
@@ -2166,7 +2206,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             
             resolved_target_type = map_data_type(col.get("dataType"), source_node_info, target_node_info,
                                                  source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
-                                                 target_table_column_types=target_table_column_types)
+                                                 target_table_column_types=target_table_column_types) or 'varchar'
             target_columns_def.append(_enrich_column({
                 "id": col_id,
                 "position": col.get("position", 0),
@@ -2189,7 +2229,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         
                         resolved_target_type = map_data_type(col.get("dataType"), source_node_info, target_node_info,
                                                              source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
-                                                             target_table_column_types=target_table_column_types)
+                                                             target_table_column_types=target_table_column_types) or 'varchar'
                         target_keys.append(_enrich_column({
                             "id": col_id,
                             "position": col.get("position", 0),
@@ -2220,7 +2260,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     
                     resolved_target_type = map_data_type(col.get("dataType"), source_node_info, target_node_info,
                                                          source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
-                                                         target_table_column_types=target_table_column_types)
+                                                         target_table_column_types=target_table_column_types) or 'varchar'
                     target_keys.append(_enrich_column({
                         "id": col_id,
                         "position": col.get("position", 0),
