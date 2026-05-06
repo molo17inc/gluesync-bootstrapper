@@ -848,10 +848,12 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                         columns.append(col_def)
                     
                     # Add special _RRN column if there's a [!RecordID] mapping for this replication
+                    rrn_target_field_name = None
                     if record_id_mappings and repl_id_for_table in record_id_mappings:
                         for trg_field_id, src_expr in record_id_mappings[repl_id_for_table].items():
                             # Look up target field name - this becomes the column name (target side)
                             target_field_name = field_id_to_name.get((target_table_id, trg_field_id), "ID")
+                            rrn_target_field_name = target_field_name
                             rrn_col = {
                                 "name": target_field_name,
                                 "type": "DECIMAL",
@@ -902,8 +904,11 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                         # Check if _RRN column was added (RecordID mapping)
                         has_rrn = any(col.get("sourceName") == "_RRN" for col in columns)
                         if has_rrn:
-                            table_config["keys"] = ["_RRN"]
-                            print(f"      No primary keys found for table {table_name}, using _RRN as key (fallback)")
+                            # Use the target field name as the key, not the sourceName _RRN
+                            # The key must match an actual column name in the target table
+                            key_name = rrn_target_field_name if rrn_target_field_name else "_RRN"
+                            table_config["keys"] = [key_name]
+                            print(f"      No primary keys found for table {table_name}, using {key_name} as key (fallback)")
                         else:
                             # Use all source column names as composite key
                             # Use sourceName if present, otherwise name (which equals source name in that case)
