@@ -122,6 +122,69 @@ class TestRRNExtraction(unittest.TestCase):
         self.assertIn('250', record_id_mappings)
         self.assertEqual(record_id_mappings['250']['18354'], '[!RecordID]')
 
+    def test_rrn_extraction_from_rrtest_xml(self):
+        """Test that RRN extraction works with rrtest.xml (with schema-linked target)."""
+        # Use rrtest.xml from test data directory
+        rrtest_xml = os.path.join(self.test_data_dir, 'rrtest.xml')
+        if not os.path.exists(rrtest_xml):
+            self.skipTest("rrtest.xml not found in test data directory")
+        
+        # Run the parser
+        parser.args.xml_path = rrtest_xml
+        parser.args.output_dir = self.temp_output_dir
+        parser.args.template = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            'table-list-template-basic.yaml'
+        )
+        parser.args.include_targets = True
+        parser.args.force_schemas = None
+        
+        # Parse and export
+        connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name, record_id_mappings = parser.parse_xml()
+        parser.export_as_yaml(
+            connections, groups, chains, replications,
+            source_to_target_schemas, field_mappings, field_id_to_name, record_id_mappings,
+            output_dir=self.temp_output_dir
+        )
+        
+        # Check that record_id_mappings was populated
+        self.assertIsNotNone(record_id_mappings)
+        self.assertIn('2', record_id_mappings, "Replication 2 should have RecordID mappings")
+        self.assertIn('13', record_id_mappings['2'], "Field ID 13 (rrn_id) should be in RecordID mappings")
+        
+        # Check that the generated YAML contains the RRN column
+        yaml_file = os.path.join(self.temp_output_dir, 'AS400_source__GLUESYNC.yaml')
+        self.assertTrue(os.path.exists(yaml_file), "YAML file should be generated")
+        
+        with open(yaml_file, 'r') as f:
+            yaml_content = yaml.safe_load(f)
+        
+        # Check that RRTEST table has rrn_id column with sourceName _RRN
+        self.assertIn('GLUESYNC', yaml_content)
+        self.assertIn('tables', yaml_content['GLUESYNC'])
+        self.assertIn('custom', yaml_content['GLUESYNC']['tables'])
+        self.assertIn('RRTEST', yaml_content['GLUESYNC']['tables']['custom'])
+        
+        rrtest_config = yaml_content['GLUESYNC']['tables']['custom']['RRTEST']
+        self.assertIn('columns', rrtest_config)
+        
+        # Find the rrn_id column
+        rrn_column = None
+        for col in rrtest_config['columns']:
+            if col.get('name') == 'rrn_id':
+                rrn_column = col
+                break
+        
+        self.assertIsNotNone(rrn_column, "rrn_id column should be present")
+        self.assertEqual(rrn_column.get('sourceName'), '_RRN', "rrn_id column should have sourceName _RRN")
+        self.assertEqual(rrn_column.get('type'), 'DECIMAL', "rrn_id column should be DECIMAL type")
+        self.assertEqual(rrn_column.get('dataLength'), 15, "rrn_id column should have dataLength 15")
+        self.assertFalse(rrn_column.get('isNullable'), "rrn_id column should not be nullable")
+        
+        # Check that keys use _RRN (source has no primary keys, so RRN is used as fallback)
+        self.assertIn('keys', rrtest_config)
+        self.assertEqual(rrtest_config['keys'], ['_RRN'], "Keys should be ['_RRN'] since source has no primary keys but has RRN mapping")
+
 
 if __name__ == '__main__':
     unittest.main()
