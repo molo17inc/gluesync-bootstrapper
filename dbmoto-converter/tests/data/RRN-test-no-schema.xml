@@ -1,0 +1,903 @@
+<?xml version="1.0" encoding="utf-8"?>
+<metadata version="10.7.1">
+  <tables>
+    <DBMMConnections>
+      <ConnectionID>5</ConnectionID>
+      <UUID>e2d0de45-9523-43ea-a265-41c418402935</UUID>
+      <Timestamp>639135134516344977</Timestamp>
+      <Name>MaseratiTest</Name>
+      <Type>3</Type>
+      <IsSource>Y</IsSource>
+      <ConnectParams>connectiontype=DotNet;dbVersion=0007.0005.0000;loadfrom=True;providerassembly=Ritmo_i/lib/Sql400.dll;connectionclass=System.Data.Sql400.Sql400Connection;datasourcename=IBM.DB2.i;</ConnectParams>
+      <ConnectString>bw4UHG8cIF9Lm3jplEQNj/i/mJC7BXtMp9ARvDRYN/9OdG6wxLuLoq1QYlJd8QQrwvY3Nn0zfXqxMxXnpa7/lVQXn7x7trEJDAimMBIymmLKPy8YxyrGyrAMn5l08gWHqW4Y9yEGgUrHmYYw4WzSHw==</ConnectString>
+      <StgConnectParams>connectiontype=DotNet;</StgConnectParams>
+      <StgConnectString />
+      <Properties>AS400SetupType=6.1;AS400FilterByMemberName=False;AS400SortSequenceTable=;AS400ExtSchemas=True;AS400ExtColumns=False;UseTransRepl=As400;DTD=-4;MaxLogEntries=10000;AS400JournalOrderBy=False;DefaultCommitMode=AutoCommit;MaxLogRecordsInQueue=200;AS400ExtPrimaryKeys=False;MaxConcurrentConnections=50;IsDisconnectedMode=False;LOBCacheSize=1024;DefaultFetchSize=1000000;AS400SetupVersion=7.2.30;LoadUniqueIndexes=False;CommandTimeout=300;AS400SetupLibrary=DBMOTOLIB;AS400ExtForeignKeys=False;AS400TempLibrary=SDRLIBT;</Properties>
+      <CreatedBy>FIATAUTO\SG30251              </CreatedBy>
+      <CreatedAt>639135134363126752</CreatedAt>
+      <ModifiedBy>FIATAUTO\SG30251              </ModifiedBy>
+      <ModifiedAt>639135134484668620</ModifiedAt>
+    </DBMMConnections>
+    <DBMMConnections>
+      <ConnectionID>6</ConnectionID>
+      <UUID>13a1a335-7430-4dc0-bf97-e122200b80c3</UUID>
+      <Timestamp>639135823703600227</Timestamp>
+      <Name>ADLSTest</Name>
+      <Type>36</Type>
+      <IsSource>N</IsSource>
+      <ConnectParams>connectiontype=DataLakeGen2;loadfrom=True;providerassembly=Plugins\\DataLakeGen2\\DataAccess.Plugins.DataLakeGen2.dll;connectionclass=AzureDataLakeGen2Connection;datasourcename=Microsoft.Azure.Data.Lake.Gen2;</ConnectParams>
+      <ConnectString>R1yIHnPsN80RsJrgto9IWsz5NP8C7VN7lmGWk4WQE2OBkD+y2Gl/PeWyj0cxNoNkFCpIbNhWitmK3+MqMx9acAmeaevGLQNKW/ze0A8OEfk+RKTdkxAuRFJobe9CBf8EkfvEs3/bLaX0T8c7vMoNUsVjgrougwGjsBS853Tax4Zh2nLjdWw/Kt++S5Zdj/tRGeXlcn2fbIUuZs27Jh7rHDndxvzCP3HsE1fwCz6Cdb5eMS2AjNnash2OvaUV7dPEF9UiDG9fh9NlSoUXsoww6I0Kwkv28aGxy5ynq12uYvW5jkdjLoYd8KL3qnco30VjwsehwvJQh+R65I1amxRL+UuAB/P/XipTLcxHoBk/1M1D8K7FS3ZgEicJJILmX10PZLhUXdlkAvVBTTzRyWooOH6H/zazIF3cZHteZmdk2H4=</ConnectString>
+      <StgConnectParams>connectiontype=DotNet;</StgConnectParams>
+      <StgConnectString />
+      <Properties>DefaultCreateTableRule=Automatic;DefaultBlockSize=10000;DefaultIsoLevel=Unspecified;DTD=0;MaxConcurrentConnections=50;DefaultBlockSizeMir=10000;IsDisconnectedMode=False;LOBCacheSize=1024;DefaultInsertMode=SingleInsert;DefaultInsertModeMir=SingleInsert;DefaultMappingRule=MapByName;CommandTimeout=60;DefaultIsoLevelMir=Unspecified;DefaultBulkType=ArrayBinding;</Properties>
+      <CreatedBy>FIATAUTO\SG30251              </CreatedBy>
+      <CreatedAt>639135134874553335</CreatedAt>
+      <ModifiedBy>FIATAUTO\SG30251              </ModifiedBy>
+      <ModifiedAt>639135823704206253</ModifiedAt>
+    </DBMMConnections>
+    <DBMMFields>
+      <FieldID>18338</FieldID>
+      <TableID>240</TableID>
+      <Name>USERV</Name>
+      <Ordinal>15</Ordinal>
+      <Type>CHAR</Type>
+      <InternalType>9</InternalType>
+      <Size>10</Size>
+      <Precision>0</Precision>
+      <Scale>0</Scale>
+      <IsUnsigned>N</IsUnsigned>
+      <Ccsid>280</Ccsid>
+      <AllowNull>N</AllowNull>
+      <DateFormat />
+      <Description>UTENTE ULTIMA VARIAZIONE</Description>
+      <PrimaryKeyPos>0</PrimaryKeyPos>
+      <IsAutoIncrement>N</IsAutoIncrement>
+      <Default>' '</Default>
+    </DBMMFields>
+    <DBMMFields>
+      <FieldID>18339</FieldID>
+      <TableID>240</TableID>
+      <Name>USERI</Name>
+      <Ordinal>13</Ordinal>
+      <Type>CHAR</Type>
+      <InternalType>9</InternalType>
+      <Size>10</Size>
+      <Precision>0</Precision>
+      <Scale>0</Scale>
+      <IsUnsigned>N</IsUnsigned>
+      <Ccsid>280</Ccsid>
+      <AllowNull>N</AllowNull>
+      <DateFormat />
+      <Description>UTENTE INSERIMENTO</Description>
+      <PrimaryKeyPos>0</PrimaryKeyPos>
+      <IsAutoIncrement>N</IsAutoIncrement>
+      <Default>' '</Default>
+    </DBMMFields>
+    <DBMMFields>
+      <FieldID>18340</FieldID>
+      <TableID>240</TableID>
+      <Name>TRC97</Name>
+      <Ordinal>1</Ordinal>
+      <Type>CHAR</Type>
+      <InternalType>9</InternalType>
+      <Size>3</Size>
+      <Precision>0</Precision>
+      <Scale>0</Scale>
+      <IsUnsigned>N</IsUnsigned>
+      <Ccsid>280</Ccsid>
+      <AllowNull>N</AllowNull>
+      <DateFormat />
+      <Description>TIPO RECORD</Description>
+      <PrimaryKeyPos>0</PrimaryKeyPos>
+      <IsAutoIncrement>N</IsAutoIncrement>
+      <Default>' '</Default>
+    </DBMMFields>
+    <DBMMFields>
+      <FieldID>18341</FieldID>
+      <TableID>240</TableID>
+      <Name>NRC97</Name>
+      <Ordinal>3</Ordinal>
+      <Type>DECIMAL</Type>
+      <InternalType>12</InternalType>
+      <Size>9</Size>
+      <Precision>9</Precision>
+      <Scale>0</Scale>
+      <IsUnsigned>N</IsUnsigned>
+      <Ccsid>0</Ccsid>
+      <AllowNull>N</AllowNull>
+      <DateFormat />
+      <Description>NR AZIONE AGG.TO</Description>
+      <PrimaryKeyPos>0</PrimaryKeyPos>
+      <IsAutoIncrement>N</IsAutoIncrement>
+      <Default>0</Default>
+    </DBMMFields>
+    <DBMMFields>
+      <FieldID>18342</FieldID>
+      <TableID>240</TableID>
+      <Name>FLVIS</Name>
+      <Ordinal>12</Ordinal>
+      <Type>CHAR</Type>
+      <InternalType>9</InternalType>
+      <Size>1</Size>
+      <Precision>0</Precision>
+      <Scale>0</Scale>
+      <IsUnsigned>N</IsUnsigned>
+      <Ccsid>280</Ccsid>
+      <AllowNull>N</AllowNull>
+      <DateFormat />
+      <Description>FLAG VISIBIL. RETE: Z/_/Q</Description>
+      <PrimaryKeyPos>0</PrimaryKeyPos>
+      <IsAutoIncrement>N</IsAutoIncrement>
+      <Default>' '</Default>
+    </DBMMFields>
+    <DBMMFields>
+      <FieldID>18343</FieldID>
+      <TableID>240</TableID>
+      <Name>DETED</Name>
+      <Ordinal>9</Ordinal>
+      <Type>CHAR</Type>
+      <InternalType>9</InternalType>
+      <Size>75</Size>
+      <Precision>0</Precision>
+      <Scale>0</Scale>
+      <IsUnsigned>N</IsUnsigned>
+      <Ccsid>280</Ccsid>
+      <AllowNull>N</AllowNull>
+      <DateFormat />
+      <Description>DESCRIZIONE WARDETO - TED</Description>
+      <PrimaryKeyPos>0</PrimaryKeyPos>
+      <IsAutoIncrement>N</IsAutoIncrement>
+      <Default>' '</Default>
+    </DBMMFields>
+    <DBMMFields>
+      <FieldID>18344</FieldID>
+      <TableID>240</TableID>
+      <Name>DESPA</Name>
+      <Ordinal>10</Ordinal>
+      <Type>CHAR</Type>
+      <InternalType>9</InternalType>
+      <Size>75</Size>
+      <Precision>0</Precision>
+      <Scale>0</Scale>
+      <IsUnsigned>N</IsUnsigned>
+      <Ccsid>280</Ccsid>
+      <AllowNull>N</AllowNull>
+      <DateFormat />
+      <Description>DESCRIZIONE WARDETO - SPA</Description>
+      <PrimaryKeyPos>0</PrimaryKeyPos>
+      <IsAutoIncrement>N</IsAutoIncrement>
+      <Default>' '</Default>
+    </DBMMFields>
+    <DBMMFields>
+      <FieldID>18345</FieldID>
+      <TableID>240</TableID>
+      <Name>DEGIA</Name>
+      <Ordinal>11</Ordinal>
+      <Type>CHAR</Type>
+      <InternalType>9</InternalType>
+      <Size>75</Size>
+      <Precision>0</Precision>
+      <Scale>0</Scale>
+      <IsUnsigned>N</IsUnsigned>
+      <Ccsid>280</Ccsid>
+      <AllowNull>N</AllowNull>
+      <DateFormat />
+      <Description>DESCRIZIONE WARDETO - GIA</Description>
+      <PrimaryKeyPos>0</PrimaryKeyPos>
+      <IsAutoIncrement>N</IsAutoIncrement>
+      <Default>' '</Default>
+    </DBMMFields>
+    <DBMMFields>
+      <FieldID>18346</FieldID>
+      <TableID>240</TableID>
+      <Name>DEFRA</Name>
+      <Ordinal>8</Ordinal>
+      <Type>CHAR</Type>
+      <InternalType>9</InternalType>
+      <Size>75</Size>
+      <Precision>0</Precision>
+      <Scale>0</Scale>
+      <IsUnsigned>N</IsUnsigned>
+      <Ccsid>280</Ccsid>
+      <AllowNull>N</AllowNull>
+      <DateFormat />
+      <Description>DESCRIZIONE WARDETO - FRA</Description>
+      <PrimaryKeyPos>0</PrimaryKeyPos>
+      <IsAutoIncrement>N</IsAutoIncrement>
+      <Default>' '</Default>
+    </DBMMFields>
+    <DBMMFields>
+      <FieldID>18347</FieldID>
+      <TableID>240</TableID>
+      <Name>DEDIF</Name>
+      <Ordinal>5</Ordinal>
+      <Type>CHAR</Type>
+      <InternalType>9</InternalType>
+      <Size>75</Size>
+      <Precision>0</Precision>
+      <Scale>0</Scale>
+      <IsUnsigned>N</IsUnsigned>
+      <Ccsid>280</Ccsid>
+      <AllowNull>N</AllowNull>
+      <DateFormat />
+      <Description>DESCRIZIONE WARDETO - ITA</Description>
+      <PrimaryKeyPos>0</PrimaryKeyPos>
+      <IsAutoIncrement>N</IsAutoIncrement>
+      <Default>' '</Default>
+    </DBMMFields>
+    <DBMMFields>
+      <FieldID>18348</FieldID>
+      <TableID>240</TableID>
+      <Name>DEDIE</Name>
+      <Ordinal>7</Ordinal>
+      <Type>CHAR</Type>
+      <InternalType>9</InternalType>
+      <Size>75</Size>
+      <Precision>0</Precision>
+      <Scale>0</Scale>
+      <IsUnsigned>N</IsUnsigned>
+      <Ccsid>280</Ccsid>
+      <AllowNull>N</AllowNull>
+      <DateFormat />
+      <Description>DESCRIZIONE WARDETO - ING</Description>
+      <PrimaryKeyPos>0</PrimaryKeyPos>
+      <IsAutoIncrement>N</IsAutoIncrement>
+      <Default>' '</Default>
+    </DBMMFields>
+    <DBMMFields>
+      <FieldID>18349</FieldID>
+      <TableID>240</TableID>
+      <Name>DATAV</Name>
+      <Ordinal>16</Ordinal>
+      <Type>TIMESTMP</Type>
+      <InternalType>30</InternalType>
+      <Size>10</Size>
+      <Precision>0</Precision>
+      <Scale>6</Scale>
+      <IsUnsigned>N</IsUnsigned>
+      <Ccsid>280</Ccsid>
+      <AllowNull>N</AllowNull>
+      <DateFormat />
+      <Description>TIMESTAMP ULTIMA VARIAZIONE</Description>
+      <PrimaryKeyPos>0</PrimaryKeyPos>
+      <IsAutoIncrement>N</IsAutoIncrement>
+      <Default>CURRENT_TIMESTAMP</Default>
+    </DBMMFields>
+    <DBMMFields>
+      <FieldID>18350</FieldID>
+      <TableID>240</TableID>
+      <Name>DATAI</Name>
+      <Ordinal>14</Ordinal>
+      <Type>TIMESTMP</Type>
+      <InternalType>30</InternalType>
+      <Size>10</Size>
+      <Precision>0</Precision>
+      <Scale>6</Scale>
+      <IsUnsigned>N</IsUnsigned>
+      <Ccsid>280</Ccsid>
+      <AllowNull>N</AllowNull>
+      <DateFormat />
+      <Description>TIMESTAMP INSERIMENTO</Description>
+      <PrimaryKeyPos>0</PrimaryKeyPos>
+      <IsAutoIncrement>N</IsAutoIncrement>
+      <Default>CURRENT_TIMESTAMP</Default>
+    </DBMMFields>
+    <DBMMFields>
+      <FieldID>18351</FieldID>
+      <TableID>240</TableID>
+      <Name>DAAGG</Name>
+      <Ordinal>6</Ordinal>
+      <Type>DECIMAL</Type>
+      <InternalType>12</InternalType>
+      <Size>8</Size>
+      <Precision>8</Precision>
+      <Scale>0</Scale>
+      <IsUnsigned>N</IsUnsigned>
+      <Ccsid>0</Ccsid>
+      <AllowNull>N</AllowNull>
+      <DateFormat />
+      <Description>DATA AGGIORNAMENTO</Description>
+      <PrimaryKeyPos>0</PrimaryKeyPos>
+      <IsAutoIncrement>N</IsAutoIncrement>
+      <Default>0</Default>
+    </DBMMFields>
+    <DBMMFields>
+      <FieldID>18352</FieldID>
+      <TableID>240</TableID>
+      <Name>CDDIF</Name>
+      <Ordinal>4</Ordinal>
+      <Type>DECIMAL</Type>
+      <InternalType>12</InternalType>
+      <Size>3</Size>
+      <Precision>3</Precision>
+      <Scale>0</Scale>
+      <IsUnsigned>N</IsUnsigned>
+      <Ccsid>0</Ccsid>
+      <AllowNull>N</AllowNull>
+      <DateFormat />
+      <Description>CODICE WARDETO</Description>
+      <PrimaryKeyPos>0</PrimaryKeyPos>
+      <IsAutoIncrement>N</IsAutoIncrement>
+      <Default>0</Default>
+    </DBMMFields>
+    <DBMMFields>
+      <FieldID>18353</FieldID>
+      <TableID>240</TableID>
+      <Name>ATC97</Name>
+      <Ordinal>2</Ordinal>
+      <Type>CHAR</Type>
+      <InternalType>9</InternalType>
+      <Size>1</Size>
+      <Precision>0</Precision>
+      <Scale>0</Scale>
+      <IsUnsigned>N</IsUnsigned>
+      <Ccsid>280</Ccsid>
+      <AllowNull>N</AllowNull>
+      <DateFormat />
+      <Description>A=ANNULLATO</Description>
+      <PrimaryKeyPos>0</PrimaryKeyPos>
+      <IsAutoIncrement>N</IsAutoIncrement>
+      <Default>' '</Default>
+    </DBMMFields>
+    <DBMMFields>
+      <FieldID>18354</FieldID>
+      <TableID>241</TableID>
+      <Name>RRN</Name>
+      <Ordinal>17</Ordinal>
+      <Type>decimal</Type>
+      <InternalType>22</InternalType>
+      <Size>0</Size>
+      <Precision>0</Precision>
+      <Scale>0</Scale>
+      <IsUnsigned>N</IsUnsigned>
+      <Ccsid>1</Ccsid>
+      <AllowNull>Y</AllowNull>
+      <PrimaryKeyPos>0</PrimaryKeyPos>
+      <IsAutoIncrement>N</IsAutoIncrement>
+    </DBMMFields>
+    <DBMMFields>
+      <FieldID>18355</FieldID>
+      <TableID>241</TableID>
+      <Name>DATAV</Name>
+      <Ordinal>16</Ordinal>
+      <Type>timestamp</Type>
+      <InternalType>30</InternalType>
+      <Size>0</Size>
+      <Precision>0</Precision>
+      <Scale>0</Scale>
+      <IsUnsigned>N</IsUnsigned>
+      <Ccsid>1</Ccsid>
+      <AllowNull>N</AllowNull>
+      <PrimaryKeyPos>0</PrimaryKeyPos>
+      <IsAutoIncrement>N</IsAutoIncrement>
+    </DBMMFields>
+    <DBMMFields>
+      <FieldID>18356</FieldID>
+      <TableID>241</TableID>
+      <Name>USERV</Name>
+      <Ordinal>15</Ordinal>
+      <Type>string</Type>
+      <InternalType>33</InternalType>
+      <Size>0</Size>
+      <Precision>0</Precision>
+      <Scale>0</Scale>
+      <IsUnsigned>N</IsUnsigned>
+      <Ccsid>1</Ccsid>
+      <AllowNull>N</AllowNull>
+      <PrimaryKeyPos>0</PrimaryKeyPos>
+      <IsAutoIncrement>N</IsAutoIncrement>
+    </DBMMFields>
+    <DBMMFields>
+      <FieldID>18357</FieldID>
+      <TableID>241</TableID>
+      <Name>DATAI</Name>
+      <Ordinal>14</Ordinal>
+      <Type>timestamp</Type>
+      <InternalType>30</InternalType>
+      <Size>0</Size>
+      <Precision>0</Precision>
+      <Scale>0</Scale>
+      <IsUnsigned>N</IsUnsigned>
+      <Ccsid>1</Ccsid>
+      <AllowNull>N</AllowNull>
+      <PrimaryKeyPos>0</PrimaryKeyPos>
+      <IsAutoIncrement>N</IsAutoIncrement>
+    </DBMMFields>
+    <DBMMFields>
+      <FieldID>18358</FieldID>
+      <TableID>241</TableID>
+      <Name>USERI</Name>
+      <Ordinal>13</Ordinal>
+      <Type>string</Type>
+      <InternalType>33</InternalType>
+      <Size>0</Size>
+      <Precision>0</Precision>
+      <Scale>0</Scale>
+      <IsUnsigned>N</IsUnsigned>
+      <Ccsid>1</Ccsid>
+      <AllowNull>N</AllowNull>
+      <PrimaryKeyPos>0</PrimaryKeyPos>
+      <IsAutoIncrement>N</IsAutoIncrement>
+    </DBMMFields>
+    <DBMMFields>
+      <FieldID>18359</FieldID>
+      <TableID>241</TableID>
+      <Name>FLVIS</Name>
+      <Ordinal>12</Ordinal>
+      <Type>string</Type>
+      <InternalType>33</InternalType>
+      <Size>0</Size>
+      <Precision>0</Precision>
+      <Scale>0</Scale>
+      <IsUnsigned>N</IsUnsigned>
+      <Ccsid>1</Ccsid>
+      <AllowNull>N</AllowNull>
+      <PrimaryKeyPos>0</PrimaryKeyPos>
+      <IsAutoIncrement>N</IsAutoIncrement>
+    </DBMMFields>
+    <DBMMFields>
+      <FieldID>18360</FieldID>
+      <TableID>241</TableID>
+      <Name>DEGIA</Name>
+      <Ordinal>11</Ordinal>
+      <Type>string</Type>
+      <InternalType>33</InternalType>
+      <Size>0</Size>
+      <Precision>0</Precision>
+      <Scale>0</Scale>
+      <IsUnsigned>N</IsUnsigned>
+      <Ccsid>1</Ccsid>
+      <AllowNull>N</AllowNull>
+      <PrimaryKeyPos>0</PrimaryKeyPos>
+      <IsAutoIncrement>N</IsAutoIncrement>
+    </DBMMFields>
+    <DBMMFields>
+      <FieldID>18361</FieldID>
+      <TableID>241</TableID>
+      <Name>DESPA</Name>
+      <Ordinal>10</Ordinal>
+      <Type>string</Type>
+      <InternalType>33</InternalType>
+      <Size>0</Size>
+      <Precision>0</Precision>
+      <Scale>0</Scale>
+      <IsUnsigned>N</IsUnsigned>
+      <Ccsid>1</Ccsid>
+      <AllowNull>N</AllowNull>
+      <PrimaryKeyPos>0</PrimaryKeyPos>
+      <IsAutoIncrement>N</IsAutoIncrement>
+    </DBMMFields>
+    <DBMMFields>
+      <FieldID>18362</FieldID>
+      <TableID>241</TableID>
+      <Name>DETED</Name>
+      <Ordinal>9</Ordinal>
+      <Type>string</Type>
+      <InternalType>33</InternalType>
+      <Size>0</Size>
+      <Precision>0</Precision>
+      <Scale>0</Scale>
+      <IsUnsigned>N</IsUnsigned>
+      <Ccsid>1</Ccsid>
+      <AllowNull>N</AllowNull>
+      <PrimaryKeyPos>0</PrimaryKeyPos>
+      <IsAutoIncrement>N</IsAutoIncrement>
+    </DBMMFields>
+    <DBMMFields>
+      <FieldID>18363</FieldID>
+      <TableID>241</TableID>
+      <Name>DEFRA</Name>
+      <Ordinal>8</Ordinal>
+      <Type>string</Type>
+      <InternalType>33</InternalType>
+      <Size>0</Size>
+      <Precision>0</Precision>
+      <Scale>0</Scale>
+      <IsUnsigned>N</IsUnsigned>
+      <Ccsid>1</Ccsid>
+      <AllowNull>N</AllowNull>
+      <PrimaryKeyPos>0</PrimaryKeyPos>
+      <IsAutoIncrement>N</IsAutoIncrement>
+    </DBMMFields>
+    <DBMMFields>
+      <FieldID>18364</FieldID>
+      <TableID>241</TableID>
+      <Name>DEDIE</Name>
+      <Ordinal>7</Ordinal>
+      <Type>string</Type>
+      <InternalType>33</InternalType>
+      <Size>0</Size>
+      <Precision>0</Precision>
+      <Scale>0</Scale>
+      <IsUnsigned>N</IsUnsigned>
+      <Ccsid>1</Ccsid>
+      <AllowNull>N</AllowNull>
+      <PrimaryKeyPos>0</PrimaryKeyPos>
+      <IsAutoIncrement>N</IsAutoIncrement>
+    </DBMMFields>
+    <DBMMFields>
+      <FieldID>18365</FieldID>
+      <TableID>241</TableID>
+      <Name>DAAGG</Name>
+      <Ordinal>6</Ordinal>
+      <Type>decimal</Type>
+      <InternalType>22</InternalType>
+      <Size>0</Size>
+      <Precision>0</Precision>
+      <Scale>0</Scale>
+      <IsUnsigned>N</IsUnsigned>
+      <Ccsid>1</Ccsid>
+      <AllowNull>N</AllowNull>
+      <PrimaryKeyPos>0</PrimaryKeyPos>
+      <IsAutoIncrement>N</IsAutoIncrement>
+    </DBMMFields>
+    <DBMMFields>
+      <FieldID>18366</FieldID>
+      <TableID>241</TableID>
+      <Name>DEDIF</Name>
+      <Ordinal>5</Ordinal>
+      <Type>string</Type>
+      <InternalType>33</InternalType>
+      <Size>0</Size>
+      <Precision>0</Precision>
+      <Scale>0</Scale>
+      <IsUnsigned>N</IsUnsigned>
+      <Ccsid>1</Ccsid>
+      <AllowNull>N</AllowNull>
+      <PrimaryKeyPos>0</PrimaryKeyPos>
+      <IsAutoIncrement>N</IsAutoIncrement>
+    </DBMMFields>
+    <DBMMFields>
+      <FieldID>18367</FieldID>
+      <TableID>241</TableID>
+      <Name>CDDIF</Name>
+      <Ordinal>4</Ordinal>
+      <Type>decimal</Type>
+      <InternalType>22</InternalType>
+      <Size>0</Size>
+      <Precision>0</Precision>
+      <Scale>0</Scale>
+      <IsUnsigned>N</IsUnsigned>
+      <Ccsid>1</Ccsid>
+      <AllowNull>N</AllowNull>
+      <PrimaryKeyPos>0</PrimaryKeyPos>
+      <IsAutoIncrement>N</IsAutoIncrement>
+    </DBMMFields>
+    <DBMMFields>
+      <FieldID>18368</FieldID>
+      <TableID>241</TableID>
+      <Name>NRC97</Name>
+      <Ordinal>3</Ordinal>
+      <Type>decimal</Type>
+      <InternalType>22</InternalType>
+      <Size>0</Size>
+      <Precision>0</Precision>
+      <Scale>0</Scale>
+      <IsUnsigned>N</IsUnsigned>
+      <Ccsid>1</Ccsid>
+      <AllowNull>N</AllowNull>
+      <PrimaryKeyPos>0</PrimaryKeyPos>
+      <IsAutoIncrement>N</IsAutoIncrement>
+    </DBMMFields>
+    <DBMMFields>
+      <FieldID>18369</FieldID>
+      <TableID>241</TableID>
+      <Name>ATC97</Name>
+      <Ordinal>2</Ordinal>
+      <Type>string</Type>
+      <InternalType>33</InternalType>
+      <Size>0</Size>
+      <Precision>0</Precision>
+      <Scale>0</Scale>
+      <IsUnsigned>N</IsUnsigned>
+      <Ccsid>1</Ccsid>
+      <AllowNull>N</AllowNull>
+      <PrimaryKeyPos>0</PrimaryKeyPos>
+      <IsAutoIncrement>N</IsAutoIncrement>
+    </DBMMFields>
+    <DBMMFields>
+      <FieldID>18370</FieldID>
+      <TableID>241</TableID>
+      <Name>TRC97</Name>
+      <Ordinal>1</Ordinal>
+      <Type>string</Type>
+      <InternalType>33</InternalType>
+      <Size>0</Size>
+      <Precision>0</Precision>
+      <Scale>0</Scale>
+      <IsUnsigned>N</IsUnsigned>
+      <Ccsid>1</Ccsid>
+      <AllowNull>N</AllowNull>
+      <PrimaryKeyPos>0</PrimaryKeyPos>
+      <IsAutoIncrement>N</IsAutoIncrement>
+    </DBMMFields>
+    <DBMMTables>
+      <TableID>240</TableID>
+      <Timestamp>639135136849174681</Timestamp>
+      <ConnectionID>5</ConnectionID>
+      <SchemaID>5</SchemaID>
+      <Name>WARDE00F</Name>
+      <Type>Table</Type>
+      <SysName>WARDE00F</SysName>
+      <Properties>BaseMember=WARDE00F;</Properties>
+    </DBMMTables>
+    <DBMMTables>
+      <TableID>241</TableID>
+      <Timestamp>639135817175202076</Timestamp>
+      <ConnectionID>6</ConnectionID>
+      <Name>MASERATIF_WARDE00F_TEST</Name>
+      <Type>azureDataLakeGen2</Type>
+      <Properties />
+    </DBMMTables>
+    <DBMMSchemas>
+      <SchemaID>5</SchemaID>
+      <Timestamp>639135136849018704</Timestamp>
+      <ConnectionID>5</ConnectionID>
+      <CatalogID>0</CatalogID>
+      <Name>MASERATIF</Name>
+    </DBMMSchemas>
+    <DBMMReplStatuses>
+      <ReplicationID>250</ReplicationID>
+      <IsForth>Y</IsForth>
+      <TransactionID>210879832</TransactionID>
+      <TransactionTS>639135913649635520</TransactionTS>
+      <Properties>InsertMode=SingleInsert;BulkType=ArrayBinding;ReceiverName=MAS0000012;ReceiverLibrary=MASRCV;JournalLibrary=MASERATIF;BlockSize=10000;BlockSizeMir=10000;JournalName=MASJRN;IsoLevelMir=Unspecified;InsertModeMir=SingleInsert;SkipRecordCount=False;IsoLevel=Unspecified;</Properties>
+      <TotalRecords>0</TotalRecords>
+      <ProcessedRecords>0</ProcessedRecords>
+      <FailedRecords>0</FailedRecords>
+      <BytesProcessed>0</BytesProcessed>
+    </DBMMReplStatuses>
+    <DBMMSysValues>
+      <SysValueID>1</SysValueID>
+      <Timestamp>0</Timestamp>
+      <ID>Version</ID>
+      <Value>10.7.1</Value>
+    </DBMMSysValues>
+    <DBMMSysValues>
+      <SysValueID>2</SysValueID>
+      <Timestamp>638089678156883839</Timestamp>
+      <ID>GlobalScript</ID>
+      <ValueLong>{}' using System;
+' using System.Data;
+' using DBMotoPublic;
+' using DBMotoScript;
+' 
+' namespace DBRS
+' {
+'     public class GlobalScript : IGlobalScript
+'     {
+'     }
+' 
+'     public class MappingRule : IMappingRule
+'     {
+'     }
+' 
+'     public class CreateTableRule : ICreateTableRule
+'     {
+'     }
+' 
+'     public class GlobalEvents : IGlobalEvents
+'     {
+'     }
+' 
+' }
+' 
+Imports System
+Imports System.Data
+Imports Microsoft.VisualBasic
+Imports DBMotoPublic
+Imports DBMotoScript
+
+Namespace DBRS
+    Public Class GlobalScript : Inherits IGlobalScript
+	Public Shared CLIENT As String = "100"
+	
+	Public Shared Function RemoveSpecialChar( obj As String) As String
+            If obj Is Nothing Then 
+                Return obj
+            End If
+            Dim str As String = Replace(obj, vbLf, " ")
+            Dim finalString As String = Replace(str, vbCr, " ")
+            Return finalString
+        End Function	
+			
+		
+    End Class
+
+    Public Class MappingRule : Inherits IMappingRule
+
+    End Class
+
+    Public Class CreateTableRule : Inherits ICreateTableRule
+
+    End Class
+
+    Public Class GlobalEvents : Inherits IGlobalEvents
+
+    End Class
+End Namespace
+</ValueLong>
+    </DBMMSysValues>
+    <DBMMSysValues>
+      <SysValueID>4</SysValueID>
+      <Timestamp>0</Timestamp>
+      <ID>ServerIPAddress</ID>
+      <Value>[192.168.1.101]:58361</Value>
+    </DBMMSysValues>
+    <DBMMSysValues>
+      <SysValueID>5</SysValueID>
+      <Timestamp>0</Timestamp>
+      <ID>Guid</ID>
+      <Value>377cf8a4-189c-4e94-9b6a-43e4830cae24</Value>
+    </DBMMSysValues>
+    <DBMMSysValues>
+      <SysValueID>6</SysValueID>
+      <Timestamp>639136611566572937</Timestamp>
+      <ID>Timestamp</ID>
+      <Value>0</Value>
+    </DBMMSysValues>
+    <DBMMSysValues>
+      <SysValueID>7</SysValueID>
+      <Timestamp>638089618203260226</Timestamp>
+      <ID>ScriptLanguage</ID>
+      <Value>VB</Value>
+    </DBMMSysValues>
+    <DBMMSysValues>
+      <SysValueID>8</SysValueID>
+      <Timestamp>0</Timestamp>
+      <ID>ServerGuid</ID>
+      <Value>dadef10b-733b-4b69-a47d-9dbfc936a827</Value>
+    </DBMMSysValues>
+    <DBMMFieldMappings>
+      <FieldMappingID>12302</FieldMappingID>
+      <ReplicationID>250</ReplicationID>
+      <IsForth>Y</IsForth>
+      <TrgFieldID>18361</TrgFieldID>
+      <SrcFieldID>18344</SrcFieldID>
+    </DBMMFieldMappings>
+    <DBMMFieldMappings>
+      <FieldMappingID>12303</FieldMappingID>
+      <ReplicationID>250</ReplicationID>
+      <IsForth>Y</IsForth>
+      <TrgFieldID>18369</TrgFieldID>
+      <SrcFieldID>18353</SrcFieldID>
+    </DBMMFieldMappings>
+    <DBMMFieldMappings>
+      <FieldMappingID>12304</FieldMappingID>
+      <ReplicationID>250</ReplicationID>
+      <IsForth>Y</IsForth>
+      <TrgFieldID>18366</TrgFieldID>
+      <SrcFieldID>18347</SrcFieldID>
+    </DBMMFieldMappings>
+    <DBMMFieldMappings>
+      <FieldMappingID>12305</FieldMappingID>
+      <ReplicationID>250</ReplicationID>
+      <IsForth>Y</IsForth>
+      <TrgFieldID>18364</TrgFieldID>
+      <SrcFieldID>18348</SrcFieldID>
+    </DBMMFieldMappings>
+    <DBMMFieldMappings>
+      <FieldMappingID>12306</FieldMappingID>
+      <ReplicationID>250</ReplicationID>
+      <IsForth>Y</IsForth>
+      <TrgFieldID>18365</TrgFieldID>
+      <SrcFieldID>18351</SrcFieldID>
+    </DBMMFieldMappings>
+    <DBMMFieldMappings>
+      <FieldMappingID>12307</FieldMappingID>
+      <ReplicationID>250</ReplicationID>
+      <IsForth>Y</IsForth>
+      <TrgFieldID>18370</TrgFieldID>
+      <SrcFieldID>18340</SrcFieldID>
+    </DBMMFieldMappings>
+    <DBMMFieldMappings>
+      <FieldMappingID>12308</FieldMappingID>
+      <ReplicationID>250</ReplicationID>
+      <IsForth>Y</IsForth>
+      <TrgFieldID>18363</TrgFieldID>
+      <SrcFieldID>18346</SrcFieldID>
+    </DBMMFieldMappings>
+    <DBMMFieldMappings>
+      <FieldMappingID>12309</FieldMappingID>
+      <ReplicationID>250</ReplicationID>
+      <IsForth>Y</IsForth>
+      <TrgFieldID>18367</TrgFieldID>
+      <SrcFieldID>18352</SrcFieldID>
+    </DBMMFieldMappings>
+    <DBMMFieldMappings>
+      <FieldMappingID>12310</FieldMappingID>
+      <ReplicationID>250</ReplicationID>
+      <IsForth>Y</IsForth>
+      <TrgFieldID>18357</TrgFieldID>
+      <SrcFieldID>18350</SrcFieldID>
+    </DBMMFieldMappings>
+    <DBMMFieldMappings>
+      <FieldMappingID>12311</FieldMappingID>
+      <ReplicationID>250</ReplicationID>
+      <IsForth>Y</IsForth>
+      <TrgFieldID>18368</TrgFieldID>
+      <SrcFieldID>18341</SrcFieldID>
+    </DBMMFieldMappings>
+    <DBMMFieldMappings>
+      <FieldMappingID>12312</FieldMappingID>
+      <ReplicationID>250</ReplicationID>
+      <IsForth>Y</IsForth>
+      <TrgFieldID>18360</TrgFieldID>
+      <SrcFieldID>18345</SrcFieldID>
+    </DBMMFieldMappings>
+    <DBMMFieldMappings>
+      <FieldMappingID>12313</FieldMappingID>
+      <ReplicationID>250</ReplicationID>
+      <IsForth>Y</IsForth>
+      <TrgFieldID>18354</TrgFieldID>
+      <SrcExpression>[!RecordID]</SrcExpression>
+    </DBMMFieldMappings>
+    <DBMMFieldMappings>
+      <FieldMappingID>12314</FieldMappingID>
+      <ReplicationID>250</ReplicationID>
+      <IsForth>Y</IsForth>
+      <TrgFieldID>18358</TrgFieldID>
+      <SrcFieldID>18339</SrcFieldID>
+    </DBMMFieldMappings>
+    <DBMMFieldMappings>
+      <FieldMappingID>12315</FieldMappingID>
+      <ReplicationID>250</ReplicationID>
+      <IsForth>Y</IsForth>
+      <TrgFieldID>18355</TrgFieldID>
+      <SrcFieldID>18349</SrcFieldID>
+    </DBMMFieldMappings>
+    <DBMMFieldMappings>
+      <FieldMappingID>12316</FieldMappingID>
+      <ReplicationID>250</ReplicationID>
+      <IsForth>Y</IsForth>
+      <TrgFieldID>18362</TrgFieldID>
+      <SrcFieldID>18343</SrcFieldID>
+    </DBMMFieldMappings>
+    <DBMMFieldMappings>
+      <FieldMappingID>12317</FieldMappingID>
+      <ReplicationID>250</ReplicationID>
+      <IsForth>Y</IsForth>
+      <TrgFieldID>18356</TrgFieldID>
+      <SrcFieldID>18338</SrcFieldID>
+    </DBMMFieldMappings>
+    <DBMMFieldMappings>
+      <FieldMappingID>12318</FieldMappingID>
+      <ReplicationID>250</ReplicationID>
+      <IsForth>Y</IsForth>
+      <TrgFieldID>18359</TrgFieldID>
+      <SrcFieldID>18342</SrcFieldID>
+    </DBMMFieldMappings>
+    <DBMMReplications>
+      <ReplicationID>250</ReplicationID>
+      <UUID>6eabbb96-3357-4b86-8867-1d139a341ec6</UUID>
+      <Timestamp>639135823718722600</Timestamp>
+      <SrcTableID>240</SrcTableID>
+      <TrgTableID>241</TrgTableID>
+      <GroupID>0</GroupID>
+      <Name>MASERATIF_WARDE00F_TEST</Name>
+      <Description />
+      <ReplMode>4</ReplMode>
+      <AutomaticFieldsMapping>Y</AutomaticFieldsMapping>
+      <UseScript>N</UseScript>
+      <Properties>MirroringInterval=600000000;</Properties>
+      <ReplStatus>0</ReplStatus>
+      <ReplInitStatus>2</ReplInitStatus>
+      <ReplLastExit>0</ReplLastExit>
+      <StartTime>639135817751177323</StartTime>
+      <RefreshLastDate>639135910392200895</RefreshLastDate>
+      <RefreshLastLen>5468735</RefreshLastLen>
+      <MirroringLastDate>639135913734124784</MirroringLastDate>
+      <MirroringLastLen>2031133</MirroringLastLen>
+      <UseRefreshSchedule>N</UseRefreshSchedule>
+      <UseMirroringSchedule>N</UseMirroringSchedule>
+      <UseVerifierSchedule>N</UseVerifierSchedule>
+      <UsePartitions>N</UsePartitions>
+      <ReplHistoryExit>2</ReplHistoryExit>
+      <VerifierProperties />
+      <CreatedBy>FIATAUTO\SG30251              </CreatedBy>
+      <CreatedAt>639135817828521523</CreatedAt>
+      <ModifiedBy>FIATAUTO\SG30251              </ModifiedBy>
+      <ModifiedAt>639135823697412139</ModifiedAt>
+    </DBMMReplications>
+  </tables>
+</metadata>

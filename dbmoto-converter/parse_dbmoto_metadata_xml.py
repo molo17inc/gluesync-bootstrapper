@@ -791,14 +791,21 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                     is_disabled = False
                     for target_id, repl_id in target_ids:
                         target_info = table_lookup.get(target_id)
-                        if target_info and not target_info["is_source"]:
+                        # Set repl_id_for_table and target_table_id even if target_info is None
+                        # This allows [!RecordID] mappings to work even when target table is not schema-linked
+                        if target_info is None or not target_info["is_source"]:
                             repl_id_for_table = repl_id
                             target_table_id = target_id
                             
                             # Check ReplStatus: '3' means disabled
                             if replications.get(repl_id, {}).get("repl_status") == '3':
                                 is_disabled = True
-                            break
+                            
+                            # If we found a valid target_info, use it and break
+                            if target_info and not target_info["is_source"]:
+                                break
+                            # Otherwise, continue to check if there's a better match
+                            # (in case there are multiple replications)
                     
                     # Get field mappings for this replication
                     table_field_mappings = field_mappings.get(repl_id_for_table, {}) if repl_id_for_table else {}

@@ -64,6 +64,31 @@ pyinstaller_syntax_check:
     - python3 -m unittest integration-tests.test_pyinstaller_compatibility -v
   allow_failure: false
 
+# Run DbMoto converter unit tests
+dbmoto_converter_tests:
+  stage: validate
+  image: python:3.9-bullseye
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: always
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: always
+    - if: $CI_COMMIT_TAG =~ /^dbmoto-/
+      when: always
+    - when: never
+  variables:
+    PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    PYTHONDONTWRITEBYTECODE: "1"
+  before_script:
+    - python3 --version
+    - pip3 install --break-system-packages --upgrade pip
+    - cd dbmoto-converter
+    - pip3 install --break-system-packages -r requirements.txt pyyaml
+  script:
+    - echo "Running DbMoto converter unit tests..."
+    - python3 -m unittest discover tests -v
+  allow_failure: false
+
 fetch_agents:
   stage: fetch-agents
   image: python:3.9-bullseye
