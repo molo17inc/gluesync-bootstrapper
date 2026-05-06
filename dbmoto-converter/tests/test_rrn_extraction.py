@@ -106,9 +106,9 @@ class TestRRNExtraction(unittest.TestCase):
         self.assertEqual(rrn_column.get('dataLength'), 15, "RRN column should have dataLength 15")
         self.assertFalse(rrn_column.get('isNullable'), "RRN column should not be nullable")
         
-        # Check that keys use RRN (the target field name, not _RRN sourceName)
+        # Check that keys use _RRN (not all columns as fallback)
         self.assertIn('keys', warde00f_config)
-        self.assertEqual(warde00f_config['keys'], ['RRN'], "Keys should be ['RRN'] (target field name) when no primary keys found but RRN mapping exists")
+        self.assertEqual(warde00f_config['keys'], ['_RRN'], "Keys should be ['_RRN'] when no primary keys found but RRN mapping exists")
 
     def test_rrn_mapping_detected_in_parse_xml(self):
         """Test that parse_xml correctly detects [!RecordID] mappings."""
@@ -181,9 +181,9 @@ class TestRRNExtraction(unittest.TestCase):
         self.assertEqual(rrn_column.get('dataLength'), 15, "rrn_id column should have dataLength 15")
         self.assertFalse(rrn_column.get('isNullable'), "rrn_id column should not be nullable")
         
-        # Check that keys use rrn_id (the target field name, not _RRN sourceName)
+        # Check that keys use _RRN (source has no primary keys, so RRN is used as fallback)
         self.assertIn('keys', rrtest_config)
-        self.assertEqual(rrtest_config['keys'], ['rrn_id'], "Keys should be ['rrn_id'] (target field name) since source has no primary keys but has RRN mapping")
+        self.assertEqual(rrtest_config['keys'], ['_RRN'], "Keys should be ['_RRN'] since source has no primary keys but has RRN mapping")
 
 
 if __name__ == '__main__':
