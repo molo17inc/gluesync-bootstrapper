@@ -871,7 +871,8 @@ def extract_schema_types_from_yaml(yaml_file_path):
         logger.error(f"Exception details: {traceback.format_exc()}")
         return None, None
 
-def process_filter_clauses(filter_config, columns_info, table_id=None):
+def process_filter_clauses(filter_config, columns_info, table_id=None,
+                           source_node_info=None, target_node_info=None):
     """
     Process filter clauses from YAML configuration into the required format.
 
@@ -882,6 +883,8 @@ def process_filter_clauses(filter_config, columns_info, table_id=None):
 
     All filter values are converted to strings as required by the backend.
     Pass ``table_id`` (int) so the emitted column carries the required ``tableId``.
+    Pass ``source_node_info`` and ``target_node_info`` so the column dataType is
+    mapped to the target native type (e.g. varchar -> string for Couchbase).
     """
     if not filter_config or 'clauses' not in filter_config:
         return None
@@ -916,12 +919,19 @@ def process_filter_clauses(filter_config, columns_info, table_id=None):
             if table_id is not None:
                 filter_column["tableId"] = int(table_id)
         else:
+            # Map the source native dataType to the target native type when node info is available
+            source_data_type = matched_column.get('dataType', fallback_type)
+            if source_node_info and target_node_info:
+                mapped_data_type = map_data_type(source_data_type, source_node_info, target_node_info)
+            else:
+                mapped_data_type = source_data_type
+
             # Full column object mirroring the entity's column payload (2.2.6.0 Column model)
             filter_column = {
                 "id": matched_column.get('id'),
                 "name": column_name,
                 "position": matched_column.get('position', 0),
-                "dataType": matched_column.get('dataType', fallback_type),
+                "dataType": mapped_data_type,
                 "isPK": matched_column.get('isPK', False),
                 "isIdentity": matched_column.get('isIdentity', False),
                 "isNullable": matched_column.get('isNullable', False),

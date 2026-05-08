@@ -1135,9 +1135,11 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         target_table_key = f"{yaml_target_schema}.{target_table_name}"
 
         # Process filter clauses using target_table_id (filters live in the target entityType)
-        processed_filters = process_filter_clauses(filter_config, columns, table_id=target_table_id) if filter_config else None
+        processed_filters = process_filter_clauses(filter_config, columns, table_id=target_table_id,
+            source_node_info=source_node_info, target_node_info=target_node_info) if filter_config else None
         logger.debug(f"Processed filters for {table_name}: {processed_filters}")
-        processed_snapshot_delete_filters = process_filter_clauses(snapshot_delete_filter_config, columns, table_id=target_table_id) if snapshot_delete_filter_config else None
+        processed_snapshot_delete_filters = process_filter_clauses(snapshot_delete_filter_config, columns, table_id=target_table_id,
+            source_node_info=source_node_info, target_node_info=target_node_info) if snapshot_delete_filter_config else None
         if processed_snapshot_delete_filters:
             logger.debug(f"Processed snapshot delete filters for {table_name}: {processed_snapshot_delete_filters}")
 
@@ -2062,9 +2064,11 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         target_table_key = f"{yaml_target_schema}.{target_table_name}"
 
         # Process filter clauses using target_table_id (filters live in the target entityType)
-        processed_filters = process_filter_clauses(filter_config, columns, table_id=target_table_id) if filter_config else None
+        processed_filters = process_filter_clauses(filter_config, columns, table_id=target_table_id,
+            source_node_info=source_node_info, target_node_info=target_node_info) if filter_config else None
         logger.debug(f"Processed filters for duplicate {yaml_table_key}: {processed_filters}")
-        processed_snapshot_delete_filters = process_filter_clauses(snapshot_delete_filter_config, columns, table_id=target_table_id) if snapshot_delete_filter_config else None
+        processed_snapshot_delete_filters = process_filter_clauses(snapshot_delete_filter_config, columns, table_id=target_table_id,
+            source_node_info=source_node_info, target_node_info=target_node_info) if snapshot_delete_filter_config else None
         if processed_snapshot_delete_filters:
             logger.debug(f"Processed snapshot delete filters for duplicate {yaml_table_key}: {processed_snapshot_delete_filters}")
 
