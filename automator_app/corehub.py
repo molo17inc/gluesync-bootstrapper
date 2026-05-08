@@ -272,6 +272,30 @@ def run_create_entities(
     set_scheduling_enabled(enable_scheduling)
     configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
 
+    # Resolve source/target types from agents.json catalog so non-RDBMS targets
+    # (NoSQL, Object Store, etc.) are correctly classified and table creation
+    # is skipped for them. Without this, a YAML hint like "SQL" or the "SQL"
+    # fallback would cause the bootstrapper to attempt CREATE TABLE against
+    # targets that don't support it (e.g. Azure Data Lake Storage).
+    inferred_source_type, inferred_target_type = infer_agent_schema_types(
+        token=token,
+        base_url=base_url,
+        pipeline_id=pipeline_id,
+        use_ssl=use_ssl,
+        skip_verify=skip_verify,
+    )
+    if inferred_target_type and inferred_target_type.upper() == "NOSQL":
+        logger.info(
+            "Pipeline %s has a non-RDBMS target (%s) - disabling table creation",
+            pipeline_id,
+            inferred_target_type,
+        )
+        create_tables = False
+    if inferred_source_type:
+        source_type = inferred_source_type
+    if inferred_target_type:
+        target_type = inferred_target_type
+
     prev_env_create_tables = os.environ.get('CREATE_TABLE_IF_NOT_EXISTS')
     prev_flag_create_tables = CREATE_TABLE_IF_NOT_EXISTS
     set_create_table_if_not_exists(create_tables)
