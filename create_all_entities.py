@@ -1076,12 +1076,12 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             logger.warning(f"Warning: No keys specified for {table_name}. Table will have no keys.")
 
         if CREATE_TABLE_IF_NOT_EXISTS:
-            # Only create tables for RDBMS targets, skip for NoSQL
-            # target_type is passed from the caller and indicates SQL or NoSQL
-            is_nosql_target = target_type and target_type.upper() == 'NOSQL'
-            
+            # Only create tables for RDBMS targets, skip for NoSQL and Object Store
+            # target_type is passed from the caller and indicates SQL, NoSQL, or Object Store
+            is_nosql_target = target_type and (target_type.upper() == 'NOSQL' or target_type.upper() == 'OBJECT STORE')
+
             if is_nosql_target:
-                logger.info(f"Skipping table creation for {target_table_name} - target is NoSQL")
+                logger.info(f"Skipping table creation for {target_table_name} - target is {target_type}")
             else:
                 logger.info(f"CREATE_TABLE_IF_NOT_EXISTS is enabled - creating table {target_table_name}")
                 handle_table_creation(
