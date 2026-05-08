@@ -832,21 +832,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         target_table_name = custom_config.get('name', table_name)
         logger.info(f"Using target table name: {target_table_name} for source table: {table_name}")
 
-        # Get and process filter configurations
+        # Get filter configurations (processed later after target_table_id is resolved)
         filter_config = custom_config.get('filter')
         snapshot_delete_filter_config = custom_config.get('snapshotDeleteFilter')
-
-        # Resolve source table id early so filter columns can reference it (2.2.6.0 Column model)
-        filter_source_table_id = resolve_table_id(source_schema, table_name, source_tables_lookup, "source")
-
-        # Process regular filter
-        processed_filters = process_filter_clauses(filter_config, columns, table_id=filter_source_table_id) if filter_config else None
-        logger.debug(f"Processed filters for {table_name}: {processed_filters}")
-
-        # Process snapshot delete filter
-        processed_snapshot_delete_filters = process_filter_clauses(snapshot_delete_filter_config, columns, table_id=filter_source_table_id) if snapshot_delete_filter_config else None
-        if processed_snapshot_delete_filters:
-            logger.debug(f"Processed snapshot delete filters for {table_name}: {processed_snapshot_delete_filters}")
 
         # Get document key configuration if it exists
         document_key = None
@@ -1145,6 +1133,13 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         # Create source and target table property keys
         source_table_key = f"{source_schema}.{table_name}"
         target_table_key = f"{yaml_target_schema}.{target_table_name}"
+
+        # Process filter clauses using target_table_id (filters live in the target entityType)
+        processed_filters = process_filter_clauses(filter_config, columns, table_id=target_table_id) if filter_config else None
+        logger.debug(f"Processed filters for {table_name}: {processed_filters}")
+        processed_snapshot_delete_filters = process_filter_clauses(snapshot_delete_filter_config, columns, table_id=target_table_id) if snapshot_delete_filter_config else None
+        if processed_snapshot_delete_filters:
+            logger.debug(f"Processed snapshot delete filters for {table_name}: {processed_snapshot_delete_filters}")
 
         partition_settings = None
         if partition_column_name:
@@ -1912,12 +1907,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         filter_config = custom_config.get('filter')
         snapshot_delete_filter_config = custom_config.get('snapshotDeleteFilter')
 
-        # Resolve source table id early so filter columns can reference it (2.2.6.0 Column model)
-        filter_source_table_id = resolve_table_id(source_schema, table_name, source_tables_lookup, "source")
-
-        processed_filters = process_filter_clauses(filter_config, columns, table_id=filter_source_table_id) if filter_config else None
-        processed_snapshot_delete_filters = process_filter_clauses(snapshot_delete_filter_config, columns, table_id=filter_source_table_id) if snapshot_delete_filter_config else None
-
         # Process document key if exists
         document_key = None
         if custom_config and 'documentKey' in custom_config:
@@ -2071,6 +2060,13 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
         source_table_key = f"{source_schema}.{table_name}"
         target_table_key = f"{yaml_target_schema}.{target_table_name}"
+
+        # Process filter clauses using target_table_id (filters live in the target entityType)
+        processed_filters = process_filter_clauses(filter_config, columns, table_id=target_table_id) if filter_config else None
+        logger.debug(f"Processed filters for duplicate {yaml_table_key}: {processed_filters}")
+        processed_snapshot_delete_filters = process_filter_clauses(snapshot_delete_filter_config, columns, table_id=target_table_id) if snapshot_delete_filter_config else None
+        if processed_snapshot_delete_filters:
+            logger.debug(f"Processed snapshot delete filters for duplicate {yaml_table_key}: {processed_snapshot_delete_filters}")
 
         partition_settings = None
         if partition_column_name:
