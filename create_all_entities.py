@@ -228,6 +228,26 @@ def set_create_table_if_not_exists(enabled: bool) -> None:
     CREATE_TABLE_IF_NOT_EXISTS = bool(enabled)
 
 
+# Target categories for which the bootstrapper must NOT attempt to issue a
+# CREATE TABLE statement. These are non-RDBMS targets (e.g. NoSQL stores,
+# object stores like Azure Data Lake Storage, S3, GCS) where the CoreHub
+# create-table endpoint will fail with "This function must not be called.".
+_NO_CREATE_TABLE_TARGET_TYPES = frozenset({"NOSQL", "OBJECT STORE"})
+
+
+def is_no_create_table_target(target_type) -> bool:
+    """Return True when the given target type does not support CREATE TABLE.
+
+    The check is case-insensitive and tolerates None / empty values. Any
+    target category not classified as RDBMS/SQL should fall under this
+    predicate so the bootstrapper skips table creation for it.
+    """
+
+    if not target_type:
+        return False
+    return str(target_type).strip().upper() in _NO_CREATE_TABLE_TARGET_TYPES
+
+
 # ProtocolAwareAdapter and CoreHubClient have been moved to utils/core_hub_client.py
 
 # Initialize the CoreHub client
@@ -1076,11 +1096,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             logger.warning(f"Warning: No keys specified for {table_name}. Table will have no keys.")
 
         if CREATE_TABLE_IF_NOT_EXISTS:
-            # Only create tables for RDBMS targets, skip for NoSQL and Object Store
-            # target_type is passed from the caller and indicates SQL, NoSQL, or Object Store
-            is_nosql_target = target_type and (target_type.upper() == 'NOSQL' or target_type.upper() == 'OBJECT STORE')
-
-            if is_nosql_target:
+            # Only create tables for RDBMS targets; skip for NoSQL, Object Store,
+            # and any other non-RDBMS category. target_type is normalized upstream.
+            if is_no_create_table_target(target_type):
                 logger.info(f"Skipping table creation for {target_table_name} - target is {target_type}")
             else:
                 logger.info(f"CREATE_TABLE_IF_NOT_EXISTS is enabled - creating table {target_table_name}")
