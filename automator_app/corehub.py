@@ -71,6 +71,10 @@ logger = logging.getLogger(__name__)
 class DuplicateCancelledError(RuntimeError):
     """Raised when a duplicate pipeline request is cancelled by the user."""
 
+
+class CoreHubPasswordChangeRequiredError(RuntimeError):
+    """Raised when CoreHub requires password change at login."""
+
 _AGENT_TYPE_BY_NAME: Optional[Dict[str, str]] = None
 
 def _get_agents_file_path() -> str:
@@ -241,7 +245,17 @@ def authenticate(
         body={"username": username, "password": password},
     )
 
-    token = response.get("apiToken") if isinstance(response, dict) else None
+    if not isinstance(response, dict):
+        raise RuntimeError(f"Authentication failed: unexpected response type {type(response).__name__}")
+
+    token = response.get("apiToken")
+    change_required = bool(response.get("changeRequired", False))
+
+    if change_required:
+        raise CoreHubPasswordChangeRequiredError(
+            "Password change required for this user. Complete password reset in CoreHub/Bootstrapper, then retry login."
+        )
+
     if not token:
         raise RuntimeError("Authentication failed: no token returned")
 

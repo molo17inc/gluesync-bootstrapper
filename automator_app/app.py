@@ -433,6 +433,8 @@ def create_app() -> FastAPI:
                 use_ssl=payload.use_ssl,
                 skip_verify=payload.skip_verify,
             )
+        except corehub.CoreHubPasswordChangeRequiredError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except Exception as exc:  # pylint: disable=broad-except
             logger.exception("Authentication failed")
             raise HTTPException(status_code=401, detail=str(exc)) from exc

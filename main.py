@@ -123,6 +123,19 @@ def fetch_core_hub(path, method='GET', token=None, body=None, params=None, heade
     client = get_core_hub_client()
     return client.request(path, method, token, body, params, headers=headers)
 
+
+def parse_login_response(auth_response):
+    if not isinstance(auth_response, dict):
+        raise RuntimeError(f"Unexpected login response type: {type(auth_response).__name__}")
+
+    token = auth_response.get('apiToken')
+    change_required = bool(auth_response.get('changeRequired', False))
+
+    if not token:
+        raise RuntimeError(f"Authentication failed: no apiToken in response ({auth_response})")
+
+    return token, change_required
+
 fake = Faker()
 
 # Initialize logger
@@ -582,13 +595,12 @@ if True:
                 method='POST',
                 body={'username': default_user, 'password': user_defined_password}
             )
-            token = auth_response.get('apiToken')
-            if not token:
-                log_failure(logger, "Failed to authenticate")
+            try:
+                token, change_required = parse_login_response(auth_response)
+            except Exception as e:
+                log_failure(logger, f"Failed to authenticate: {str(e)}")
                 lockfile_failure()
-                raise Exception('Failed to authenticate')
-
-            change_required = auth_response.get('changeRequired', False)
+                raise
             if change_required:
                 logger.info("Password change required")
                 # Generate a new random password and change it
@@ -605,11 +617,12 @@ if True:
                         method='POST',
                         body={'username': default_user, 'password': user_defined_password}
                     )
-                    token = auth_response.get('apiToken')
-                    if not token:
-                        log_failure(logger, "Failed to re-authenticate with user-defined password")
+                    try:
+                        token, _ = parse_login_response(auth_response)
+                    except Exception as auth_error:
+                        log_failure(logger, f"Failed to re-authenticate with user-defined password: {str(auth_error)}")
                         lockfile_failure()
-                        raise Exception('Failed to re-authenticate with user-defined password')
+                        raise
                     new_password = user_defined_password
             else:
                 new_password = user_defined_password
@@ -820,11 +833,7 @@ if True:
             method='POST',
             body={'username': default_user, 'password': new_password}
         )
-        new_token = auth_response.get('apiToken')
-        if not new_token:
-            raise Exception('Failed to re-authenticate after password change')
-
-        change_required = auth_response.get('changeRequired', False)
+        new_token, change_required = parse_login_response(auth_response)
         if change_required:
             raise Exception('Password change still required after reset')
 
@@ -980,9 +989,7 @@ def main():
                     method='POST',
                     body={'username': default_user, 'password': user_defined_password}
                 )
-                token = auth_response.get('apiToken')
-
-                change_required = auth_response.get('changeRequired', False)
+                token, change_required = parse_login_response(auth_response)
 
                 if not change_required == False and not token:
                     log_failure(logger, "Failed to authenticate")
@@ -1013,11 +1020,12 @@ def main():
                     method='POST',
                     body={'username': default_user, 'password': user_defined_password}
                 )
-                token = auth_response.get('apiToken')
-                if not token:
-                    log_failure(logger, "Failed to re-authenticate with user-defined password")
+                try:
+                    token, _ = parse_login_response(auth_response)
+                except Exception as auth_error:
+                    log_failure(logger, f"Failed to re-authenticate with user-defined password: {str(auth_error)}")
                     lockfile_failure()
-                    raise Exception('Failed to re-authenticate with user-defined password')
+                    raise
                 new_password = user_defined_password
         else:
             new_password = user_defined_password
