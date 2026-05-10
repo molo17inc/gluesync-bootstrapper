@@ -1647,6 +1647,32 @@ def create_app() -> FastAPI:
 
         return ApiMessage(success=success, message="\n".join(logs))
 
+    @app.get("/api/export/global-config")
+    async def export_global_config():
+        if not state.token or not state.base_url:
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+        try:
+            yaml_text = corehub.export_global_config_yaml(
+                token=state.token,
+                base_url=state.base_url,
+                use_ssl=state.use_ssl,
+                skip_verify=state.skip_verify,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Failed to export global configuration")
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"global-config_{timestamp}.yaml"
+        return StreamingResponse(
+            io.BytesIO(yaml_text.encode("utf-8")),
+            media_type="application/x-yaml",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+            },
+        )
+
     @app.get("/api/export/all-pipelines")
     async def export_all_pipelines():
         if not state.token or not state.base_url:

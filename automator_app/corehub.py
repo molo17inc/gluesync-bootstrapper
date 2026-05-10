@@ -993,6 +993,71 @@ def export_pipeline_yaml(
     return buffer.getvalue()
 
 
+def _fetch_optional_core_hub_json(path: str, token: str) -> Optional[Any]:
+    """Fetch an optional CoreHub JSON payload.
+
+    Missing endpoints (404) are treated as absent data so the export can remain
+    partial but still readable.
+    """
+
+    try:
+        return fetch_core_hub(path, token=token)
+    except Exception as exc:  # pylint: disable=broad-except
+        cause = getattr(exc, "__cause__", None)
+        response = getattr(cause, "response", None)
+        status_code = getattr(response, "status_code", None)
+        if status_code == 404:
+            return None
+        raise
+
+
+def export_global_config_yaml(
+    *,
+    token: str,
+    base_url: str,
+    use_ssl: Optional[bool],
+    skip_verify: Optional[bool],
+) -> str:
+    """Export instance-level global configuration to a simple YAML document."""
+
+    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+
+    global_config: Dict[str, Any] = {}
+
+    grafana = _fetch_optional_core_hub_json("/global-config/grafana", token)
+    if isinstance(grafana, dict) and grafana:
+        global_config["grafana"] = grafana
+
+    logging_config = _fetch_optional_core_hub_json("/global-config/logging", token)
+    if isinstance(logging_config, dict) and logging_config:
+        global_config["logging"] = logging_config
+
+    release_channel = _fetch_optional_core_hub_json("/global-config/release-channel", token)
+    if isinstance(release_channel, dict) and release_channel:
+        value = release_channel.get("releaseChannel")
+        if value is not None:
+            global_config["releaseChannel"] = value
+
+    smtp = _fetch_optional_core_hub_json("/global-config/smtp", token)
+    if isinstance(smtp, dict) and smtp:
+        global_config["smtp"] = smtp
+
+    stored_keys = _fetch_optional_core_hub_json("/global-config/keys", token)
+    if isinstance(stored_keys, dict):
+        keys = stored_keys.get("keys")
+        if isinstance(keys, list):
+            global_config["storedKeys"] = [str(key) for key in keys]
+
+    buffer = io.StringIO()
+    yaml.safe_dump(
+        {"globalConfig": global_config},
+        buffer,
+        sort_keys=False,
+        allow_unicode=True,
+    )
+    return buffer.getvalue()
+
+
 def export_pipeline_full_backup(
     *,
     token: str,
@@ -1018,6 +1083,18 @@ def export_pipeline_full_backup(
 
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+        try:
+            global_config_yaml = export_global_config_yaml(
+                token=token,
+                base_url=base_url,
+                use_ssl=use_ssl,
+                skip_verify=skip_verify,
+            )
+            zip_file.writestr("global-config.yaml", global_config_yaml.encode("utf-8"))
+            logger.info("Exported instance global configuration YAML")
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Failed to export global configuration YAML: %s", exc)
+
         all_agents: list[dict] = []
         seen_agents: set[tuple] = set()
         pipelines_meta: list[dict] = []

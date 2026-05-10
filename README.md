@@ -204,7 +204,7 @@ groups:
 - When creating **new** groups in CoreHub, `create_all_entities.py` uses the `groups` section (if present) to set the group `description` and `color`.
 - If a group with the same name already exists in CoreHub, it is reused and its existing metadata is not overwritten.
 
-The exporter scripts (`export_template_from_corehub.py`, `export_all_pipelines.py`) populate this section from CoreHub when generating backup YAML files.
+The exporter scripts (`export_template_from_corehub.py`, `export_all_pipelines.py`) populate this section from CoreHub when generating backup YAML files. Instance-level settings are exported separately as `global-config.yaml`.
 
 ## Snapshot Delete Filter
 
