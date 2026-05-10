@@ -1018,35 +1018,18 @@ def export_global_config_yaml(
     use_ssl: Optional[bool],
     skip_verify: Optional[bool],
 ) -> str:
-    """Export instance-level global configuration to a simple YAML document."""
+    """Export every stored global configuration row into a YAML document."""
 
     configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
 
+    response = _fetch_optional_core_hub_json("/global-config", token)
     global_config: Dict[str, Any] = {}
 
-    grafana = _fetch_optional_core_hub_json("/global-config/grafana", token)
-    if isinstance(grafana, dict) and grafana:
-        global_config["grafana"] = grafana
-
-    logging_config = _fetch_optional_core_hub_json("/global-config/logging", token)
-    if isinstance(logging_config, dict) and logging_config:
-        global_config["logging"] = logging_config
-
-    release_channel = _fetch_optional_core_hub_json("/global-config/release-channel", token)
-    if isinstance(release_channel, dict) and release_channel:
-        value = release_channel.get("releaseChannel")
-        if value is not None:
-            global_config["releaseChannel"] = value
-
-    smtp = _fetch_optional_core_hub_json("/global-config/smtp", token)
-    if isinstance(smtp, dict) and smtp:
-        global_config["smtp"] = smtp
-
-    stored_keys = _fetch_optional_core_hub_json("/global-config/keys", token)
-    if isinstance(stored_keys, dict):
-        keys = stored_keys.get("keys")
-        if isinstance(keys, list):
-            global_config["storedKeys"] = [str(key) for key in keys]
+    if isinstance(response, dict):
+        if isinstance(response.get("configurations"), dict):
+            global_config = response["configurations"]
+        else:
+            global_config = response
 
     buffer = io.StringIO()
     yaml.safe_dump(
