@@ -104,6 +104,8 @@ class TestRRNExtraction(unittest.TestCase):
         self.assertEqual(rrn_column.get('sourceName'), '_RRN', "RRN column should have sourceName _RRN")
         self.assertEqual(rrn_column.get('type'), 'DECIMAL', "RRN column should be DECIMAL type")
         self.assertEqual(rrn_column.get('dataLength'), 15, "RRN column should have dataLength 15")
+        self.assertEqual(rrn_column.get('numericPrecision'), 15, "RRN column should have numericPrecision 15")
+        self.assertEqual(rrn_column.get('numericScale'), 0, "RRN column should have numericScale 0")
         self.assertFalse(rrn_column.get('isNullable'), "RRN column should not be nullable")
         
         # Check that keys use _RRN (not all columns as fallback)
@@ -179,6 +181,8 @@ class TestRRNExtraction(unittest.TestCase):
         self.assertEqual(rrn_column.get('sourceName'), '_RRN', "rrn_id column should have sourceName _RRN")
         self.assertEqual(rrn_column.get('type'), 'DECIMAL', "rrn_id column should be DECIMAL type")
         self.assertEqual(rrn_column.get('dataLength'), 15, "rrn_id column should have dataLength 15")
+        self.assertEqual(rrn_column.get('numericPrecision'), 15, "rrn_id column should have numericPrecision 15")
+        self.assertEqual(rrn_column.get('numericScale'), 0, "rrn_id column should have numericScale 0")
         self.assertFalse(rrn_column.get('isNullable'), "rrn_id column should not be nullable")
         
         # Check that keys use _RRN (source has no primary keys, so RRN is used as fallback)

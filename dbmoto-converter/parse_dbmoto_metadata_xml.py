@@ -856,7 +856,7 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                                 "name": target_field_name,
                                 "type": "DECIMAL",
                                 "dataLength": 15,
-                                "numericPrecision": 0,
+                                "numericPrecision": 15,
                                 "numericScale": 0,
                                 "isNullable": False,
                                 "sourceName": "_RRN"
