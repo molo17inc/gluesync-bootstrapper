@@ -560,10 +560,11 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                         col_data_length = _normalize_data_length(mapped_type, col_data_length)
                         resolved_target_type = mapped_type
 
-                        # Get isPrimaryKey from column metadata or fall back to keys-based check
-                        col_is_pk = col_meta.get('isPK', col_meta.get('is_primary_key'))
-                        if col_is_pk is None:
-                            col_is_pk = _is_primary_key(col_name)
+                        # YAML-defined keys are the bootstrapper source of truth for
+                        # target table creation.  When source metadata says a column is
+                        # not a PK (for example CUSTOMERS_NO_PKEY in demo-kits), still
+                        # mark it as PK if the table-list-template declares it in keys.
+                        col_is_pk = _is_primary_key(col_name) or bool(col_meta.get('isPK', col_meta.get('is_primary_key')))
                         column_dtos.append(Column(
                             name=col_name,
                             dataType=format_column_type(resolved_target_type, col_data_length, col_numeric_precision, col_numeric_scale),
@@ -590,10 +591,9 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                             target_agent_tag=target_agent_tag,
                         )
                         col_data_length = _normalize_data_length(mapped_type, col.get("charMaxLength", 0))
-                        # Use isPrimaryKey from column data (GlueSync 2.2.6.0+) or fall back to keys-based check
-                        col_is_pk = col.get("isPK")
-                        if col_is_pk is None:
-                            col_is_pk = _is_primary_key(col["name"])
+                        # YAML-defined keys override source metadata so templates can
+                        # create target PKs for source tables that do not expose one.
+                        col_is_pk = _is_primary_key(col["name"]) or bool(col.get("isPK"))
                         column_dtos.append(Column(
                             name=col["name"],
                             dataType=format_column_type(mapped_type, col_data_length,

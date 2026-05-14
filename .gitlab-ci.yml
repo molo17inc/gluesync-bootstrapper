@@ -89,6 +89,29 @@ dbmoto_converter_tests:
     - python3 -m unittest discover tests -v
   allow_failure: false
 
+bootstrapper_core_unit_tests:
+  stage: validate
+  image: python:3.9-bullseye
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: always
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: always
+    - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
+      when: always
+    - when: never
+  variables:
+    PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    PYTHONDONTWRITEBYTECODE: "1"
+  before_script:
+    - python3 --version
+    - pip3 install --break-system-packages --upgrade pip
+    - pip3 install --break-system-packages -r requirements.txt
+  script:
+    - echo "Running bootstrapper core YAML payload unit tests..."
+    - python3 -m unittest discover integration-tests -p 'test_bootstrapper_*.py' -v
+  allow_failure: false
+
 fetch_agents:
   stage: fetch-agents
   image: python:3.9-bullseye
