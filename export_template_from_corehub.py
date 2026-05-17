@@ -29,7 +29,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
-from commons import fetch_core_hub
+from commons import fetch_core_hub, get_table_columns
 from utils.chronos_client import ChronosClient
 from utils.log import create_log_file, get_logger, log_failure, log_success
 
@@ -572,6 +572,13 @@ def _process_single_entity(
             
             # Build column mapping with metadata using explicit source/target keys
             # Use column index in sorted array as ordinalPosition (1-based)
+            if target_type is None:
+                logger.warning(
+                    f"Column '{source_name}' in table '{source_table_name}' has no data type "
+                    f"in stored entity data (legacy entity with unserialised DataTypeInterface). "
+                    f"The type field will be null in the export; use a recent version of GlueSync "
+                    f"or re-create the entity to populate the type."
+                )
             col_mapping = {
                 "source": source_name,
                 "target": target_name,
@@ -1253,6 +1260,11 @@ def main() -> None:
 
         jobs = fetch_pipeline_jobs(pipeline_id)
         attach_schedules_from_jobs(jobs, entities_by_id, schemas, group_id_to_name)
+
+        # Backfill null column types via live discovery (legacy entity serialisation bug)
+        enriched = enrich_null_column_types_from_discovery(schemas, entities, token, pipeline_id)
+        if enriched:
+            logger.info(f"Enriched null column types for {enriched} table(s) via live discovery")
 
         yaml_data = build_yaml_structure(schemas, groups_by_name)
 

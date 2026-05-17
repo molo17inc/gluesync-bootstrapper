@@ -62,6 +62,7 @@ from export_template_from_corehub import (
     attach_schedules_from_jobs,
     build_yaml_structure,
     build_export_header,
+    enrich_null_column_types_from_discovery,
 )
 import time
 import yaml
@@ -975,6 +976,28 @@ def export_pipeline_yaml(
 
     jobs = fetch_pipeline_jobs(pipeline_id)
     attach_schedules_from_jobs(jobs, entities_by_id, schemas, group_id_to_name)
+
+    # Backfill null column types that are caused by legacy entities whose
+    # DataTypeInterface was not registered for serialisation and therefore
+    # stored as null in SQLite.  We call live discovery for each affected
+    # table so the exported YAML always carries real type information.
+    try:
+        enriched = enrich_null_column_types_from_discovery(
+            schemas, entities, token, pipeline_id
+        )
+        if enriched:
+            logger.info(
+                "export_pipeline_yaml: enriched null column types for %d table(s) "
+                "via live CoreHub discovery for pipeline %s",
+                enriched,
+                pipeline_id,
+            )
+    except Exception as _enrich_exc:  # pylint: disable=broad-except
+        logger.warning(
+            "export_pipeline_yaml: column-type enrichment failed for pipeline %s: %s",
+            pipeline_id,
+            _enrich_exc,
+        )
 
     # Clean up internal metadata before export
     for schema_cfg in schemas.values():
