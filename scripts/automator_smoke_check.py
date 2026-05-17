@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
 import urllib.error
@@ -33,6 +34,14 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _healthz_body_is_ok(body: str) -> bool:
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return False
+    return isinstance(payload, dict) and payload.get("status") == "ok"
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     args = _parse_args(argv)
     deadline = time.time() + args.timeout
@@ -45,7 +54,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         try:
             with urllib.request.urlopen(health_url, timeout=2) as response:
                 body = response.read().decode("utf-8")
-                if response.status == 200 and '"status": "ok"' in body:
+                if response.status == 200 and _healthz_body_is_ok(body):
                     break
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             last_error = exc
