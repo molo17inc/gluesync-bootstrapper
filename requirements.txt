@@ -1,5 +1,6 @@
 requests
 python-logstash-async==2.7.2
+mcp>=1.0.0
 faker
 PyYAML
 colorama
