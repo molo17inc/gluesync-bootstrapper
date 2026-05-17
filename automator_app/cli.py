@@ -65,8 +65,8 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--port",
         type=int,
-        default=8080,
-        help="Port to listen on (default: 8080)",
+        default=None,
+        help="Port to listen on (default: 8080, auto-selects if in use)",
     )
     parser.add_argument(
         "--log-level",
@@ -307,11 +307,11 @@ def main(argv: Optional[list[str]] = None) -> None:
     args = _parse_args(filtered_argv)
 
     try:
-        # Find an available port instead of failing
-        port = _find_available_port(args.host, args.port)
-        if port != args.port:
-            LOGGER.info("Requested port %d was in use, using port %d", args.port, port)
-        args.port = port
+        # If the user explicitly passed --port, respect it exactly.
+        # Only auto-discover a free port when the default (8080) is used.
+        if args.port is None:
+            args.port = _find_available_port(args.host, 8080)
+        # else: use the explicit port as-is
 
         url = f"http://{args.host}:{args.port}"
 
