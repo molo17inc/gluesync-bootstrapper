@@ -208,9 +208,23 @@ automator_smoke_windows:
       ) -RedirectStandardOutput $logFile -RedirectStandardError $errorLogFile -PassThru
 
       try {
+        # Give the server a moment to initialize, then verify it is still alive
+        Start-Sleep -Seconds 3
+        if ($process.HasExited) {
+          Write-Host "=== SERVER STDOUT ==="
+          Get-Content $logFile -ErrorAction SilentlyContinue
+          Write-Host "=== SERVER STDERR ==="
+          Get-Content $errorLogFile -ErrorAction SilentlyContinue
+          throw "Automator server process exited prematurely (exit code $($process.ExitCode))"
+        }
+
         $smokeCheck = Join-Path (Join-Path $env:CI_PROJECT_DIR 'scripts') 'automator_smoke_check.py'
         & $python $smokeCheck --base-url "http://127.0.0.1:$port" --timeout 180
         if ($LASTEXITCODE -ne 0) {
+          Write-Host "=== SERVER STDOUT ==="
+          Get-Content $logFile -ErrorAction SilentlyContinue
+          Write-Host "=== SERVER STDERR ==="
+          Get-Content $errorLogFile -ErrorAction SilentlyContinue
           throw "Automator smoke helper failed"
         }
         Write-Host "Automator smoke test passed on Windows"
