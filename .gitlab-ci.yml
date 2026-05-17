@@ -41,7 +41,7 @@ variables:
 # Run syntax check on every commit to catch PyInstaller issues early
 pyinstaller_syntax_check:
   stage: validate
-  image: python:3.9-bullseye
+  image: python:3.11-bullseye
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       when: always
@@ -67,7 +67,7 @@ pyinstaller_syntax_check:
 # Run DbMoto converter unit tests
 dbmoto_converter_tests:
   stage: validate
-  image: python:3.9-bullseye
+  image: python:3.11-bullseye
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       when: always
@@ -91,7 +91,7 @@ dbmoto_converter_tests:
 
 bootstrapper_core_unit_tests:
   stage: validate
-  image: python:3.9-bullseye
+  image: python:3.11-bullseye
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       when: always
@@ -112,9 +112,150 @@ bootstrapper_core_unit_tests:
     - python3 -m unittest discover integration-tests -p 'test_bootstrapper_*.py' -v
   allow_failure: false
 
+automator_smoke_linux:
+  stage: validate
+  image: python:3.11-bullseye
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: always
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: always
+    - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
+      when: always
+    - when: never
+  variables:
+    PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    PYTHONDONTWRITEBYTECODE: "1"
+  before_script:
+    - python3 --version
+    - pip3 install --break-system-packages --upgrade pip
+    - pip3 install --break-system-packages -r requirements.txt
+  script:
+    - |
+      set -euo pipefail
+      PORT=18080
+      LOG_FILE="automator-smoke-linux.log"
+      python3 run_automator.py --host 127.0.0.1 --port "$PORT" --no-open-browser >"$LOG_FILE" 2>&1 &
+      APP_PID=$!
+      cleanup() {
+        kill "$APP_PID" >/dev/null 2>&1 || true
+        wait "$APP_PID" >/dev/null 2>&1 || true
+      }
+      trap cleanup EXIT
+
+      python3 - "$PORT" <<'PY'
+        import sys
+        import time
+        import urllib.error
+        import urllib.request
+
+        port = int(sys.argv[1])
+        base_url = f"http://127.0.0.1:{port}"
+        deadline = time.time() + 90
+        last_error = None
+
+        while time.time() < deadline:
+            try:
+                with urllib.request.urlopen(f"{base_url}/api/healthz", timeout=2) as response:
+                    body = response.read().decode("utf-8")
+                    if response.status == 200 and '"status": "ok"' in body:
+                        break
+            except (urllib.error.URLError, TimeoutError, OSError) as exc:
+                last_error = exc
+                time.sleep(1)
+        else:
+            print(f"Timed out waiting for {base_url}/api/healthz: {last_error}", file=sys.stderr)
+            raise SystemExit(1)
+
+        with urllib.request.urlopen(f"{base_url}/", timeout=2) as response:
+            if response.status != 200:
+                raise SystemExit(f"Root endpoint returned HTTP {response.status}")
+            if "text/html" not in response.headers.get_content_type():
+                raise SystemExit("Root endpoint did not return HTML")
+      PY
+      echo "Automator smoke test passed on Linux"
+
+automator_smoke_windows:
+  stage: validate
+  tags:
+    - hq-windows-shell-2022
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: always
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: always
+    - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
+      when: always
+    - when: never
+  variables:
+    PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    PYTHONDONTWRITEBYTECODE: "1"
+  before_script:
+    - |
+      $ErrorActionPreference = 'Stop'
+      $pythonDir = Join-Path $env:CI_PROJECT_DIR 'python'
+      New-Item -ItemType Directory -Force -Path $pythonDir | Out-Null
+      $pythonZip = Join-Path $pythonDir 'python.zip'
+      Invoke-WebRequest -Uri 'https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip' -OutFile $pythonZip
+      Expand-Archive -Path $pythonZip -DestinationPath $pythonDir -Force
+      Remove-Item $pythonZip
+      $pthFile = Join-Path $pythonDir 'python311._pth'
+      (Get-Content $pthFile) -replace '#import site', 'import site' | Set-Content $pthFile
+      $getPip = Join-Path $pythonDir 'get-pip.py'
+      Invoke-WebRequest -Uri 'https://bootstrap.pypa.io/get-pip.py' -OutFile $getPip
+      & (Join-Path $pythonDir 'python.exe') $getPip
+      & (Join-Path $pythonDir 'python.exe') -m pip install --upgrade pip
+      & (Join-Path $pythonDir 'python.exe') -m pip install -r (Join-Path $env:CI_PROJECT_DIR 'requirements.txt')
+      $env:Path = "$pythonDir;$env:Path"
+  script:
+    - |
+      $ErrorActionPreference = 'Stop'
+      $port = 18081
+      $logFile = Join-Path $env:CI_PROJECT_DIR 'automator-smoke-windows.log'
+      $python = Join-Path $env:CI_PROJECT_DIR 'python\python.exe'
+      $process = Start-Process -FilePath $python -WorkingDirectory $env:CI_PROJECT_DIR -ArgumentList @(
+        'run_automator.py',
+        '--host', '127.0.0.1',
+        '--port', "$port",
+        '--no-open-browser'
+      ) -RedirectStandardOutput $logFile -RedirectStandardError $logFile -PassThru
+
+      try {
+        $deadline = (Get-Date).AddSeconds(90)
+        $healthOk = $false
+
+        while ((Get-Date) -lt $deadline) {
+          try {
+            $response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$port/api/healthz" -TimeoutSec 2
+            if ($response.StatusCode -eq 200 -and $response.Content -match '"status"' -and $response.Content -match '"ok"') {
+              $healthOk = $true
+              break
+            }
+          } catch {
+            Start-Sleep -Seconds 1
+          }
+        }
+
+        if (-not $healthOk) {
+          throw "Timed out waiting for http://127.0.0.1:$port/api/healthz"
+        }
+
+        $root = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$port/" -TimeoutSec 2
+        if ($root.StatusCode -ne 200) {
+          throw "Root endpoint returned HTTP $($root.StatusCode)"
+        }
+
+        Write-Host "Automator smoke test passed on Windows"
+      }
+      finally {
+        if (-not $process.HasExited) {
+          Stop-Process -Id $process.Id -Force
+        }
+      }
+
 fetch_agents:
   stage: fetch-agents
-  image: python:3.9-bullseye
+  image: python:3.11-bullseye
   rules:
     - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
       when: always
@@ -146,7 +287,7 @@ fetch_agents:
 
 automator_build:
   stage: build
-  image: python:3.9-bullseye
+  image: python:3.11-bullseye
   needs:
     - job: fetch_agents
       artifacts: true
@@ -360,7 +501,7 @@ build-sonar:
 
 deploy_lambda:
   stage: deploy
-  image: python:3.9
+  image: python:3.11-bullseye
   rules:
     - if: $CI_COMMIT_TAG =~ /^dbmoto-/
       when: always
