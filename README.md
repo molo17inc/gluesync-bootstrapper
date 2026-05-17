@@ -1378,3 +1378,54 @@ aws cloudformation delete-stack --stack-name dbmoto-xml-converter
 - **CORS**: Configure for web applications
 - **File validation**: XML content is validated during processing
 - **Rate limiting**: Configure API Gateway throttling
+
+## MCP Server (AI Agent Integration)
+
+Gluesync exposes a **Model Context Protocol (MCP) server** that lets any MCP-compatible AI agent (Claude Desktop, Cursor, OpenClaw, custom agents) control CoreHub pipeline operations directly — no manual API calls needed.
+
+### What agents can do
+
+| Tool | Description |
+|---|---|
+| `list_pipelines` | List all pipelines |
+| `get_pipeline` | Full config and agent details |
+| `get_pipeline_status` | Health summary (syncing / idle / erroring / paused) |
+| `start_entity_sync` | Start sync, optionally with snapshot |
+| `stop_entity_sync` | Stop sync for one or all entities |
+| `export_pipeline_yaml` | Export pipeline config to YAML |
+| `get_notifications` | Recent CoreHub events and errors |
+| *(and more…)* | See [`mcp_server/README.md`](mcp_server/README.md) for the full list |
+
+### Quick start — SSE (Automator running)
+
+If the Automator is already running, the MCP server is available immediately:
+
+```
+http://localhost:<AUTOMATOR_PORT>/mcp/sse
+```
+
+Point your MCP client at that URL. No extra setup required.
+
+### Quick start — stdio (Claude Desktop / CLI)
+
+```json
+{
+  "mcpServers": {
+    "gluesync": {
+      "command": "python3",
+      "args": ["-m", "mcp_server.server"],
+      "cwd": "/path/to/gluesync-bootstrapper",
+      "env": {
+        "COREHUB_TOKEN": "your-token",
+        "CORE_HUB_URL": "https://localhost:1717"
+      }
+    }
+  }
+}
+```
+
+### Authentication
+
+Pass a CoreHub JWT as the `token` argument to any tool call, or set `COREHUB_TOKEN` in the environment once and omit it from every call.
+
+→ Full documentation, example agent interactions, and all available tools: [`mcp_server/README.md`](mcp_server/README.md)
