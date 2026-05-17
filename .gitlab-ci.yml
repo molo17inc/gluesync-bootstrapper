@@ -220,13 +220,14 @@ automator_smoke_windows:
       $ErrorActionPreference = 'Stop'
       $port = 18081
       $logFile = Join-Path $env:CI_PROJECT_DIR 'automator-smoke-windows.log'
+      $errorLogFile = Join-Path $env:CI_PROJECT_DIR 'automator-smoke-windows.err.log'
       $python = Join-Path $env:CI_PROJECT_DIR 'python\python.exe'
       $process = Start-Process -FilePath $python -WorkingDirectory $env:CI_PROJECT_DIR -ArgumentList @(
         'run_automator.py',
         '--host', '127.0.0.1',
         '--port', "$port",
         '--no-open-browser'
-      ) -RedirectStandardOutput $logFile -RedirectStandardError $logFile -PassThru
+      ) -RedirectStandardOutput $logFile -RedirectStandardError $errorLogFile -PassThru
 
       try {
         $deadline = (Get-Date).AddSeconds(90)
