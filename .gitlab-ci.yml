@@ -189,6 +189,8 @@ automator_smoke_windows:
       & (Join-Path $pythonDir 'python.exe') $getPip
       & (Join-Path $pythonDir 'python.exe') -m pip install --upgrade pip
       & (Join-Path $pythonDir 'python.exe') -m pip install -r (Join-Path $env:CI_PROJECT_DIR 'requirements.txt')
+      # Add project root to sys.path so automator_app is importable from embedded Python
+      Add-Content $pthFile "`r`n$env:CI_PROJECT_DIR"
       $env:Path = "$pythonDir;$env:Path"
   script:
     - |
