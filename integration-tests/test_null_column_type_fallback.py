@@ -33,6 +33,7 @@ import copy
 import sys
 import unittest
 from pathlib import Path
+from typing import Dict, List, Optional
 from unittest import mock
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -118,7 +119,7 @@ class EnrichNullColumnTypesTests(unittest.TestCase):
     # ------------------------------------------------------------------
     def _make_schemas_with_null_types(self, table: str = "MY_TABLE",
                                       schema: str = "SYSADM",
-                                      cols: list | None = None) -> dict:
+                                      cols: Optional[List[dict]] = None) -> dict:
         cols = cols or [
             _null_type_yaml_col("COL_A", "col_a", 1),
             _null_type_yaml_col("COL_B", "col_b", 2),
