@@ -8,9 +8,10 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from typing import Optional
 
 
-def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Check the Automator smoke server")
     parser.add_argument(
         "--base-url",
@@ -32,10 +33,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: Optional[list[str]] = None) -> int:
     args = _parse_args(argv)
     deadline = time.time() + args.timeout
-    last_error: Exception | None = None
+    last_error: Optional[Exception] = None
 
     health_url = f"{args.base_url}/api/healthz"
     root_url = f"{args.base_url}/"
