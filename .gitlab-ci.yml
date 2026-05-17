@@ -143,35 +143,35 @@ automator_smoke_linux:
       }
       trap cleanup EXIT
 
-      python3 - "$PORT" <<'PY'
-import sys
-import time
-import urllib.error
-import urllib.request
+      python3 - "$PORT" <<-'PY'
+        	import sys
+        	import time
+        	import urllib.error
+        	import urllib.request
 
-port = int(sys.argv[1])
-base_url = f"http://127.0.0.1:{port}"
-deadline = time.time() + 90
-last_error = None
+        	port = int(sys.argv[1])
+        	base_url = f"http://127.0.0.1:{port}"
+        	deadline = time.time() + 90
+        	last_error = None
 
-while time.time() < deadline:
-    try:
-        with urllib.request.urlopen(f"{base_url}/api/healthz", timeout=2) as response:
-            body = response.read().decode("utf-8")
-            if response.status == 200 and '"status": "ok"' in body:
-                break
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        last_error = exc
-        time.sleep(1)
-else:
-    print(f"Timed out waiting for {base_url}/api/healthz: {last_error}", file=sys.stderr)
-    raise SystemExit(1)
+        	while time.time() < deadline:
+        	    try:
+        	        with urllib.request.urlopen(f"{base_url}/api/healthz", timeout=2) as response:
+        	            body = response.read().decode("utf-8")
+        	            if response.status == 200 and '"status": "ok"' in body:
+        	                break
+        	    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        	        last_error = exc
+        	        time.sleep(1)
+        	else:
+        	    print(f"Timed out waiting for {base_url}/api/healthz: {last_error}", file=sys.stderr)
+        	    raise SystemExit(1)
 
-with urllib.request.urlopen(f"{base_url}/", timeout=2) as response:
-    if response.status != 200:
-        raise SystemExit(f"Root endpoint returned HTTP {response.status}")
-    if "text/html" not in response.headers.get_content_type():
-        raise SystemExit("Root endpoint did not return HTML")
+        	with urllib.request.urlopen(f"{base_url}/", timeout=2) as response:
+        	    if response.status != 200:
+        	        raise SystemExit(f"Root endpoint returned HTTP {response.status}")
+        	    if "text/html" not in response.headers.get_content_type():
+        	        raise SystemExit("Root endpoint did not return HTML")
       PY
       echo "Automator smoke test passed on Linux"
 
