@@ -1,0 +1,1 @@
+# Gluesync MCP Server package

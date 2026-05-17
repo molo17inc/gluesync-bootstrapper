@@ -2299,6 +2299,52 @@ def create_app() -> FastAPI:
                 detail=f"Failed to upload certificate: {str(e)}"
             ) from e
 
+    # ── MCP Server (SSE transport) ─────────────────────────────────────────
+    # Mount the Gluesync MCP server at /mcp so any MCP-capable AI agent can
+    # connect while the Automator is running.  The dependency on the `mcp`
+    # package is optional: if it is not installed the Automator continues to
+    # work normally and only the /mcp endpoint is unavailable.
+    try:
+        from mcp.server.sse import SseServerTransport
+        from starlette.routing import Mount, Route
+        from starlette.applications import Starlette
+        from mcp_server.server import server as _mcp_server, InitializationOptions
+
+        _sse_transport = SseServerTransport("/mcp/messages/")
+
+        async def _mcp_handle_sse(request):
+            async with _sse_transport.connect_sse(
+                request.scope, request.receive, request._send
+            ) as streams:
+                await _mcp_server.run(
+                    streams[0],
+                    streams[1],
+                    InitializationOptions(
+                        server_name="gluesync-automator",
+                        server_version="1.0.0",
+                        capabilities=_mcp_server.get_capabilities(
+                            notification_options=None,
+                            experimental_capabilities={},
+                        ),
+                    ),
+                )
+
+        _mcp_starlette = Starlette(
+            routes=[
+                Route("/sse", endpoint=_mcp_handle_sse),
+                Mount("/messages/", app=_sse_transport.handle_post_message),
+            ]
+        )
+        app.mount("/mcp", _mcp_starlette)
+        logger.info("Gluesync MCP server mounted at /mcp/sse (SSE transport)")
+    except ImportError:
+        logger.info(
+            "mcp package not available – MCP server endpoint disabled. "
+            "Install 'mcp' to enable AI agent integration."
+        )
+    except Exception as _mcp_exc:  # pylint: disable=broad-except
+        logger.warning("Failed to mount MCP server: %s", _mcp_exc)
+
     return app
 
 
