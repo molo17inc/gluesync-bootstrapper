@@ -872,7 +872,38 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
         # Build columns definition with IDs
         columns_def = []
-        
+
+        # ---------------------------------------------------------------
+        # Detect legacy backup YAML where all column types are null.
+        # This is caused by an old GlueSync version that stored Column with
+        # a DataTypeInterface field that was not registered for serialisation,
+        # resulting in null being written to SQLite and propagated to exports.
+        # Build a discovery-based type lookup so we can resolve types during
+        # entity creation without relying on the (broken) YAML type field.
+        # ---------------------------------------------------------------
+        _yaml_cols = custom_config.get('columns') or []
+        _null_type_cols = [
+            c for c in _yaml_cols
+            if isinstance(c, dict) and "source" in c and c.get("type") is None
+        ]
+        _discovery_type_by_source: Dict[str, str] = {}
+        if _null_type_cols and len(_null_type_cols) == len(_yaml_cols) and _yaml_cols:
+            logger.warning(
+                f"Table {table_name}: all {len(_yaml_cols)} YAML column type fields are null – "
+                f"this backup was exported from a GlueSync instance with legacy entity storage. "
+                f"Falling back to live CoreHub discovery for column type resolution."
+            )
+            for disc_col in (columns.get("columns") or []):
+                _disc_name = disc_col.get("name") or ""
+                _disc_dt = disc_col.get("dataType") or disc_col.get("type")
+                if _disc_name and _disc_dt:
+                    _discovery_type_by_source[_disc_name] = _disc_dt
+            if _discovery_type_by_source:
+                logger.info(
+                    f"Table {table_name}: resolved {len(_discovery_type_by_source)} column types "
+                    f"from live source discovery (will be used as fallback for null YAML types)"
+                )
+
         has_column_mappings = _is_column_mappings(custom_config.get('columns', []))
         is_column_whitelist = _is_column_whitelist(custom_config.get('columns', []))
         
@@ -1395,6 +1426,21 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             if _override:
                                 resolved_target_type = _override
 
+                            # Fallback for legacy null-type backups: if we still have no
+                            # resolved type, use the live discovery type for this source column
+                            if not resolved_target_type and _discovery_type_by_source:
+                                _fallback_src_type = _discovery_type_by_source.get(col.get("name", ""))
+                                if _fallback_src_type:
+                                    resolved_target_type = map_data_type(
+                                        _fallback_src_type, source_node_info, target_node_info,
+                                        source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
+                                        target_table_column_types=target_table_column_types,
+                                    )
+                                    logger.debug(
+                                        f"Table {table_name}, column {col.get('name')}: resolved target type "
+                                        f"via discovery fallback ({_fallback_src_type} → {resolved_target_type})"
+                                    )
+
                             max_target_col_id = max(max_target_col_id, target_col_id)
                             # Get isPrimaryKey from discovered target column or fall back to source column
                             target_is_primary_key = (discovered_target_col.get("isPK") if discovered_target_col else False) or col.get("isPK", False) or _is_in_keys(col["name"], custom_config)
@@ -1554,7 +1600,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     else:
                         # Object format with user-defined properties
                         col_name = target_col.get('name')
-                        col_type = target_col.get('dataType', target_col.get('type', 'varchar'))  # Default to varchar if not specified
+                        col_type = target_col.get('dataType') or target_col.get('type') or 'varchar'  # null-safe: treat explicit null as missing
                         col_data_length = target_col.get('dataLength', 1024)  # Default data length
                         col_numeric_precision = target_col.get('numPrec', 0)  # Default numeric precision
                         col_numeric_scale = target_col.get('numScale', 0)  # Default numeric scale
@@ -2665,7 +2711,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     else:
                         # Object format with user-defined properties
                         col_name = target_col.get('name')
-                        col_type = target_col.get('dataType', target_col.get('type', 'varchar'))  # Default to varchar if not specified
+                        col_type = target_col.get('dataType') or target_col.get('type') or 'varchar'  # null-safe: treat explicit null as missing
                         col_data_length = target_col.get('dataLength', 1024)  # Default data length
                         col_numeric_precision = target_col.get('numPrec', 0)  # Default numeric precision
                         col_numeric_scale = target_col.get('numScale', 0)  # Default numeric scale

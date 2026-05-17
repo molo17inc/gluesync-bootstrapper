@@ -478,7 +478,7 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                     else:
                         # Object format with user-defined properties
                         col_name = target_col.get('name')
-                        col_type = target_col.get('dataType', target_col.get('type', 'varchar'))  # Default to varchar if not specified
+                        col_type = target_col.get('dataType') or target_col.get('type') or 'varchar'  # null-safe: treat explicit null as missing
                         col_data_length = target_col.get('dataLength', 1024)  # Default data length
                         col_numeric_precision = target_col.get('numPrec', 0)  # Default numeric precision
                         col_numeric_scale = target_col.get('numScale', 0)  # Default numeric scale
@@ -531,7 +531,10 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
                                 f"Warning: Column metadata entry missing 'name' for table {target_table_name}. Skipping entry: {col_meta}")
                             continue
 
-                        col_type = col_meta.get('dataType', col_meta.get('type', 'varchar'))
+                        # Use `or` rather than .get(key, default) so that an explicit
+                        # null value (type: null in YAML) is treated the same as a
+                        # missing key and falls through to the 'varchar' fallback.
+                        col_type = col_meta.get('dataType') or col_meta.get('type') or 'varchar'
                         col_data_length = _to_int(col_meta.get('dataLength', col_meta.get('data_length')))
                         col_numeric_precision = _to_int(col_meta.get('numericPrecision', col_meta.get('numeric_precision')))
                         col_numeric_scale = _to_int(col_meta.get('numericScale', col_meta.get('numeric_scale')))

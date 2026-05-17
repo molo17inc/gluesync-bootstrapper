@@ -28,7 +28,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
-from commons import fetch_core_hub
+from commons import fetch_core_hub, get_table_columns
 from utils.chronos_client import ChronosClient
 from utils.log import create_log_file, get_logger, log_failure, log_success
 
@@ -571,6 +571,13 @@ def _process_single_entity(
             
             # Build column mapping with metadata using explicit source/target keys
             # Use column index in sorted array as ordinalPosition (1-based)
+            if target_type is None:
+                logger.warning(
+                    f"Column '{source_name}' in table '{source_table_name}' has no data type "
+                    f"in stored entity data (legacy entity with unserialised DataTypeInterface). "
+                    f"The type field will be null in the export; use a recent version of GlueSync "
+                    f"or re-create the entity to populate the type."
+                )
             col_mapping = {
                 "source": source_name,
                 "target": target_name,
@@ -1059,6 +1066,97 @@ def build_yaml_structure(
     return root
 
 
+def enrich_null_column_types_from_discovery(
+    schemas: Dict[str, Any],
+    entities: List[Dict[str, Any]],
+    token: str,
+    pipeline_id: str,
+) -> int:
+    """Post-processing pass: for every table whose exported column types are all null
+    (symptom of legacy entities stored when Column.dataType was an unregistered interface),
+    call the CoreHub live column discovery endpoint and backfill the 'type' field.
+
+    Returns the number of tables that were successfully enriched.
+    """
+    # Identify the source agent ID from the entity list
+    source_agent_id: Optional[str] = None
+    for ent in entities:
+        for ae in ent.get("agentEntities", []) or []:
+            if (ae.get("entityType") or {}).get("type") == "Source":
+                source_agent_id = ae.get("agentId")
+                break
+        if source_agent_id:
+            break
+
+    if not source_agent_id:
+        logger.warning("enrich_null_column_types_from_discovery: could not determine source agent ID – skipping enrichment")
+        return 0
+
+    enriched = 0
+    for schema_name, schema_cfg in schemas.items():
+        if not isinstance(schema_cfg, dict):
+            continue
+        custom = (schema_cfg.get("tables") or {}).get("custom") or {}
+        for table_name, table_cfg in custom.items():
+            if not isinstance(table_cfg, dict):
+                continue
+            columns = table_cfg.get("columns") or []
+            if not columns:
+                continue
+
+            # Only attempt enrichment when ALL column type fields are null –
+            # that is the clear fingerprint of the legacy serialisation bug.
+            export_format_cols = [
+                c for c in columns
+                if isinstance(c, dict) and "source" in c and c.get("type") is None
+            ]
+            if not export_format_cols or len(export_format_cols) < len(columns):
+                continue  # already has types, or mixed format – leave alone
+
+            try:
+                discovered = get_table_columns(token, pipeline_id, source_agent_id, schema_name, table_name)
+                if not discovered or not isinstance(discovered.get("columns"), list):
+                    logger.warning(
+                        f"enrich_null_column_types_from_discovery: discovery returned no columns "
+                        f"for {schema_name}.{table_name} – leaving type as null"
+                    )
+                    continue
+
+                disc_by_name: Dict[str, Any] = {
+                    c["name"]: c for c in discovered["columns"] if c.get("name")
+                }
+
+                filled = 0
+                for col_mapping in columns:
+                    if not (isinstance(col_mapping, dict) and col_mapping.get("type") is None and "source" in col_mapping):
+                        continue
+                    source_col_name = col_mapping["source"]
+                    disc_col = disc_by_name.get(source_col_name)
+                    if disc_col:
+                        resolved = disc_col.get("dataType") or disc_col.get("type")
+                        if resolved:
+                            col_mapping["type"] = resolved
+                            filled += 1
+
+                if filled:
+                    logger.info(
+                        f"enrich_null_column_types_from_discovery: filled {filled}/{len(columns)} "
+                        f"null column types for {schema_name}.{table_name} via live discovery"
+                    )
+                    enriched += 1
+                else:
+                    logger.warning(
+                        f"enrich_null_column_types_from_discovery: discovery found no matching columns "
+                        f"for {schema_name}.{table_name}"
+                    )
+            except Exception as exc:
+                logger.warning(
+                    f"enrich_null_column_types_from_discovery: failed for {schema_name}.{table_name}: {exc}"
+                )
+
+    return enriched
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
@@ -1102,6 +1200,11 @@ def main() -> None:
 
         jobs = fetch_pipeline_jobs(pipeline_id)
         attach_schedules_from_jobs(jobs, entities_by_id, schemas, group_id_to_name)
+
+        # Backfill null column types via live discovery (legacy entity serialisation bug)
+        enriched = enrich_null_column_types_from_discovery(schemas, entities, token, pipeline_id)
+        if enriched:
+            logger.info(f"Enriched null column types for {enriched} table(s) via live discovery")
 
         yaml_data = build_yaml_structure(schemas, groups_by_name)
 
