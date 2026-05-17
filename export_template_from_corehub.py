@@ -21,6 +21,7 @@
 # Copyright (C) 2025 MOLO17. All rights reserved.
 
 import argparse
+import io
 import json
 import os
 from pathlib import Path
@@ -1059,6 +1060,156 @@ def build_yaml_structure(
     return root
 
 
+def build_export_header(
+    token: str,
+    pipeline_id: str,
+    base_url: Optional[str] = None,
+) -> str:
+    """Return a YAML comment block that records the provenance of the export.
+
+    The header is prepended verbatim to every exported backup YAML so that
+    anyone receiving the file can immediately tell:
+    - which CoreHub instance produced it (URL + version),
+    - which pipeline was exported (ID + name),
+    - and when the export was taken.
+
+    All fields are best-effort: failures to fetch any piece of info are
+    silently swallowed so that a metadata hiccup never blocks the export.
+    """
+    from datetime import datetime, timezone
+
+    corehub_version = "unknown"
+    pipeline_name = pipeline_id
+    corehub_url = base_url or CORE_HUB_URL
+
+    try:
+        version_resp = fetch_core_hub("/version", token=token)
+        if isinstance(version_resp, str):
+            corehub_version = version_resp.strip()
+        elif isinstance(version_resp, dict):
+            corehub_version = (
+                version_resp.get("version")
+                or version_resp.get("appVersion")
+                or str(version_resp)
+            )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.debug("build_export_header: could not fetch CoreHub version: %s", exc)
+
+    try:
+        pipeline_resp = fetch_core_hub(f"/pipelines/{pipeline_id}", token=token)
+        if isinstance(pipeline_resp, dict):
+            pipeline_name = pipeline_resp.get("name") or pipeline_id
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.debug("build_export_header: could not fetch pipeline name: %s", exc)
+
+    exported_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    lines = [
+        "# ---------------------------------------------------------------",
+        "# Gluesync Automator – Pipeline Configuration Export",
+        "# ---------------------------------------------------------------",
+        f"# CoreHub URL     : {corehub_url}",
+        f"# CoreHub version : {corehub_version}",
+        f"# Pipeline ID     : {pipeline_id}",
+        f"# Pipeline name   : {pipeline_name}",
+        f"# Exported at     : {exported_at} (UTC)",
+        "# ---------------------------------------------------------------",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def enrich_null_column_types_from_discovery(
+    schemas: Dict[str, Any],
+    entities: List[Dict[str, Any]],
+    token: str,
+    pipeline_id: str,
+) -> int:
+    """Post-processing pass: for every table whose exported column types are all null
+    (symptom of legacy entities stored when Column.dataType was an unregistered interface),
+    call the CoreHub live column discovery endpoint and backfill the 'type' field.
+
+    Returns the number of tables that were successfully enriched.
+    """
+    # Identify the source agent ID from the entity list
+    source_agent_id: Optional[str] = None
+    for ent in entities:
+        for ae in ent.get("agentEntities", []) or []:
+            if (ae.get("entityType") or {}).get("type") == "Source":
+                source_agent_id = ae.get("agentId")
+                break
+        if source_agent_id:
+            break
+
+    if not source_agent_id:
+        logger.warning("enrich_null_column_types_from_discovery: could not determine source agent ID – skipping enrichment")
+        return 0
+
+    enriched = 0
+    for schema_name, schema_cfg in schemas.items():
+        if not isinstance(schema_cfg, dict):
+            continue
+        custom = (schema_cfg.get("tables") or {}).get("custom") or {}
+        for table_name, table_cfg in custom.items():
+            if not isinstance(table_cfg, dict):
+                continue
+            columns = table_cfg.get("columns") or []
+            if not columns:
+                continue
+
+            # Only attempt enrichment when ALL column type fields are null –
+            # that is the clear fingerprint of the legacy serialisation bug.
+            export_format_cols = [
+                c for c in columns
+                if isinstance(c, dict) and "source" in c and c.get("type") is None
+            ]
+            if not export_format_cols or len(export_format_cols) < len(columns):
+                continue  # already has types, or mixed format – leave alone
+
+            try:
+                discovered = get_table_columns(token, pipeline_id, source_agent_id, schema_name, table_name)
+                if not discovered or not isinstance(discovered.get("columns"), list):
+                    logger.warning(
+                        f"enrich_null_column_types_from_discovery: discovery returned no columns "
+                        f"for {schema_name}.{table_name} – leaving type as null"
+                    )
+                    continue
+
+                disc_by_name: Dict[str, Any] = {
+                    c["name"]: c for c in discovered["columns"] if c.get("name")
+                }
+
+                filled = 0
+                for col_mapping in columns:
+                    if not (isinstance(col_mapping, dict) and col_mapping.get("type") is None and "source" in col_mapping):
+                        continue
+                    source_col_name = col_mapping["source"]
+                    disc_col = disc_by_name.get(source_col_name)
+                    if disc_col:
+                        resolved = disc_col.get("dataType") or disc_col.get("type")
+                        if resolved:
+                            col_mapping["type"] = resolved
+                            filled += 1
+
+                if filled:
+                    logger.info(
+                        f"enrich_null_column_types_from_discovery: filled {filled}/{len(columns)} "
+                        f"null column types for {schema_name}.{table_name} via live discovery"
+                    )
+                    enriched += 1
+                else:
+                    logger.warning(
+                        f"enrich_null_column_types_from_discovery: discovery found no matching columns "
+                        f"for {schema_name}.{table_name}"
+                    )
+            except Exception as exc:
+                logger.warning(
+                    f"enrich_null_column_types_from_discovery: failed for {schema_name}.{table_name}: {exc}"
+                )
+
+    return enriched
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
@@ -1110,13 +1261,14 @@ def main() -> None:
         if out_dir and not os.path.exists(out_dir):
             os.makedirs(out_dir, exist_ok=True)
 
+        # Build provenance header and prepend it to the YAML
+        header = build_export_header(token, pipeline_id)
+        yaml_buffer = io.StringIO()
+        yaml.safe_dump(yaml_data, yaml_buffer, sort_keys=False, allow_unicode=True)
+
         with open(output_path, "w", encoding="utf-8") as f:
-            yaml.safe_dump(
-                yaml_data,
-                f,
-                sort_keys=False,
-                allow_unicode=True,
-            )
+            f.write(header)
+            f.write(yaml_buffer.getvalue())
 
         log_success(logger, f"Export completed for pipeline {pipeline_id}. Output: {output_path}")
 

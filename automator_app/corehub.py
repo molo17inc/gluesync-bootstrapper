@@ -61,6 +61,7 @@ from export_template_from_corehub import (
     build_schemas_from_entities,
     attach_schedules_from_jobs,
     build_yaml_structure,
+    build_export_header,
 )
 import time
 import yaml
@@ -990,7 +991,10 @@ def export_pipeline_yaml(
         sort_keys=False,
         allow_unicode=True,
     )
-    return buffer.getvalue()
+
+    # Prepend provenance header so recipients can identify the source instance
+    header = build_export_header(token, pipeline_id, base_url=base_url)
+    return header + buffer.getvalue()
 
 
 def export_pipeline_full_backup(
