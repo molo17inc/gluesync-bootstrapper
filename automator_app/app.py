@@ -45,7 +45,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from commons import extract_all_schemas_from_yaml, extract_schema_types_from_yaml
 from . import corehub
@@ -122,6 +122,8 @@ def _cleanup_old_fingerprints(static_dir: Path, original_name: str, keep_name: s
 
 
 class LoginRequest(BaseModel):
+    model_config = ConfigDict(validate_by_name=True)
+
     base_url: str = Field(..., alias="baseUrl")
     username: str
     password: str
@@ -130,25 +132,23 @@ class LoginRequest(BaseModel):
     enable_scheduling: bool = Field(True, alias="enableScheduling")
     create_tables: bool = Field(True, alias="createTables")
 
-    @validator("base_url")
+    @field_validator("base_url")
     def _strip_url(cls, value: str) -> str:  # pylint: disable=no-self-argument
         return value.strip()
 
-    class Config:
-        allow_population_by_field_name = True
-
 
 class BulkTemplateRequest(BaseModel):
+    model_config = ConfigDict(validate_by_name=True)
+
     pipeline_id: str = Field(..., alias="pipelineId")
     source_schema: str = Field(..., alias="sourceSchema")
     target_schema: str = Field(..., alias="targetSchema")
     table_names: list[str] = Field(..., alias="tableNames")
 
-    class Config:
-        allow_population_by_field_name = True
-
 
 class RunRequest(BaseModel):
+    model_config = ConfigDict(validate_by_name=True)
+
     pipeline_id: str = Field(..., alias="pipelineId")
     source_schema: str = Field(..., alias="sourceSchema")
     target_schema: str = Field(..., alias="targetSchema")
@@ -162,9 +162,6 @@ class RunRequest(BaseModel):
     use_ssl: Optional[bool] = Field(None, alias="useSsl")
     skip_verify: Optional[bool] = Field(None, alias="skipVerify")
     auto_schemas: bool = Field(True, alias="autoSchemas")
-
-    class Config:
-        allow_population_by_field_name = True
 
 
 class UploadResponse(BaseModel):
@@ -223,6 +220,8 @@ class BulkTablesResponse(BaseModel):
 
 
 class BulkCreateRequest(BaseModel):
+    model_config = ConfigDict(validate_by_name=True)
+
     pipeline_id: str = Field(..., alias="pipelineId")
     source_schema: str = Field(..., alias="sourceSchema")
     target_schema: str = Field(..., alias="targetSchema")
@@ -234,11 +233,10 @@ class BulkCreateRequest(BaseModel):
     enable_scheduling: Optional[bool] = Field(None, alias="enableScheduling")
     create_tables: Optional[bool] = Field(None, alias="createTables")
 
-    class Config:
-        allow_population_by_field_name = True
-
 
 class DuplicatePipelineRequest(BaseModel):
+    model_config = ConfigDict(validate_by_name=True)
+
     new_pipeline_name: Optional[str] = Field(None, alias="newPipelineName")
     source_agent_tag: str = Field(..., alias="sourceAgentTag")
     target_agent_tag: str = Field(..., alias="targetAgentTag")
@@ -253,11 +251,10 @@ class DuplicatePipelineRequest(BaseModel):
     override_source_schema: Optional[str] = Field(None, alias="overrideSourceSchema")
     override_target_schema: Optional[str] = Field(None, alias="overrideTargetSchema")
 
-    class Config:
-        allow_population_by_field_name = True
-
 
 class DuplicatePipelineResponse(BaseModel):
+    model_config = ConfigDict(validate_by_name=True)
+
     original_pipeline_id: str = Field(..., alias="originalPipelineId")
     new_pipeline_id: str = Field(..., alias="newPipelineId")
     new_pipeline_name: str = Field(..., alias="newPipelineName")
@@ -268,27 +265,22 @@ class DuplicatePipelineResponse(BaseModel):
     entity_clone_status: Optional[str] = Field(None, alias="entityCloneStatus")
     entity_clone_errors: Optional[list[str]] = Field(None, alias="entityCloneErrors")
 
-    class Config:
-        allow_population_by_field_name = True
-
 
 class PipelineAgentsResponse(BaseModel):
+    model_config = ConfigDict(validate_by_name=True)
+
     source_agent_type: Optional[str] = Field(None, alias="sourceAgentType")
     source_agent_tag: Optional[str] = Field(None, alias="sourceAgentTag")
     target_agent_type: Optional[str] = Field(None, alias="targetAgentType")
     target_agent_tag: Optional[str] = Field(None, alias="targetAgentTag")
 
-    class Config:
-        allow_population_by_field_name = True
-
 
 class UploadCertificateRequest(BaseModel):
+    model_config = ConfigDict(validate_by_name=True)
+
     pipeline_id: str = Field(..., alias="pipelineId")
     agent_id: str = Field(..., alias="agentId")
     certificate_type: str = Field(..., alias="certificateType")
-
-    class Config:
-        allow_population_by_field_name = True
 
 
 def _ensure_static_assets() -> None:
@@ -1901,5 +1893,4 @@ def create_app() -> FastAPI:
         logger.warning("Failed to mount MCP server: %s", _mcp_exc)
 
     return app
-
 
