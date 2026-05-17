@@ -133,7 +133,7 @@ automator_smoke_linux:
   script:
     - |
       set -euo pipefail
-      PORT=18080
+      PORT="$(python3 -c 'import socket; sock = socket.socket(); sock.bind(("127.0.0.1", 0)); print(sock.getsockname()[1]); sock.close()')"
       LOG_FILE="automator-smoke-linux.log"
       python3 run_automator.py --host 127.0.0.1 --port "$PORT" --no-open-browser >"$LOG_FILE" 2>&1 &
       APP_PID=$!
@@ -143,36 +143,11 @@ automator_smoke_linux:
       }
       trap cleanup EXIT
 
-      python3 - "$PORT" <<-'PY'
-        	import sys
-        	import time
-        	import urllib.error
-        	import urllib.request
-
-        	port = int(sys.argv[1])
-        	base_url = f"http://127.0.0.1:{port}"
-        	deadline = time.time() + 90
-        	last_error = None
-
-        	while time.time() < deadline:
-        	    try:
-        	        with urllib.request.urlopen(f"{base_url}/api/healthz", timeout=2) as response:
-        	            body = response.read().decode("utf-8")
-        	            if response.status == 200 and '"status": "ok"' in body:
-        	                break
-        	    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        	        last_error = exc
-        	        time.sleep(1)
-        	else:
-        	    print(f"Timed out waiting for {base_url}/api/healthz: {last_error}", file=sys.stderr)
-        	    raise SystemExit(1)
-
-        	with urllib.request.urlopen(f"{base_url}/", timeout=2) as response:
-        	    if response.status != 200:
-        	        raise SystemExit(f"Root endpoint returned HTTP {response.status}")
-        	    if "text/html" not in response.headers.get_content_type():
-        	        raise SystemExit("Root endpoint did not return HTML")
-      PY
+      if ! python3 scripts/automator_smoke_check.py --base-url "http://127.0.0.1:${PORT}" --timeout 180; then
+        echo "Automator smoke log tail:"
+        tail -n 200 "$LOG_FILE" || true
+        exit 1
+      fi
       echo "Automator smoke test passed on Linux"
 
 automator_smoke_windows:
@@ -210,7 +185,10 @@ automator_smoke_windows:
   script:
     - |
       $ErrorActionPreference = 'Stop'
-      $port = 18081
+      $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+      $listener.Start()
+      $port = $listener.LocalEndpoint.Port
+      $listener.Stop()
       $logFile = Join-Path $env:CI_PROJECT_DIR 'automator-smoke-windows.log'
       $errorLogFile = Join-Path $env:CI_PROJECT_DIR 'automator-smoke-windows.err.log'
       $python = Join-Path $env:CI_PROJECT_DIR 'python\python.exe'
@@ -222,30 +200,11 @@ automator_smoke_windows:
       ) -RedirectStandardOutput $logFile -RedirectStandardError $errorLogFile -PassThru
 
       try {
-        $deadline = (Get-Date).AddSeconds(90)
-        $healthOk = $false
-
-        while ((Get-Date) -lt $deadline) {
-          try {
-            $response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$port/api/healthz" -TimeoutSec 2
-            if ($response.StatusCode -eq 200 -and $response.Content -match '"status"' -and $response.Content -match '"ok"') {
-              $healthOk = $true
-              break
-            }
-          } catch {
-            Start-Sleep -Seconds 1
-          }
+        $smokeCheck = Join-Path (Join-Path $env:CI_PROJECT_DIR 'scripts') 'automator_smoke_check.py'
+        & $python $smokeCheck --base-url "http://127.0.0.1:$port" --timeout 180
+        if ($LASTEXITCODE -ne 0) {
+          throw "Automator smoke helper failed"
         }
-
-        if (-not $healthOk) {
-          throw "Timed out waiting for http://127.0.0.1:$port/api/healthz"
-        }
-
-        $root = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$port/" -TimeoutSec 2
-        if ($root.StatusCode -ne 200) {
-          throw "Root endpoint returned HTTP $($root.StatusCode)"
-        }
-
         Write-Host "Automator smoke test passed on Windows"
       }
       finally {
