@@ -556,12 +556,19 @@ def map_data_type(source_type, source_node_info, target_node_info,
 
     # Step 1: If target table exists, reuse source type when it's already a
     # dataType used by an existing target column.
-    if target_table_column_types and source_type in target_table_column_types:
-        logger.debug(
-            f"map_data_type: source type '{source_type}' already present "
-            f"in target table, keeping as-is"
+    if target_table_column_types:
+        normalized_source_type = str(source_type).strip().lower()
+        matched_target_type = next(
+            (existing_type for existing_type in target_table_column_types
+             if str(existing_type).strip().lower() == normalized_source_type),
+            None,
         )
-        return source_type
+        if matched_target_type:
+            logger.debug(
+                f"map_data_type: source type '{source_type}' already present "
+                f"in target table, reusing target spelling '{matched_target_type}'"
+            )
+            return matched_target_type
 
     # Step 2: Resolve source -> gluesyncDataType
     source_item = next(
