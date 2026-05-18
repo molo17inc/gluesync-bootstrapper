@@ -311,6 +311,93 @@ class CreateEntitiesFromDemoKitYamlTests(unittest.TestCase):
         self.assertEqual(target_entity_type["filter"]["clauses"][0]["operation"]["type"], "Equal")
         self.assertEqual(target_entity_type["filter"]["clauses"][0]["operation"]["filterValue"], "Female")
 
+    def test_create_entities_normalizes_source_data_types_to_gluesync_types(self):
+        import create_all_entities
+
+        yaml_config = _load_yaml(
+            """
+public:
+  target: GLUESYNCUSER
+  tables:
+    whitelist: [tstfch2]
+    blacklist: []
+    custom:
+      tstfch2:
+        name: tstfch2
+        keys: [k]
+        columns:
+          - name: k
+            type: NUMBER
+            isNullable: false
+          - name: fch
+            type: DATE
+            isNullable: true
+            """
+        )
+
+        source_node_info = {
+            "category": "RDBMS",
+            "dataTypesMatrix": [
+                {"supportedTypes": ["numeric"], "gluesyncDataType": "NUMBER"},
+                {"supportedTypes": ["date"], "gluesyncDataType": "DATE"},
+            ],
+        }
+        target_node_info = {
+            "category": "RDBMS",
+            "dataTypesMatrix": [
+                {"gluesyncDataType": "NUMBER", "defaultType": "NUMBER", "supportedTypes": ["NUMBER"]},
+                {"gluesyncDataType": "DATE", "defaultType": "DATE", "supportedTypes": ["DATE"]},
+            ],
+        }
+
+        captured_puts = []
+
+        def fake_fetch(path, method="GET", token=None, body=None, **kwargs):
+            if path.endswith("/config/entities") and method == "PUT":
+                captured_puts.append(copy.deepcopy(body))
+                return {"ok": True}
+            if path.endswith("/entities"):
+                entities = captured_puts[-1]["entities"] if captured_puts else []
+                return [{"entity": {"entityId": "entity-1", **entity}} for entity in entities]
+            return {}
+
+        def fake_columns(table):
+            if table == "tstfch2":
+                return {
+                    "columns": [
+                        {"name": "k", "id": 1, "dataType": "numeric", "isPK": True, "isNullable": False, "position": 1},
+                        {"name": "fch", "id": 2, "dataType": "date", "isPK": False, "isNullable": True, "position": 2},
+                    ]
+                }
+            if table == "TSTFCH2":
+                return {
+                    "columns": [
+                        {"name": "K", "id": 11, "dataType": "NUMBER", "isPK": True, "isNullable": False, "position": 1},
+                        {"name": "FCH", "id": 12, "dataType": "DATE", "isPK": False, "isNullable": True, "position": 2},
+                    ]
+                }
+            return {"columns": []}
+
+        with mock.patch.object(create_all_entities, "CREATE_TABLE_IF_NOT_EXISTS", False),              mock.patch.object(create_all_entities, "get_node_info", side_effect=[source_node_info, target_node_info]),              mock.patch.object(create_all_entities, "get_agent_tables", return_value=[]),              mock.patch.object(create_all_entities, "get_table_columns", side_effect=lambda token, pipeline_id, agent_id, schema, table: fake_columns(table)),              mock.patch.object(create_all_entities, "fetch_core_hub", side_effect=fake_fetch),              contextlib.redirect_stdout(io.StringIO()):
+            result = create_all_entities.create_entities(
+                token="token",
+                pipeline_id="pipeline",
+                source_schema="public",
+                target_schema="GLUESYNCUSER",
+                tables=[{"name": "tstfch2", "schema": "public", "id": 1}],
+                source_agent_id="source-agent",
+                target_agent_id="target-agent",
+                source_type="SQL",
+                target_type="SQL",
+                yaml_config=yaml_config,
+                chunk_size=50,
+            )
+
+        self.assertEqual(result, {"successful": 1, "failed": 0, "total": 1})
+        payload = captured_puts[0]
+        source_entity, target_entity = payload["entities"][0]["agentEntities"]
+        self.assertEqual([col["dataType"] for col in source_entity["columns"]], ["NUMBER", "DATE"])
+
 
 class CreateSchedulesFromDemoKitYamlTests(unittest.TestCase):
     def test_create_entities_wires_entity_and_group_schedules_from_chronos_template(self):

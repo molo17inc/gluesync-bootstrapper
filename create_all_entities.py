@@ -127,6 +127,28 @@ def _is_in_keys(col_name, custom_config):
                 return True
     return False
 
+
+def _get_source_gluesync_data_type(source_type, source_node_info):
+    """Resolve a source native type to GlueSync's canonical data type."""
+    if not source_type:
+        return source_type
+
+    source_matrix = (source_node_info or {}).get('dataTypesMatrix', [])
+    normalized_source_type = str(source_type).split('(')[0].strip().lower()
+
+    source_item = next(
+        (
+            item for item in source_matrix
+            if any(str(t).strip().lower() == normalized_source_type for t in item.get('supportedTypes', []))
+        ),
+        None,
+    )
+    if source_item and source_item.get('gluesyncDataType'):
+        return source_item['gluesyncDataType']
+
+    return str(source_type).strip().upper()
+
+
 def _enrich_column(col_dict, source_col):
     if not source_col:
         return col_dict
@@ -975,7 +997,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             "position": col.get("position", 0),
                             "name": source_col_name,
                             "alias": target_col_name,
-                            "dataType": col.get("dataType"),
+                            "dataType": _get_source_gluesync_data_type(col.get("dataType"), source_node_info),
                             "isPK": col.get("isPK", False) or _is_in_keys(source_col_name, custom_config),
                             "isIdentity": col.get("isIdentity", False),
                             "isNullable": col.get("isNullable", True),
@@ -1006,7 +1028,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     "position": col.get("position", 0),
                     "name": col["name"],
                     "alias": col["name"],
-                    "dataType": col.get("dataType"),
+                    "dataType": _get_source_gluesync_data_type(col.get("dataType"), source_node_info),
                     "isPK": col.get("isPK", False) or _is_in_keys(col["name"], custom_config), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
                 }, col))
 
@@ -2031,7 +2053,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     "position": col.get("position", 0),
                     "name": col["name"],
                     "alias": col["name"],
-                    "dataType": col.get("dataType"),
+                    "dataType": _get_source_gluesync_data_type(col.get("dataType"), source_node_info),
                     "isPK": col.get("isPK", False) or _is_in_keys(col["name"], custom_config), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
                 }, col))
 
@@ -2454,7 +2476,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     "position": col.get("position", 0),
                     "name": col["name"],
                     "alias": col["name"],
-                    "dataType": col.get("dataType"),
+                    "dataType": _get_source_gluesync_data_type(col.get("dataType"), source_node_info),
                     "isPK": col.get("isPK", False) or _is_in_keys(col["name"], table_data), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
                 }, col))
 
