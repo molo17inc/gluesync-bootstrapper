@@ -95,22 +95,34 @@ def _is_target_known_type(data_type, target_node_info):
     target-compatible value, even when that value happens to be identical to
     the source dataType (e.g. PostgreSQL ``numeric`` -> Vertica ``numeric``).
     """
+    return _canonicalize_target_type(data_type, target_node_info) is not None
+
+
+def _canonicalize_target_type(data_type, target_node_info):
+    """Return the canonical target-matrix casing for ``data_type`` or None.
+
+    Looks up ``data_type`` (case-insensitively) in the target's
+    ``dataTypesMatrix`` ``defaultType``/``supportedTypes`` lists and returns
+    the value with the matrix's original casing. Returns None when no match
+    is found. ``defaultType`` matches take precedence over ``supportedTypes``.
+    """
     if not data_type or not target_node_info:
-        return False
+        return None
     matrix = target_node_info.get('dataTypesMatrix') or []
     needle = str(data_type).strip().lower()
     if not needle:
-        return False
+        return None
+    supported_match = None
     for entry in matrix:
         if not isinstance(entry, dict):
             continue
         default_type = entry.get('defaultType')
         if default_type and str(default_type).strip().lower() == needle:
-            return True
+            return str(default_type)
         for st in entry.get('supportedTypes') or []:
-            if st and str(st).strip().lower() == needle:
-                return True
-    return False
+            if st and str(st).strip().lower() == needle and supported_match is None:
+                supported_match = str(st)
+    return supported_match
 
 
 def _is_in_keys(col_name, custom_config):
@@ -1492,9 +1504,13 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             _mapped = map_data_type(_source_dt, source_node_info, target_node_info,
                                                     source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
                                                     target_table_column_types=target_table_column_types)
-                            _mapping_succeeded = bool(_mapped) and _is_target_known_type(_mapped, target_node_info)
-                            if _mapping_succeeded:
-                                resolved_target_type = _mapped
+                            _canonical = _canonicalize_target_type(_mapped, target_node_info) if _mapped else None
+                            if _canonical:
+                                # Prefer YAML `type:` when it is also a known target type
+                                # (gives the user authoritative control over target casing/variant).
+                                _yaml_type = yaml_col.get('type')
+                                _yaml_canonical = _canonicalize_target_type(_yaml_type, target_node_info) if _yaml_type else None
+                                resolved_target_type = _yaml_canonical or _canonical
                             elif yaml_col.get('type'):
                                 resolved_target_type = yaml_col.get('type')
                             elif discovered_target_col and discovered_target_col.get('dataType'):
