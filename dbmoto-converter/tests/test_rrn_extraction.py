@@ -65,10 +65,11 @@ class TestRRNExtraction(unittest.TestCase):
         parser.args.force_schemas = None
         
         # Parse and export
-        connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name, record_id_mappings = parser.parse_xml()
+        connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name, record_id_mappings, refresh_filters = parser.parse_xml()
         parser.export_as_yaml(
             connections, groups, chains, replications,
             source_to_target_schemas, field_mappings, field_id_to_name, record_id_mappings,
+            refresh_filters=refresh_filters,
             output_dir=self.temp_output_dir
         )
         
@@ -117,7 +118,7 @@ class TestRRNExtraction(unittest.TestCase):
         parser.args.xml_path = self.test_xml
         parser.args.output_dir = self.temp_output_dir
         
-        connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name, record_id_mappings = parser.parse_xml()
+        connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name, record_id_mappings, _refresh_filters = parser.parse_xml()
         
         # Verify RecordID mapping was detected
         self.assertIsNotNone(record_id_mappings)
@@ -142,10 +143,11 @@ class TestRRNExtraction(unittest.TestCase):
         parser.args.force_schemas = None
         
         # Parse and export
-        connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name, record_id_mappings = parser.parse_xml()
+        connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name, record_id_mappings, refresh_filters = parser.parse_xml()
         parser.export_as_yaml(
             connections, groups, chains, replications,
             source_to_target_schemas, field_mappings, field_id_to_name, record_id_mappings,
+            refresh_filters=refresh_filters,
             output_dir=self.temp_output_dir
         )
         
