@@ -22,6 +22,7 @@
 import argparse
 import base64
 import gzip
+import html
 import json
 import os
 import re
@@ -287,6 +288,19 @@ def parse_xml():
                 "trg_table_id": repl_elem.findtext("TrgTableID"),
                 "group_priority": int(properties.get('GroupPriority', '0')) if group_id in chains else 0
             }
+    
+    # Extract replication statuses for refresh filters (whereClause)
+    refresh_filters = {}
+    for status_elem in root.findall("./tables/DBMMReplStatuses"):
+        repl_id = status_elem.findtext("ReplicationID")
+        props_text = status_elem.findtext("Properties", "")
+        for prop in props_text.split(';'):
+            if '=' in prop:
+                key, value = prop.split('=', 1)
+                if key.strip() == "RefreshFilter" and value.strip():
+                    refresh_filters[repl_id] = html.unescape(value.strip())
+                    print(f"  Found refresh filter for replication {repl_id}: {refresh_filters[repl_id]}")
+                    break
     
     # Extract database connections and identify source vs target
     print("Extracting connections...")
@@ -637,9 +651,9 @@ def parse_xml():
     conversion_stats['replications'] = len(replications)
     conversion_stats['schema_mappings'] = len(source_to_target_schemas)
     
-    return connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name, record_id_mappings
+    return connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name, record_id_mappings, refresh_filters
 
-def export_as_yaml(connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name, record_id_mappings=None, output_dir=None, template_file=None):
+def export_as_yaml(connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name, record_id_mappings=None, output_dir=None, template_file=None, refresh_filters=None):
     # Use environment variables if parameters are not provided (Lambda mode)
     if output_dir is None:
         output_dir = os.environ.get('OUTPUT_DIR')
@@ -909,6 +923,11 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                     }
                     if export_table_name != table_name:
                         print(f"      Mapped source table '{table_name}' -> target table '{export_table_name}' (schema: {target_schema_name}, connection: {target_conn_name})")
+
+                    # Add refresh filter as whereClause if available
+                    if refresh_filters and repl_id_for_table and refresh_filters.get(repl_id_for_table):
+                        table_config["whereClause"] = refresh_filters[repl_id_for_table]
+                        print(f"      Added whereClause for table {table_name}: {refresh_filters[repl_id_for_table]}")
 
                     # Add primary keys if found, otherwise fallback:
                     # - If _RRN column exists, use it as the only key
@@ -1203,8 +1222,8 @@ if __name__ == "__main__":
             # Ensure output directory exists
             os.makedirs(args.output_dir, exist_ok=True)
             
-            # Parse the XML and get connections, groups, chains, replications, schema mappings, field mappings, and record ID mappings
-            connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name, record_id_mappings = parse_xml()
+            # Parse the XML and get connections, groups, chains, replications, schema mappings, field mappings, record ID mappings, and refresh filters
+            connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name, record_id_mappings, refresh_filters = parse_xml()
             
             # Print hierarchy summary
             print("\n=== Database Structure ===")
@@ -1216,7 +1235,7 @@ if __name__ == "__main__":
             
             # Export as YAML files
             print("\nExporting to YAML files...")
-            exported = export_as_yaml(connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name, record_id_mappings)
+            exported = export_as_yaml(connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name, record_id_mappings, refresh_filters=refresh_filters)
             print(f"\nDone! {exported} YAML files created in {os.path.abspath(args.output_dir)}/")
             print("These files match the structure needed for table-list-template.yaml in gluesync-bootstrapper.")
             
