@@ -117,20 +117,25 @@ def table_exists(pipeline_id: str, schema_name: str, table_name: str, token: str
     """
     Check if a table exists in the given schema.
     """
+    # When CREATE_TABLE_IF_NOT_EXISTS is enabled, a 404 "not found" is expected
+    # during table discovery and should not be logged as an error.
+    expected_statuses = {404} if CREATE_TABLE_IF_NOT_EXISTS else None
+
     try:
         # URL-encode the table name to handle special characters
         encoded_table_name = urllib.parse.quote(table_name, safe='')
         fetch_core_hub(
             f"/pipelines/{pipeline_id}/config/entities/schemas/{schema_name}/tables/{encoded_table_name}",
             method="GET",
-            token=token
+            token=token,
+            expected_error_statuses=expected_statuses
         )
         logger.info(f"Table {table_name} exists in schema {schema_name}")
         return True
     except (requests.exceptions.RequestException, RuntimeError) as e:
         error_msg = str(e)
         logger.info(f"Initial table existence check failed for {table_name}: {error_msg}")
-        
+
         # Try opposite casing
         if table_name != table_name.lower():
             # Original has uppercase, try lowercase
@@ -143,21 +148,22 @@ def table_exists(pipeline_id: str, schema_name: str, table_name: str, token: str
         else:
             # No casing change possible, return False
             return False
-            
+
         try:
             # URL-encode the alternate table name as well
             encoded_alternate_table_name = urllib.parse.quote(alternate_table_name, safe='')
             fetch_core_hub(
                 f"/pipelines/{pipeline_id}/config/entities/schemas/{schema_name}/tables/{encoded_alternate_table_name}",
                 method="GET",
-                token=token
+                token=token,
+                expected_error_statuses=expected_statuses
             )
             logger.info(f"Table {alternate_table_name} exists in schema {schema_name} (using alternate casing)")
             return True
         except (requests.exceptions.RequestException, RuntimeError) as e2:
             error_msg2 = str(e2)
             logger.info(f"Alternate casing check also failed for {alternate_table_name}: {error_msg2}")
-        
+
         return False
 
 def generate_create_table_statement(pipeline_id: str, schema_name: str, table_name: str, token: str,

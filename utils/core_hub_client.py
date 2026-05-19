@@ -75,7 +75,7 @@ class CoreHubClient:
 
         self.session = requests.Session()
 
-    def request(self, path, method='GET', token=None, body=None, params=None, headers=None):
+    def request(self, path, method='GET', token=None, body=None, params=None, headers=None, expected_error_statuses=None):
         url = f"{self.base_url}{path}"
         headers = headers.copy() if headers else {}
 
@@ -86,10 +86,10 @@ class CoreHubClient:
         # send malformed/double Content-Encoding headers
         if 'Accept-Encoding' not in headers:
             headers['Accept-Encoding'] = 'identity'
-        
+
         # Use configured SSL verification setting
         verify = self.verify_ssl if self.use_ssl else False
-        
+
         try:
             if method.upper() == 'GET':
                 response = self.session.get(url, headers=headers, verify=verify, params=params)
@@ -117,23 +117,33 @@ class CoreHubClient:
                 response = self.session.delete(url, headers=headers, verify=verify, params=params)
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")
-            
+
             # Force raise for status
             response.raise_for_status()
-            
+
             # Parse JSON response or return text if not JSON
             try:
                 return response.json()
             except ValueError:
                 return response.text
         except requests.exceptions.RequestException as e:
+            # Check if this is an expected error status (e.g. 404 during table existence checks)
+            is_expected = False
+            if expected_error_statuses and hasattr(e, 'response') and e.response is not None:
+                is_expected = e.response.status_code in expected_error_statuses
+
             # Check if this is a 401 Unauthorized error - these are expected during
             # initial authentication attempts and should be warnings, not errors
             is_401 = False
             if hasattr(e, 'response') and e.response is not None:
                 is_401 = e.response.status_code == 401
-            
-            if is_401:
+
+            if is_expected:
+                logger.info(f"CoreHub API request returned expected status: {str(e)}")
+                if hasattr(e, 'response') and e.response is not None:
+                    logger.info(f"Status code: {e.response.status_code}")
+                    logger.info(f"Response: {e.response.text}")
+            elif is_401:
                 logger.warning(f"CoreHub API request failed: {str(e)}")
                 if hasattr(e, 'response') and e.response is not None:
                     logger.warning(f"Status code: {e.response.status_code}")

@@ -124,7 +124,7 @@ def get_oracle_agent_tags() -> set[str]:
     return oracle_tags
 
 
-def fetch_core_hub(path, method='GET', token=None, body=None, params=None, headers=None):
+def fetch_core_hub(path, method='GET', token=None, body=None, params=None, headers=None, expected_error_statuses=None):
     # Log request details
     logger.debug(f"\n{'=' * 80}")
     logger.debug(f"[API REQUEST] {method.upper()} {path}")
@@ -154,7 +154,7 @@ def fetch_core_hub(path, method='GET', token=None, body=None, params=None, heade
     try:
         # Make the request
         start_time = time.time()
-        response = core_hub_client.request(path, method, token, body, params, headers=headers)
+        response = core_hub_client.request(path, method, token, body, params, headers=headers, expected_error_statuses=expected_error_statuses)
         duration = time.time() - start_time
 
         # Log response (dump full JSON when possible, otherwise capture long strings)
@@ -185,15 +185,30 @@ def fetch_core_hub(path, method='GET', token=None, body=None, params=None, heade
         return response
 
     except Exception as e:
-        logger.error(f"API request failed: {str(e)}")
+        # Check if this is an expected error status (e.g. 404 during table existence checks)
+        is_expected = False
+        if expected_error_statuses and hasattr(e, 'response') and e.response is not None:
+            is_expected = e.response.status_code in expected_error_statuses
+
+        if is_expected:
+            logger.info(f"API request returned expected status: {str(e)}")
+        else:
+            logger.error(f"API request failed: {str(e)}")
+
         error_payload = None
         if hasattr(e, 'response') and e.response is not None:
             try:
                 error_payload = e.response.json()
-                logger.error(f"Error response: {json.dumps(error_payload, indent=2)}")
+                if is_expected:
+                    logger.info(f"Response: {json.dumps(error_payload, indent=2)}")
+                else:
+                    logger.error(f"Error response: {json.dumps(error_payload, indent=2)}")
             except Exception:
                 error_payload = e.response.text
-                logger.error(f"Error response: {error_payload}")
+                if is_expected:
+                    logger.info(f"Response: {error_payload}")
+                else:
+                    logger.error(f"Error response: {error_payload}")
         logger.debug("=" * 80 + "\n")
 
         message = f"CoreHub request {method.upper()} {path} failed: {e}"
