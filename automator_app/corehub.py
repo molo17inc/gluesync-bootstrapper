@@ -229,6 +229,7 @@ def authenticate(
     base_url: str,
     username: str,
     password: str,
+    new_password: Optional[str] = None,
     use_ssl: Optional[bool] = None,
     skip_verify: Optional[bool] = None,
 ) -> str:
@@ -244,8 +245,35 @@ def authenticate(
     )
 
     token = response.get("apiToken") if isinstance(response, dict) else None
+    change_required = bool(response.get("changeRequired")) if isinstance(response, dict) else False
     if not token:
         raise RuntimeError("Authentication failed: no token returned")
+
+    if change_required:
+        if not new_password:
+            raise RuntimeError(
+                "Password change required by CoreHub. Provide newPassword and retry login."
+            )
+        reset_response = client.request(
+            "/authentication/reset-password",
+            method="POST",
+            token=token,
+            body={"oldPassword": password, "newPassword": new_password},
+        )
+        if str(reset_response).strip() != "Password changed":
+            raise RuntimeError(f"Password reset failed: {reset_response}")
+
+        reauth_response = client.request(
+            "/authentication/login",
+            method="POST",
+            body={"username": username, "password": new_password},
+        )
+        token = reauth_response.get("apiToken") if isinstance(reauth_response, dict) else None
+        still_requires_change = bool(reauth_response.get("changeRequired")) if isinstance(reauth_response, dict) else False
+        if not token:
+            raise RuntimeError("Re-authentication failed after password reset: no token returned")
+        if still_requires_change:
+            raise RuntimeError("Password change is still required after reset")
 
     logger.info("Authentication successful for user %s", username)
     return token
