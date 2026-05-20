@@ -219,15 +219,31 @@ def fetch_pipeline_jobs(pipeline_id: str) -> List[Dict[str, Any]]:
     """Fetch all Chronos jobs for the given pipeline."""
     chronos_client = ChronosClient(corehub_url=os.getenv("CORE_HUB_URL"))
     try:
-        jobs = chronos_client._request(  # type: ignore[attr-defined]
+        jobs_response = chronos_client._request(  # type: ignore[attr-defined]
             "api/jobs/", params={"pipeline_id": pipeline_id, "limit": 1000}
         )
     except Exception as exc:  # pylint: disable=broad-except
         logger.warning(f"Failed to fetch Chronos jobs for pipeline {pipeline_id}: {exc}")
         return []
 
-    if not isinstance(jobs, list):
-        logger.warning(f"Unexpected Chronos jobs response format: {str(jobs)[:500]}")
+    # Chronos can return either:
+    # - a plain list of jobs (legacy shape)
+    # - a paginated object {"items": [...], ...} (newer shape)
+    jobs: List[Dict[str, Any]]
+    if isinstance(jobs_response, list):
+        jobs = [j for j in jobs_response if isinstance(j, dict)]
+    elif isinstance(jobs_response, dict):
+        items = jobs_response.get("items")
+        if isinstance(items, list):
+            jobs = [j for j in items if isinstance(j, dict)]
+        else:
+            logger.warning(
+                "Unexpected Chronos jobs response format: missing 'items' list in %s",
+                str(jobs_response)[:500],
+            )
+            return []
+    else:
+        logger.warning(f"Unexpected Chronos jobs response format: {str(jobs_response)[:500]}")
         return []
 
     logger.info(f"Fetched {len(jobs)} Chronos jobs for pipeline {pipeline_id}")
