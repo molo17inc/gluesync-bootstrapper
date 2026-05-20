@@ -294,11 +294,19 @@ def parse_xml():
     for status_elem in root.findall("./tables/DBMMReplStatuses"):
         repl_id = status_elem.findtext("ReplicationID")
         props_text = status_elem.findtext("Properties", "")
-        for prop in props_text.split(';'):
+        # Respect \; (escaped semicolons) when splitting by semicolons
+        _placeholder = "\x00ESC_SEMI\x00"
+        safe_props = props_text.replace("\\;", _placeholder)
+        for prop in safe_props.split(';'):
             if '=' in prop:
                 key, value = prop.split('=', 1)
                 if key.strip() == "RefreshFilter" and value.strip():
-                    refresh_filters[repl_id] = html.unescape(value.strip())
+                    # Restore escaped semicolons, then unescape XML entities and backslash escapes
+                    filt = value.strip().replace(_placeholder, ";")
+                    filt = html.unescape(filt)
+                    filt = filt.replace("\\=", "=")
+                    filt = filt.replace("\\\\", "\\")
+                    refresh_filters[repl_id] = filt
                     print(f"  Found refresh filter for replication {repl_id}: {refresh_filters[repl_id]}")
                     break
     

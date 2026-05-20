@@ -114,5 +114,123 @@ class TestRefreshFilterExtraction(unittest.TestCase):
             self.assertNotEqual(filt.strip(), '', f"Empty filter for repl {repl_id} should be skipped")
 
 
+class TestRefreshFilterUnescaping(unittest.TestCase):
+    """Test that RefreshFilter values are fully unescaped (XML entities + backslash escapes)."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.xml_path = os.path.join(self.temp_dir, 'test_unescape.xml')
+
+        # Synthetic XML with both XML entities and backslash escapes in RefreshFilter
+        with open(self.xml_path, 'w', encoding='utf-8') as f:
+            f.write(r'<?xml version="1.0" encoding="utf-8"?>' + '\n')
+            f.write(r'<metadata version="10.7.1">' + '\n')
+            f.write(r'  <tables>' + '\n')
+            # Connection
+            f.write(r'    <DBMMConnections>' + '\n')
+            f.write(r'      <ConnectionID>1</ConnectionID>' + '\n')
+            f.write(r'      <Name>TestSource</Name>' + '\n')
+            f.write(r'      <IsSource>Y</IsSource>' + '\n')
+            f.write(r'    </DBMMConnections>' + '\n')
+            # Schema
+            f.write(r'    <DBMMSchemas>' + '\n')
+            f.write(r'      <SchemaID>1</SchemaID>' + '\n')
+            f.write(r'      <ConnectionID>1</ConnectionID>' + '\n')
+            f.write(r'      <Name>TESTSCHEMA</Name>' + '\n')
+            f.write(r'    </DBMMSchemas>' + '\n')
+            # Table
+            f.write(r'    <DBMMTables>' + '\n')
+            f.write(r'      <TableID>1</TableID>' + '\n')
+            f.write(r'      <SchemaID>1</SchemaID>' + '\n')
+            f.write(r'      <Name>T1</Name>' + '\n')
+            f.write(r'    </DBMMTables>' + '\n')
+            # Field
+            f.write(r'    <DBMMFields>' + '\n')
+            f.write(r'      <FieldID>1</FieldID>' + '\n')
+            f.write(r'      <TableID>1</TableID>' + '\n')
+            f.write(r'      <Name>ID</Name>' + '\n')
+            f.write(r'      <Type>INT</Type>' + '\n')
+            f.write(r'      <Size>10</Size>' + '\n')
+            f.write(r'      <PrimaryKeyPos>1</PrimaryKeyPos>' + '\n')
+            f.write(r'    </DBMMFields>' + '\n')
+            # Replication
+            f.write(r'    <DBMMReplications>' + '\n')
+            f.write(r'      <ReplicationID>99</ReplicationID>' + '\n')
+            f.write(r'      <GroupID>0</GroupID>' + '\n')
+            f.write(r'      <Name>R1</Name>' + '\n')
+            f.write(r'      <SrcTableID>1</SrcTableID>' + '\n')
+            f.write(r'      <TrgTableID>1</TrgTableID>' + '\n')
+            f.write(r'    </DBMMReplications>' + '\n')
+            # RefreshFilter with &gt;\= (XML entity + backslash escape)
+            f.write(r'    <DBMMReplStatuses>' + '\n')
+            f.write(r'      <ReplicationID>99</ReplicationID>' + '\n')
+            f.write(r'      <Properties>RefreshFilter=(A*100+B)&gt;\=to_char(1);BlockSize=10000;</Properties>' + '\n')
+            f.write(r'    </DBMMReplStatuses>' + '\n')
+            # Another with &lt;\= and semicolon-in-value (\;)
+            f.write(r'    <DBMMReplStatuses>' + '\n')
+            f.write(r'      <ReplicationID>98</ReplicationID>' + '\n')
+            f.write(r'      <Properties>RefreshFilter=X&lt;\=5\;Y&gt;\=10;BlockSize=10000;</Properties>' + '\n')
+            f.write(r'    </DBMMReplStatuses>' + '\n')
+            f.write(r'  </tables>' + '\n')
+            f.write(r'</metadata>' + '\n')
+
+        parser.args.xml_path = self.xml_path
+        parser.args.output_dir = self.temp_dir
+        parser.args.template = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            'table-list-template-basic.yaml'
+        )
+        parser.args.include_targets = True
+        parser.args.force_schemas = None
+
+    def tearDown(self):
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
+
+    def test_backslash_and_xml_entities_unescaped(self):
+        r"""\= and \; inside RefreshFilter must become = and ; after parsing."""
+        result = parser.parse_xml()
+        refresh_filters = result[-1]
+
+        self.assertIn('99', refresh_filters)
+        self.assertEqual(refresh_filters['99'], "(A*100+B)>=to_char(1)")
+
+        self.assertIn('98', refresh_filters)
+        self.assertEqual(refresh_filters['98'], "X<=5;Y>=10")
+
+    def test_whereClause_in_yaml_with_unescaped_operators(self):
+        r"""Exported YAML must contain >= and <=, not &gt;\= or &lt;\=."""
+        result = parser.parse_xml()
+        refresh_filters = result[-1]
+
+        parser.export_as_yaml(
+            *result[:-1],
+            refresh_filters=refresh_filters,
+            output_dir=self.temp_dir
+        )
+
+        yaml_files = [f for f in os.listdir(self.temp_dir) if f.endswith('.yaml')]
+        self.assertGreater(len(yaml_files), 0)
+
+        for yf in yaml_files:
+            with open(os.path.join(self.temp_dir, yf), 'r') as fh:
+                content = yaml.safe_load(fh)
+            for schema_name, schema_data in content.items():
+                if isinstance(schema_data, dict) and 'tables' in schema_data:
+                    custom = schema_data['tables'].get('custom', {})
+                    for table_name, table_def in custom.items():
+                        if 'whereClause' in table_def:
+                            wc = table_def['whereClause']
+                            self.assertNotIn("&gt;", wc)
+                            self.assertNotIn("&lt;", wc)
+                            self.assertNotIn("\\=", wc)
+                            self.assertNotIn("\\;", wc)
+                            # Should contain actual operators
+                            self.assertTrue(
+                                '>=' in wc or '<=' in wc,
+                                f"whereClause should contain >= or <=, got: {wc}"
+                            )
+
+
 if __name__ == '__main__':
     unittest.main()
