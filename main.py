@@ -772,7 +772,7 @@ def main():
 
     # First check if we have a valid SDK token
     sdk_token = None
-    if not use_sdk:
+    if use_sdk:
         try:
             # Try to get token from SDK first if available
             if 'GluesyncSDK' in globals():
