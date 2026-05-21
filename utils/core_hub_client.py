@@ -81,6 +81,13 @@ class CoreHubClient:
 
         if token:
             headers['Authorization'] = f'Bearer {token}'
+            # Also sync the token as the gs-auth cookie so that CoreHub
+            # instances whose extractAuthHeader reads the cookie (rather than
+            # the Authorization header) still authenticate correctly.  This
+            # matters for subprocesses that start a fresh requests.Session()
+            # and therefore have no cookies carried over from a prior login.
+            parsed = urlparse(self.base_url)
+            self.session.cookies.set('gs-auth', token, domain=parsed.hostname or 'localhost')
 
         # Disable automatic gzip acceptance to avoid issues with servers that
         # send malformed/double Content-Encoding headers
