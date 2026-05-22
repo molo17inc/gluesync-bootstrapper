@@ -97,10 +97,10 @@ class TestJournalCheckpointExtraction(unittest.TestCase):
         journal_checkpoints = result[-2]
 
         self.assertIsInstance(journal_checkpoints, dict)
-        self.assertIn('TESTSCHEMA', journal_checkpoints)
-        self.assertIn('JRN001', journal_checkpoints['TESTSCHEMA'])
+        self.assertIn('LIB1', journal_checkpoints)
+        self.assertIn('JRN001', journal_checkpoints['LIB1'])
 
-        cp = journal_checkpoints['TESTSCHEMA']['JRN001']
+        cp = journal_checkpoints['LIB1']['JRN001']
         self.assertEqual(cp['journalLibrary'], 'LIB1')
         self.assertEqual(cp['journalName'], 'JRN001')
         self.assertEqual(cp['receiverLibrary'], 'LIB1')
@@ -169,7 +169,7 @@ class TestJournalCheckpointExtraction(unittest.TestCase):
             output_dir=self.temp_dir
         )
 
-        cp_path = os.path.join(self.temp_dir, 'TESTSCHEMA', 'JRN001.cp')
+        cp_path = os.path.join(self.temp_dir, 'LIB1', 'JRN001.cp')
         self.assertTrue(os.path.exists(cp_path))
 
         with open(cp_path, 'r') as fh:
@@ -232,7 +232,7 @@ class TestJournalCheckpointExtraction(unittest.TestCase):
         result = parser.parse_xml()
         journal_checkpoints = result[-2]
 
-        self.assertEqual(journal_checkpoints['TESTSCHEMA']['J']['sequenceNumber'], '00000000000000000007')
+        self.assertEqual(journal_checkpoints['L']['J']['sequenceNumber'], '00000000000000000007')
 
     def test_checkpoint_written_without_yaml_export(self):
         """If a schema has a checkpoint but no tables with fields, the .cp file should still be written."""
@@ -282,7 +282,7 @@ class TestJournalCheckpointExtraction(unittest.TestCase):
             output_dir=self.temp_dir
         )
 
-        cp_path = os.path.join(self.temp_dir, 'EMPTYSCHEMA', 'JRN001.cp')
+        cp_path = os.path.join(self.temp_dir, 'LIB1', 'JRN001.cp')
         self.assertTrue(os.path.exists(cp_path), f"Checkpoint file should be written even without fields")
 
         with open(cp_path, 'r') as fh:
@@ -291,7 +291,7 @@ class TestJournalCheckpointExtraction(unittest.TestCase):
 
 
 class TestJournalCheckpointGoldenSelection(unittest.TestCase):
-    """Test that only the checkpoint with the most remote (largest) timestamp is kept per journal."""
+    """Test that only the checkpoint with the oldest (smallest) timestamp is kept per journal per journalLibrary."""
 
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
@@ -341,7 +341,7 @@ class TestJournalCheckpointGoldenSelection(unittest.TestCase):
             f.write('      <ReplicationID>1</ReplicationID>\n')
             f.write('      <TransactionID>99</TransactionID>\n')
             f.write('      <TransactionTS>900000000000000000</TransactionTS>\n')
-            f.write('      <Properties>ReceiverName=RCV_NEW;ReceiverLibrary=NEW;JournalLibrary=NEW;JournalName=JRN001;</Properties>\n')
+            f.write('      <Properties>ReceiverName=RCV_NEW;ReceiverLibrary=NEW;JournalLibrary=OLD;JournalName=JRN001;</Properties>\n')
             f.write('    </DBMMReplStatuses>\n')
             f.write('  </tables>\n')
             f.write('</metadata>\n')
@@ -360,19 +360,19 @@ class TestJournalCheckpointGoldenSelection(unittest.TestCase):
             shutil.rmtree(self.temp_dir)
 
     def test_most_remote_timestamp_wins(self):
-        """When multiple checkpoints exist for the same journal, the one with the largest timestamp must be kept."""
+        """When multiple checkpoints exist for the same journal, the oldest (smallest timestamp) must be kept."""
         result = parser.parse_xml()
         journal_checkpoints = result[-2]
 
-        self.assertIn('TESTSCHEMA', journal_checkpoints)
-        self.assertIn('JRN001', journal_checkpoints['TESTSCHEMA'])
+        self.assertIn('OLD', journal_checkpoints)
+        self.assertIn('JRN001', journal_checkpoints['OLD'])
 
-        cp = journal_checkpoints['TESTSCHEMA']['JRN001']
-        self.assertEqual(cp['receiverName'], 'RCV_NEW')
-        self.assertEqual(cp['receiverLibrary'], 'NEW')
-        self.assertEqual(cp['journalLibrary'], 'NEW')
-        self.assertEqual(cp['sequenceNumber'], '00000000000000000099')
-        self.assertEqual(cp['timestamp'], 900000000000000000)
+        cp = journal_checkpoints['OLD']['JRN001']
+        self.assertEqual(cp['receiverName'], 'RCV_OLD')
+        self.assertEqual(cp['receiverLibrary'], 'OLD')
+        self.assertEqual(cp['journalLibrary'], 'OLD')
+        self.assertEqual(cp['sequenceNumber'], '00000000000000000010')
+        self.assertEqual(cp['timestamp'], 100000000000000000)
 
     def test_single_checkpoint_written_to_disk(self):
         """Only the golden checkpoint file should be written, no duplicates."""
@@ -385,14 +385,14 @@ class TestJournalCheckpointGoldenSelection(unittest.TestCase):
             output_dir=self.temp_dir
         )
 
-        cp_path = os.path.join(self.temp_dir, 'TESTSCHEMA', 'JRN001.cp')
+        cp_path = os.path.join(self.temp_dir, 'OLD', 'JRN001.cp')
         self.assertTrue(os.path.exists(cp_path))
 
         with open(cp_path, 'r') as fh:
             content = json.load(fh)
 
-        self.assertEqual(content['receiverName'], 'RCV_NEW')
-        self.assertEqual(content['timestamp'], 900000000000000000)
+        self.assertEqual(content['receiverName'], 'RCV_OLD')
+        self.assertEqual(content['timestamp'], 100000000000000000)
 
     def test_different_journals_are_independent(self):
         """Different journal names within the same schema should not interfere."""
@@ -456,14 +456,14 @@ class TestJournalCheckpointGoldenSelection(unittest.TestCase):
         result = parser.parse_xml()
         journal_checkpoints = result[-2]
 
-        self.assertIn('MIXED', journal_checkpoints)
-        self.assertEqual(len(journal_checkpoints['MIXED']), 2)
+        self.assertIn('LIB', journal_checkpoints)
+        self.assertEqual(len(journal_checkpoints['LIB']), 2)
 
-        self.assertEqual(journal_checkpoints['MIXED']['JRNA']['receiverName'], 'A_NEW')
-        self.assertEqual(journal_checkpoints['MIXED']['JRNA']['timestamp'], 200)
+        self.assertEqual(journal_checkpoints['LIB']['JRNA']['receiverName'], 'A_OLD')
+        self.assertEqual(journal_checkpoints['LIB']['JRNA']['timestamp'], 100)
 
-        self.assertEqual(journal_checkpoints['MIXED']['JRNB']['receiverName'], 'B_ONLY')
-        self.assertEqual(journal_checkpoints['MIXED']['JRNB']['timestamp'], 500)
+        self.assertEqual(journal_checkpoints['LIB']['JRNB']['receiverName'], 'B_ONLY')
+        self.assertEqual(journal_checkpoints['LIB']['JRNB']['timestamp'], 500)
 
 
 class TestJournalCheckpointIntegration(unittest.TestCase):

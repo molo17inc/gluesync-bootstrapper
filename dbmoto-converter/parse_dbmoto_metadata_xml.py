@@ -563,25 +563,6 @@ def parse_xml():
         if not all([receiver_name, receiver_library, journal_name, journal_library]):
             continue
 
-        # Find source schema for this replication
-        repl = replications.get(repl_id)
-        if not repl:
-            continue
-
-        src_table_id = repl.get('src_table_id')
-        if not src_table_id:
-            continue
-
-        # Find schema name for source table
-        src_schema_name = None
-        for schema_id, schema in schemas.items():
-            if src_table_id in schema.get("tables", {}):
-                src_schema_name = schema["name"]
-                break
-
-        if not src_schema_name:
-            continue
-
         # Format sequence number with leading zeros (20 digits)
         sequence_number = str(transaction_id).zfill(20) if transaction_id else "0".zfill(20)
 
@@ -594,16 +575,16 @@ def parse_xml():
             "timestamp": int(transaction_ts) if transaction_ts else 0
         }
 
-        # Store per schema per journal, keeping the one with the most remote (largest) timestamp
-        if src_schema_name not in journal_checkpoints:
-            journal_checkpoints[src_schema_name] = {}
+        # Store per journalLibrary per journal, keeping the oldest (smallest) timestamp
+        if journal_library not in journal_checkpoints:
+            journal_checkpoints[journal_library] = {}
 
-        existing = journal_checkpoints[src_schema_name].get(journal_name)
-        if existing is None or checkpoint_data["timestamp"] > existing["timestamp"]:
-            journal_checkpoints[src_schema_name][journal_name] = checkpoint_data
-            print(f"  Found journal checkpoint for schema '{src_schema_name}', journal '{journal_name}': seq={sequence_number}, ts={checkpoint_data['timestamp']}")
+        existing = journal_checkpoints[journal_library].get(journal_name)
+        if existing is None or checkpoint_data["timestamp"] < existing["timestamp"]:
+            journal_checkpoints[journal_library][journal_name] = checkpoint_data
+            print(f"  Found journal checkpoint for journalLibrary '{journal_library}', journal '{journal_name}': seq={sequence_number}, ts={checkpoint_data['timestamp']}")
         else:
-            print(f"  Skipped older checkpoint for schema '{src_schema_name}', journal '{journal_name}' (ts={checkpoint_data['timestamp']} <= existing ts={existing['timestamp']})")
+            print(f"  Skipped newer checkpoint for journalLibrary '{journal_library}', journal '{journal_name}' (ts={checkpoint_data['timestamp']} >= existing ts={existing['timestamp']})")
 
     # Build source-to-target schema mapping from replications
     print("\nBuilding source-to-target schema mappings...")
@@ -1125,15 +1106,16 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
             else:
                 print(f"Skipped: {conn_name}.{schema_name} (no tables with fields)")
 
-            # Write journal checkpoint files for this schema even if no tables with fields
-            if journal_checkpoints and schema_name in journal_checkpoints:
-                for journal_name, checkpoint_data in journal_checkpoints[schema_name].items():
-                    cp_dir = os.path.join(output_dir, schema_name)
-                    os.makedirs(cp_dir, exist_ok=True)
-                    cp_filepath = os.path.join(cp_dir, f"{journal_name}.cp")
-                    with open(cp_filepath, 'w') as cp_f:
-                        json.dump(checkpoint_data, cp_f, separators=(',', ':'))
-                    print(f"  Written checkpoint file: {cp_filepath}")
+    # Write journal checkpoint files per journalLibrary
+    if journal_checkpoints:
+        for journal_library, journals in journal_checkpoints.items():
+            for journal_name, checkpoint_data in journals.items():
+                cp_dir = os.path.join(output_dir, journal_library)
+                os.makedirs(cp_dir, exist_ok=True)
+                cp_filepath = os.path.join(cp_dir, f"{journal_name}.cp")
+                with open(cp_filepath, 'w') as cp_f:
+                    json.dump(checkpoint_data, cp_f, separators=(',', ':'))
+                print(f"  Written checkpoint file: {cp_filepath}")
 
     conversion_stats['yaml_files_exported'] = exported_count
     return exported_count
