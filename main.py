@@ -501,7 +501,11 @@ def save_token(token):
 # Retrieve use_sdk from environment early to avoid unnecessary imports/checks
 use_sdk = os.getenv('USE_SDK', 'False').lower() in ['true', '1', 't', 'y', 'yes']
 
-# Only check license file and initialize SDK if USE_SDK is true
+# Only check license file and import SDK class if USE_SDK is true.
+# NOTE: The actual SDK connect (initialize_gluesync_sdk) is deferred to main()
+# until after wait_for_corehub_ready, otherwise the WebSocket handshake races
+# the CoreHub startup and fails with ConnectionRefusedError, leaving the
+# client in a half-initialized state with a runaway background reconnect task.
 if use_sdk:
     # Check if the license file exists before initializing the SDK
     license_file_path = os.getenv('GLUESYNC_LICENSE_FILE', '/opt/gluesync/data/gs-license.dat')
@@ -516,9 +520,6 @@ if use_sdk:
         logger.error("gluesync_sdk module not found. Make sure it's installed as a submodule.")
         # Handle the absence of the SDK appropriately, e.g., set a flag or use a mock
         GluesyncSDK = None
-
-    # Initialize the Gluesync SDK client
-    initialize_gluesync_sdk()
 else:
     logger.info("Skipping SDK initialization as USE_SDK is set to false")
 
@@ -770,6 +771,17 @@ def main():
         lockfile_failure()
         raise
 
+    # Initialize the Gluesync SDK client now that CoreHub is reachable.
+    # Deferring this here (instead of at module-import time) avoids a race
+    # where the SDK's WebSocket handshake to /ext-module fails with
+    # ConnectionRefusedError because the CoreHub container is started but
+    # not yet listening on its port.
+    if use_sdk and 'GluesyncSDK' in globals() and GluesyncSDK is not None:
+        try:
+            initialize_gluesync_sdk()
+        except Exception as sdk_init_error:
+            logger.warning(f"SDK initialization failed, will fall back to default credentials: {sdk_init_error}")
+
     # First check if we have a valid SDK token
     sdk_token = None
     if use_sdk:
@@ -794,7 +806,7 @@ def main():
                                 token = sdk_token  # Use the SDK token for all subsequent requests
                             else:
                                 logger.warning("SDK token verification returned unexpected response")
-                            sdk_token = None
+                                sdk_token = None
                         except Exception as e:
                             logger.warning(f"SDK token verification failed: {str(e)}")
                             sdk_token = None
@@ -806,6 +818,11 @@ def main():
     if sdk_token:
         token = sdk_token
     else:
+        # Default to no password change required; will be overridden if
+        # /authentication/login response says otherwise. Pre-initialising
+        # avoids a NameError on the saved-token-only path where the
+        # default-credentials block below is skipped.
+        change_required = False
         # Otherwise, check if a valid saved token is present
         try:
             with open(AUTH_TOKEN_PATH, 'r') as f:
