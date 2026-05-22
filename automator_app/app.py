@@ -724,7 +724,7 @@ def create_app() -> FastAPI:
                 logger.info("[bulk-create] %s", line)
 
         msg = "Bulk entity creation completed successfully" if ok else result.get("error") or "Bulk entity creation failed"
-        return ApiMessage(success=ok, message=msg)
+        return ApiMessage(success=ok, message=msg, logs=logs)
 
     @inner_app.post("/api/bulk/template")
     async def bulk_export_template(request: BulkTemplateRequest):
@@ -2019,6 +2019,57 @@ def create_app() -> FastAPI:
 
         asyncio.create_task(_execute_run(run_status.run_id, request))
         return ApiMessage(message="Entity creation started")
+
+    @inner_app.post("/api/agent/certificate/upload", response_model=ApiMessage)
+    async def upload_certificate(
+        pipeline_id: str = Form(..., alias="pipelineId"),
+        agent_id: str = Form(..., alias="agentId"),
+        certificate_type: str = Form(..., alias="certificateType"),
+        file: UploadFile = File(...)
+    ) -> ApiMessage:
+        """Upload a certificate file for an agent.
+
+        Args:
+            pipeline_id: Pipeline ID
+            agent_id: Agent ID
+            certificate_type: Type of certificate (truststore, keystore, certificate)
+            file: Certificate file to upload
+
+        Returns:
+            ApiMessage with success status
+        """
+        if not state.token or not state.base_url:
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="No file provided")
+
+        certificate_ext = Path(file.filename).suffix.lstrip('.').lower() or 'crt'
+
+        certificate_data = await file.read()
+        if not certificate_data:
+            raise HTTPException(status_code=400, detail="Certificate file is empty")
+
+        try:
+            corehub.upload_agent_certificate(
+                token=state.token,
+                pipeline_id=pipeline_id,
+                agent_id=agent_id,
+                certificate_type=certificate_type,
+                certificate_data=certificate_data,
+                certificate_ext=certificate_ext,
+            )
+
+            return ApiMessage(
+                success=True,
+                message=f"Certificate uploaded successfully for agent {agent_id}"
+            )
+        except Exception as e:
+            logger.error(f"Failed to upload certificate: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to upload certificate: {str(e)}"
+            ) from e
 
     # Determine which app to return
     if not base_path:
