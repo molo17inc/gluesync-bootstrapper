@@ -38,7 +38,6 @@ from utils.core_hub_client import CoreHubClient
 CORE_HUB_URL = os.getenv('CORE_HUB_URL', 'https://localhost:1717')
 ENABLE_SCHEDULING = os.getenv('ENABLE_SCHEDULING', 'true').lower() == 'true'
 CHRONOS_URL = os.getenv('CHRONOS_URL', 'http://gluesync-chronos:8000')
-AUTH_TOKEN_PATH = os.getenv('AUTH_TOKEN_PATH', '/opt/config/auth_token.json')
 
 # Initialize the CoreHub client
 core_hub_client = CoreHubClient(CORE_HUB_URL)
@@ -125,32 +124,7 @@ def get_oracle_agent_tags() -> set[str]:
     return oracle_tags
 
 
-def _load_saved_auth_token() -> Optional[str]:
-    """Return token from AUTH_TOKEN_PATH when available and valid."""
-    try:
-        with open(AUTH_TOKEN_PATH, "r", encoding="utf-8") as file:
-            token_data = json.load(file)
-        token = token_data.get("token")
-        return token if isinstance(token, str) and token.strip() else None
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return None
-
-
-def _is_unauthorized_error(error: Exception) -> bool:
-    response = getattr(error, "response", None)
-    return response is not None and getattr(response, "status_code", None) == 401
-
-
-def fetch_core_hub(
-        path,
-        method='GET',
-        token=None,
-        body=None,
-        params=None,
-        headers=None,
-        expected_error_statuses=None,
-        retry_with_saved_token=True
-):
+def fetch_core_hub(path, method='GET', token=None, body=None, params=None, headers=None, expected_error_statuses=None):
     # Log request details
     logger.debug(f"\n{'=' * 80}")
     logger.debug(f"[API REQUEST] {method.upper()} {path}")
@@ -211,26 +185,6 @@ def fetch_core_hub(
         return response
 
     except Exception as e:
-        if retry_with_saved_token and token and _is_unauthorized_error(e):
-            refreshed_token = _load_saved_auth_token()
-            if refreshed_token and refreshed_token != token:
-                logger.info(
-                    "Retrying %s %s with refreshed token from %s after 401",
-                    method.upper(),
-                    path,
-                    AUTH_TOKEN_PATH,
-                )
-                return fetch_core_hub(
-                    path,
-                    method=method,
-                    token=refreshed_token,
-                    body=body,
-                    params=params,
-                    headers=headers,
-                    expected_error_statuses=expected_error_statuses,
-                    retry_with_saved_token=False,
-                )
-
         # Check if this is an expected error status (e.g. 404 during table existence checks)
         is_expected = False
         if expected_error_statuses and hasattr(e, 'response') and e.response is not None:

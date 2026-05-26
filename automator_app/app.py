@@ -125,7 +125,6 @@ class LoginRequest(BaseModel):
     base_url: str = Field(..., alias="baseUrl")
     username: str
     password: str
-    new_password: Optional[str] = Field(None, alias="newPassword")
     use_ssl: bool = Field(False, alias="useSsl")
     skip_verify: bool = Field(False, alias="skipVerify")
     enable_scheduling: bool = Field(True, alias="enableScheduling")
@@ -431,7 +430,6 @@ def create_app() -> FastAPI:
                 base_url=payload.base_url,
                 username=payload.username,
                 password=payload.password,
-                new_password=payload.new_password,
                 use_ssl=payload.use_ssl,
                 skip_verify=payload.skip_verify,
             )
@@ -1857,4 +1855,5 @@ def create_app() -> FastAPI:
             ) from e
 
     return app
+
 

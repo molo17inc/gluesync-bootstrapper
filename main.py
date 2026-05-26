@@ -501,11 +501,7 @@ def save_token(token):
 # Retrieve use_sdk from environment early to avoid unnecessary imports/checks
 use_sdk = os.getenv('USE_SDK', 'False').lower() in ['true', '1', 't', 'y', 'yes']
 
-# Only check license file and import SDK class if USE_SDK is true.
-# NOTE: The actual SDK connect (initialize_gluesync_sdk) is deferred to main()
-# until after wait_for_corehub_ready, otherwise the WebSocket handshake races
-# the CoreHub startup and fails with ConnectionRefusedError, leaving the
-# client in a half-initialized state with a runaway background reconnect task.
+# Only check license file and initialize SDK if USE_SDK is true
 if use_sdk:
     # Check if the license file exists before initializing the SDK
     license_file_path = os.getenv('GLUESYNC_LICENSE_FILE', '/opt/gluesync/data/gs-license.dat')
@@ -520,15 +516,169 @@ if use_sdk:
         logger.error("gluesync_sdk module not found. Make sure it's installed as a submodule.")
         # Handle the absence of the SDK appropriately, e.g., set a flag or use a mock
         GluesyncSDK = None
+
+    # Initialize the Gluesync SDK client
+    initialize_gluesync_sdk()
 else:
     logger.info("Skipping SDK initialization as USE_SDK is set to false")
 
-# Global initialization complete.
-# NOTE:
-# Keep module import side-effects minimal. Authentication and password-reset
-# flows are executed exclusively inside main() so we do not perform duplicate
-# logins nor call helpers before they are defined.
+# Global initialization complete
 if True:
+    # Determine authentication method
+    if not use_sdk:
+        logger.info("Using manual authentication with provided password or token.")
+        # Existing authentication logic
+        try:
+            conf_test = load_config_from_file(file_conf_path)
+            logger.info(f"Loaded configuration from {file_conf_path}")
+        except Exception as e:
+            log_failure(logger, f"Failed to load configuration: {str(e)}")
+            lockfile_failure()
+
+        # Initialize Core Hub client
+        configure_core_hub(core_hub_url, use_ssl=ssl_enabled, skip_verify=ssl_skip_verify)
+        logger.info(f"Core Hub URL: {core_hub_url}")
+
+        # Wait for CoreHub to be ready before attempting authentication
+        logger.info("Waiting for CoreHub to be ready...")
+        try:
+            wait_for_corehub_ready(max_retries=30, initial_delay=2)
+        except RuntimeError as e:
+            logger.error(f"Failed to connect to CoreHub: {e}")
+            lockfile_failure()
+            raise
+
+        # Check if a valid token is present
+        token = None
+        if os.path.exists(AUTH_TOKEN_PATH):
+            try:
+                with open(AUTH_TOKEN_PATH, 'r') as f:
+                    token_data = json.load(f)
+                    token = token_data.get('token')
+                    if token:
+                        # Verify login by attempting to authenticate
+                        try:
+                            check_token = fetch_core_hub(
+                                '/pipelines',
+                                method='GET',
+                                token=token
+                            )
+                            if isinstance(check_token, list):
+                                log_success(logger, "Successfully authenticated with saved token")
+                        except Exception as e:
+                            if "401" in str(e):
+                                logger.warning("Saved token is invalid, attempting to authenticate with default credentials")
+                                token = None
+                            else:
+                                raise e
+            except FileNotFoundError:
+                logger.info("No saved token found, attempting to authenticate with default credentials")
+                token = None
+
+        if not token:
+            # Initial authentication
+            auth_response = fetch_core_hub(
+                '/authentication/login',
+                method='POST',
+                body={'username': default_user, 'password': user_defined_password}
+            )
+            token = auth_response.get('apiToken')
+            if not token:
+                log_failure(logger, "Failed to authenticate")
+                lockfile_failure()
+                raise Exception('Failed to authenticate')
+
+            change_required = auth_response.get('changeRequired', False)
+            if change_required:
+                logger.info("Password change required")
+                # Generate a new random password and change it
+                new_password = generate_random_password()
+                try:
+                    # Change password and get new token
+                    token = change_password(token, user_defined_password, new_password)
+                    log_success(logger, f"[NEW PASSWORD] Successfully changed password to: {new_password}")
+                except Exception as e:
+                    log_failure(logger, f"Password change failed, attempting to continue with default password: {str(e)}")
+                    # Try to get a fresh token with the user-defined password
+                    auth_response = fetch_core_hub(
+                        '/authentication/login',
+                        method='POST',
+                        body={'username': default_user, 'password': user_defined_password}
+                    )
+                    token = auth_response.get('apiToken')
+                    if not token:
+                        log_failure(logger, "Failed to re-authenticate with user-defined password")
+                        lockfile_failure()
+                        raise Exception('Failed to re-authenticate with user-defined password')
+                    new_password = user_defined_password
+            else:
+                new_password = user_defined_password
+                # Save the initial token if no password change was required
+                save_token(token)
+
+        # Use the token for CoreHubClient
+        set_core_hub_client(CoreHubClient(core_hub_url))
+    else:
+        # If we're using SDK, still need to set the core_hub_client for API calls
+        logger.info("Using Gluesync SDK for authentication.")
+        # Make sure we have a client
+        if get_core_hub_client() is None:
+            set_core_hub_client(CoreHubClient(core_hub_url))
+        try:
+            # Get the SDK client for inspection
+            sdk_client = get_gluesync_client()
+            if sdk_client:
+                logger.debug(f"SDK client type: {type(sdk_client).__name__}")
+                # Check if client has token-related attributes
+                token_attrs = [attr for attr in dir(sdk_client) if 'token' in attr.lower()]
+                if token_attrs:
+                    logger.debug(f"Token-related attributes in SDK client: {token_attrs}")
+            
+            # Try to get the token
+            token = get_token()
+            logger.debug(f"Token retrieved: {token is not None}")
+            
+            if not token:
+                logger.error("Failed to obtain token from Gluesync SDK - token is None.")
+                # Check for any alternative token access methods
+                if sdk_client and hasattr(sdk_client, 'token'):
+                    logger.debug("Trying to access token via property...")
+                    token = sdk_client.token
+                    logger.debug(f"Token via property: {token is not None}")
+                
+                if not token:
+                    logger.error("SDK authentication failed - token is None.")
+                    # Retry SDK connection
+                    max_retries = 30
+                    retry_delay = 2
+                    for retry in range(1, max_retries + 1):
+                        logger.info(f"Retrying SDK authentication (attempt {retry}/{max_retries})...")
+                        time.sleep(retry_delay)
+                        try:
+                            # Reinitialize SDK client
+                            initialize_gluesync_sdk()
+                            token = get_token()
+                            if token:
+                                logger.info(f"Successfully obtained token from SDK on retry {retry}")
+                                save_token(token)
+                                break
+                        except Exception as retry_error:
+                            logger.warning(f"Retry {retry} failed: {str(retry_error)}")
+                            if retry == max_retries:
+                                logger.error("All SDK authentication retries exhausted.")
+                                raise Exception("Failed to authenticate via SDK after retries")
+            else:
+                logger.info("Successfully obtained token from Gluesync SDK.")
+                # Save the token
+                save_token(token)
+        except Exception as e:
+            logger.error(f"Exception during SDK token retrieval: {str(e)}")
+            logger.error(f"Exception type: {type(e).__name__}")
+            raise Exception(f"SDK authentication failed: {str(e)}")
+
+        # Use the token for CoreHubClient
+        # Set the global core_hub_client using the existing get_core_hub_client function
+        core_hub_client = get_core_hub_client()
 
     def get_entities(token, pipeline_id):
         response = fetch_core_hub(f"/pipelines/{pipeline_id}/entities", token=token)
@@ -760,31 +910,9 @@ def main():
         effective_target_type,
     )
 
-    # Configure API client and wait until CoreHub is reachable before auth.
-    configure_core_hub(core_hub_url, use_ssl=ssl_enabled, skip_verify=ssl_skip_verify)
-    logger.info("Core Hub URL: %s", core_hub_url)
-    logger.info("Waiting for CoreHub to be ready...")
-    try:
-        wait_for_corehub_ready(max_retries=30, initial_delay=2)
-    except RuntimeError as error:
-        logger.error("Failed to connect to CoreHub: %s", error)
-        lockfile_failure()
-        raise
-
-    # Initialize the Gluesync SDK client now that CoreHub is reachable.
-    # Deferring this here (instead of at module-import time) avoids a race
-    # where the SDK's WebSocket handshake to /ext-module fails with
-    # ConnectionRefusedError because the CoreHub container is started but
-    # not yet listening on its port.
-    if use_sdk and 'GluesyncSDK' in globals() and GluesyncSDK is not None:
-        try:
-            initialize_gluesync_sdk()
-        except Exception as sdk_init_error:
-            logger.warning(f"SDK initialization failed, will fall back to default credentials: {sdk_init_error}")
-
     # First check if we have a valid SDK token
     sdk_token = None
-    if use_sdk:
+    if not use_sdk:
         try:
             # Try to get token from SDK first if available
             if 'GluesyncSDK' in globals():
@@ -806,7 +934,7 @@ def main():
                                 token = sdk_token  # Use the SDK token for all subsequent requests
                             else:
                                 logger.warning("SDK token verification returned unexpected response")
-                                sdk_token = None
+                            sdk_token = None
                         except Exception as e:
                             logger.warning(f"SDK token verification failed: {str(e)}")
                             sdk_token = None
@@ -818,11 +946,6 @@ def main():
     if sdk_token:
         token = sdk_token
     else:
-        # Default to no password change required; will be overridden if
-        # /authentication/login response says otherwise. Pre-initialising
-        # avoids a NameError on the saved-token-only path where the
-        # default-credentials block below is skipped.
-        change_required = False
         # Otherwise, check if a valid saved token is present
         try:
             with open(AUTH_TOKEN_PATH, 'r') as f:
@@ -1141,3 +1264,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
