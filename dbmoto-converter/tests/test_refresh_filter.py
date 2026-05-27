@@ -77,7 +77,8 @@ class TestRefreshFilterExtraction(unittest.TestCase):
         refresh_filters = result[-1]
 
         parser.export_as_yaml(
-            *result[:-1],
+            *result[:-2],
+            journal_checkpoints=result[-2],
             refresh_filters=refresh_filters,
             output_dir=self.temp_output_dir
         )
@@ -204,7 +205,8 @@ class TestRefreshFilterUnescaping(unittest.TestCase):
         refresh_filters = result[-1]
 
         parser.export_as_yaml(
-            *result[:-1],
+            *result[:-2],
+            journal_checkpoints=result[-2],
             refresh_filters=refresh_filters,
             output_dir=self.temp_dir
         )

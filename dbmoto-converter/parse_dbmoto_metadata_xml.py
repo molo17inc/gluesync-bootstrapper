@@ -536,7 +536,56 @@ def parse_xml():
     print(f"Tables with fields: {tables_with_fields}")
     print(f"Tables without fields: {len(tables) - tables_with_fields}")
     print(f"Tables with primary keys: {tables_with_primary_keys}")
-    
+
+    # Extract journal checkpoints from DBMMReplStatuses (AS400 journal metadata)
+    journal_checkpoints = {}
+    for status_elem in root.findall("./tables/DBMMReplStatuses"):
+        repl_id = status_elem.findtext("ReplicationID")
+        props_text = status_elem.findtext("Properties", "")
+        transaction_id = status_elem.findtext("TransactionID")
+        transaction_ts = status_elem.findtext("TransactionTS")
+
+        # Parse properties using the same escaped-semicolon-safe approach
+        properties = {}
+        _placeholder = "\x00ESC_SEMI\x00"
+        safe_props = props_text.replace("\\;", _placeholder)
+        for prop in safe_props.split(';'):
+            if '=' in prop:
+                key, value = prop.split('=', 1)
+                properties[key.strip()] = value.strip().replace(_placeholder, ";")
+
+        # Check for required journal properties
+        receiver_name = properties.get("ReceiverName")
+        receiver_library = properties.get("ReceiverLibrary")
+        journal_name = properties.get("JournalName")
+        journal_library = properties.get("JournalLibrary")
+
+        if not all([receiver_name, receiver_library, journal_name, journal_library]):
+            continue
+
+        # Format sequence number with leading zeros (20 digits)
+        sequence_number = str(transaction_id).zfill(20) if transaction_id else "0".zfill(20)
+
+        checkpoint_data = {
+            "journalLibrary": journal_library,
+            "journalName": journal_name,
+            "receiverLibrary": receiver_library,
+            "receiverName": receiver_name,
+            "sequenceNumber": sequence_number,
+            "timestamp": int(transaction_ts) if transaction_ts else 0
+        }
+
+        # Store per journalLibrary per journal, keeping the oldest (smallest) timestamp
+        if journal_library not in journal_checkpoints:
+            journal_checkpoints[journal_library] = {}
+
+        existing = journal_checkpoints[journal_library].get(journal_name)
+        if existing is None or checkpoint_data["timestamp"] < existing["timestamp"]:
+            journal_checkpoints[journal_library][journal_name] = checkpoint_data
+            print(f"  Found journal checkpoint for journalLibrary '{journal_library}', journal '{journal_name}': seq={sequence_number}, ts={checkpoint_data['timestamp']}")
+        else:
+            print(f"  Skipped newer checkpoint for journalLibrary '{journal_library}', journal '{journal_name}' (ts={checkpoint_data['timestamp']} >= existing ts={existing['timestamp']})")
+
     # Build source-to-target schema mapping from replications
     print("\nBuilding source-to-target schema mappings...")
     source_to_target_schemas = {}
@@ -659,9 +708,9 @@ def parse_xml():
     conversion_stats['replications'] = len(replications)
     conversion_stats['schema_mappings'] = len(source_to_target_schemas)
     
-    return connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name, record_id_mappings, refresh_filters
+    return connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name, record_id_mappings, journal_checkpoints, refresh_filters
 
-def export_as_yaml(connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name, record_id_mappings=None, output_dir=None, template_file=None, refresh_filters=None):
+def export_as_yaml(connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name, record_id_mappings=None, output_dir=None, template_file=None, journal_checkpoints=None, refresh_filters=None):
     # Use environment variables if parameters are not provided (Lambda mode)
     if output_dir is None:
         output_dir = os.environ.get('OUTPUT_DIR')
@@ -1057,6 +1106,17 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
             else:
                 print(f"Skipped: {conn_name}.{schema_name} (no tables with fields)")
 
+    # Write journal checkpoint files per journalLibrary
+    if journal_checkpoints:
+        for journal_library, journals in journal_checkpoints.items():
+            for journal_name, checkpoint_data in journals.items():
+                cp_dir = os.path.join(output_dir, journal_library)
+                os.makedirs(cp_dir, exist_ok=True)
+                cp_filepath = os.path.join(cp_dir, f"{journal_name}.cp")
+                with open(cp_filepath, 'w') as cp_f:
+                    json.dump(checkpoint_data, cp_f, separators=(',', ':'))
+                print(f"  Written checkpoint file: {cp_filepath}")
+
     conversion_stats['yaml_files_exported'] = exported_count
     return exported_count
 
@@ -1230,8 +1290,8 @@ if __name__ == "__main__":
             # Ensure output directory exists
             os.makedirs(args.output_dir, exist_ok=True)
             
-            # Parse the XML and get connections, groups, chains, replications, schema mappings, field mappings, record ID mappings, and refresh filters
-            connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name, record_id_mappings, refresh_filters = parse_xml()
+            # Parse the XML and get connections, groups, chains, replications, schema mappings, field mappings, record ID mappings, journal checkpoints, and refresh filters
+            connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name, record_id_mappings, journal_checkpoints, refresh_filters = parse_xml()
             
             # Print hierarchy summary
             print("\n=== Database Structure ===")
@@ -1243,7 +1303,7 @@ if __name__ == "__main__":
             
             # Export as YAML files
             print("\nExporting to YAML files...")
-            exported = export_as_yaml(connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name, record_id_mappings, refresh_filters=refresh_filters)
+            exported = export_as_yaml(connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name, record_id_mappings, journal_checkpoints=journal_checkpoints, refresh_filters=refresh_filters)
             print(f"\nDone! {exported} YAML files created in {os.path.abspath(args.output_dir)}/")
             print("These files match the structure needed for table-list-template.yaml in gluesync-bootstrapper.")
             
