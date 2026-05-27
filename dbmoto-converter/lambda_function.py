@@ -393,9 +393,10 @@ def _run_conversion_job(xml_content, filename, template_content, include_targets
         if force_schemas_value:
             os.environ["FORCE_SCHEMAS"] = force_schemas_value
 
-        connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name = parse_xml()
+        connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name, record_id_mappings, journal_checkpoints, refresh_filters = parse_xml()
         exported_count = export_as_yaml(
-            connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name
+            connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name,
+            record_id_mappings=record_id_mappings, journal_checkpoints=journal_checkpoints, refresh_filters=refresh_filters
         )
 
         report_path = write_conversion_report()

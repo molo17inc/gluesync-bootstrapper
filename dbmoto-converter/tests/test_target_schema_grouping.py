@@ -151,7 +151,7 @@ class TestTargetSchemaGrouping(unittest.TestCase):
         parser.args.include_targets = True
         parser.args.force_schemas = None
 
-        connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name, record_id_mappings, refresh_filters = parser.parse_xml()
+        connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name, record_id_mappings, journal_checkpoints, refresh_filters = parser.parse_xml()
         exported = parser.export_as_yaml(
             connections,
             groups,
@@ -161,6 +161,7 @@ class TestTargetSchemaGrouping(unittest.TestCase):
             field_mappings,
             field_id_to_name,
             record_id_mappings,
+            journal_checkpoints=journal_checkpoints,
             refresh_filters=refresh_filters,
             output_dir=self.output_dir,
             template_file=self.template_path,
