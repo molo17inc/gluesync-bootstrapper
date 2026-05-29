@@ -242,12 +242,22 @@ class CreateTablesFromDemoKitYamlTests(unittest.TestCase):
         self.assertTrue(all(schema_name == "demo" for schema_name, _, _ in generated_requests))
         self.assertIn("CREATE TABLE demo.SALES DATA", create_requests)
 
+        # CUSTOMERS_NO_PKEY has YAML keys but no source-discovered PKs in the mock.
+        # With the fix, YAML keys are NOT sent to generate_create_table_statement.
         customers_request = next(req for _, table, req in generated_requests if table == "CUSTOMERS_NO_PKEY")
         customers_columns = customers_request["columns"]
-        self.assertTrue(next(col for col in customers_columns if col["name"] == "ID")["isPK"])
+        self.assertFalse(next(col for col in customers_columns if col["name"] == "ID").get("isPK", False))
 
+        # DRIVERS and ARTICLES have source-discovered PKs (isPK=True in mock)
+        drivers_request = next(req for _, table, req in generated_requests if table == "DRIVERS")
+        self.assertTrue(next(col for col in drivers_request["columns"] if col["name"] == "ID")["isPK"])
+
+        articles_request = next(req for _, table, req in generated_requests if table == "ARTICLES")
+        self.assertTrue(next(col for col in articles_request["columns"] if col["name"] == "ID")["isPK"])
+
+        # SALES DATA also has YAML keys but no source-discovered PKs in the mock.
         sales_request = next(req for _, table, req in generated_requests if table == "SALES DATA")
-        self.assertTrue(next(col for col in sales_request["columns"] if col["name"] == "ID")["isPK"])
+        self.assertFalse(next(col for col in sales_request["columns"] if col["name"] == "ID").get("isPK", False))
 
 
 class CreateEntitiesFromDemoKitYamlTests(unittest.TestCase):

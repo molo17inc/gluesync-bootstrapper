@@ -391,8 +391,20 @@ def create_tables(token, pipeline_id, source_schema, target_schema, tables, sour
         if not keys:
             logger.info(f"Warning: No keys specified for {table_name}. Table will have no keys.")
 
+        # Only send source-discovered keys to the create-table statement.
+        # YAML-defined keys are honoured for entity creation (create_all_entities.py)
+        # but must not be sent to generate_create_table_statement when the source
+        # agent has not discovered any primary keys.
+        source_discovered_keys = [
+            {
+                "name": col["name"],
+                "alias": col["name"],
+                "type": col.get("dataType")
+            } for col in columns["columns"] if col.get("isPK")
+        ]
+
         # check if the table exists on the target
-        handle_table_creation(pipeline_id, target_table_name, yaml_target_schema, keys, token, columns, custom_config,
+        handle_table_creation(pipeline_id, target_table_name, yaml_target_schema, source_discovered_keys, token, columns, custom_config,
                               source_node_info, target_node_info,
                               source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
 
