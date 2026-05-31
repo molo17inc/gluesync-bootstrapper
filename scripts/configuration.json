@@ -36,6 +36,7 @@
        "gridgain",
        "db2-luw-triggers",
        "sap-hana",
-       "azure-data-lake"  
+       "azure-data-lake",
+       "aws-redshift"  
    ]
 }
