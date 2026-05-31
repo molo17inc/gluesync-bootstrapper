@@ -13,8 +13,14 @@ const api = {
     }
     return res.json();
   },
-  async exportPipelineFull(pipelineId) {
-    const response = await fetch(`/api/export/pipeline/${encodeURIComponent(pipelineId)}/full`);
+  async exportPipelineFull(pipelineId, includeSecrets = false) {
+    const params = new URLSearchParams();
+    if (includeSecrets) {
+      params.append('include_secrets', 'true');
+    }
+    const query = params.toString();
+    const url = `/api/export/pipeline/${encodeURIComponent(pipelineId)}/full${query ? '?' + query : ''}`;
+    const response = await fetch(url);
     if (!response.ok) {
       throw new Error(`Full backup export failed: ${response.status} ${response.statusText}`);
     }
@@ -111,8 +117,14 @@ const api = {
       || 'template.yaml';
     return { blob, filename };
   },
-  async exportPipeline(pipelineId) {
-    const response = await fetch(`/api/export/pipeline/${encodeURIComponent(pipelineId)}`);
+  async exportPipeline(pipelineId, includeSecrets = false) {
+    const params = new URLSearchParams();
+    if (includeSecrets) {
+      params.append('include_secrets', 'true');
+    }
+    const query = params.toString();
+    const url = `/api/export/pipeline/${encodeURIComponent(pipelineId)}${query ? '?' + query : ''}`;
+    const response = await fetch(url);
     if (!response.ok) {
       throw new Error(`Export failed: ${response.status} ${response.statusText}`);
     }
@@ -120,8 +132,14 @@ const api = {
     const filename = response.headers.get('Content-Disposition')?.split('filename=')[1]?.replace(/"/g, '') || 'backup.yaml';
     return { blob, filename };
   },
-  async exportAllPipelines() {
-    const response = await fetch('/api/export/all-pipelines');
+  async exportAllPipelines(includeSecrets = false) {
+    const params = new URLSearchParams();
+    if (includeSecrets) {
+      params.append('include_secrets', 'true');
+    }
+    const query = params.toString();
+    const url = `/api/export/all-pipelines${query ? '?' + query : ''}`;
+    const response = await fetch(url);
     if (!response.ok) {
       throw new Error(`Export all failed: ${response.status} ${response.statusText}`);
     }
@@ -997,6 +1015,7 @@ function bindEvents() {
   const yamlInput = document.getElementById('yaml-file');
   const exportForm = document.getElementById('export-form');
   const exportPipelineSelect = document.getElementById('export-pipeline-id');
+  const includeSecretsCheckbox = document.getElementById('include-secrets-checkbox');
   const bulkForm = document.getElementById('bulk-form');
   const bulkPipelineSelect = document.getElementById('bulk-pipeline-id');
   const bulkSchemaSelect = document.getElementById('bulk-source-schema');
@@ -1602,7 +1621,8 @@ function bindEvents() {
       ui.setExportMessage('Exporting metadata…');
        logActivity('Export', `Exporting metadata for pipeline ${pipelineId}…`);
       try {
-        const { blob, filename } = await api.exportPipeline(pipelineId);
+        const includeSecrets = includeSecretsCheckbox?.checked || false;
+        const { blob, filename } = await api.exportPipeline(pipelineId, includeSecrets);
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -1631,7 +1651,8 @@ function bindEvents() {
       ui.setExportMessage('Exporting full backup…');
       logActivity('Export', `Exporting full backup for pipeline ${pipelineId}…`);
       try {
-        const { blob, filename } = await api.exportPipelineFull(pipelineId);
+        const includeSecrets = includeSecretsCheckbox?.checked || false;
+        const { blob, filename } = await api.exportPipelineFull(pipelineId, includeSecrets);
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -1656,7 +1677,8 @@ function bindEvents() {
       ui.setExportMessage('Exporting all pipelines…');
       logActivity('Export', 'Exporting all pipelines…');
       try {
-        const { blob, filename } = await api.exportAllPipelines();
+        const includeSecrets = includeSecretsCheckbox?.checked || false;
+        const { blob, filename } = await api.exportAllPipelines(includeSecrets);
         console.log('Export All API call successful, filename:', filename);
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');

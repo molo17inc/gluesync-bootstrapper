@@ -757,7 +757,7 @@ def create_app() -> FastAPI:
         )
 
     @app.get("/api/export/pipeline/{pipeline_id}")
-    async def export_pipeline(pipeline_id: str):
+    async def export_pipeline(pipeline_id: str, include_secrets: bool = False):
         """Export only the YAML metadata for a single pipeline.
         
         Duplicate source tables are handled by creating unique keys (e.g., table@@2, table@@3)
@@ -774,6 +774,7 @@ def create_app() -> FastAPI:
                 pipeline_id=pipeline_id,
                 use_ssl=state.use_ssl,
                 skip_verify=state.skip_verify,
+                include_secrets=include_secrets,
             )
         except Exception as exc:  # pylint: disable=broad-except
             logger.exception("Failed to export pipeline %s", pipeline_id)
@@ -790,7 +791,7 @@ def create_app() -> FastAPI:
         )
 
     @app.get("/api/export/pipeline/{pipeline_id}/full")
-    async def export_pipeline_full_backup(pipeline_id: str):
+    async def export_pipeline_full_backup(pipeline_id: str, include_secrets: bool = False):
         """Export a full backup (YAML + agents-config + UDFs) for a single pipeline."""
 
         if not state.token or not state.base_url:
@@ -803,6 +804,7 @@ def create_app() -> FastAPI:
                 pipeline_id=pipeline_id,
                 use_ssl=state.use_ssl,
                 skip_verify=state.skip_verify,
+                include_secrets=include_secrets,
             )
         except Exception as exc:  # pylint: disable=broad-except
             logger.exception("Failed to export full backup for pipeline %s", pipeline_id)
@@ -1767,7 +1769,7 @@ def create_app() -> FastAPI:
         return ApiMessage(message="OIDC import completed. " + "; ".join(summary_parts))
 
     @app.get("/api/export/all-pipelines")
-    async def export_all_pipelines():
+    async def export_all_pipelines(include_secrets: bool = False):
         if not state.token or not state.base_url:
             raise HTTPException(status_code=401, detail="Authentication required")
 
@@ -1777,6 +1779,7 @@ def create_app() -> FastAPI:
                 base_url=state.base_url,
                 use_ssl=state.use_ssl,
                 skip_verify=state.skip_verify,
+                include_secrets=include_secrets,
             )
         except Exception as exc:  # pylint: disable=broad-except
             logger.exception("Failed to export all pipelines")
@@ -1926,7 +1929,7 @@ def create_app() -> FastAPI:
         return JSONResponse(oidc_config)
 
     @app.get("/api/export/full-backup")
-    async def export_full_backup():
+    async def export_full_backup(include_secrets: bool = False):
         """Export a complete CoreHub backup including pipelines, global configs, SMTP, webhooks, thresholds, and schedules."""
         if not state.token or not state.base_url:
             raise HTTPException(status_code=401, detail="Authentication required")
@@ -1937,6 +1940,7 @@ def create_app() -> FastAPI:
                 base_url=state.base_url,
                 use_ssl=state.use_ssl,
                 skip_verify=state.skip_verify,
+                include_secrets=include_secrets,
             )
         except Exception as exc:  # pylint: disable=broad-except
             logger.exception("Failed to export full CoreHub backup")
