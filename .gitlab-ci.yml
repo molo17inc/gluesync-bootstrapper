@@ -112,6 +112,12 @@ bootstrapper_core_unit_tests:
     - python3 -m unittest discover integration-tests -p 'test_bootstrapper_*.py' -v
     - echo "Running Chronos export regression tests..."
     - python3 -m unittest integration-tests.test_export_template_from_corehub -v
+    - echo "Running automator CoreHub flow tests..."
+    - python3 -m unittest integration-tests.test_automator_corehub_flows -v
+    - echo "Running automator backup/export tests..."
+    - python3 -m unittest integration-tests.test_automator_backup_export -v
+    - echo "Running automator backup/import tests..."
+    - python3 -m unittest integration-tests.test_automator_backup_import -v
   allow_failure: false
 
 fetch_agents:
