@@ -949,6 +949,7 @@ def export_pipeline_yaml(
     use_ssl: Optional[bool],
     skip_verify: Optional[bool],
     skip_schedules: bool = False,
+    include_secrets: bool = False,
 ) -> str:
     """Export a single pipeline configuration to YAML text for download.
 
@@ -958,6 +959,7 @@ def export_pipeline_yaml(
     Args:
         skip_schedules: If True, do not embed pipeline/group/entity schedules.
                         Useful when schedules are backed up separately (e.g. full CoreHub backup).
+        include_secrets: If True, preserve encrypted secrets in agent credentials backup.
     """
 
     configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
@@ -1033,6 +1035,7 @@ def export_pipeline_full_backup(
     pipeline_id: str,
     use_ssl: Optional[bool],
     skip_verify: Optional[bool],
+    include_secrets: bool = False,
 ) -> bytes:
     """Export a full backup (YAML + agents-config + UDFs) for a single pipeline."""
 
@@ -1072,6 +1075,7 @@ def export_pipeline_full_backup(
             pipeline_id=pipeline_id,
             use_ssl=use_ssl,
             skip_verify=skip_verify,
+            include_secrets=include_secrets,
         )
 
         safe_name = "".join(c for c in pipeline_name if c.isalnum() or c in (" ", "-", "_")).rstrip()
@@ -1184,14 +1188,14 @@ def export_pipeline_full_backup(
                     continue
                 seen_agents.add(key)
 
-                masked_host_credentials = dict(host_credentials)
-                if "password" in masked_host_credentials and masked_host_credentials["password"]:
-                    masked_host_credentials["password"] = "*******"
+                export_host_credentials = dict(host_credentials)
+                if not include_secrets and "password" in export_host_credentials and export_host_credentials["password"]:
+                    export_host_credentials["password"] = "*******"
 
                 agent_payload: Dict[str, Any] = {
                     "agentType": agent_type,
                     "agentTag": agent_tag,
-                    "hostCredentials": masked_host_credentials,
+                    "hostCredentials": export_host_credentials,
                     "customHostCredentials": agent.get("customHostCredentials") or {},
                     "specificConfiguration": agent.get("specificConfiguration") or {},
                 }
@@ -1297,12 +1301,14 @@ def export_all_pipelines_yaml(
     use_ssl: Optional[bool],
     skip_verify: Optional[bool],
     skip_schedules: bool = False,
+    include_secrets: bool = False,
 ) -> bytes:
     """Export all pipelines to a ZIP file containing individual YAML files.
 
     Args:
         skip_schedules: If True, do not embed schedules in pipeline YAMLs.
                         Useful when schedules are backed up separately (e.g. full CoreHub backup).
+        include_secrets: If True, preserve encrypted secrets in agent credentials backup.
     """
 
     configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
@@ -1821,6 +1827,7 @@ def export_full_corehub_backup(
     base_url: str,
     use_ssl: Optional[bool],
     skip_verify: Optional[bool],
+    include_secrets: bool = False,
 ) -> bytes:
     """Export a complete CoreHub backup including pipelines, global configs, SMTP, webhooks, thresholds, and schedules.
 
@@ -1917,6 +1924,7 @@ def export_full_corehub_backup(
                 use_ssl=use_ssl,
                 skip_verify=skip_verify,
                 skip_schedules=True,
+                include_secrets=include_secrets,
             )
             with io.BytesIO(pipelines_zip_bytes) as inner_buf:
                 with zipfile.ZipFile(inner_buf, "r") as inner_zip:

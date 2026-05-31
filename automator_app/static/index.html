@@ -206,6 +206,26 @@
               <h2>Export (backup pipeline configuration)</h2>
               <form id="export-form" class="form-grid">
                 <fieldset class="fieldset">
+                  <legend>Export options</legend>
+                  <label
+                    class="checkbox-label"
+                    title="Secrets are encrypted with AES256 using your database storage key which is saved within your 'bootstrap-core-hub.json' under the key gluesync-storage-key"
+                  >
+                    <input
+                      type="checkbox"
+                      id="include-secrets-checkbox"
+                      name="includeSecrets"
+                    />
+                    Include secrets
+                  </label>
+                  <span class="hint-text"
+                    >Secrets are encrypted with AES256 using your database
+                    storage key which is saved within your
+                    "bootstrap-core-hub.json" under the key
+                    gluesync-storage-key</span
+                  >
+                </fieldset>
+                <fieldset class="fieldset">
                   <legend>Export a single pipeline</legend>
                   <label>
                     Pipeline
