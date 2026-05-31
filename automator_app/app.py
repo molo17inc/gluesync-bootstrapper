@@ -1703,6 +1703,69 @@ def create_app() -> FastAPI:
         message = "Full backup restore completed. " + "; ".join(summary_parts)
         return ApiMessage(message=message)
 
+    @app.post("/api/import/users", response_model=ApiMessage)
+    async def import_users(file: UploadFile = File(...)) -> ApiMessage:
+        """Restore user management configuration from a YAML backup."""
+        if not state.token or not state.base_url:
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+        contents = await file.read()
+        if not contents:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+        try:
+            users_data = yaml.safe_load(contents.decode("utf-8"))
+        except yaml.YAMLError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid YAML: {exc}") from exc
+
+        try:
+            result = corehub.import_users(
+                token=state.token,
+                base_url=state.base_url,
+                use_ssl=state.use_ssl,
+                skip_verify=state.skip_verify,
+                users_data=users_data,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Failed to import users")
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        status = result.get("status", "unknown")
+        return ApiMessage(message=f"Users import {status}")
+
+    @app.post("/api/import/oidc", response_model=ApiMessage)
+    async def import_oidc(file: UploadFile = File(...)) -> ApiMessage:
+        """Restore OIDC configuration from a YAML backup."""
+        if not state.token or not state.base_url:
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+        contents = await file.read()
+        if not contents:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+        try:
+            oidc_data = yaml.safe_load(contents.decode("utf-8"))
+        except yaml.YAMLError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid YAML: {exc}") from exc
+
+        try:
+            result = corehub.import_oidc_config(
+                token=state.token,
+                base_url=state.base_url,
+                use_ssl=state.use_ssl,
+                skip_verify=state.skip_verify,
+                oidc_data=oidc_data,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Failed to import OIDC config")
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        summary_parts: list[str] = []
+        for key, res in result.items():
+            status = res.get("status", "unknown")
+            summary_parts.append(f"{key}: {status}")
+        return ApiMessage(message="OIDC import completed. " + "; ".join(summary_parts))
+
     @app.get("/api/export/all-pipelines")
     async def export_all_pipelines():
         if not state.token or not state.base_url:
@@ -1823,6 +1886,44 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
         return JSONResponse(schedules_config)
+
+    @app.get("/api/export/users")
+    async def export_users():
+        """Export user management configuration from CoreHub."""
+        if not state.token or not state.base_url:
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+        try:
+            users_config = corehub.export_users(
+                token=state.token,
+                base_url=state.base_url,
+                use_ssl=state.use_ssl,
+                skip_verify=state.skip_verify,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Failed to export users")
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        return JSONResponse(users_config)
+
+    @app.get("/api/export/oidc")
+    async def export_oidc():
+        """Export OIDC configuration from CoreHub."""
+        if not state.token or not state.base_url:
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+        try:
+            oidc_config = corehub.export_oidc_config(
+                token=state.token,
+                base_url=state.base_url,
+                use_ssl=state.use_ssl,
+                skip_verify=state.skip_verify,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Failed to export OIDC config")
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        return JSONResponse(oidc_config)
 
     @app.get("/api/export/full-backup")
     async def export_full_backup():
