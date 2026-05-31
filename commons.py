@@ -226,7 +226,7 @@ def generate_short_guid():
 
 
 def get_pipeline_config(token, pipeline_id):
-    return fetch_core_hub(f"/pipelines/{pipeline_id}/config", token=token)
+    return fetch_core_hub(f"/pipelines/{pipeline_id}/config", token=token, params={"include_secrets": "true"})
 
 
 def get_pipeline_agents(token, pipeline_id):

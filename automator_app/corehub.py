@@ -1630,13 +1630,9 @@ def export_smtp_settings(
     configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
 
     try:
-        response = fetch_core_hub("/global-config/smtp", token=token)
+        response = fetch_core_hub("/global-config/smtp", token=token, params={"include_secrets": "true"})
         if isinstance(response, dict):
-            # Mask password if present
-            masked = dict(response)
-            if "password" in masked and masked["password"]:
-                masked["password"] = "*******"
-            return {"smtp": masked}
+            return {"smtp": response}
         return {"smtp": {"value": response}}
     except Exception as exc:  # pylint: disable=broad-except
         logger.warning("Failed to fetch SMTP settings: %s", exc)
@@ -1766,7 +1762,7 @@ def export_users(
     configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
 
     try:
-        response = fetch_core_hub("/users", token=token)
+        response = fetch_core_hub("/users", token=token, params={"include_secrets": "true"})
         if isinstance(response, dict):
             return {"users": response}
         if isinstance(response, list):
@@ -1787,22 +1783,29 @@ def export_oidc_config(
     """Export OIDC configuration from CoreHub."""
     configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
 
-    endpoints = {
-        "oidc_configuration": "/oidc/configuration",
-        "oidc_auth_url": "/oidc/auth-url",
-    }
-
     configs: Dict[str, Any] = {}
-    for key, path in endpoints.items():
-        try:
-            response = fetch_core_hub(path, token=token)
-            if isinstance(response, dict):
-                configs[key] = response
-            else:
-                configs[key] = {"value": response}
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.warning("Failed to fetch OIDC config %s: %s", key, exc)
-            configs[key] = {"error": str(exc)}
+
+    # OIDC configuration - include secrets for backup/restore
+    try:
+        response = fetch_core_hub("/oidc/configuration", token=token, params={"include_secrets": "true"})
+        if isinstance(response, dict):
+            configs["oidc_configuration"] = response
+        else:
+            configs["oidc_configuration"] = {"value": response}
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("Failed to fetch OIDC configuration: %s", exc)
+        configs["oidc_configuration"] = {"error": str(exc)}
+
+    # OIDC auth URL (no secrets here)
+    try:
+        response = fetch_core_hub("/oidc/auth-url", token=token)
+        if isinstance(response, dict):
+            configs["oidc_auth_url"] = response
+        else:
+            configs["oidc_auth_url"] = {"value": response}
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("Failed to fetch OIDC auth URL: %s", exc)
+        configs["oidc_auth_url"] = {"error": str(exc)}
 
     return configs
 

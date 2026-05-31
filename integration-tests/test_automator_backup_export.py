@@ -388,9 +388,9 @@ class ExportGlobalConfigsTests(unittest.TestCase):
 
 
 class ExportSmtpSettingsTests(unittest.TestCase):
-    """Verify export_smtp_settings masks passwords."""
+    """Verify export_smtp_settings fetches SMTP configuration with include_secrets."""
 
-    def test_masks_password(self):
+    def test_includes_password_with_include_secrets(self):
         import automator_app.corehub as corehub
 
         def fake_fetch(path, **kwargs):
@@ -408,8 +408,7 @@ class ExportSmtpSettingsTests(unittest.TestCase):
 
         smtp = result["smtp"]
         self.assertEqual(smtp["host"], "smtp.example.com")
-        self.assertEqual(smtp["password"], "*******")
-        self.assertNotIn("supersecret", str(result))
+        self.assertEqual(smtp["password"], "supersecret")
 
     def test_handles_non_dict_response(self):
         import automator_app.corehub as corehub
@@ -577,7 +576,7 @@ class ExportFullCorehubBackupTests(unittest.TestCase):
                 self.assertEqual(global_cfg["release_channel"]["channel"], "stable")
 
                 smtp_cfg = yaml.safe_load(zf.read("smtp.yaml").decode("utf-8"))
-                self.assertEqual(smtp_cfg["smtp"]["password"], "*******")
+                self.assertEqual(smtp_cfg["smtp"]["password"], "secret")
 
                 webhooks_cfg = yaml.safe_load(zf.read("webhooks.yaml").decode("utf-8"))
                 self.assertTrue(webhooks_cfg["webhooks"]["enabled"])
