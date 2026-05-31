@@ -2038,11 +2038,11 @@ def duplicate_pipeline(
     entity_clone_errors: list[str] = []
     udf_clone_status = "skipped"
     udf_clone_errors: list[str] = []
-    
+    detailed_entity_errors: list[str] = []
+
     logger.info("clone_entities parameter value: %s", clone_entities)
     if clone_entities:
         logger.info("ENTERING clone_entities block - will clone entities and UDFs")
-        detailed_entity_errors: list[str] = []
         try:
             _raise_if_cancelled()
             snapshot_path = _write_temp_yaml(yaml_config)
