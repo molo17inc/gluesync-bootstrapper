@@ -1113,6 +1113,17 @@ def create_app() -> FastAPI:
                     if "agents-config" in lower:
                         continue
 
+                    # Skip global config YAMLs from full CoreHub backup format
+                    # (these are backed up separately and not pipeline configs)
+                    GLOBAL_CONFIG_NAMES = {
+                        "global-configs", "smtp", "webhooks",
+                        "thresholds", "schedules", "users", "oidc",
+                    }
+                    stem = name.rsplit("/", 1)[-1]  # strip any path
+                    stem_no_ext = stem.rsplit(".", 1)[0]
+                    if stem_no_ext in GLOBAL_CONFIG_NAMES:
+                        continue
+
                     try:
                         yaml_text = zf.read(name).decode("utf-8")
                     except Exception as exc:  # pylint: disable=broad-except
@@ -1121,8 +1132,6 @@ def create_app() -> FastAPI:
                         continue
 
                     # Derive original pipeline ID from filename: backup_<safe_name>_<pipelineId>.yaml
-                    stem = name.rsplit("/", 1)[-1]  # strip any path
-                    stem_no_ext = stem.rsplit(".", 1)[0]
                     old_pipeline_id = None
                     if stem_no_ext.startswith("backup_"):
                         tail = stem_no_ext[len("backup_") :]
@@ -1647,6 +1656,53 @@ def create_app() -> FastAPI:
 
         return ApiMessage(success=success, message="\n".join(logs))
 
+    @app.post("/api/import/full-backup", response_model=ApiMessage)
+    async def import_full_backup(
+        file: UploadFile = File(...)
+    ) -> ApiMessage:
+        """Restore a complete CoreHub backup (pipelines + global configs + schedules).
+
+        Accepts the ZIP produced by /api/export/full-backup and restores each
+        domain independently: global configs, SMTP, webhooks, thresholds,
+        schedules, and pipelines (agents + entities + UDFs).
+        """
+
+        if not state.token or not state.base_url:
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+        contents = await file.read()
+        if not contents:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+        try:
+            results = corehub.import_full_corehub_backup(
+                token=state.token,
+                base_url=state.base_url,
+                use_ssl=state.use_ssl,
+                skip_verify=state.skip_verify,
+                zip_bytes=contents,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Failed to import full CoreHub backup")
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        # Build summary
+        summary_parts: list[str] = []
+        for domain, result in results.items():
+            status = result.get("status", "unknown") if isinstance(result, dict) else "unknown"
+            if status == "restored":
+                summary_parts.append(f"{domain}: restored")
+            elif status == "skipped":
+                reason = result.get("reason", "")
+                summary_parts.append(f"{domain}: skipped ({reason})")
+            elif status == "pending":
+                summary_parts.append(f"{domain}: pending (requires manual pipeline import)")
+            else:
+                summary_parts.append(f"{domain}: {status}")
+
+        message = "Full backup restore completed. " + "; ".join(summary_parts)
+        return ApiMessage(message=message)
+
     @app.get("/api/export/all-pipelines")
     async def export_all_pipelines():
         if not state.token or not state.base_url:
@@ -1665,6 +1721,128 @@ def create_app() -> FastAPI:
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"pipeline_backups_{timestamp}.zip"
+        return StreamingResponse(
+            io.BytesIO(zip_data),
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+            },
+        )
+
+    @app.get("/api/export/global-configs")
+    async def export_global_configs():
+        """Export all global CoreHub configuration settings."""
+        if not state.token or not state.base_url:
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+        try:
+            configs = corehub.export_global_configs(
+                token=state.token,
+                base_url=state.base_url,
+                use_ssl=state.use_ssl,
+                skip_verify=state.skip_verify,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Failed to export global configs")
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        return JSONResponse(configs)
+
+    @app.get("/api/export/smtp")
+    async def export_smtp():
+        """Export SMTP configuration from CoreHub."""
+        if not state.token or not state.base_url:
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+        try:
+            smtp_config = corehub.export_smtp_settings(
+                token=state.token,
+                base_url=state.base_url,
+                use_ssl=state.use_ssl,
+                skip_verify=state.skip_verify,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Failed to export SMTP settings")
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        return JSONResponse(smtp_config)
+
+    @app.get("/api/export/webhooks")
+    async def export_webhooks():
+        """Export webhooks configuration from CoreHub."""
+        if not state.token or not state.base_url:
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+        try:
+            webhooks_config = corehub.export_webhooks_config(
+                token=state.token,
+                base_url=state.base_url,
+                use_ssl=state.use_ssl,
+                skip_verify=state.skip_verify,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Failed to export webhooks config")
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        return JSONResponse(webhooks_config)
+
+    @app.get("/api/export/thresholds")
+    async def export_thresholds():
+        """Export thresholds configuration from CoreHub."""
+        if not state.token or not state.base_url:
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+        try:
+            thresholds_config = corehub.export_thresholds(
+                token=state.token,
+                base_url=state.base_url,
+                use_ssl=state.use_ssl,
+                skip_verify=state.skip_verify,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Failed to export thresholds")
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        return JSONResponse(thresholds_config)
+
+    @app.get("/api/export/schedules")
+    async def export_schedules():
+        """Export Chronos scheduler jobs and settings from CoreHub."""
+        if not state.token or not state.base_url:
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+        try:
+            schedules_config = corehub.export_schedules(
+                token=state.token,
+                base_url=state.base_url,
+                use_ssl=state.use_ssl,
+                skip_verify=state.skip_verify,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Failed to export schedules")
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        return JSONResponse(schedules_config)
+
+    @app.get("/api/export/full-backup")
+    async def export_full_backup():
+        """Export a complete CoreHub backup including pipelines, global configs, SMTP, webhooks, thresholds, and schedules."""
+        if not state.token or not state.base_url:
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+        try:
+            zip_data = corehub.export_full_corehub_backup(
+                token=state.token,
+                base_url=state.base_url,
+                use_ssl=state.use_ssl,
+                skip_verify=state.skip_verify,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Failed to export full CoreHub backup")
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"corehub_full_backup_{timestamp}.zip"
         return StreamingResponse(
             io.BytesIO(zip_data),
             media_type="application/zip",
