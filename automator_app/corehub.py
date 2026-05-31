@@ -1477,9 +1477,9 @@ def export_all_pipelines_yaml(
                         continue
                     seen_agents.add(key)
 
-                    # Mask secrets when exporting
+                    # Mask secrets when exporting, unless include_secrets is True
                     masked_host_credentials = dict(host_credentials)
-                    if "password" in masked_host_credentials and masked_host_credentials["password"]:
+                    if not include_secrets and "password" in masked_host_credentials and masked_host_credentials["password"]:
                         masked_host_credentials["password"] = "*******"
 
                     agent_payload: Dict[str, Any] = {
