@@ -178,6 +178,40 @@ python3 -m pytest integration-tests/ -v
 
 ---
 
+### `test_automator_backup_export.py` (14 tests)
+**Coverage**: Pipeline and CoreHub data export/backup flows
+
+| Test | Feature |
+|------|---------|
+| `test_basic_export_contains_schema_tables_and_keys` | `export_pipeline_yaml` produces correct schema/table/keys YAML |
+| `test_export_with_schedules_attaches_them_to_tables` | Entity-level schedules attached to tables in exported YAML |
+| `test_zip_contains_yaml_agents_config_and_udfs` | `export_pipeline_full_backup` ZIP contains YAML + agents + UDFs |
+| `test_passwords_are_masked_in_agents_config` | Passwords masked with `*******` in agents-config.yaml |
+| `test_bulk_export_contains_all_pipeline_yamls` | `export_all_pipelines_yaml` ZIP contains all pipeline backups |
+| `test_exports_all_global_configs` | `export_global_configs` fetches grafana/logging/release-channel/license/session |
+| `test_gracefully_handles_failed_endpoints` | Global config export gracefully handles endpoint failures |
+| `test_masks_password` | `export_smtp_settings` masks SMTP password |
+| `test_handles_non_dict_response` | SMTP export handles non-dict CoreHub responses |
+| `test_exports_all_webhook_configs` | `export_webhooks_config` fetches webhooks/retention/event-types |
+| `test_exports_thresholds` | `export_thresholds` fetches lag/retry/alert configuration |
+| `test_exports_jobs_and_settings` | `export_schedules` fetches Chronos jobs and settings |
+| `test_gracefully_handles_missing_chronos` | Schedule export handles missing Chronos gracefully |
+| `test_zip_contains_corehub_config_yaml` | `export_full_corehub_backup` ZIP contains all global configs |
+
+---
+
+### `test_automator_backup_import.py` (4 tests)
+**Coverage**: Pipeline import and duplication flows
+
+| Test | Feature |
+|------|---------|
+| `test_import_creates_pipeline_and_binds_agents` | `import_pipeline_config_only` creates pipeline and binds agents |
+| `test_duplicate_name_avoids_collision_with_suffix` | Name collision handling with `(restored)` and `(restored 2)` suffixes |
+| `test_duplicate_creates_new_pipeline` | `duplicate_pipeline` clones pipeline with new agents |
+| `test_duplicate_with_entity_clone` | `duplicate_pipeline` with `clone_entities=True` clones entities and UDFs |
+
+---
+
 ## Coverage Matrix
 
 | YAML Feature | Integration Tests Using It | Unit Tests Covering It |
