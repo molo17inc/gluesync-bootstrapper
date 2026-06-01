@@ -548,6 +548,67 @@ demo:
         self.assertTrue(id_col.get("isPK", False), "ID must be marked as PK under the ultimate fallback")
         self.assertTrue(name_col.get("isPK", False), "NAME must be marked as PK under the ultimate fallback")
 
+    def test_user_provided_yaml_with_empty_keys_runs_successfully(self):
+        """
+        Verify that the user's provided YAML file ('fixtures/Dave_FILELIB_SIU.yaml')
+        which triggered the bug (with empty keys for CLMSURPM and CLMSIUPM)
+        loads, parses, and runs completely without throwing any exceptions.
+        """
+        import create_all_tables
+
+        fixture_path = Path(__file__).resolve().parent / "fixtures" / "Dave_FILELIB_SIU.yaml"
+        self.assertTrue(fixture_path.exists(), f"Fixture file {fixture_path} must exist")
+
+        with open(fixture_path, "r") as f:
+            yaml_config = yaml.safe_load(f)
+
+        # Let's test table creation for ANON_TABLE_05 (which has null keys in the file)
+        discovered_tables = [{"name": "ANON_TABLE_05"}]
+        
+        # Dynamically build source columns matching the YAML configuration for perfect alignment
+        clmsurpm_cols = yaml_config['ANON_SCHEMA']['tables']['custom']['ANON_TABLE_05']['columns']
+        source_columns = {
+            "columns": [
+                _source_col(col['name'], idx, col.get('type') or col.get('dataType') or 'varchar', is_pk=None)
+                for idx, col in enumerate(clmsurpm_cols, 1)
+            ]
+        }
+
+        captured_requests = []
+
+        def fake_generate(pipeline_id, schema_name, table_name, token, table_data):
+            captured_requests.append((schema_name, table_name, _model_to_dict(table_data)))
+            return f"CREATE TABLE {schema_name}.{table_name} (...)"
+
+        with mock.patch.object(create_all_tables, "get_node_info", side_effect=[_node_info(), _node_info()]), \
+             mock.patch.object(create_all_tables, "get_table_columns", return_value=source_columns), \
+             mock.patch.object(create_all_tables, "table_exists", return_value=False), \
+             mock.patch.object(create_all_tables, "map_data_type", side_effect=lambda source_type, *args, **kwargs: source_type), \
+             mock.patch.object(create_all_tables, "generate_create_table_statement", side_effect=fake_generate), \
+             mock.patch.object(create_all_tables, "create_target_table"):
+            
+            # This must complete successfully without raising any exceptions
+            create_all_tables.create_tables(
+                token="token",
+                pipeline_id="pipeline",
+                source_schema="ANON_SCHEMA",
+                target_schema="ANON_TARGET",
+                tables=discovered_tables,
+                source_agent_id="source-agent",
+                target_agent_id="target-agent",
+                source_type="SQL",
+                target_type="SQL",
+                yaml_config=yaml_config,
+            )
+
+        self.assertEqual(len(captured_requests), 1)
+        _, _, request_body = captured_requests[0]
+        columns = request_body["columns"]
+        
+        # Verify both columns got PK because of ultimate fallback
+        for col in columns:
+            self.assertTrue(col.get("isPK", False), f"{col['name']} must be PK under ultimate fallback")
+
 
 if __name__ == "__main__":
     unittest.main()
