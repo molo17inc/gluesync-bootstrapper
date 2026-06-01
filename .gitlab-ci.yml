@@ -108,10 +108,8 @@ bootstrapper_core_unit_tests:
     - pip3 install --break-system-packages --upgrade pip
     - pip3 install --break-system-packages -r requirements.txt
   script:
-    - echo "Running bootstrapper core YAML payload unit tests..."
-    - python3 -m unittest discover integration-tests -p 'test_bootstrapper_*.py' -v
-    - echo "Running Chronos export regression tests..."
-    - python3 -m unittest integration-tests.test_export_template_from_corehub -v
+    - echo "Running all bootstrapper integration and regression tests..."
+    - python3 -m unittest discover -s integration-tests -v
   allow_failure: false
 
 fetch_agents:
