@@ -389,7 +389,14 @@ def create_tables(token, pipeline_id, source_schema, target_schema, tables, sour
                             logger.warning(f"Fallback key '{key_name}' not found in columns for table '{table_name}'")
 
         if not keys:
-            logger.info(f"Warning: No keys specified for {table_name}. Table will have no keys.")
+            logger.warning(f"Source table {table_name} has no PKs and no YAML keys. Ultimate fallback: using ALL columns as keys.")
+            keys = [
+                {
+                    "name": col["name"],
+                    "alias": col["name"],
+                    "type": col.get("dataType")
+                } for col in columns["columns"]
+            ]
 
         # Only send source-discovered keys to the create-table statement.
         # YAML-defined keys are honoured for entity creation (create_all_entities.py)
@@ -402,6 +409,11 @@ def create_tables(token, pipeline_id, source_schema, target_schema, tables, sour
                 "type": col.get("dataType")
             } for col in columns["columns"] if col.get("isPK")
         ]
+
+        if not source_discovered_keys and (not custom_config or not custom_config.get('keys')):
+            # If there are no discovered keys and no keys defined in YAML, apply ultimate fallback of ALL columns as keys to target table creation.
+            logger.warning(f"No source-discovered keys and no YAML keys. Applying ultimate fallback of ALL columns as keys to target table creation.")
+            source_discovered_keys = keys
 
         # check if the table exists on the target
         handle_table_creation(pipeline_id, target_table_name, yaml_target_schema, source_discovered_keys, token, columns, custom_config,

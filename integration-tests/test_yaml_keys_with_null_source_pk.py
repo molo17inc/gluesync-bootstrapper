@@ -403,6 +403,151 @@ demo:
         self.assertIsNotNone(id_col)
         self.assertTrue(id_col.get("isPK", False), "ID must be a PK from discovery because YAML keys was null")
 
+    def test_ultimate_fallback_table_creation_all_columns_marked_as_pk(self):
+        """
+        When the source has no discovered primary keys and the YAML configuration
+        does not define any keys (it is empty or null), the ultimate fallback
+        must mark ALL columns as primary keys in the target table creation.
+        """
+        import create_all_tables
+
+        yaml_text = """
+demo:
+  target: public
+  tables:
+    whitelist: [CUSTOMERS_NO_PKEY]
+    blacklist: []
+    custom:
+      CUSTOMERS_NO_PKEY:
+        keys:
+"""
+        yaml_config = yaml.safe_load(yaml_text)
+        discovered_tables = [{"name": "CUSTOMERS_NO_PKEY"}]
+
+        # Source columns: both ID and NAME with is_pk=False or None
+        source_columns = {
+            "columns": [
+                _source_col("ID", 1, "int", is_pk=None),
+                _source_col("NAME", 2, "varchar", is_pk=None),
+            ]
+        }
+
+        captured_requests = []
+
+        def fake_generate(pipeline_id, schema_name, table_name, token, table_data):
+            captured_requests.append((schema_name, table_name, _model_to_dict(table_data)))
+            return f"CREATE TABLE {schema_name}.{table_name} (...)"
+
+        with mock.patch.object(create_all_tables, "get_node_info", side_effect=[_node_info(), _node_info()]), \
+             mock.patch.object(create_all_tables, "get_table_columns", return_value=source_columns), \
+             mock.patch.object(create_all_tables, "table_exists", return_value=False), \
+             mock.patch.object(create_all_tables, "map_data_type", side_effect=lambda source_type, *args, **kwargs: source_type), \
+             mock.patch.object(create_all_tables, "generate_create_table_statement", side_effect=fake_generate), \
+             mock.patch.object(create_all_tables, "create_target_table"):
+            
+            create_all_tables.create_tables(
+                token="token",
+                pipeline_id="pipeline",
+                source_schema="demo",
+                target_schema="fallback_target",
+                tables=discovered_tables,
+                source_agent_id="source-agent",
+                target_agent_id="target-agent",
+                source_type="SQL",
+                target_type="SQL",
+                yaml_config=yaml_config,
+            )
+
+        self.assertEqual(len(captured_requests), 1)
+        _, _, request_body = captured_requests[0]
+        columns = request_body["columns"]
+
+        self.assertEqual(len(columns), 2)
+        id_col = next((c for c in columns if c["name"] == "ID"), None)
+        name_col = next((c for c in columns if c["name"] == "NAME"), None)
+
+        self.assertIsNotNone(id_col)
+        self.assertIsNotNone(name_col)
+        # Verify both ID and NAME are marked as PKs due to the ultimate fallback
+        self.assertTrue(id_col.get("isPK", False), "ID must be a PK under the ultimate fallback")
+        self.assertTrue(name_col.get("isPK", False), "NAME must be a PK under the ultimate fallback")
+
+    def test_ultimate_fallback_entity_creation_all_columns_marked_as_pk(self):
+        """
+        When the source has no discovered primary keys and the YAML configuration
+        does not define any keys (it is empty or null), the ultimate fallback
+        must mark ALL columns as primary keys in the generated target entity payloads.
+        """
+        import create_all_entities
+
+        yaml_text = """
+demo:
+  target: public
+  tables:
+    whitelist: [CUSTOMERS_NO_PKEY]
+    blacklist: []
+    custom:
+      CUSTOMERS_NO_PKEY:
+        keys:
+"""
+        yaml_config = yaml.safe_load(yaml_text)
+        discovered_tables = [{"name": "CUSTOMERS_NO_PKEY", "schema": "demo", "id": 101}]
+
+        source_columns = {
+            "columns": [
+                _source_col("ID", 1, "int", is_pk=None),
+                _source_col("NAME", 2, "varchar", is_pk=None),
+            ]
+        }
+
+        captured_puts = []
+
+        def fake_fetch(path, method="GET", token=None, body=None, **kwargs):
+            if path.endswith("/config/entities") and method == "PUT":
+                captured_puts.append(copy.deepcopy(body))
+                return {"ok": True}
+            if path.endswith("/entities"):
+                entities = captured_puts[-1]["entities"] if captured_puts else []
+                return [{"entity": {"entityId": f"entity-{idx}", **entity}} for idx, entity in enumerate(entities, 1)]
+            return {}
+
+        with mock.patch.object(create_all_entities, "CREATE_TABLE_IF_NOT_EXISTS", False), \
+             mock.patch.object(create_all_entities, "get_node_info", side_effect=[_node_info(), _node_info()]), \
+             mock.patch.object(create_all_entities, "get_agent_tables", return_value=[]), \
+             mock.patch.object(create_all_entities, "get_table_columns", return_value=source_columns), \
+             mock.patch.object(create_all_entities, "map_data_type", side_effect=lambda source_type, *args, **kwargs: source_type), \
+             mock.patch.object(create_all_entities, "fetch_core_hub", side_effect=fake_fetch):
+            
+            result = create_all_entities.create_entities(
+                token="token",
+                pipeline_id="pipeline",
+                source_schema="demo",
+                target_schema="fallback_target",
+                tables=discovered_tables,
+                source_agent_id="source-agent",
+                target_agent_id="target-agent",
+                source_type="SQL",
+                target_type="SQL",
+                yaml_config=yaml_config,
+            )
+
+        self.assertEqual(result, {"successful": 1, "failed": 0, "total": 1})
+        self.assertEqual(len(captured_puts), 1)
+        
+        entity = captured_puts[0]["entities"][0]
+        # Inspect source entity columns
+        source_agent_entity = entity["agentEntities"][0]
+        columns = source_agent_entity["columns"]
+        
+        self.assertEqual(len(columns), 2, "Both columns must be included in the source entity")
+        id_col = next((c for c in columns if c["name"] == "ID"), None)
+        name_col = next((c for c in columns if c["name"] == "NAME"), None)
+        
+        self.assertIsNotNone(id_col)
+        self.assertIsNotNone(name_col)
+        self.assertTrue(id_col.get("isPK", False), "ID must be marked as PK under the ultimate fallback")
+        self.assertTrue(name_col.get("isPK", False), "NAME must be marked as PK under the ultimate fallback")
+
 
 if __name__ == "__main__":
     unittest.main()
