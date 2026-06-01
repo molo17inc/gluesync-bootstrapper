@@ -1,0 +1,1872 @@
+# Anonymized YAML configuration file for integration testing
+# Removed all client-specific and proprietary names
+
+ANON_SCHEMA:
+  target: ANON_TARGET
+  tables:
+    whitelist:
+    - ANON_TABLE_01
+    - ANON_TABLE_02
+    - ANON_TABLE_03
+    - ANON_TABLE_04
+    - ANON_TABLE_05
+    - ANON_TABLE_06
+    - ANON_TABLE_07
+    - ANON_TABLE_08
+    - ANON_TABLE_09
+    - ANON_TABLE_10
+    - ANON_TABLE_11
+    - ANON_TABLE_12
+    - ANON_TABLE_13
+    - ANON_TABLE_14
+    - ANON_TABLE_15
+    - ANON_TABLE_16
+    - ANON_TABLE_17
+    blacklist: []
+    custom:
+      ANON_TABLE_01:
+        name: ANON_SCHEMA.ANON_TABLE_01
+        columns:
+        - name: ANON_COL_01
+          type: DECIMAL
+          dataLength: 11
+          numericPrecision: 11
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_02
+          type: VARCHAR
+          dataLength: 100
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_03
+          type: VARCHAR
+          dataLength: 10
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_04
+          type: VARCHAR
+          dataLength: 10
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_05
+          type: TIMESTAMP
+          dataLength: 10
+          numericPrecision: 0
+          numericScale: 6
+          isNullable: false
+        - name: ANON_COL_06
+          type: DECIMAL
+          dataLength: 11
+          numericPrecision: 11
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_07
+          type: VARCHAR
+          dataLength: 100
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_08
+          type: INTEGER
+          dataLength: 4
+          numericPrecision: 9
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_09
+          type: VARCHAR
+          dataLength: 200
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_10
+          type: VARCHAR
+          dataLength: 20
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        keys:
+        - ANON_COL_08
+      ANON_TABLE_02:
+        name: ANON_SCHEMA.ANON_TABLE_02
+        columns:
+        - name: ANON_COL_01
+          type: BIGINT
+          dataLength: 8
+          numericPrecision: 18
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_02
+          type: INTEGER
+          dataLength: 4
+          numericPrecision: 9
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_03
+          type: CHAR
+          dataLength: 20
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_04
+          type: DATE
+          dataLength: 4
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_05
+          type: CHAR
+          dataLength: 10
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_06
+          type: CHAR
+          dataLength: 100
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_07
+          type: DECIMAL
+          dataLength: 10
+          numericPrecision: 10
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_08
+          type: CHAR
+          dataLength: 100
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_09
+          type: CHAR
+          dataLength: 40
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_10
+          type: TIMESTAMP
+          dataLength: 10
+          numericPrecision: 0
+          numericScale: 6
+          isNullable: false
+        keys:
+        - ANON_COL_01
+        - ANON_COL_02
+      ANON_TABLE_03:
+        name: ANON_SCHEMA.ANON_TABLE_03
+        columns:
+        - name: ANON_COL_01
+          type: DECIMAL
+          dataLength: 4
+          numericPrecision: 4
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_02
+          type: TIMESTAMP
+          dataLength: 13
+          numericPrecision: 0
+          numericScale: 6
+          isNullable: false
+        - name: ANON_COL_03
+          type: VARCHAR
+          dataLength: 200
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_04
+          type: DATE
+          dataLength: 4
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_05
+          type: TIMESTAMP
+          dataLength: 13
+          numericPrecision: 0
+          numericScale: 6
+          isNullable: false
+        - name: ANON_COL_06
+          type: VARCHAR
+          dataLength: 128
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_07
+          type: TIMESTAMP
+          dataLength: 13
+          numericPrecision: 0
+          numericScale: 6
+          isNullable: false
+        - name: ANON_COL_08
+          type: VARCHAR
+          dataLength: 255
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_09
+          type: CHAR
+          dataLength: 1
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_10
+          type: VARCHAR
+          dataLength: 28
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_11
+          type: DECIMAL
+          dataLength: 5
+          numericPrecision: 5
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_12
+          type: BIGINT
+          dataLength: 8
+          numericPrecision: 18
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_13
+          type: DECIMAL
+          dataLength: 3
+          numericPrecision: 3
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_14
+          type: CHAR
+          dataLength: 4
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_15
+          type: VARCHAR
+          dataLength: 128
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_16
+          type: DATE
+          dataLength: 4
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        keys:
+        - ANON_COL_12
+      ANON_TABLE_04:
+        name: ANON_SCHEMA.ANON_TABLE_04
+        columns:
+        - name: ANON_COL_01
+          type: TIMESTAMP
+          dataLength: 10
+          numericPrecision: 0
+          numericScale: 6
+          isNullable: false
+        - name: ANON_COL_02
+          type: VARCHAR
+          dataLength: 50
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_03
+          type: VARCHAR
+          dataLength: 3000
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_04
+          type: VARCHAR
+          dataLength: 10
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_05
+          type: DECIMAL
+          dataLength: 5
+          numericPrecision: 5
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_06
+          type: VARCHAR
+          dataLength: 10
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_07
+          type: BIGINT
+          dataLength: 8
+          numericPrecision: 18
+          numericScale: 0
+          isNullable: false
+        keys:
+        - ANON_COL_01
+        - ANON_COL_02
+        - ANON_COL_03
+        - ANON_COL_07
+      ANON_TABLE_05:
+        name: ANON_SCHEMA.ANON_TABLE_05
+        columns:
+        - name: ANON_COL_01
+          type: CHAR
+          dataLength: 1
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_02
+          type: CHAR
+          dataLength: 1
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_03
+          type: DECIMAL
+          dataLength: 5
+          numericPrecision: 5
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_04
+          type: DECIMAL
+          dataLength: 9
+          numericPrecision: 9
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_05
+          type: CHAR
+          dataLength: 1
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_06
+          type: CHAR
+          dataLength: 1
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_07
+          type: CHAR
+          dataLength: 25
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_08
+          type: CHAR
+          dataLength: 250
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_09
+          type: CHAR
+          dataLength: 1
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_10
+          type: DECIMAL
+          dataLength: 5
+          numericPrecision: 5
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_11
+          type: DATE
+          dataLength: 4
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_12
+          type: DECIMAL
+          dataLength: 3
+          numericPrecision: 3
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_13
+          type: CHAR
+          dataLength: 100
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_14
+          type: CHAR
+          dataLength: 1
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_15
+          type: CHAR
+          dataLength: 2000
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_16
+          type: CHAR
+          dataLength: 100
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_17
+          type: DATE
+          dataLength: 4
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_18
+          type: CHAR
+          dataLength: 25
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_19
+          type: DATE
+          dataLength: 4
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_20
+          type: CHAR
+          dataLength: 30
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_21
+          type: CHAR
+          dataLength: 1
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_22
+          type: CHAR
+          dataLength: 1
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_23
+          type: DECIMAL
+          dataLength: 9
+          numericPrecision: 9
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_24
+          type: CHAR
+          dataLength: 2
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_25
+          type: CHAR
+          dataLength: 1
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_26
+          type: CHAR
+          dataLength: 150
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_27
+          type: CHAR
+          dataLength: 25
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_28
+          type: CHAR
+          dataLength: 100
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_29
+          type: CHAR
+          dataLength: 50
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_30
+          type: CHAR
+          dataLength: 100
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_31
+          type: CHAR
+          dataLength: 1
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_32
+          type: CHAR
+          dataLength: 25
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_33
+          type: CHAR
+          dataLength: 1
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_34
+          type: CHAR
+          dataLength: 4
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_35
+          type: DECIMAL
+          dataLength: 3
+          numericPrecision: 3
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_36
+          type: DATE
+          dataLength: 4
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_37
+          type: NUMERIC
+          dataLength: 5
+          numericPrecision: 5
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_38
+          type: NUMERIC
+          dataLength: 4
+          numericPrecision: 4
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_39
+          type: CHAR
+          dataLength: 50
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_40
+          type: CHAR
+          dataLength: 100
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_41
+          type: CHAR
+          dataLength: 10
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_42
+          type: DATE
+          dataLength: 4
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_43
+          type: CHAR
+          dataLength: 25
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_44
+          type: NUMERIC
+          dataLength: 2
+          numericPrecision: 2
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_45
+          type: NUMERIC
+          dataLength: 6
+          numericPrecision: 6
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_46
+          type: CHAR
+          dataLength: 50
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_47
+          type: CHAR
+          dataLength: 1
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_48
+          type: CHAR
+          dataLength: 2
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_49
+          type: CHAR
+          dataLength: 50
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_50
+          type: DATE
+          dataLength: 4
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_51
+          type: CHAR
+          dataLength: 1
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_52
+          type: CHAR
+          dataLength: 100
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_53
+          type: CHAR
+          dataLength: 15
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        keys: null
+      ANON_TABLE_06:
+        name: ANON_SCHEMA.ANON_TABLE_06
+        columns:
+        - name: ANON_COL_01
+          type: DECIMAL
+          dataLength: 5
+          numericPrecision: 5
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_02
+          type: DATE
+          dataLength: 4
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_03
+          type: CHAR
+          dataLength: 1
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_04
+          type: CHAR
+          dataLength: 20
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_05
+          type: DECIMAL
+          dataLength: 3
+          numericPrecision: 3
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_06
+          type: DECIMAL
+          dataLength: 11
+          numericPrecision: 11
+          numericScale: 2
+          isNullable: false
+        - name: ANON_COL_07
+          type: CHAR
+          dataLength: 1
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_08
+          type: CHAR
+          dataLength: 1
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_09
+          type: DECIMAL
+          dataLength: 11
+          numericPrecision: 11
+          numericScale: 2
+          isNullable: false
+        - name: ANON_COL_10
+          type: CHAR
+          dataLength: 30
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_11
+          type: CHAR
+          dataLength: 1000
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_12
+          type: DATE
+          dataLength: 4
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_13
+          type: CHAR
+          dataLength: 10
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_14
+          type: CHAR
+          dataLength: 2
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_15
+          type: CHAR
+          dataLength: 1
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_16
+          type: CHAR
+          dataLength: 50
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_17
+          type: CHAR
+          dataLength: 25
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_18
+          type: CHAR
+          dataLength: 50
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_19
+          type: CHAR
+          dataLength: 1
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_20
+          type: CHAR
+          dataLength: 4
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_21
+          type: CHAR
+          dataLength: 50
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_22
+          type: DATE
+          dataLength: 4
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_23
+          type: DECIMAL
+          dataLength: 3
+          numericPrecision: 3
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_24
+          type: NUMERIC
+          dataLength: 5
+          numericPrecision: 5
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_25
+          type: CHAR
+          dataLength: 500
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_26
+          type: CHAR
+          dataLength: 100
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_27
+          type: NUMERIC
+          dataLength: 4
+          numericPrecision: 4
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_28
+          type: CHAR
+          dataLength: 300
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_29
+          type: DATE
+          dataLength: 4
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_30
+          type: CHAR
+          dataLength: 50
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_31
+          type: CHAR
+          dataLength: 100
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_32
+          type: CHAR
+          dataLength: 10
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_33
+          type: DATE
+          dataLength: 4
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_34
+          type: CHAR
+          dataLength: 1000
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_35
+          type: NUMERIC
+          dataLength: 2
+          numericPrecision: 2
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_36
+          type: NUMERIC
+          dataLength: 6
+          numericPrecision: 6
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_37
+          type: DATE
+          dataLength: 4
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_38
+          type: CHAR
+          dataLength: 1
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        keys: null
+      ANON_TABLE_07:
+        name: ANON_SCHEMA.ANON_TABLE_07
+        columns:
+        - name: ANON_COL_01
+          type: CHAR
+          dataLength: 10
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_02
+          type: NUMERIC
+          dataLength: 5
+          numericPrecision: 5
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_03
+          type: CHAR
+          dataLength: 3
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_04
+          type: TIMESTAMP
+          dataLength: 10
+          numericPrecision: 0
+          numericScale: 6
+          isNullable: false
+        - name: ANON_COL_05
+          type: CHAR
+          dataLength: 50
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_06
+          type: CHAR
+          dataLength: 100
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_07
+          type: CHAR
+          dataLength: 4
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_08
+          type: DECIMAL
+          dataLength: 3
+          numericPrecision: 3
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_09
+          type: NUMERIC
+          dataLength: 5
+          numericPrecision: 5
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_10
+          type: NUMERIC
+          dataLength: 4
+          numericPrecision: 4
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_11
+          type: NUMERIC
+          dataLength: 2
+          numericPrecision: 2
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_12
+          type: NUMERIC
+          dataLength: 6
+          numericPrecision: 6
+          numericScale: 0
+          isNullable: false
+        keys:
+        - ANON_COL_01
+        - ANON_COL_02
+        - ANON_COL_03
+        - ANON_COL_04
+        - ANON_COL_05
+        - ANON_COL_06
+        - ANON_COL_07
+        - ANON_COL_08
+        - ANON_COL_09
+        - ANON_COL_10
+        - ANON_COL_11
+        - ANON_COL_12
+      ANON_TABLE_08:
+        name: ANON_SCHEMA.ANON_TABLE_08
+        columns:
+        - name: ANON_COL_01
+          type: CHAR
+          dataLength: 10
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_02
+          type: NUMERIC
+          dataLength: 5
+          numericPrecision: 5
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_03
+          type: TIMESTAMP
+          dataLength: 10
+          numericPrecision: 0
+          numericScale: 6
+          isNullable: false
+        - name: ANON_COL_04
+          type: CHAR
+          dataLength: 2500
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_05
+          type: CHAR
+          dataLength: 4
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_06
+          type: DECIMAL
+          dataLength: 3
+          numericPrecision: 3
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_07
+          type: NUMERIC
+          dataLength: 5
+          numericPrecision: 5
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_08
+          type: CHAR
+          dataLength: 75
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_09
+          type: NUMERIC
+          dataLength: 4
+          numericPrecision: 4
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_10
+          type: CHAR
+          dataLength: 250
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_11
+          type: DATE
+          dataLength: 4
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_12
+          type: NUMERIC
+          dataLength: 2
+          numericPrecision: 2
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_13
+          type: NUMERIC
+          dataLength: 6
+          numericPrecision: 6
+          numericScale: 0
+          isNullable: false
+        keys:
+        - ANON_COL_01
+        - ANON_COL_02
+        - ANON_COL_03
+        - ANON_COL_04
+        - ANON_COL_05
+        - ANON_COL_06
+        - ANON_COL_07
+        - ANON_COL_08
+        - ANON_COL_09
+        - ANON_COL_10
+        - ANON_COL_11
+        - ANON_COL_12
+        - ANON_COL_13
+      ANON_TABLE_09:
+        name: ANON_SCHEMA.ANON_TABLE_09
+        columns:
+        - name: ANON_COL_01
+          type: CHAR
+          dataLength: 30
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_02
+          type: NUMERIC
+          dataLength: 5
+          numericPrecision: 5
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_03
+          type: CHAR
+          dataLength: 4
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_04
+          type: NUMERIC
+          dataLength: 5
+          numericPrecision: 5
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_05
+          type: NUMERIC
+          dataLength: 4
+          numericPrecision: 4
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_06
+          type: NUMERIC
+          dataLength: 3
+          numericPrecision: 3
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_07
+          type: NUMERIC
+          dataLength: 2
+          numericPrecision: 2
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_08
+          type: NUMERIC
+          dataLength: 6
+          numericPrecision: 6
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_09
+          type: DECIMAL
+          dataLength: 3
+          numericPrecision: 3
+          numericScale: 0
+          isNullable: false
+        keys:
+        - ANON_COL_01
+        - ANON_COL_02
+        - ANON_COL_03
+        - ANON_COL_04
+        - ANON_COL_05
+        - ANON_COL_06
+        - ANON_COL_07
+        - ANON_COL_08
+        - ANON_COL_09
+      ANON_TABLE_10:
+        name: ANON_SCHEMA.ANON_TABLE_10
+        columns:
+        - name: ANON_COL_01
+          type: CHAR
+          dataLength: 10
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_02
+          type: CHAR
+          dataLength: 50
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_03
+          type: CHAR
+          dataLength: 30
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_04
+          type: NUMERIC
+          dataLength: 5
+          numericPrecision: 5
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_05
+          type: DATE
+          dataLength: 4
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_06
+          type: CHAR
+          dataLength: 50
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_07
+          type: DATE
+          dataLength: 4
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_08
+          type: CHAR
+          dataLength: 4
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_09
+          type: DATE
+          dataLength: 4
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_10
+          type: NUMERIC
+          dataLength: 5
+          numericPrecision: 5
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_11
+          type: NUMERIC
+          dataLength: 4
+          numericPrecision: 4
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_12
+          type: DATE
+          dataLength: 4
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_13
+          type: DATE
+          dataLength: 4
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_14
+          type: NUMERIC
+          dataLength: 3
+          numericPrecision: 3
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_15
+          type: NUMERIC
+          dataLength: 2
+          numericPrecision: 2
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_16
+          type: NUMERIC
+          dataLength: 6
+          numericPrecision: 6
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_17
+          type: DECIMAL
+          dataLength: 3
+          numericPrecision: 3
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_18
+          type: CHAR
+          dataLength: 2
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_19
+          type: CHAR
+          dataLength: 3
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        keys:
+        - ANON_COL_01
+        - ANON_COL_02
+        - ANON_COL_03
+        - ANON_COL_04
+        - ANON_COL_05
+        - ANON_COL_06
+        - ANON_COL_07
+        - ANON_COL_08
+        - ANON_COL_09
+        - ANON_COL_10
+        - ANON_COL_11
+        - ANON_COL_12
+        - ANON_COL_13
+        - ANON_COL_14
+        - ANON_COL_15
+        - ANON_COL_16
+        - ANON_COL_17
+        - ANON_COL_18
+        - ANON_COL_19
+      ANON_TABLE_11:
+        name: ANON_SCHEMA.ANON_TABLE_11
+        columns:
+        - name: ANON_COL_01
+          type: CHAR
+          dataLength: 1
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_02
+          type: BIGINT
+          dataLength: 8
+          numericPrecision: 18
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_03
+          type: TIMESTAMP
+          dataLength: 13
+          numericPrecision: 0
+          numericScale: 6
+          isNullable: false
+        - name: ANON_COL_04
+          type: TIMESTAMP
+          dataLength: 13
+          numericPrecision: 0
+          numericScale: 6
+          isNullable: false
+        - name: ANON_COL_05
+          type: VARCHAR
+          dataLength: 100
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_06
+          type: INTEGER
+          dataLength: 4
+          numericPrecision: 9
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_07
+          type: DATE
+          dataLength: 4
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_08
+          type: VARCHAR
+          dataLength: 128
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_09
+          type: TIMESTAMP
+          dataLength: 13
+          numericPrecision: 0
+          numericScale: 6
+          isNullable: false
+        - name: ANON_COL_10
+          type: VARCHAR
+          dataLength: 255
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_11
+          type: CHAR
+          dataLength: 1
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_12
+          type: VARCHAR
+          dataLength: 28
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_13
+          type: BIGINT
+          dataLength: 8
+          numericPrecision: 18
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_14
+          type: VARCHAR
+          dataLength: 40
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_15
+          type: DECIMAL
+          dataLength: 10
+          numericPrecision: 10
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_16
+          type: VARCHAR
+          dataLength: 100
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_17
+          type: VARCHAR
+          dataLength: 128
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_18
+          type: TIMESTAMP
+          dataLength: 10
+          numericPrecision: 0
+          numericScale: 6
+          isNullable: false
+        keys:
+        - ANON_COL_13
+      ANON_TABLE_12:
+        name: ANON_SCHEMA.ANON_TABLE_12
+        columns:
+        - name: ANON_COL_01
+          type: BIGINT
+          dataLength: 8
+          numericPrecision: 18
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_02
+          type: TIMESTAMP
+          dataLength: 13
+          numericPrecision: 0
+          numericScale: 6
+          isNullable: false
+        - name: ANON_COL_03
+          type: TIMESTAMP
+          dataLength: 13
+          numericPrecision: 0
+          numericScale: 6
+          isNullable: false
+        - name: ANON_COL_04
+          type: VARCHAR
+          dataLength: 128
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_05
+          type: TIMESTAMP
+          dataLength: 13
+          numericPrecision: 0
+          numericScale: 6
+          isNullable: false
+        - name: ANON_COL_06
+          type: VARCHAR
+          dataLength: 255
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_07
+          type: CHAR
+          dataLength: 1
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_08
+          type: VARCHAR
+          dataLength: 28
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_09
+          type: BIGINT
+          dataLength: 8
+          numericPrecision: 18
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_10
+          type: VARCHAR
+          dataLength: 128
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_11
+          type: TIMESTAMP
+          dataLength: 10
+          numericPrecision: 0
+          numericScale: 6
+          isNullable: false
+        - name: ANON_COL_12
+          type: DECIMAL
+          dataLength: 11
+          numericPrecision: 11
+          numericScale: 2
+          isNullable: false
+        - name: ANON_COL_13
+          type: DECIMAL
+          dataLength: 11
+          numericPrecision: 11
+          numericScale: 2
+          isNullable: false
+        keys:
+        - ANON_COL_09
+      ANON_TABLE_13:
+        name: ANON_SCHEMA.ANON_TABLE_13
+        columns:
+        - name: ANON_COL_01
+          type: BIGINT
+          dataLength: 8
+          numericPrecision: 18
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_02
+          type: TIMESTAMP
+          dataLength: 13
+          numericPrecision: 0
+          numericScale: 6
+          isNullable: false
+        - name: ANON_COL_03
+          type: TIMESTAMP
+          dataLength: 13
+          numericPrecision: 0
+          numericScale: 6
+          isNullable: false
+        - name: ANON_COL_04
+          type: VARCHAR
+          dataLength: 128
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_05
+          type: TIMESTAMP
+          dataLength: 13
+          numericPrecision: 0
+          numericScale: 6
+          isNullable: false
+        - name: ANON_COL_06
+          type: VARCHAR
+          dataLength: 255
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_07
+          type: CHAR
+          dataLength: 1
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_08
+          type: VARCHAR
+          dataLength: 28
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_09
+          type: VARCHAR
+          dataLength: 200
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_10
+          type: DECIMAL
+          dataLength: 11
+          numericPrecision: 11
+          numericScale: 2
+          isNullable: false
+        - name: ANON_COL_11
+          type: DECIMAL
+          dataLength: 11
+          numericPrecision: 11
+          numericScale: 2
+          isNullable: false
+        - name: ANON_COL_12
+          type: BIGINT
+          dataLength: 8
+          numericPrecision: 18
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_13
+          type: VARCHAR
+          dataLength: 128
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_14
+          type: TIMESTAMP
+          dataLength: 10
+          numericPrecision: 0
+          numericScale: 6
+          isNullable: false
+        - name: ANON_COL_15
+          type: DECIMAL
+          dataLength: 10
+          numericPrecision: 10
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_16
+          type: VARCHAR
+          dataLength: 200
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        keys:
+        - ANON_COL_12
+      ANON_TABLE_14:
+        name: ANON_SCHEMA.ANON_TABLE_14
+        columns:
+        - name: ANON_COL_01
+          type: TIMESTAMP
+          dataLength: 10
+          numericPrecision: 0
+          numericScale: 6
+          isNullable: false
+        - name: ANON_COL_02
+          type: BIGINT
+          dataLength: 8
+          numericPrecision: 18
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_03
+          type: INTEGER
+          dataLength: 4
+          numericPrecision: 9
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_04
+          type: VARCHAR
+          dataLength: 20
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_05
+          type: CHAR
+          dataLength: 3000
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_06
+          type: BIGINT
+          dataLength: 8
+          numericPrecision: 18
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_07
+          type: CHAR
+          dataLength: 10
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        keys:
+        - ANON_COL_06
+      ANON_TABLE_15:
+        name: ANON_SCHEMA.ANON_TABLE_15
+        columns:
+        - name: ANON_COL_01
+          type: CHAR
+          dataLength: 10
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_02
+          type: DECIMAL
+          dataLength: 11
+          numericPrecision: 11
+          numericScale: 2
+          isNullable: false
+        - name: ANON_COL_03
+          type: CHAR
+          dataLength: 2
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_04
+          type: TIMESTAMP
+          dataLength: 13
+          numericPrecision: 0
+          numericScale: 6
+          isNullable: false
+        - name: ANON_COL_05
+          type: TIMESTAMP
+          dataLength: 13
+          numericPrecision: 0
+          numericScale: 6
+          isNullable: false
+        - name: ANON_COL_06
+          type: VARCHAR
+          dataLength: 128
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_07
+          type: TIMESTAMP
+          dataLength: 13
+          numericPrecision: 0
+          numericScale: 6
+          isNullable: false
+        - name: ANON_COL_08
+          type: VARCHAR
+          dataLength: 255
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_09
+          type: CHAR
+          dataLength: 1
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_10
+          type: VARCHAR
+          dataLength: 28
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_11
+          type: DECIMAL
+          dataLength: 11
+          numericPrecision: 11
+          numericScale: 2
+          isNullable: false
+        - name: ANON_COL_12
+          type: INTEGER
+          dataLength: 4
+          numericPrecision: 9
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_13
+          type: CHAR
+          dataLength: 4
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_14
+          type: DECIMAL
+          dataLength: 3
+          numericPrecision: 3
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_15
+          type: DATE
+          dataLength: 4
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        keys:
+        - ANON_COL_12
+      ANON_TABLE_16:
+        name: ANON_SCHEMA.ANON_TABLE_16
+        columns:
+        - name: ANON_COL_01
+          type: BIGINT
+          dataLength: 8
+          numericPrecision: 18
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_02
+          type: TIMESTAMP
+          dataLength: 13
+          numericPrecision: 0
+          numericScale: 6
+          isNullable: false
+        - name: ANON_COL_03
+          type: VARCHAR
+          dataLength: 8
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_04
+          type: DECIMAL
+          dataLength: 11
+          numericPrecision: 11
+          numericScale: 2
+          isNullable: false
+        - name: ANON_COL_05
+          type: DECIMAL
+          dataLength: 11
+          numericPrecision: 11
+          numericScale: 2
+          isNullable: false
+        - name: ANON_COL_06
+          type: TIMESTAMP
+          dataLength: 13
+          numericPrecision: 0
+          numericScale: 6
+          isNullable: false
+        - name: ANON_COL_07
+          type: VARCHAR
+          dataLength: 128
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_08
+          type: TIMESTAMP
+          dataLength: 13
+          numericPrecision: 0
+          numericScale: 6
+          isNullable: false
+        - name: ANON_COL_09
+          type: VARCHAR
+          dataLength: 255
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_10
+          type: CHAR
+          dataLength: 1
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_11
+          type: VARCHAR
+          dataLength: 28
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_12
+          type: BIGINT
+          dataLength: 8
+          numericPrecision: 18
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_13
+          type: VARCHAR
+          dataLength: 128
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_14
+          type: DATE
+          dataLength: 4
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        keys:
+        - ANON_COL_12
+      ANON_TABLE_17:
+        name: ANON_SCHEMA.ANON_TABLE_17
+        columns:
+        - name: ANON_COL_01
+          type: VARCHAR
+          dataLength: 200
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_02
+          type: VARCHAR
+          dataLength: 10
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_03
+          type: BIGINT
+          dataLength: 8
+          numericPrecision: 18
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_04
+          type: TIMESTAMP
+          dataLength: 13
+          numericPrecision: 0
+          numericScale: 6
+          isNullable: false
+        - name: ANON_COL_05
+          type: TIMESTAMP
+          dataLength: 13
+          numericPrecision: 0
+          numericScale: 6
+          isNullable: false
+        - name: ANON_COL_06
+          type: DECIMAL
+          dataLength: 11
+          numericPrecision: 11
+          numericScale: 2
+          isNullable: true
+        - name: ANON_COL_07
+          type: VARCHAR
+          dataLength: 128
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_08
+          type: TIMESTAMP
+          dataLength: 13
+          numericPrecision: 0
+          numericScale: 6
+          isNullable: false
+        - name: ANON_COL_09
+          type: VARCHAR
+          dataLength: 255
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_10
+          type: CHAR
+          dataLength: 1
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_11
+          type: VARCHAR
+          dataLength: 28
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_12
+          type: DECIMAL
+          dataLength: 11
+          numericPrecision: 11
+          numericScale: 2
+          isNullable: true
+        - name: ANON_COL_13
+          type: VARCHAR
+          dataLength: 10
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+        - name: ANON_COL_14
+          type: BIGINT
+          dataLength: 8
+          numericPrecision: 18
+          numericScale: 0
+          isNullable: false
+        - name: ANON_COL_15
+          type: NUMERIC
+          dataLength: 6
+          numericPrecision: 6
+          numericScale: 0
+          isNullable: true
+        keys:
+        - ANON_COL_14
