@@ -1124,7 +1124,22 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             logger.debug(f"Using primary keys for {table_name}: {keys}")
 
         if not keys:
-            logger.warning(f"Warning: No keys specified for {table_name}. Table will have no keys.")
+            logger.warning(f"Warning: No keys specified for {table_name}. Applying ultimate fallback: using ALL columns as keys.")
+            for col in columns["columns"]:
+                col_id = col.get('id')
+                if col_id is None:
+                    error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
+                keys.append(_enrich_column({
+                    "id": col_id,
+                    "position": col.get("position", 0),
+                    "name": col["name"],
+                    "alias": col["name"],
+                    "dataType": col.get("dataType")
+                }, col))
+            for col_def in columns_def:
+                col_def["isPK"] = True
 
         if CREATE_TABLE_IF_NOT_EXISTS:
             # Only create tables for RDBMS targets; skip for NoSQL, Object Store,
@@ -1805,6 +1820,32 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     }, discovered_target_col if 'discovered_target_col' in locals() and discovered_target_col else col))
             logger.debug(f"Using primary target keys for {table_name}: {target_keys}")
 
+        if not target_keys:
+            logger.warning(f"Warning: No target keys specified for {table_name}. Applying ultimate fallback: using ALL columns as keys.")
+            for col in columns["columns"]:
+                col_id = col.get('id')
+                if col_id is None:
+                    error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
+                
+                _resolved_dt = target_discovered_columns_by_name.get(col["name"].lower(), {}).get('type') or map_data_type(
+                    col.get("dataType"), source_node_info, target_node_info,
+                    source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
+                    target_table_column_types=target_table_column_types)
+                _override = target_data_type_overrides.get(col["name"].lower())
+                if _override:
+                    _resolved_dt = _override
+                target_keys.append(_enrich_column({
+                    "id": col_id,
+                    "position": col.get("position", 0),
+                    "name": col["name"],
+                    "alias": col["name"],
+                    "dataType": _resolved_dt
+                }, col))
+            for col_def in target_columns_def:
+                col_def["isPK"] = True
+
         # Determine target entity type based on target_type
         # Check if target_type indicates NoSQL (case-insensitive)
         is_target_nosql = target_type and "nosql" in target_type.lower()
@@ -2116,7 +2157,18 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     }, col))
 
         if not keys:
-            logger.warning(f"No keys specified for duplicate table {yaml_table_key}")
+            logger.warning(f"No keys specified for duplicate table {yaml_table_key}. Applying ultimate fallback: using ALL columns as keys.")
+            for col in columns["columns"]:
+                col_id = col.get('id')
+                if col_id is None:
+                    raise ValueError(f"Column '{col.get('name')}' in {yaml_table_key} missing 'id' field")
+                keys.append(_enrich_column({
+                    "id": col_id,
+                    "position": col.get("position", 0),
+                    "name": col["name"],
+                    "alias": col["name"],
+                    "dataType": col.get("dataType")
+                }, col))
 
         # Generate table IDs
         source_table_id = resolve_table_id(source_schema, table_name, source_tables_lookup, "source")
@@ -2568,6 +2620,25 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             },
                             "type": col.get("dataType")
                         }, col))
+
+            if not keys:
+                logger.warning(f"No keys specified for MultiTable component '{table_key}'. Applying ultimate fallback: using ALL columns as keys.")
+                for col in columns["columns"]:
+                    col_id = col.get('id')
+                    if col_id is None:
+                        raise ValueError(f"Column '{col.get('name')}' in table {table_key} missing 'id' field in CoreHub API response.")
+                    keys.append(_enrich_column({
+                        "id": col_id,
+                        "position": col.get("position", 0),
+                        "name": col["name"],
+                        "alias": col["name"],
+                        "table": {
+                            "id": str(source_table_id),
+                            "name": table_key,
+                            "schema": source_schema
+                        },
+                        "type": col.get("dataType")
+                    }, col))
 
             # Add keys for this table
             multi_keys.append(_enrich_column({
