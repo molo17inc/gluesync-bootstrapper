@@ -126,7 +126,7 @@ def _canonicalize_target_type(data_type, target_node_info):
 
 
 def _is_in_keys(col_name, custom_config):
-    if not custom_config or 'keys' not in custom_config:
+    if not custom_config or 'keys' not in custom_config or custom_config['keys'] is None:
         return False
     keys = custom_config['keys']
     for k in keys:
@@ -1025,7 +1025,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         logger.debug(f"Columns definition for {table_name}: {columns_def}")
 
         # Process keys and other configurations as before...
-        if custom_config and 'keys' in custom_config:
+        if custom_config and 'keys' in custom_config and custom_config['keys'] is not None:
             logger.info(f"Processing keys for table {table_name}. Requested keys: {custom_config['keys']}")
             logger.info(f"Has columns section: {bool(custom_config.get('columns'))}")
             keys = []
@@ -1675,7 +1675,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
         # Process target keys with proper IDs
         target_keys = []
-        if custom_config and 'keys' in custom_config:
+        if custom_config and 'keys' in custom_config and custom_config['keys'] is not None:
             has_column_mappings = _is_column_mappings(custom_config.get('columns', []))
             
             if has_column_mappings:
@@ -2052,7 +2052,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 }, col))
 
         # Process keys
-        if custom_config and 'keys' in custom_config:
+        if custom_config and 'keys' in custom_config and custom_config['keys'] is not None:
             keys = []
             if has_column_mappings:
                 for col in columns["columns"]:
@@ -2258,7 +2258,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
         # Build target keys
         target_keys = []
-        if custom_config and 'keys' in custom_config:
+        if custom_config and 'keys' in custom_config and custom_config['keys'] is not None:
             for key_name in custom_config['keys']:
                 found = False
                 for col in columns["columns"]:
@@ -2484,7 +2484,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
             # Process keys
             custom_config = table_data
-            if custom_config and 'keys' in custom_config:
+            if custom_config and 'keys' in custom_config and custom_config['keys'] is not None:
                 keys = []
                 for key_def in custom_config['keys']:
                     # Handle both string (key name) and dict (key with name/alias) formats
@@ -2791,7 +2791,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
             # Process keys for target with IDs
             custom_config = table_data
-            if custom_config and 'keys' in custom_config:
+            if custom_config and 'keys' in custom_config and custom_config['keys'] is not None:
                 keys = []
                 for key_def in custom_config['keys']:
                     if isinstance(key_def, dict):

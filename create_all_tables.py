@@ -319,7 +319,7 @@ def create_tables(token, pipeline_id, source_schema, target_schema, tables, sour
             logger.info(f"Document key configuration for {table_name}: {document_key}")
 
         # Process keys and other configurations as before...
-        if custom_config and 'keys' in custom_config:
+        if custom_config and 'keys' in custom_config and custom_config['keys'] is not None:
             keys = []
             for key_def in custom_config['keys']:
                 # Handle both string (key name) and dict (key with name/alias) formats
