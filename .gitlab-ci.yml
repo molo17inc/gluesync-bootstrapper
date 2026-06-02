@@ -779,21 +779,20 @@ update_budibase_version:
         exit 1
       fi
 
-      case "$CI_COMMIT_TAG" in
-        beta-*)
-          UPDATE_PAYLOAD="{
-            \"latestVersionAlpha\": \"$MODULE_VERSION\",
-            \"latestVersionBeta\": \"$MODULE_VERSION\"
-          }"
-          ;;
-        *)
-          UPDATE_PAYLOAD="{
-            \"latestVersionAlpha\": \"$MODULE_VERSION\",
-            \"latestVersionBeta\": \"$MODULE_VERSION\",
-            \"latestVersionGA\": \"$MODULE_VERSION\"
-          }"
-          ;;
-      esac
+      # Determine channel from tag / version string:
+      #   beta-*                       → beta only
+      #   version contains -alpha/-rc  → alpha only
+      #   version contains -beta/-preview/-dev → beta only
+      #   everything else (GA)         → GA only
+      if echo "$CI_COMMIT_TAG" | grep -qE '^beta-'; then
+        UPDATE_PAYLOAD="{\"latestVersionBeta\": \"$MODULE_VERSION\"}"
+      elif echo "$MODULE_VERSION" | grep -qE '(-alpha|-rc)'; then
+        UPDATE_PAYLOAD="{\"latestVersionAlpha\": \"$MODULE_VERSION\"}"
+      elif echo "$MODULE_VERSION" | grep -qE '(-beta|-preview|-dev)'; then
+        UPDATE_PAYLOAD="{\"latestVersionBeta\": \"$MODULE_VERSION\"}"
+      else
+        UPDATE_PAYLOAD="{\"latestVersionGA\": \"$MODULE_VERSION\"}"
+      fi
 
       UPDATE_RESPONSE=$(curl -s -w "\n%{http_code}" -X PUT \
         -H "x-budibase-app-id: $BUDIBASE_APP_ID" \
