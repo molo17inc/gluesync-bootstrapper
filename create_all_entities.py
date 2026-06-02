@@ -1024,19 +1024,47 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
         logger.debug(f"Columns definition for {table_name}: {columns_def}")
 
-        # Process keys and other configurations as before...
-        if custom_config and 'keys' in custom_config and custom_config['keys'] is not None:
-            logger.info(f"Processing keys for table {table_name}. Requested keys: {custom_config['keys']}")
-            logger.info(f"Has columns section: {bool(custom_config.get('columns'))}")
-            keys = []
-            
+        # Resolve keys with the following precedence:
+        # 1. Use YAML-declared keys (custom config 'keys' or documentKey.keys)
+        # 2. Or, attempt retrieval of source table keys (isPK from source)
+        # 3. Or, attempt retrieval of target table keys (isPK from target)
+        # 4. Fallback to use of all columns as keys (ultimate fallback)
+        keys = []
+        resolved_method = "none"
+
+        # Discover target columns early so they are available for key resolution
+        target_discovered_columns = None
+        target_discovered_columns_by_name = {}
+        try:
+            target_discovered_columns = get_table_columns(token, pipeline_id, target_agent_id, yaml_target_schema, target_table_name)
+            if target_discovered_columns and isinstance(target_discovered_columns.get('columns'), list):
+                target_discovered_columns_by_name = {
+                    c.get('name').lower(): c
+                    for c in target_discovered_columns['columns']
+                    if c.get('name')
+                }
+                logger.debug(
+                    f"Found {len(target_discovered_columns_by_name)} existing columns in target table {yaml_target_schema}.{target_table_name} during early discovery"
+                )
+        except Exception as e:
+            logger.debug(f"Could not get target columns for {yaml_target_schema}.{target_table_name} during early discovery: {str(e)}")
+
+        # Step 1: Use YAML-declared keys
+        yaml_keys = None
+        if custom_config:
+            yaml_keys = custom_config.get('keys')
+            if not yaml_keys and 'documentKey' in custom_config:
+                yaml_keys = custom_config['documentKey'].get('keys')
+
+        if yaml_keys is not None and len(yaml_keys) > 0:
+            resolved_method = "yaml"
+            logger.info(f"Processing keys for table {table_name}. Requested keys: {yaml_keys}")
             has_column_mappings = _is_column_mappings(custom_config.get('columns', []))
             
             if has_column_mappings:
                 # Use column mappings for keys
-                logger.info(f"Key extraction via column mappings for {table_name}. Keys to find: {custom_config['keys']}")
+                logger.info(f"Key extraction via column mappings for {table_name}. Keys to find: {yaml_keys}")
                 for col in columns["columns"]:
-                    # Use the id field from CoreHub API as the column ID
                     col_id = col.get('id')
                     if col_id is None:
                         error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
@@ -1044,32 +1072,26 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         raise ValueError(error_msg)
                         
                     for column_map in custom_config['columns']:
-                        # Extract source:target pairs, ignoring metadata fields
                         mapping_pairs = _extract_mapping_pairs(column_map)
                         for source_name, target_name in mapping_pairs:
                             name_match = col["name"] == source_name
-                            in_keys = col["name"] in custom_config["keys"]
+                            in_keys = col["name"] in yaml_keys
                             if name_match and in_keys:
                                 keys.append(_enrich_column({
-                                    "id": col_id,  # Use actual ordinal position from database
+                                    "id": col_id,
                                     "position": col.get("position", 0),
                                     "name": col["name"],
                                     "alias": target_name,
                                     "dataType": col.get("dataType")
                                 }, col))
                                 logger.info(f"Key matched: col={col['name']!r}, source_name={source_name!r}, target_name={target_name!r}")
-                            elif col["name"] in custom_config["keys"]:
-                                logger.warning(f"Key col={col['name']!r} is in keys list but source_name={source_name!r} did not match (name_match={name_match}, in_keys={in_keys})")
             else:
                 # No column mappings, use keys directly from source columns
-                logger.debug(f"Processing keys for {table_name}: {custom_config['keys']}")
-                logger.debug(f"Available columns: {[col['name'] for col in columns['columns']]}")
-                for key_name in custom_config['keys']:
-                    # Find the column and its index (case-insensitive to handle cross-db scenarios like pgsql→oracle)
+                logger.debug(f"Processing keys for {table_name}: {yaml_keys}")
+                for key_name in yaml_keys:
                     found = False
                     for col in columns["columns"]:
                         if col["name"].lower() == key_name.lower():
-                            # Use the id field from CoreHub API as the column ID
                             col_id = col.get('id')
                             if col_id is None:
                                 error_msg = f"CRITICAL ERROR: Column '{key_name}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
@@ -1077,53 +1099,66 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                 raise ValueError(error_msg)
 
                             keys.append(_enrich_column({
-                                "id": col_id,  # Use actual ordinal position from database
+                                "id": col_id,
                                 "position": col.get("position", 0),
                                 "name": col["name"],
                                 "alias": col["name"],
                                 "dataType": col.get("dataType")
                             }, col))
                             found = True
-                            logger.debug(f"Found key '{key_name}' in columns with id={col_id}")
                             break
                     if not found:
-                        logger.warning(f"Warning: Key '{key_name}' not found in columns for table '{table_name}'. Searching in columns_def...")
-                        # Try to find it in the already built columns_def (which might have come from YAML metadata)
                         for col_def in columns_def:
                             if col_def.get('name', '').lower() == key_name.lower():
                                 keys.append(copy.deepcopy(col_def))
                                 found = True
-                                logger.info(f"Found key '{key_name}' in columns_def")
                                 break
-                    
                     if not found:
                         error_msg = f"CRITICAL ERROR: Key '{key_name}' not found in discovery or columns_def for table '{table_name}' in schema '{source_schema}'. This key is required by the YAML configuration but does not exist in the source database discovery."
                         logger.error(error_msg)
                         raise ValueError(error_msg)
 
-            
-            logger.info(f"Final keys array for {table_name}: {keys} (count: {len(keys)})")
-        else:
-            keys = []
-            for col in columns["columns"]:
-                if col.get("isPK"):
-                    # Use the id field from CoreHub API as the column ID
+        # Step 2: Attempt retrieval of source table keys
+        if not keys:
+            source_pks = [col for col in columns["columns"] if col.get("isPK")]
+            if source_pks:
+                resolved_method = "source"
+                for col in source_pks:
                     col_id = col.get('id')
                     if col_id is None:
-                        error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
-                        logger.error(error_msg)
-                        raise ValueError(error_msg)
-                        
+                        raise ValueError(f"Primary key column '{col.get('name')}' missing id")
                     keys.append(_enrich_column({
-                        "id": col_id,  # Use actual ordinal position from database
+                        "id": col_id,
                         "position": col.get("position", 0),
                         "name": col["name"],
                         "alias": col["name"],
                         "dataType": col.get("dataType")
                     }, col))
-            logger.debug(f"Using primary keys for {table_name}: {keys}")
+                logger.info(f"Resolved keys via source table keys: {[k['name'] for k in keys]}")
 
+        # Step 3: Attempt retrieval of target table keys
         if not keys:
+            if target_discovered_columns and isinstance(target_discovered_columns.get('columns'), list):
+                target_pks = [col for col in target_discovered_columns['columns'] if col.get("isPK")]
+                if target_pks:
+                    resolved_method = "target"
+                    for target_col in target_pks:
+                        matched_col = next((c for c in columns["columns"] if c["name"].lower() == target_col["name"].lower()), None)
+                        if matched_col:
+                            col_id = matched_col.get('id')
+                            if col_id is not None:
+                                keys.append(_enrich_column({
+                                    "id": col_id,
+                                    "position": matched_col.get("position", 0),
+                                    "name": matched_col["name"],
+                                    "alias": matched_col["name"],
+                                    "dataType": matched_col.get("dataType")
+                                }, matched_col))
+                    logger.info(f"Resolved keys via target table keys: {[k['name'] for k in keys]}")
+
+        # Step 4: Fallback to use of all columns as keys
+        if not keys:
+            resolved_method = "all_columns"
             logger.warning(f"Warning: No keys specified for {table_name}. Applying ultimate fallback: using ALL columns as keys.")
             for col in columns["columns"]:
                 col_id = col.get('id')
@@ -1278,22 +1313,21 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             # Also add mappingFunctionInfo for the first UDF
             target_entity_type["mappingFunctionInfo"] = udf_config[0]
         
-        # Discover target columns first (needed for columnsMappingMatrix)
-        target_discovered_columns = None
-        target_discovered_columns_by_name = {}
-        try:
-            target_discovered_columns = get_table_columns(token, pipeline_id, target_agent_id, yaml_target_schema, target_table_name)
-            if target_discovered_columns and isinstance(target_discovered_columns.get('columns'), list):
-                target_discovered_columns_by_name = {
-                    c.get('name').lower(): c
-                    for c in target_discovered_columns['columns']
-                    if c.get('name')
-                }
-                logger.debug(
-                    f"Found {len(target_discovered_columns_by_name)} existing columns in target table {yaml_target_schema}.{target_table_name}"
-                )
-        except Exception as e:
-            logger.debug(f"Could not get target columns for {yaml_target_schema}.{target_table_name}: {str(e)}")
+        # Target columns already discovered earlier for key resolution fallback
+        if not target_discovered_columns:
+            try:
+                target_discovered_columns = get_table_columns(token, pipeline_id, target_agent_id, yaml_target_schema, target_table_name)
+                if target_discovered_columns and isinstance(target_discovered_columns.get('columns'), list):
+                    target_discovered_columns_by_name = {
+                        c.get('name').lower(): c
+                        for c in target_discovered_columns['columns']
+                        if c.get('name')
+                    }
+                    logger.debug(
+                        f"Found {len(target_discovered_columns_by_name)} existing columns in target table {yaml_target_schema}.{target_table_name}"
+                    )
+            except Exception as e:
+                logger.debug(f"Could not get target columns for {yaml_target_schema}.{target_table_name}: {str(e)}")
 
         # Build set of dataTypes already present in the target table for type-mapping fallback
         target_table_column_types = extract_target_column_types(target_discovered_columns)
