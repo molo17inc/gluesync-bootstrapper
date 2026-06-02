@@ -318,78 +318,89 @@ def create_tables(token, pipeline_id, source_schema, target_schema, tables, sour
             }
             logger.info(f"Document key configuration for {table_name}: {document_key}")
 
-        # Process keys and other configurations as before...
-        if custom_config and 'keys' in custom_config and custom_config['keys'] is not None:
-            keys = []
-            for key_def in custom_config['keys']:
-                # Handle both string (key name) and dict (key with name/alias) formats
+        # Resolve keys with the following precedence:
+        # 1. Use YAML-declared keys (custom config 'keys' or documentKey.keys)
+        # 2. Or, attempt retrieval of source table keys (isPK from source)
+        # 3. Or, attempt retrieval of target table keys (isPK from target)
+        # 4. Fallback to use of all columns as keys (ultimate fallback)
+        keys = []
+        resolved_method = "none"
+
+        # Step 1: Use YAML-declared keys
+        yaml_keys = None
+        if custom_config:
+            yaml_keys = custom_config.get('keys')
+            if not yaml_keys and 'documentKey' in custom_config:
+                yaml_keys = custom_config['documentKey'].get('keys')
+
+        if yaml_keys is not None and len(yaml_keys) > 0:
+            resolved_method = "yaml"
+            for key_def in yaml_keys:
                 if isinstance(key_def, dict):
-                    # Handle the case where the key is specified as a dict with 'name' and optional 'alias'
                     key_name = next(iter(key_def)) if not key_def.get('name') else key_def['name']
                     key_config = key_def.get(key_name, {}) if isinstance(key_def.get(key_name), dict) else {}
-
-                    # Get the key name (either from the dict key or from the 'name' field)
                     key_name = key_name or key_config.get('name')
-                    # Get the alias (defaults to the key name if not specified)
                     key_alias = key_config.get('name', key_name)
-
-                    # Get the key type from the config or find it in the columns
                     key_type = key_config.get('dataType')
                 else:
-                    # Simple string format - use the string as both name and alias
                     key_name = key_def
                     key_alias = key_def
                     key_type = None
 
-                # Try to find the key in the columns to get its type if not specified
-                key_column = next((col for col in columns["columns"] if col["name"] == key_name), None)
-
+                key_column = next((col for col in columns["columns"] if col["name"].lower() == key_name.lower()), None)
                 if key_column:
                     keys.append({
-                        "name": key_name,
+                        "name": key_column["name"],
                         "alias": key_alias,
                         "type": key_type or key_column.get("dataType")
                     })
                 else:
-                    logger.info(
-                        f"Warning: Key {key_name} not found in columns for table {table_name}. Adding with unknown type.")
+                    logger.info(f"Warning: Key {key_name} not found in columns for table {table_name}. Adding with unknown type.")
                     keys.append({
                         "name": key_name,
                         "alias": key_alias,
                         "type": key_type or "unknown"
                     })
-            logger.info(f"Using custom keys for {table_name}: {keys}")
-        else:
-            keys = [
-                {
-                    "name": col["name"],
-                    "alias": col["name"],
-                    "type": col.get("dataType")
-                } for col in columns["columns"] if col.get("isPK")
-            ]
-            logger.info(f"Using primary keys for {table_name}: {keys}")
+            logger.info(f"Resolved keys via YAML-declared keys: {keys}")
 
-            if not keys and custom_config:
-                # Source has no discovered PKs — fall back to YAML keys (or documentKey.keys)
-                yaml_fallback_keys = custom_config.get('keys') or []
-                if not yaml_fallback_keys and 'documentKey' in custom_config:
-                    yaml_fallback_keys = custom_config['documentKey'].get('keys', [])
-
-                if yaml_fallback_keys:
-                    logger.info(f"Source table {table_name} has no PKs — using YAML-defined keys as fallback: {yaml_fallback_keys}")
-                    for key_name in yaml_fallback_keys:
-                        key_column = next((col for col in columns["columns"] if col["name"].lower() == key_name.lower()), None)
-                        if key_column:
-                            keys.append({
-                                "name": key_column["name"],
-                                "alias": key_column["name"],
-                                "type": key_column.get("dataType")
-                            })
-                        else:
-                            logger.warning(f"Fallback key '{key_name}' not found in columns for table '{table_name}'")
-
+        # Step 2: Attempt retrieval of source table keys
         if not keys:
-            logger.warning(f"Source table {table_name} has no PKs and no YAML keys. Ultimate fallback: using ALL columns as keys.")
+            source_pks = [col for col in columns["columns"] if col.get("isPK")]
+            if source_pks:
+                resolved_method = "source"
+                for col in source_pks:
+                    keys.append({
+                        "name": col["name"],
+                        "alias": col["name"],
+                        "type": col.get("dataType")
+                    })
+                logger.info(f"Resolved keys via source table keys: {keys}")
+
+        # Step 3: Attempt retrieval of target table keys
+        if not keys:
+            target_discovered_columns = None
+            try:
+                target_discovered_columns = get_table_columns(token, pipeline_id, target_agent_id, yaml_target_schema, target_table_name)
+            except Exception as e:
+                logger.debug(f"Could not get target columns for {yaml_target_schema}.{target_table_name} during key resolution: {str(e)}")
+
+            if target_discovered_columns and isinstance(target_discovered_columns.get('columns'), list):
+                target_pks = [col for col in target_discovered_columns['columns'] if col.get("isPK")]
+                if target_pks:
+                    resolved_method = "target"
+                    for col in target_pks:
+                        src_col = next((c for c in columns["columns"] if c["name"].lower() == col["name"].lower()), None)
+                        keys.append({
+                            "name": src_col["name"] if src_col else col["name"],
+                            "alias": col["name"],
+                            "type": (src_col.get("dataType") if src_col else None) or col.get("dataType")
+                        })
+                    logger.info(f"Resolved keys via target table keys: {keys}")
+
+        # Step 4: Fallback to use of all columns as keys
+        if not keys:
+            resolved_method = "all_columns"
+            logger.warning(f"Source table {table_name} has no PKs, no YAML keys, and no target PKs. Ultimate fallback: using ALL columns as keys.")
             keys = [
                 {
                     "name": col["name"],
@@ -397,6 +408,7 @@ def create_tables(token, pipeline_id, source_schema, target_schema, tables, sour
                     "type": col.get("dataType")
                 } for col in columns["columns"]
             ]
+            logger.info(f"Resolved keys via ultimate fallback (all columns): {keys}")
 
         # Only send source-discovered keys to the create-table statement.
         # YAML-defined keys are honoured for entity creation (create_all_entities.py)
@@ -410,9 +422,9 @@ def create_tables(token, pipeline_id, source_schema, target_schema, tables, sour
             } for col in columns["columns"] if col.get("isPK")
         ]
 
-        if not source_discovered_keys and (not custom_config or not custom_config.get('keys')):
-            # If there are no discovered keys and no keys defined in YAML, apply ultimate fallback of ALL columns as keys to target table creation.
-            logger.warning(f"No source-discovered keys and no YAML keys. Applying ultimate fallback of ALL columns as keys to target table creation.")
+        if not source_discovered_keys and resolved_method in ("target", "all_columns"):
+            # If there are no discovered keys and no keys defined in YAML, apply the resolved fallback (target keys or all columns as keys) to target table creation.
+            logger.warning(f"No source-discovered keys and no YAML keys. Applying resolved fallback ({resolved_method}) of keys to target table creation: {[k['name'] for k in keys]}")
             source_discovered_keys = keys
 
         # check if the table exists on the target

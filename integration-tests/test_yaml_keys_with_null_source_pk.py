@@ -609,6 +609,80 @@ demo:
         for col in columns:
             self.assertTrue(col.get("isPK", False), f"{col['name']} must be PK under ultimate fallback")
 
+    def test_fallback_to_target_discovered_keys(self):
+        """
+        Verify that when no keys are defined in YAML and no PKs are discovered on the source,
+        but PKs exist in target discovery, the bootstrapper correctly resolves to target keys.
+        """
+        import create_all_tables
+
+        yaml_text = """
+demo:
+  target: public
+  tables:
+    whitelist: [CUSTOMERS_NO_PKEY]
+    blacklist: []
+    custom:
+      CUSTOMERS_NO_PKEY:
+        keys:
+"""
+        yaml_config = yaml.safe_load(yaml_text)
+        discovered_tables = [{"name": "CUSTOMERS_NO_PKEY"}]
+
+        # Source columns: no PKs
+        source_columns = {
+            "columns": [
+                _source_col("ID", 1, "int", is_pk=None),
+                _source_col("NAME", 2, "varchar", is_pk=None),
+            ]
+        }
+
+        # Target columns: ID is PK
+        target_columns = {
+            "columns": [
+                _source_col("ID", 1, "int", is_pk=True),
+                _source_col("NAME", 2, "varchar", is_pk=False),
+            ]
+        }
+
+        captured_requests = []
+
+        def fake_generate(pipeline_id, schema_name, table_name, token, table_data):
+            captured_requests.append((schema_name, table_name, _model_to_dict(table_data)))
+            return f"CREATE TABLE {schema_name}.{table_name} (...)"
+
+        with mock.patch.object(create_all_tables, "get_node_info", side_effect=[_node_info(), _node_info()]), \
+             mock.patch.object(create_all_tables, "get_table_columns", side_effect=[source_columns, target_columns]), \
+             mock.patch.object(create_all_tables, "table_exists", return_value=False), \
+             mock.patch.object(create_all_tables, "map_data_type", side_effect=lambda source_type, *args, **kwargs: source_type), \
+             mock.patch.object(create_all_tables, "generate_create_table_statement", side_effect=fake_generate), \
+             mock.patch.object(create_all_tables, "create_target_table"):
+            
+            create_all_tables.create_tables(
+                token="token",
+                pipeline_id="pipeline",
+                source_schema="demo",
+                target_schema="fallback_target",
+                tables=discovered_tables,
+                source_agent_id="source-agent",
+                target_agent_id="target-agent",
+                source_type="SQL",
+                target_type="SQL",
+                yaml_config=yaml_config,
+            )
+
+        self.assertEqual(len(captured_requests), 1)
+        _, _, request_body = captured_requests[0]
+        columns = request_body["columns"]
+
+        id_col = next((c for c in columns if c["name"] == "ID"), None)
+        name_col = next((c for c in columns if c["name"] == "NAME"), None)
+
+        self.assertIsNotNone(id_col)
+        self.assertIsNotNone(name_col)
+        self.assertTrue(id_col.get("isPK", False), "ID must be PK because it was discovered on target")
+        self.assertFalse(name_col.get("isPK", False), "NAME must NOT be PK because target says it is not PK")
+
 
 if __name__ == "__main__":
     unittest.main()
