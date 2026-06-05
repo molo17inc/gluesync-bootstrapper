@@ -640,7 +640,7 @@ def list_source_tables(
     else:
         logger.warning("Unexpected tables discovery response for pipeline %s schema %s: %r", pipeline_id, schema, tables)
 
-    return names
+    return sorted(names)
 
 
 def discover_primary_key_names(
