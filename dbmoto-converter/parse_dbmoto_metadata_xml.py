@@ -710,6 +710,140 @@ def parse_xml():
     
     return connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name, record_id_mappings, journal_checkpoints, refresh_filters
 
+def find_matching_template_schema(schema_name, template_schemas):
+    # First try exact match
+    if schema_name.lower() in template_schemas:
+        _, schema = template_schemas[schema_name.lower()]
+        return schema
+    
+    # Try partial match (case insensitive)
+    for template_lower, (template_name, schema) in template_schemas.items():
+        if schema_name.lower() in template_lower or template_lower in schema_name.lower():
+            return schema
+    
+    # No match found, return None
+    return None
+
+def _build_table_entry_helper(table, table_lookup, replications, field_mappings, field_id_to_name, record_id_mappings, refresh_filters, table_assignments, target_id=None, repl_id=None):
+    """Build a table config entry for a specific target replication."""
+    columns = []
+
+    target_info = table_lookup.get(target_id) if target_id else None
+    target_table_id = target_id
+    repl_id_for_table = repl_id
+
+    # Determine if the replication is disabled
+    is_disabled = False
+    if repl_id_for_table and replications.get(repl_id_for_table, {}).get("repl_status") == '3':
+        is_disabled = True
+
+    # Get field mappings for this replication
+    table_field_mappings = field_mappings.get(repl_id_for_table, {}) if repl_id_for_table else {}
+
+    for field in table["fields"]:
+        # Determine target field name using field mappings
+        target_field_name = field["name"]
+
+        # Find source field ID by looking up in the field_id_to_name dict
+        src_field_id = None
+        for (tid, fid), fname in field_id_to_name.items():
+            if tid == table["id"] and fname == field["name"]:
+                src_field_id = fid
+                break
+
+        # If we found the source field ID and have mappings, look up the target
+        if src_field_id and table_field_mappings:
+            mapping = table_field_mappings.get(src_field_id)
+            if mapping and mapping.get("target_field_id"):
+                # Look up target field name from target table
+                mapped_target_field_id = mapping["target_field_id"]
+                target_field_name = field_id_to_name.get((target_table_id, mapped_target_field_id), field["name"])
+                if target_field_name != field["name"]:
+                    print(f"        Mapped field: {field['name']} -> {target_field_name}")
+
+        col_def = {
+            "name": target_field_name,
+            "type": field.get("type") or "VARCHAR",
+            "dataLength": field.get("data_length", 0),
+            "numericPrecision": field.get("numeric_precision", 0),
+            "numericScale": field.get("numeric_scale", 0),
+            "isNullable": field.get("allow_null", True)
+        }
+
+        # Store source field name if it differs from target (for GlueSync column mapping)
+        if target_field_name != field["name"]:
+            col_def["sourceName"] = field["name"]
+
+        columns.append(col_def)
+
+    # Add special _RRN column if there's a [!RecordID] mapping for this replication
+    if record_id_mappings and repl_id_for_table in record_id_mappings:
+        for trg_field_id, src_expr in record_id_mappings[repl_id_for_table].items():
+            # Look up target field name - this becomes the column name (target side)
+            target_field_name = field_id_to_name.get((target_table_id, trg_field_id), "ID")
+            rrn_col = {
+                "name": target_field_name,
+                "type": "DECIMAL",
+                "dataLength": 15,
+                "numericPrecision": 15,
+                "numericScale": 0,
+                "isNullable": False,
+                "sourceName": "_RRN"
+            }
+            columns.append(rrn_col)
+            print(f"      Added _RRN source column mapped to target field '{target_field_name}'")
+
+    # Determine the mapped target table name if available
+    export_table_name = table["name"]
+    target_schema_name = None
+    target_conn_name = None
+    if target_info and not target_info["is_source"]:
+        export_table_name = target_info["table"]["name"]
+        target_schema_name = target_info["schema_name"]
+        target_conn_name = target_info["connection_name"]
+
+    whitelist_name = table["name"]
+
+    # Create the table entry with column definitions
+    table_config = {
+        "name": export_table_name,
+        "columns": columns
+    }
+    if export_table_name != table["name"]:
+        print(f"      Mapped source table '{table['name']}' -> target table '{export_table_name}' (schema: {target_schema_name}, connection: {target_conn_name})")
+
+    # Add refresh filter as whereClause if available
+    if refresh_filters and repl_id_for_table and refresh_filters.get(repl_id_for_table):
+        table_config["whereClause"] = refresh_filters[repl_id_for_table]
+        print(f"      Added whereClause for table {table['name']}: {refresh_filters[repl_id_for_table]}")
+
+    # Add primary keys if found, otherwise fallback:
+    # - If _RRN column exists, use it as the only key
+    # - Otherwise, use ALL columns as keys (composite key)
+    if table.get("primary_keys"):
+        # Use simple string array format to match template
+        table_config["keys"] = table["primary_keys"]
+        print(f"      Added {len(table['primary_keys'])} primary key(s) to table {table['name']}: {table['primary_keys']}")
+    else:
+        # No primary keys found - apply fallback strategy
+        # Check if _RRN column was added (RecordID mapping)
+        has_rrn = any(col.get("sourceName") == "_RRN" for col in columns)
+        if has_rrn:
+            table_config["keys"] = ["_RRN"]
+            print(f"      No primary keys found for table {table['name']}, using _RRN as key (fallback)")
+        else:
+            # Use all source column names as composite key
+            # Use sourceName if present, otherwise name (which equals source name in that case)
+            all_column_keys = [col.get("sourceName") or col.get("name") for col in columns if (col.get("sourceName") or col.get("name"))]
+            table_config["keys"] = all_column_keys
+            print(f"      No primary keys found for table {table['name']}, using all {len(all_column_keys)} columns as composite key (fallback)")
+
+    # Add group/chain assignments if this table is in any replication
+    if table["id"] in table_assignments:
+        table_config.update(table_assignments[table["id"]])
+
+    return whitelist_name, table_config, is_disabled, target_schema_name, target_conn_name
+
 def export_as_yaml(connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name, record_id_mappings=None, output_dir=None, template_file=None, journal_checkpoints=None, refresh_filters=None):
     # Use environment variables if parameters are not provided (Lambda mode)
     if output_dir is None:
@@ -759,21 +893,6 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
     template_schemas = {}
     if template_structure and 'schemas' in template_structure:
         template_schemas = {name.lower(): (name, schema) for name, schema in template_structure['schemas'].items()}
-    
-    # Function to find best matching template schema
-    def find_matching_template_schema(schema_name):
-        # First try exact match
-        if schema_name.lower() in template_schemas:
-            _, schema = template_schemas[schema_name.lower()]
-            return schema
-        
-        # Try partial match (case insensitive)
-        for template_lower, (template_name, schema) in template_schemas.items():
-            if schema_name.lower() in template_lower or template_lower in schema_name.lower():
-                return schema
-        
-        # No match found, return None
-        return None
     
     # Process connections and schemas based on mode
     # Check for manual override schemas
@@ -841,138 +960,38 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
             # Only export if there are tables with fields
             if tables_with_fields:
                 # Find matching template for this schema
-                template_schema = find_matching_template_schema(schema_name)
+                template_schema = find_matching_template_schema(schema_name, template_schemas)
 
                 # Create per-target buckets keyed by (target_connection, target_schema)
                 # so tables with multiple targets generate separate YAMLs.
                 schema_groups = {}
 
-                def _build_table_entry(table, target_id=None, repl_id=None):
-                    """Build a table config entry for a specific target replication."""
-                    columns = []
 
-                    target_info = table_lookup.get(target_id) if target_id else None
-                    target_table_id = target_id
-                    repl_id_for_table = repl_id
-
-                    # Determine if the replication is disabled
-                    is_disabled = False
-                    if repl_id_for_table and replications.get(repl_id_for_table, {}).get("repl_status") == '3':
-                        is_disabled = True
-
-                    # Get field mappings for this replication
-                    table_field_mappings = field_mappings.get(repl_id_for_table, {}) if repl_id_for_table else {}
-
-                    for field in table["fields"]:
-                        # Determine target field name using field mappings
-                        target_field_name = field["name"]
-
-                        # Find source field ID by looking up in the field_id_to_name dict
-                        src_field_id = None
-                        for (tid, fid), fname in field_id_to_name.items():
-                            if tid == table["id"] and fname == field["name"]:
-                                src_field_id = fid
-                                break
-
-                        # If we found the source field ID and have mappings, look up the target
-                        if src_field_id and table_field_mappings:
-                            mapping = table_field_mappings.get(src_field_id)
-                            if mapping and mapping.get("target_field_id"):
-                                # Look up target field name from target table
-                                mapped_target_field_id = mapping["target_field_id"]
-                                target_field_name = field_id_to_name.get((target_table_id, mapped_target_field_id), field["name"])
-                                if target_field_name != field["name"]:
-                                    print(f"        Mapped field: {field['name']} -> {target_field_name}")
-
-                        col_def = {
-                            "name": target_field_name,
-                            "type": field.get("type") or "VARCHAR",
-                            "dataLength": field.get("data_length", 0),
-                            "numericPrecision": field.get("numeric_precision", 0),
-                            "numericScale": field.get("numeric_scale", 0),
-                            "isNullable": field.get("allow_null", True)
-                        }
-
-                        # Store source field name if it differs from target (for GlueSync column mapping)
-                        if target_field_name != field["name"]:
-                            col_def["sourceName"] = field["name"]
-
-                        columns.append(col_def)
-
-                    # Add special _RRN column if there's a [!RecordID] mapping for this replication
-                    if record_id_mappings and repl_id_for_table in record_id_mappings:
-                        for trg_field_id, src_expr in record_id_mappings[repl_id_for_table].items():
-                            # Look up target field name - this becomes the column name (target side)
-                            target_field_name = field_id_to_name.get((target_table_id, trg_field_id), "ID")
-                            rrn_col = {
-                                "name": target_field_name,
-                                "type": "DECIMAL",
-                                "dataLength": 15,
-                                "numericPrecision": 15,
-                                "numericScale": 0,
-                                "isNullable": False,
-                                "sourceName": "_RRN"
-                            }
-                            columns.append(rrn_col)
-                            print(f"      Added _RRN source column mapped to target field '{target_field_name}'")
-
-                    # Determine the mapped target table name if available
-                    export_table_name = table["name"]
-                    target_schema_name = None
-                    target_conn_name = None
-                    if target_info and not target_info["is_source"]:
-                        export_table_name = target_info["table"]["name"]
-                        target_schema_name = target_info["schema_name"]
-                        target_conn_name = target_info["connection_name"]
-
-                    whitelist_name = table["name"]
-
-                    # Create the table entry with column definitions
-                    table_config = {
-                        "name": export_table_name,
-                        "columns": columns
-                    }
-                    if export_table_name != table["name"]:
-                        print(f"      Mapped source table '{table['name']}' -> target table '{export_table_name}' (schema: {target_schema_name}, connection: {target_conn_name})")
-
-                    # Add refresh filter as whereClause if available
-                    if refresh_filters and repl_id_for_table and refresh_filters.get(repl_id_for_table):
-                        table_config["whereClause"] = refresh_filters[repl_id_for_table]
-                        print(f"      Added whereClause for table {table['name']}: {refresh_filters[repl_id_for_table]}")
-
-                    # Add primary keys if found, otherwise fallback:
-                    # - If _RRN column exists, use it as the only key
-                    # - Otherwise, use ALL columns as keys (composite key)
-                    if table.get("primary_keys"):
-                        # Use simple string array format to match template
-                        table_config["keys"] = table["primary_keys"]
-                        print(f"      Added {len(table['primary_keys'])} primary key(s) to table {table['name']}: {table['primary_keys']}")
-                    else:
-                        # No primary keys found - apply fallback strategy
-                        # Check if _RRN column was added (RecordID mapping)
-                        has_rrn = any(col.get("sourceName") == "_RRN" for col in columns)
-                        if has_rrn:
-                            table_config["keys"] = ["_RRN"]
-                            print(f"      No primary keys found for table {table['name']}, using _RRN as key (fallback)")
-                        else:
-                            # Use all source column names as composite key
-                            # Use sourceName if present, otherwise name (which equals source name in that case)
-                            all_column_keys = [col.get("sourceName") or col.get("name") for col in columns if (col.get("sourceName") or col.get("name"))]
-                            table_config["keys"] = all_column_keys
-                            print(f"      No primary keys found for table {table['name']}, using all {len(all_column_keys)} columns as composite key (fallback)")
-
-                    # Add group/chain assignments if this table is in any replication
-                    if table["id"] in table_assignments:
-                        table_config.update(table_assignments[table["id"]])
-
-                    return whitelist_name, table_config, is_disabled, target_schema_name, target_conn_name
 
                 for table_name, table in tables_with_fields.items():
                     target_ids = source_to_target_tables.get(table["id"], [])
 
-                    if not target_ids:
-                        # No target replication - build once with defaults
-                        whitelist_name, table_config, is_disabled, target_schema, target_conn = _build_table_entry(table)
+                    # Filter out replications whose "target" actually points back to a source
+                    # connection (self-referencing / single-connection setups). We still want
+                    # to keep one such replication so whereClause / disabled status are not
+                    # lost when no real target connection exists.
+                    real_target_ids = [
+                        (tid, rid) for (tid, rid) in target_ids
+                        if not (table_lookup.get(tid) and table_lookup[tid]["is_source"])
+                    ]
+                    fallback_repl_id = None
+                    if not real_target_ids and target_ids:
+                        # Preserve the first replication id so whereClause can be applied
+                        # even when there is no separate target connection.
+                        fallback_repl_id = target_ids[0][1]
+
+                    if not real_target_ids:
+                        # No real target replication - build once with defaults.
+                        # Pass fallback_repl_id (if any) so whereClause / disabled state
+                        # from the originating replication are still applied.
+                        whitelist_name, table_config, is_disabled, target_schema, target_conn = _build_table_entry_helper(
+                            table, table_lookup, replications, field_mappings, field_id_to_name, record_id_mappings, refresh_filters, table_assignments, repl_id=fallback_repl_id
+                        )
 
                         # Resolve the target schema for this table.
                         if schema_name in manual_overrides:
@@ -1005,14 +1024,12 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                                 group_bucket["whitelist"].append(whitelist_name)
                             group_bucket["custom"][table_name] = table_config
                     else:
-                        # Process each target replication separately so tables
+                        # Process each real target replication separately so tables
                         # with multiple targets generate multiple YAMLs.
-                        for target_id, repl_id in target_ids:
-                            target_info = table_lookup.get(target_id)
-                            if target_info and target_info["is_source"]:
-                                continue
-
-                            whitelist_name, table_config, is_disabled, target_schema, target_conn = _build_table_entry(table, target_id, repl_id)
+                        for target_id, repl_id in real_target_ids:
+                            whitelist_name, table_config, is_disabled, target_schema, target_conn = _build_table_entry_helper(
+                                table, table_lookup, replications, field_mappings, field_id_to_name, record_id_mappings, refresh_filters, table_assignments, target_id, repl_id
+                            )
 
                             # Resolve the target schema for this table.
                             if schema_name in manual_overrides:

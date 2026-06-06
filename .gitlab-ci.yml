@@ -343,8 +343,6 @@ build-sonar:
   needs:
     - job: pyinstaller_syntax_check
       optional: true
-  variables:
-    SONAR_TOKEN: $SONAR_TOKEN
   cache:
     policy: pull-push
     key: "sonar-cache-$CI_COMMIT_REF_SLUG"
