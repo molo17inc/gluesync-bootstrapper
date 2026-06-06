@@ -843,60 +843,22 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                 # Find matching template for this schema
                 template_schema = find_matching_template_schema(schema_name)
 
-                # Create per-target schema buckets so mixed target schemas do not overwrite one another.
+                # Create per-target buckets keyed by (target_connection, target_schema)
+                # so tables with multiple targets generate separate YAMLs.
                 schema_groups = {}
 
-                for table_name, table in tables_with_fields.items():
-                    # Convert field list to column definitions matching template format
+                def _build_table_entry(table, target_id=None, repl_id=None):
+                    """Build a table config entry for a specific target replication."""
                     columns = []
 
-                    # Find the replication and target info for this table
-                    target_ids = source_to_target_tables.get(table["id"], [])
-                    target_info = None
-                    repl_id_for_table = None
-                    target_table_id = None
+                    target_info = table_lookup.get(target_id) if target_id else None
+                    target_table_id = target_id
+                    repl_id_for_table = repl_id
 
-                    # Determine if the table has a disabled replication
+                    # Determine if the replication is disabled
                     is_disabled = False
-                    for target_id, repl_id in target_ids:
-                        candidate_target_info = table_lookup.get(target_id)
-                        # Set repl_id_for_table and target_table_id even if target_info is None
-                        # This allows [!RecordID] mappings to work when the target table is not schema-linked.
-                        if candidate_target_info is None or not candidate_target_info["is_source"]:
-                            target_info = candidate_target_info
-                            repl_id_for_table = repl_id
-                            target_table_id = target_id
-
-                            # Check ReplStatus: '3' means disabled
-                            if replications.get(repl_id, {}).get("repl_status") == '3':
-                                is_disabled = True
-
-                            # If we found a valid target_info, use it and break
-                            if target_info and not target_info["is_source"]:
-                                break
-
-                    # Resolve the target schema for this table.
-                    # Manual overrides / template targets apply to the whole source schema.
-                    if schema_name in manual_overrides:
-                        table_target_schema = manual_overrides[schema_name]
-                    elif template_schema and template_schema.get('target'):
-                        table_target_schema = template_schema['target']
-                    elif target_info and not target_info["is_source"]:
-                        table_target_schema = target_info["schema_name"]
-                    elif schema_name in source_to_target_schemas:
-                        table_target_schema = source_to_target_schemas[schema_name]
-                    else:
-                        table_target_schema = schema_name
-
-                    if table_target_schema not in schema_groups:
-                        schema_groups[table_target_schema] = {
-                            "whitelist": [],
-                            "custom": {},
-                            "disabled_whitelist": [],
-                            "disabled_custom": {}
-                        }
-
-                    group_bucket = schema_groups[table_target_schema]
+                    if repl_id_for_table and replications.get(repl_id_for_table, {}).get("repl_status") == '3':
+                        is_disabled = True
 
                     # Get field mappings for this replication
                     table_field_mappings = field_mappings.get(repl_id_for_table, {}) if repl_id_for_table else {}
@@ -904,7 +866,6 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                     for field in table["fields"]:
                         # Determine target field name using field mappings
                         target_field_name = field["name"]
-                        target_field = None
 
                         # Find source field ID by looking up in the field_id_to_name dict
                         src_field_id = None
@@ -918,8 +879,8 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                             mapping = table_field_mappings.get(src_field_id)
                             if mapping and mapping.get("target_field_id"):
                                 # Look up target field name from target table
-                                target_field_id = mapping["target_field_id"]
-                                target_field_name = field_id_to_name.get((target_table_id, target_field_id), field["name"])
+                                mapped_target_field_id = mapping["target_field_id"]
+                                target_field_name = field_id_to_name.get((target_table_id, mapped_target_field_id), field["name"])
                                 if target_field_name != field["name"]:
                                     print(f"        Mapped field: {field['name']} -> {target_field_name}")
 
@@ -956,20 +917,13 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                             print(f"      Added _RRN source column mapped to target field '{target_field_name}'")
 
                     # Determine the mapped target table name if available
-                    export_table_name = table_name
+                    export_table_name = table["name"]
                     target_schema_name = None
                     target_conn_name = None
-                    target_ids_with_repl = source_to_target_tables.get(table["id"], [])
-                    for target_id, repl_id in target_ids_with_repl:
-                        target_info = table_lookup.get(target_id)
-                        if target_info and not target_info["is_source"]:
-                            export_table_name = target_info["table"]["name"]
-                            target_schema_name = target_info["schema_name"]
-                            target_conn_name = target_info["connection_name"]
-                            break
-                    else:
-                        if target_ids_with_repl:
-                            print(f"      Warning: Could not resolve target table IDs {[t[0] for t in target_ids_with_repl]} for source table {table_name}")
+                    if target_info and not target_info["is_source"]:
+                        export_table_name = target_info["table"]["name"]
+                        target_schema_name = target_info["schema_name"]
+                        target_conn_name = target_info["connection_name"]
 
                     whitelist_name = table["name"]
 
@@ -978,13 +932,13 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                         "name": export_table_name,
                         "columns": columns
                     }
-                    if export_table_name != table_name:
-                        print(f"      Mapped source table '{table_name}' -> target table '{export_table_name}' (schema: {target_schema_name}, connection: {target_conn_name})")
+                    if export_table_name != table["name"]:
+                        print(f"      Mapped source table '{table['name']}' -> target table '{export_table_name}' (schema: {target_schema_name}, connection: {target_conn_name})")
 
                     # Add refresh filter as whereClause if available
                     if refresh_filters and repl_id_for_table and refresh_filters.get(repl_id_for_table):
                         table_config["whereClause"] = refresh_filters[repl_id_for_table]
-                        print(f"      Added whereClause for table {table_name}: {refresh_filters[repl_id_for_table]}")
+                        print(f"      Added whereClause for table {table['name']}: {refresh_filters[repl_id_for_table]}")
 
                     # Add primary keys if found, otherwise fallback:
                     # - If _RRN column exists, use it as the only key
@@ -992,45 +946,120 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                     if table.get("primary_keys"):
                         # Use simple string array format to match template
                         table_config["keys"] = table["primary_keys"]
-                        print(f"      Added {len(table['primary_keys'])} primary key(s) to table {table_name}: {table['primary_keys']}")
+                        print(f"      Added {len(table['primary_keys'])} primary key(s) to table {table['name']}: {table['primary_keys']}")
                     else:
                         # No primary keys found - apply fallback strategy
                         # Check if _RRN column was added (RecordID mapping)
                         has_rrn = any(col.get("sourceName") == "_RRN" for col in columns)
                         if has_rrn:
                             table_config["keys"] = ["_RRN"]
-                            print(f"      No primary keys found for table {table_name}, using _RRN as key (fallback)")
+                            print(f"      No primary keys found for table {table['name']}, using _RRN as key (fallback)")
                         else:
                             # Use all source column names as composite key
                             # Use sourceName if present, otherwise name (which equals source name in that case)
                             all_column_keys = [col.get("sourceName") or col.get("name") for col in columns if (col.get("sourceName") or col.get("name"))]
                             table_config["keys"] = all_column_keys
-                            print(f"      No primary keys found for table {table_name}, using all {len(all_column_keys)} columns as composite key (fallback)")
+                            print(f"      No primary keys found for table {table['name']}, using all {len(all_column_keys)} columns as composite key (fallback)")
 
                     # Add group/chain assignments if this table is in any replication
                     if table["id"] in table_assignments:
                         table_config.update(table_assignments[table["id"]])
 
-                    # Separate active and disabled tables
-                    if is_disabled:
-                        if whitelist_name not in group_bucket["disabled_whitelist"]:
-                            group_bucket["disabled_whitelist"].append(whitelist_name)
-                        group_bucket["disabled_custom"][table_name] = table_config
+                    return whitelist_name, table_config, is_disabled, target_schema_name, target_conn_name
+
+                for table_name, table in tables_with_fields.items():
+                    target_ids = source_to_target_tables.get(table["id"], [])
+
+                    if not target_ids:
+                        # No target replication - build once with defaults
+                        whitelist_name, table_config, is_disabled, target_schema, target_conn = _build_table_entry(table)
+
+                        # Resolve the target schema for this table.
+                        if schema_name in manual_overrides:
+                            target_schema = manual_overrides[schema_name]
+                        elif template_schema and template_schema.get('target'):
+                            target_schema = template_schema['target']
+                        elif schema_name in source_to_target_schemas:
+                            target_schema = source_to_target_schemas[schema_name]
+                        else:
+                            target_schema = schema_name
+
+                        target_conn = target_conn or "default"
+
+                        group_key = (target_conn, target_schema)
+                        if group_key not in schema_groups:
+                            schema_groups[group_key] = {
+                                "whitelist": [],
+                                "custom": {},
+                                "disabled_whitelist": [],
+                                "disabled_custom": {}
+                            }
+
+                        group_bucket = schema_groups[group_key]
+                        if is_disabled:
+                            if whitelist_name not in group_bucket["disabled_whitelist"]:
+                                group_bucket["disabled_whitelist"].append(whitelist_name)
+                            group_bucket["disabled_custom"][table_name] = table_config
+                        else:
+                            if whitelist_name not in group_bucket["whitelist"]:
+                                group_bucket["whitelist"].append(whitelist_name)
+                            group_bucket["custom"][table_name] = table_config
                     else:
-                        if whitelist_name not in group_bucket["whitelist"]:
-                            group_bucket["whitelist"].append(whitelist_name)
-                        group_bucket["custom"][table_name] = table_config
+                        # Process each target replication separately so tables
+                        # with multiple targets generate multiple YAMLs.
+                        for target_id, repl_id in target_ids:
+                            target_info = table_lookup.get(target_id)
+                            if target_info and target_info["is_source"]:
+                                continue
+
+                            whitelist_name, table_config, is_disabled, target_schema, target_conn = _build_table_entry(table, target_id, repl_id)
+
+                            # Resolve the target schema for this table.
+                            if schema_name in manual_overrides:
+                                target_schema = manual_overrides[schema_name]
+                            elif template_schema and template_schema.get('target'):
+                                target_schema = template_schema['target']
+                            elif target_schema:
+                                pass  # Keep resolved target_schema from target_info
+                            elif schema_name in source_to_target_schemas:
+                                target_schema = source_to_target_schemas[schema_name]
+                            else:
+                                target_schema = schema_name
+
+                            target_conn = target_conn or "default"
+
+                            group_key = (target_conn, target_schema)
+                            if group_key not in schema_groups:
+                                schema_groups[group_key] = {
+                                    "whitelist": [],
+                                    "custom": {},
+                                    "disabled_whitelist": [],
+                                    "disabled_custom": {}
+                                }
+
+                            group_bucket = schema_groups[group_key]
+                            if is_disabled:
+                                if whitelist_name not in group_bucket["disabled_whitelist"]:
+                                    group_bucket["disabled_whitelist"].append(whitelist_name)
+                                group_bucket["disabled_custom"][table_name] = table_config
+                            else:
+                                if whitelist_name not in group_bucket["whitelist"]:
+                                    group_bucket["whitelist"].append(whitelist_name)
+                                group_bucket["custom"][table_name] = table_config
 
                 custom_props = template_schema.get('customProperties', {}) if template_schema else {}
                 schedules = template_schema.get('schedules', []) if template_schema else []
                 multiple_target_groups = len(schema_groups) > 1
+                group_keys = list(schema_groups.keys())
+                all_conns = set(k[0] for k in group_keys)
+                all_schemas = set(k[1] for k in group_keys)
 
-                for table_target_schema, group_bucket in schema_groups.items():
+                for (target_conn_name, target_schema_name), group_bucket in schema_groups.items():
                     # Create the schema structure that matches table-list-template.yaml
                     # Use direct schema name as root key (no 'schemas' wrapper)
                     yaml_data = {
                         schema_name: {
-                            "target": table_target_schema,
+                            "target": target_schema_name,
                             "tables": {
                                 "whitelist": group_bucket["whitelist"],
                                 "custom": group_bucket["custom"]
@@ -1071,7 +1100,15 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
 
                     # Create filename and write YAML
                     if multiple_target_groups:
-                        filename = f"{conn_name}__{schema_name}__{table_target_schema}.yaml".replace("/", "_")
+                        if len(all_conns) == len(group_keys):
+                            # All connections are unique - use connection name
+                            filename = f"{conn_name}__{schema_name}__{target_conn_name}.yaml".replace("/", "_")
+                        elif len(all_schemas) == len(group_keys):
+                            # All schemas are unique - use schema name (backward compatible)
+                            filename = f"{conn_name}__{schema_name}__{target_schema_name}.yaml".replace("/", "_")
+                        else:
+                            # Need both connection and schema to differentiate
+                            filename = f"{conn_name}__{schema_name}__{target_conn_name}__{target_schema_name}.yaml".replace("/", "_")
                     else:
                         filename = f"{conn_name}__{schema_name}.yaml".replace("/", "_")
                     filepath = os.path.join(output_dir, filename)
