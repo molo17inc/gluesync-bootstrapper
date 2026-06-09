@@ -1102,6 +1102,58 @@ def create_app() -> FastAPI:
 
         created_pipelines: list[dict] = []
 
+        # Restore global notification settings (SMTP) if present in the backup.
+        # Prefer a dedicated global-config.yaml file; otherwise fall back to a
+        # globalNotifications key embedded in any per-pipeline YAML.
+        try:
+            notification_cfg = None
+            with zipfile.ZipFile(io.BytesIO(contents)) as zf_gc:
+                for name in zf_gc.namelist():
+                    if name.startswith("__MACOSX/") or name.rsplit("/", 1)[-1].startswith("._"):
+                        continue
+                    stem = name.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+                    if stem == "global-config":
+                        try:
+                            parsed = yaml.safe_load(zf_gc.read(name).decode("utf-8"))
+                            if isinstance(parsed, dict):
+                                notification_cfg = parsed
+                                break
+                        except Exception as exc:  # pylint: disable=broad-except
+                            logger.warning("Failed to parse %s during import-all: %s", name, exc)
+
+                # Fallback: scan per-pipeline YAMLs for an embedded globalNotifications key
+                if notification_cfg is None:
+                    for name in zf_gc.namelist():
+                        lower = name.lower()
+                        if not (lower.endswith(".yaml") or lower.endswith(".yml")):
+                            continue
+                        if "agents-config" in lower:
+                            continue
+                        if name.startswith("__MACOSX/") or name.rsplit("/", 1)[-1].startswith("._"):
+                            continue
+                        try:
+                            parsed = yaml.safe_load(zf_gc.read(name).decode("utf-8"))
+                        except Exception:  # pylint: disable=broad-except
+                            continue
+                        if isinstance(parsed, dict) and isinstance(parsed.get("globalNotifications"), dict):
+                            notification_cfg = {"globalNotifications": parsed["globalNotifications"]}
+                            break
+
+            if notification_cfg:
+                result = corehub.import_global_notifications(
+                    token=state.token,
+                    base_url=state.base_url,
+                    use_ssl=state.use_ssl,
+                    skip_verify=state.skip_verify,
+                    notification_cfg=notification_cfg,
+                )
+                if result.get("status") == "restored":
+                    logger.info("Restored global notification settings during import-all")
+                elif result.get("status") == "failed":
+                    errors.append(f"global notifications: {result.get('error')}")
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("Failed to restore global notifications during import-all: %s", exc)
+
         # Second pass: process each per-pipeline YAML and recreate pipeline + entities
         try:
             with zipfile.ZipFile(io.BytesIO(contents)) as zf:
@@ -1118,7 +1170,7 @@ def create_app() -> FastAPI:
                     # Skip global config YAMLs from full CoreHub backup format
                     # (these are backed up separately and not pipeline configs)
                     GLOBAL_CONFIG_NAMES = {
-                        "global-configs", "smtp", "webhooks",
+                        "global-config", "global-configs", "smtp", "webhooks",
                         "thresholds", "schedules", "users", "oidc",
                     }
                     stem = name.rsplit("/", 1)[-1]  # strip any path
@@ -1583,6 +1635,15 @@ def create_app() -> FastAPI:
                     if not (lower.endswith(".yaml") or lower.endswith(".yml")):
                         continue
                     if "agents-config" in lower:
+                        continue
+
+                    # Skip global config YAMLs (backed up separately, not pipeline configs)
+                    GLOBAL_CONFIG_NAMES = {
+                        "global-config", "global-configs", "smtp", "webhooks",
+                        "thresholds", "schedules", "users", "oidc",
+                    }
+                    stem = name.rsplit("/", 1)[-1]
+                    if stem.rsplit(".", 1)[0] in GLOBAL_CONFIG_NAMES:
                         continue
 
                     logs.append(f"Validating pipeline definition: {name}")

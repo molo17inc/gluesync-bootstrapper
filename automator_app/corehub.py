@@ -941,6 +941,36 @@ def get_environment_summary(
     }
 
 
+def fetch_global_notification_config(
+    *,
+    token: str,
+    base_url: str,
+    use_ssl: Optional[bool],
+    skip_verify: Optional[bool],
+    include_secrets: bool = False,
+) -> Optional[dict]:
+    """Fetch global notification settings (SMTP) from CoreHub.
+
+    Returns a dict with the SMTP configuration, or None if unavailable.
+    When include_secrets is False the password field is masked.
+    """
+    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+
+    try:
+        smtp = fetch_core_hub("/global-config/smtp", token=token)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("Failed to fetch global SMTP config: %s", exc)
+        return None
+
+    if not isinstance(smtp, dict):
+        return None
+
+    cfg = dict(smtp)
+    if not include_secrets and "password" in cfg and cfg["password"]:
+        cfg["password"] = "*******"
+    return cfg
+
+
 def export_pipeline_yaml(
     *,
     token: str,
@@ -950,6 +980,7 @@ def export_pipeline_yaml(
     skip_verify: Optional[bool],
     skip_schedules: bool = False,
     include_secrets: bool = False,
+    include_global_config: bool = True,
 ) -> str:
     """Export a single pipeline configuration to YAML text for download.
 
@@ -960,6 +991,9 @@ def export_pipeline_yaml(
         skip_schedules: If True, do not embed pipeline/group/entity schedules.
                         Useful when schedules are backed up separately (e.g. full CoreHub backup).
         include_secrets: If True, preserve encrypted secrets in agent credentials backup.
+        include_global_config: If True, embed global notification settings (SMTP) in this YAML.
+                        Set to False when the global config is written to a separate file
+                        (e.g. inside a ZIP backup) to avoid duplication.
     """
 
     configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
@@ -1015,6 +1049,31 @@ def export_pipeline_yaml(
 
     yaml_data = build_yaml_structure(schemas, groups_by_name)
 
+    # Add global notification settings (SMTP) to the YAML export.
+    # Skipped when the caller writes global config to a separate file
+    # (e.g. inside a ZIP backup) to avoid duplication.
+    if include_global_config:
+        try:
+            notification_cfg = fetch_global_notification_config(
+                token=token,
+                base_url=base_url,
+                use_ssl=use_ssl,
+                skip_verify=skip_verify,
+                include_secrets=include_secrets,
+            )
+            if notification_cfg and yaml_data:
+                yaml_data["globalNotifications"] = notification_cfg
+                logger.info(
+                    "Added global notification config to YAML export for pipeline %s",
+                    pipeline_id,
+                )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning(
+                "Failed to add global notification config to YAML export for pipeline %s: %s",
+                pipeline_id,
+                exc,
+            )
+
     buffer = io.StringIO()
     yaml.safe_dump(
         yaml_data or {},
@@ -1068,7 +1127,8 @@ def export_pipeline_full_backup(
         }
         pipelines_meta.append(pipeline_meta)
 
-        # Export pipeline YAML configuration
+        # Export pipeline YAML configuration. Global config is written to a
+        # separate global-config.yaml below, so don't embed it here.
         yaml_content = export_pipeline_yaml(
             token=token,
             base_url=base_url,
@@ -1076,6 +1136,7 @@ def export_pipeline_full_backup(
             use_ssl=use_ssl,
             skip_verify=skip_verify,
             include_secrets=include_secrets,
+            include_global_config=False,
         )
 
         safe_name = "".join(c for c in pipeline_name if c.isalnum() or c in (" ", "-", "_")).rstrip()
@@ -1229,6 +1290,38 @@ def export_pipeline_full_backup(
             yaml_text = "\n".join(yaml_text_lines) + "\n"
             zip_file.writestr(f"{root_prefix}agents-config.yaml", yaml_text)
 
+        # Export global notification settings (SMTP)
+        try:
+            notification_cfg = fetch_global_notification_config(
+                token=token,
+                base_url=base_url,
+                use_ssl=use_ssl,
+                skip_verify=skip_verify,
+                include_secrets=include_secrets,
+            )
+            if notification_cfg:
+                buffer = io.StringIO()
+                yaml.safe_dump(
+                    {"globalNotifications": notification_cfg},
+                    buffer,
+                    sort_keys=False,
+                    allow_unicode=True,
+                )
+                zip_file.writestr(
+                    f"{root_prefix}global-config.yaml",
+                    buffer.getvalue(),
+                )
+                logger.info(
+                    "Exported global notification config for pipeline %s",
+                    pipeline_id,
+                )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning(
+                "Failed to export global notification config for pipeline %s: %s",
+                pipeline_id,
+                exc,
+            )
+
         # Export mapping function (UDF) source files, if any were discovered.
         for udf_name, meta in udfs_to_export.items():
             try:
@@ -1353,6 +1446,8 @@ def export_all_pipelines_yaml(
                     use_ssl=use_ssl,
                     skip_verify=skip_verify,
                     skip_schedules=skip_schedules,
+                    include_secrets=include_secrets,
+                    include_global_config=False,
                 )
 
                 # Create filename with pipeline name if available
@@ -1523,6 +1618,31 @@ def export_all_pipelines_yaml(
 
             yaml_text = "\n".join(yaml_text_lines) + "\n"
             zip_file.writestr("agents-config.yaml", yaml_text)
+
+        # Export global notification settings (SMTP) once for the whole backup.
+        try:
+            notification_cfg = fetch_global_notification_config(
+                token=token,
+                base_url=base_url,
+                use_ssl=use_ssl,
+                skip_verify=skip_verify,
+                include_secrets=include_secrets,
+            )
+            if notification_cfg:
+                buffer = io.StringIO()
+                yaml.safe_dump(
+                    {"globalNotifications": notification_cfg},
+                    buffer,
+                    sort_keys=False,
+                    allow_unicode=True,
+                )
+                zip_file.writestr("global-config.yaml", buffer.getvalue())
+                logger.info("Exported global notification config to all-pipelines backup")
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning(
+                "Failed to export global notification config to all-pipelines backup: %s",
+                exc,
+            )
 
         # Export mapping function (UDF) source files, if any were discovered.
         for (pipeline_id, udf_name), meta in udfs_to_export.items():
@@ -2014,6 +2134,43 @@ def import_smtp_settings(
         return {"status": "restored"}
     except Exception as exc:  # pylint: disable=broad-except
         logger.warning("Failed to restore SMTP settings: %s", exc)
+        return {"status": "failed", "error": str(exc)}
+
+
+def import_global_notifications(
+    *,
+    token: str,
+    base_url: str,
+    use_ssl: Optional[bool],
+    skip_verify: Optional[bool],
+    notification_cfg: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Restore global notification settings (SMTP) from a backup.
+
+    Accepts either a dict already shaped like the SMTP config, or one wrapped
+    under a ``globalNotifications`` key (as written to global-config.yaml).
+    A masked password ("*******" or "<hidden>") is dropped so the existing
+    CoreHub password is preserved instead of being overwritten with a sentinel.
+    """
+    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+
+    if not isinstance(notification_cfg, dict):
+        return {"status": "skipped", "reason": "invalid notification config"}
+
+    payload = notification_cfg.get("globalNotifications", notification_cfg)
+    if not isinstance(payload, dict) or not payload:
+        return {"status": "skipped", "reason": "no globalNotifications in backup"}
+
+    payload = dict(payload)
+    pwd = payload.get("password")
+    if pwd in ("*******", "<hidden>", None, ""):
+        payload.pop("password", None)
+
+    try:
+        fetch_core_hub("/global-config/smtp", method="PUT", token=token, body=payload)
+        return {"status": "restored"}
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("Failed to restore global notification settings: %s", exc)
         return {"status": "failed", "error": str(exc)}
 
 
