@@ -1161,6 +1161,58 @@ def create_app() -> FastAPI:
         except Exception as exc:  # pylint: disable=broad-except
             logger.warning("Failed to restore global notifications during import-all: %s", exc)
 
+        # Restore users config (full CoreHub backup) if present.
+        try:
+            users_cfg = None
+            with zipfile.ZipFile(io.BytesIO(contents)) as zf_users:
+                for name in zf_users.namelist():
+                    if name.rsplit("/", 1)[-1].rsplit(".", 1)[0] == "users":
+                        try:
+                            users_cfg = yaml.safe_load(zf_users.read(name).decode("utf-8"))
+                            break
+                        except Exception as exc:  # pylint: disable=broad-except
+                            logger.warning("Failed to parse %s during import-all: %s", name, exc)
+            if users_cfg:
+                result = corehub.import_users(
+                    token=state.token,
+                    base_url=state.base_url,
+                    use_ssl=state.use_ssl,
+                    skip_verify=state.skip_verify,
+                    users_data=users_cfg,
+                )
+                if result.get("status") == "restored":
+                    logger.info("Restored users config during import-all")
+                elif result.get("status") == "failed":
+                    errors.append(f"users: {result.get('error')}")
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("Failed to restore users during import-all: %s", exc)
+
+        # Restore OIDC config (full CoreHub backup) if present.
+        try:
+            oidc_cfg = None
+            with zipfile.ZipFile(io.BytesIO(contents)) as zf_oidc:
+                for name in zf_oidc.namelist():
+                    if name.rsplit("/", 1)[-1].rsplit(".", 1)[0] == "oidc":
+                        try:
+                            oidc_cfg = yaml.safe_load(zf_oidc.read(name).decode("utf-8"))
+                            break
+                        except Exception as exc:  # pylint: disable=broad-except
+                            logger.warning("Failed to parse %s during import-all: %s", name, exc)
+            if oidc_cfg:
+                result = corehub.import_oidc_config(
+                    token=state.token,
+                    base_url=state.base_url,
+                    use_ssl=state.use_ssl,
+                    skip_verify=state.skip_verify,
+                    oidc_data=oidc_cfg,
+                )
+                if result.get("status") == "restored":
+                    logger.info("Restored OIDC config during import-all")
+                elif result.get("status") == "failed":
+                    errors.append(f"oidc: {result.get('error')}")
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("Failed to restore OIDC during import-all: %s", exc)
+
         # Second pass: process each per-pipeline YAML and recreate pipeline + entities
         try:
             with zipfile.ZipFile(io.BytesIO(contents)) as zf:

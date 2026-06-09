@@ -6,6 +6,8 @@ Covers:
 - import_pipeline_config_only (import agent config into a new pipeline)
 - duplicate_pipeline (clone a pipeline with new name/schema)
 - import_global_notifications (restore SMTP settings from backup)
+- import_users (restore user list from backup)
+- import_oidc_config (restore OIDC settings from backup)
 - import-all skip-list for global-config.yaml
 
 Mocks fetch_core_hub on automator_app.corehub since all CoreHub calls
@@ -253,6 +255,108 @@ class GlobalConfigFileSkipTests(unittest.TestCase):
         self.assertIn("global-config", skip_stems)
         self.assertIn("global-configs", skip_stems)
         self.assertIn("smtp", skip_stems)
+
+
+class ImportUsersTests(unittest.TestCase):
+    """Verify import_users restores user list from backup."""
+
+    def test_restores_users_from_backup(self):
+        import automator_app.corehub as corehub
+
+        put_calls: list[tuple[str, Any]] = []
+
+        def fake_fetch(path, method="GET", **kwargs):
+            if method == "PUT":
+                put_calls.append((path, kwargs.get("body")))
+            return {"status": "ok"}
+
+        with mock.patch.object(corehub, "fetch_core_hub", side_effect=fake_fetch):
+            result = corehub.import_users(
+                token="tok", base_url="http://test", use_ssl=False, skip_verify=False,
+                users_data={"users": [{"id": "1", "username": "admin", "role": "SUPER_ADMIN"}]},
+            )
+
+        self.assertEqual(result["status"], "restored")
+        self.assertEqual(put_calls[0][0], "/users")
+        self.assertEqual(put_calls[0][1][0]["username"], "admin")
+
+    def test_skips_when_users_missing(self):
+        import automator_app.corehub as corehub
+
+        with mock.patch.object(corehub, "fetch_core_hub"):
+            result = corehub.import_users(
+                token="tok", base_url="http://test", use_ssl=False, skip_verify=False,
+                users_data={},
+            )
+
+        self.assertEqual(result["status"], "skipped")
+
+    def test_skips_when_users_exported_with_error(self):
+        import automator_app.corehub as corehub
+
+        with mock.patch.object(corehub, "fetch_core_hub"):
+            result = corehub.import_users(
+                token="tok", base_url="http://test", use_ssl=False, skip_verify=False,
+                users_data={"users": {"error": "permission denied"}},
+            )
+
+        self.assertEqual(result["status"], "skipped")
+
+
+class ImportOidcConfigTests(unittest.TestCase):
+    """Verify import_oidc_config restores OIDC settings from backup."""
+
+    def test_restores_oidc_configuration(self):
+        import automator_app.corehub as corehub
+
+        put_calls: list[tuple[str, Any]] = []
+
+        def fake_fetch(path, method="GET", **kwargs):
+            if method == "PUT":
+                put_calls.append((path, kwargs.get("body")))
+            return {"status": "ok"}
+
+        with mock.patch.object(corehub, "fetch_core_hub", side_effect=fake_fetch):
+            result = corehub.import_oidc_config(
+                token="tok", base_url="http://test", use_ssl=False, skip_verify=False,
+                oidc_data={
+                    "oidc_configuration": {"enabled": True, "providerName": "Auth0"},
+                    "oidc_auth_url": {"authorizationUrl": "http://auth"},
+                },
+            )
+
+        self.assertEqual(result["oidc_configuration"]["status"], "restored")
+        self.assertEqual(result["oidc_auth_url"]["status"], "restored")
+        paths = {p for p, _ in put_calls}
+        self.assertIn("/oidc/configuration", paths)
+        self.assertIn("/oidc/auth-url", paths)
+
+    def test_skips_missing_oidc_keys(self):
+        import automator_app.corehub as corehub
+
+        with mock.patch.object(corehub, "fetch_core_hub"):
+            result = corehub.import_oidc_config(
+                token="tok", base_url="http://test", use_ssl=False, skip_verify=False,
+                oidc_data={"oidc_configuration": {"enabled": True}},
+            )
+
+        self.assertEqual(result["oidc_configuration"]["status"], "restored")
+        self.assertEqual(result["oidc_auth_url"]["status"], "skipped")
+
+    def test_skips_errored_oidc_data(self):
+        import automator_app.corehub as corehub
+
+        with mock.patch.object(corehub, "fetch_core_hub"):
+            result = corehub.import_oidc_config(
+                token="tok", base_url="http://test", use_ssl=False, skip_verify=False,
+                oidc_data={
+                    "oidc_configuration": {"error": "not configured"},
+                    "oidc_auth_url": {"authorizationUrl": "http://auth"},
+                },
+            )
+
+        self.assertEqual(result["oidc_configuration"]["status"], "skipped")
+        self.assertEqual(result["oidc_auth_url"]["status"], "restored")
 
 
 if __name__ == "__main__":
