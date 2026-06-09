@@ -952,12 +952,21 @@ def fetch_global_notification_config(
     """Fetch global notification settings (SMTP) from CoreHub.
 
     Returns a dict with the SMTP configuration, or None if unavailable.
-    When include_secrets is False the password field is masked.
+
+    When include_secrets is True, CoreHub returns the real password ONLY if the
+    authenticated user is a SUPER_ADMIN (see GlobalConfigurations.kt smtp GET:
+    revealSecret = include_secrets && isSuperAdmin). Otherwise CoreHub returns
+    the password as "<hidden>". When include_secrets is False the password is
+    masked locally to "*******" for consistency with agent credentials exports.
     """
     configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
 
+    # Forward include_secrets to CoreHub so super-admins receive the real
+    # password instead of the "<hidden>" placeholder.
+    params = {"include_secrets": "true"} if include_secrets else None
+
     try:
-        smtp = fetch_core_hub("/global-config/smtp", token=token)
+        smtp = fetch_core_hub("/global-config/smtp", token=token, params=params)
     except Exception as exc:  # pylint: disable=broad-except
         logger.warning("Failed to fetch global SMTP config: %s", exc)
         return None
