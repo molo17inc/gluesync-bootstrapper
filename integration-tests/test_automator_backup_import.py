@@ -260,14 +260,18 @@ class GlobalConfigFileSkipTests(unittest.TestCase):
 class ImportUsersTests(unittest.TestCase):
     """Verify import_users restores user list from backup."""
 
-    def test_restores_users_from_backup(self):
+    def test_creates_new_users_with_temp_password(self):
         import automator_app.corehub as corehub
 
-        put_calls: list[tuple[str, Any]] = []
+        calls: list[tuple[str, str, Any]] = []
 
         def fake_fetch(path, method="GET", **kwargs):
-            if method == "PUT":
-                put_calls.append((path, kwargs.get("body")))
+            body = kwargs.get("body")
+            calls.append((method, path, body))
+            if path == "/users" and method == "GET":
+                return []  # no existing users
+            if path == "/users" and method == "POST":
+                return {"id": "new-id", "username": body.get("username") if body else None}
             return {"status": "ok"}
 
         with mock.patch.object(corehub, "fetch_core_hub", side_effect=fake_fetch):
@@ -277,8 +281,60 @@ class ImportUsersTests(unittest.TestCase):
             )
 
         self.assertEqual(result["status"], "restored")
-        self.assertEqual(put_calls[0][0], "/users")
-        self.assertEqual(put_calls[0][1][0]["username"], "admin")
+        self.assertEqual(result["created"], 1)
+        self.assertEqual(result["updated"], 0)
+
+        post_calls = [c for c in calls if c[0] == "POST" and c[1] == "/users"]
+        self.assertTrue(post_calls, "Expected POST /users for new user")
+        self.assertEqual(post_calls[0][2]["username"], "admin")
+        self.assertEqual(post_calls[0][2]["role"], "SUPER_ADMIN")
+        # A random 16-char password should have been generated
+        self.assertEqual(len(post_calls[0][2]["password"]), 16)
+
+    def test_updates_existing_user_profile(self):
+        import automator_app.corehub as corehub
+
+        calls: list[tuple[str, str, Any]] = []
+
+        def fake_fetch(path, method="GET", **kwargs):
+            body = kwargs.get("body")
+            calls.append((method, path, body))
+            if path == "/users" and method == "GET":
+                return [{"id": "existing-id", "username": "admin", "role": "MANAGER"}]
+            return {"status": "ok"}
+
+        with mock.patch.object(corehub, "fetch_core_hub", side_effect=fake_fetch):
+            result = corehub.import_users(
+                token="tok", base_url="http://test", use_ssl=False, skip_verify=False,
+                users_data={"users": [{"id": "1", "username": "admin", "role": "SUPER_ADMIN", "name": "Admin User"}]},
+            )
+
+        self.assertEqual(result["status"], "restored")
+        self.assertEqual(result["created"], 0)
+        self.assertEqual(result["updated"], 1)
+
+        put_calls = [c for c in calls if c[0] == "PUT" and "/users/" in c[1]]
+        self.assertTrue(put_calls, "Expected PUT /users/{id} for existing user")
+        self.assertEqual(put_calls[0][2]["role"], "SUPER_ADMIN")
+        self.assertEqual(put_calls[0][2]["name"], "Admin User")
+
+    def test_skips_oidc_users(self):
+        import automator_app.corehub as corehub
+
+        def fake_fetch(path, method="GET", **kwargs):
+            if path == "/users" and method == "GET":
+                return []
+            return {"status": "ok"}
+
+        with mock.patch.object(corehub, "fetch_core_hub", side_effect=fake_fetch):
+            result = corehub.import_users(
+                token="tok", base_url="http://test", use_ssl=False, skip_verify=False,
+                users_data={"users": [{"id": "1", "username": "oidc-user", "role": "VIEWER", "isOidcUser": True}]},
+            )
+
+        self.assertEqual(result["status"], "restored")
+        self.assertEqual(result["skipped"], 1)
+        self.assertEqual(result["created"], 0)
 
     def test_skips_when_users_missing(self):
         import automator_app.corehub as corehub

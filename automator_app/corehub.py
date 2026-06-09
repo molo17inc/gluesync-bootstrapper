@@ -2028,7 +2028,18 @@ def export_full_corehub_backup(
             users = export_users(
                 token=token, base_url=base_url, use_ssl=use_ssl, skip_verify=skip_verify
             )
-            zip_file.writestr("users.yaml", _dump_to_yaml(users).encode("utf-8"))
+            users_comment = (
+                "# NOTE: Passwords are exported as hashes only. CoreHub does not accept\n"
+                "# password hashes for creation (a plaintext password is required).\n"
+                "# After importing this backup:\n"
+                "#   - Existing users retain their current password but profile is updated.\n"
+                "#   - New users are created with a random temporary password.\n"
+                "#   - ALL affected users MUST reset their password via the CoreHub UI.\n"
+            )
+            zip_file.writestr(
+                "users.yaml",
+                (users_comment + _dump_to_yaml(users)).encode("utf-8"),
+            )
         except Exception as exc:  # pylint: disable=broad-except
             logger.warning("Failed to export users: %s", exc)
             zip_file.writestr("users.yaml", _dump_to_yaml({"error": str(exc)}).encode("utf-8"))
@@ -2316,7 +2327,17 @@ def import_users(
     skip_verify: Optional[bool],
     users_data: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """Restore user management configuration from a previously exported dict."""
+    """Restore user management configuration from a previously exported dict.
+
+    CoreHub does not support a bulk PUT /users endpoint. The backup only
+    contains password *hashes* which cannot be used for creation (CreateUser
+    requires a plaintext password). Therefore:
+
+    - Existing users are updated via PUT /users/{id} (role/profile fields).
+    - New users are created via POST /users with a random temporary password.
+    - OIDC users are skipped entirely (managed by external IdP).
+    - After import, affected users must reset their passwords via the CoreHub UI.
+    """
     configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
 
     users = users_data.get("users")
@@ -2325,13 +2346,107 @@ def import_users(
     if isinstance(users, dict) and "error" in users:
         return {"status": "skipped", "reason": "exported with error"}
 
-    payload = _unwrap_value_if_needed(users)
+    raw = _unwrap_value_if_needed(users)
+    if not isinstance(raw, list):
+        return {"status": "skipped", "reason": "invalid users format"}
+
+    # Fetch current users on the target CoreHub to detect existing accounts.
     try:
-        fetch_core_hub("/users", method="PUT", token=token, body=payload)
-        return {"status": "restored"}
+        existing_resp = fetch_core_hub("/users", token=token)
+        if isinstance(existing_resp, list):
+            existing_users = existing_resp
+        elif isinstance(existing_resp, dict):
+            existing_users = existing_resp.get("users") or []
+        else:
+            existing_users = []
     except Exception as exc:  # pylint: disable=broad-except
-        logger.warning("Failed to restore users: %s", exc)
-        return {"status": "failed", "error": str(exc)}
+        logger.warning("Failed to fetch existing users during import: %s", exc)
+        existing_users = []
+
+    existing_by_username: Dict[str, dict] = {
+        str(u.get("username")): u
+        for u in existing_users
+        if isinstance(u, dict) and u.get("username")
+    }
+
+    created = updated = skipped = 0
+    errors: list[str] = []
+
+    for user in raw:
+        if not isinstance(user, dict):
+            continue
+
+        # Skip OIDC users — they are provisioned by an external identity provider.
+        if user.get("isOidcUser"):
+            skipped += 1
+            continue
+
+        username = str(user.get("username", "")).strip()
+        if not username:
+            continue
+
+        role = user.get("role")
+        name = user.get("name") or ""
+        surname = user.get("surname") or ""
+        email = user.get("email") or ""
+
+        if username in existing_by_username:
+            # Update existing user profile (role, name, surname, email).
+            # Password cannot be updated here because we only have a hash.
+            existing_id = existing_by_username[username].get("id")
+            try:
+                fetch_core_hub(
+                    f"/users/{existing_id}",
+                    method="PUT",
+                    token=token,
+                    body={
+                        "role": role,
+                        "name": name,
+                        "surname": surname,
+                        "email": email,
+                    },
+                )
+                updated += 1
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning("Failed to update user %s: %s", username, exc)
+                errors.append(f"update {username}: {exc}")
+        else:
+            # Create a new user with a random temporary password.
+            # The admin (or the user) must reset the password afterwards.
+            import secrets
+            import string
+
+            temp_password = "".join(
+                secrets.choice(string.ascii_letters + string.digits) for _ in range(16)
+            )
+            try:
+                fetch_core_hub(
+                    "/users",
+                    method="POST",
+                    token=token,
+                    body={
+                        "username": username,
+                        "password": temp_password,
+                        "role": role or "VIEWER",
+                        "name": name,
+                        "surname": surname,
+                        "email": email,
+                    },
+                )
+                created += 1
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning("Failed to create user %s: %s", username, exc)
+                errors.append(f"create {username}: {exc}")
+
+    if errors:
+        return {
+            "status": "restored",
+            "created": created,
+            "updated": updated,
+            "skipped": skipped,
+            "errors": errors,
+        }
+    return {"status": "restored", "created": created, "updated": updated, "skipped": skipped}
 
 
 def import_oidc_config(
