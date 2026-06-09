@@ -1,827 +1,317 @@
-# This program is part of Gluesync.
-#
-# Gluesync Bootstrapper is dual-licensed under the following licenses:
-#
-# 1. GNU General Public License (GPL) Version 3
-#    You may use, modify, and distribute this software under the terms of the GPL v3.
-#    See the LICENSE-GPL file or <http://www.gnu.org/licenses/gpl-3.0.html> for details.
-#    This option is available at no cost, but any derivative works must also be licensed under GPL v3.
-#
-# 2. MOLO17 Commercial License
-#    Alternatively, you may use this software under the MOLO17 Commercial License,
-#    which includes a warranty and permits proprietary use. Contact MOLO17 at info@molo17.com
-#    for licensing terms and conditions.
-#
-# You must choose one of these licenses to use this software. Using this software implies
-# acceptance of one of these licenses. See the accompanying LICENSE files or contact
-# MOLO17 for more information.
-#
-# Copyright (C) 2025 MOLO17. All rights reserved.
+###                                                  ###
+# Automatically generated file, do not modify manually #
+###                                                  ###
+
+image: gradle:8.8-jdk21
 
 stages:
-  - validate
-  - fetch-agents
+  - check
+  - test
   - build
-  - build-sonar
   - deploy
-
-default:
-  tags:
-    - gs-runners-hq
+  - notify
+  - webhook
 
 variables:
   DOCKER_TLS_CERTDIR: ""
-  AWS_REGION: us-east-1
-  STACK_NAME: dbmoto-xml-converter
-  RESULTS_BUCKET_PREFIX: gluesync-conversion-results
-  HOSTED_ZONE_ID: ""
-  SONAR_USER_HOME: "${CI_PROJECT_DIR}/.sonar"
-  GIT_DEPTH: "0"
+  GIT_DEPTH: "1"
+  GIT_STRATEGY: "fetch"
+  MOLO17_NEXUS_URL: "https://nexus.hq.molo17.com"
 
-# Run syntax check on every commit to catch PyInstaller issues early
-pyinstaller_syntax_check:
-  stage: validate
-  image: python:3.9-bullseye
+workflow:
   rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-      when: always
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-      when: always
-    - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
+    - if: '$PIPELINE_TYPE == "build_and_deploy"'
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_TAG == null'
       when: always
     - when: never
-  variables:
-    PIP_DISABLE_PIP_VERSION_CHECK: "1"
-    PYTHONDONTWRITEBYTECODE: "1"
-  before_script:
-    - python3 --version
-    - pip3 install --break-system-packages --upgrade pip
-    - pip3 install --break-system-packages -r requirements.txt
-  script:
-    - echo "Running PyInstaller compatibility syntax check..."
-    - python3 integration-tests/test_pyinstaller_compatibility.py --quick-check
-    - echo "Running full unit test suite..."
-    - python3 -m unittest integration-tests.test_pyinstaller_compatibility -v
-  allow_failure: false
+  name: "$PIPELINE_DESCRIPTION"
 
-# Run DbMoto converter unit tests
-dbmoto_converter_tests:
-  stage: validate
-  image: python:3.9-bullseye
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-      when: always
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-      when: always
-    - if: $CI_COMMIT_TAG =~ /^dbmoto-/
-      when: always
-    - when: never
-  variables:
-    PIP_DISABLE_PIP_VERSION_CHECK: "1"
-    PYTHONDONTWRITEBYTECODE: "1"
-  before_script:
-    - python3 --version
-    - pip3 install --break-system-packages --upgrade pip
-    - cd dbmoto-converter
-    - pip3 install --break-system-packages -r requirements.txt pyyaml
-  script:
-    - echo "Running DbMoto converter unit tests..."
-    - python3 -m unittest discover tests -v
-  allow_failure: false
-
-bootstrapper_core_unit_tests:
-  stage: validate
-  image: python:3.9-bullseye
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-      when: always
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-      when: always
-    - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
-      when: always
-    - when: never
-  variables:
-    PIP_DISABLE_PIP_VERSION_CHECK: "1"
-    PYTHONDONTWRITEBYTECODE: "1"
-  before_script:
-    - python3 --version
-    - pip3 install --break-system-packages --upgrade pip
-    - pip3 install --break-system-packages -r requirements.txt
-  script:
-    - echo "Running bootstrapper core YAML payload unit tests..."
-    - python3 -m unittest discover integration-tests -p 'test_bootstrapper_*.py' -v
-    - echo "Running Chronos export regression tests..."
-    - python3 -m unittest integration-tests.test_export_template_from_corehub -v
-    - echo "Running automator CoreHub flow tests..."
-    - python3 -m unittest integration-tests.test_automator_corehub_flows -v
-    - echo "Running automator backup/export tests..."
-    - python3 -m unittest integration-tests.test_automator_backup_export -v
-    - echo "Running automator backup/import tests..."
-    - python3 -m unittest integration-tests.test_automator_backup_import -v
-  allow_failure: false
-
-fetch_agents:
-  stage: fetch-agents
-  image: python:3.9-bullseye
-  rules:
-    - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
-      when: always
-    - if: "$CI_COMMIT_TAG =~ /^tag-/"
-      when: always
-    - if: "$CI_COMMIT_TAG =~ /^beta-/"
-      when: always
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-      when: always
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-      when: always
-    - when: never
-  variables:
-    PIP_DISABLE_PIP_VERSION_CHECK: "1"
-    PYTHONDONTWRITEBYTECODE: "1"
-  before_script:
-    - python3 --version
-    - pip3 install --break-system-packages --upgrade pip
-    - pip3 install --break-system-packages requests
-  script:
-    - echo "Fetching latest agents data..."
-    - python3 scripts/fetch-agents.py
-    - echo "Using fetched agents.json as pipeline artifact"
-  artifacts:
-    paths:
-      - agents.json
-    expire_in: 1 day
-  allow_failure: false
-
-automator_build:
-  stage: build
-  image: python:3.9-bullseye
-  needs:
-    - job: fetch_agents
-      artifacts: true
-      optional: true
-  rules:
-    - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
-      when: always
-    - when: never
-  variables:
-    PIP_DISABLE_PIP_VERSION_CHECK: "1"
-    PYTHONDONTWRITEBYTECODE: "1"
-  before_script:
-    - python3 --version
-    - pip3 install --break-system-packages --upgrade pip
-    - pip3 install --break-system-packages -r requirements.txt pyinstaller
-  script:
-    - |
-      export AUTOMATOR_VERSION="${CI_COMMIT_TAG#automator-}"
-      echo "Building Gluesync Automator version $AUTOMATOR_VERSION for Linux"
-      echo "$AUTOMATOR_VERSION" > automator_app/VERSION
-      pyinstaller automator-linux.spec --clean --distpath .automator-build/dist --workpath .automator-build/build
-    - ls -la .automator-build/dist
-  artifacts:
-    name: "gluesync-automator-linux-${CI_COMMIT_TAG}"
-    paths:
-      - .automator-build/dist/gluesync-automator-linux
-    expire_in: 2 weeks
-
-automator_build_windows:
-  stage: build
+check_changelog:
+  stage: check
   tags:
-    - hq-windows-shell-2022
-  needs:
-    - job: fetch_agents
-      artifacts: true
-      optional: true
+    - hq-linux-docker
   rules:
-    - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
-      when: always
-    - when: never
-  variables:
-    PIP_DISABLE_PIP_VERSION_CHECK: "1"
-    PYTHONDONTWRITEBYTECODE: "1"
-  before_script:
-    - |
-      $ErrorActionPreference = 'Stop'
-      $pythonDir = Join-Path $env:CI_PROJECT_DIR 'python'
-      New-Item -ItemType Directory -Force -Path $pythonDir | Out-Null
-      $pythonZip = Join-Path $pythonDir 'python.zip'
-      Invoke-WebRequest -Uri 'https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip' -OutFile $pythonZip
-      Expand-Archive -Path $pythonZip -DestinationPath $pythonDir -Force
-      Remove-Item $pythonZip
-      $pthFile = Join-Path $pythonDir 'python311._pth'
-      (Get-Content $pthFile) -replace '#import site', 'import site' | Set-Content $pthFile
-      $getPip = Join-Path $pythonDir 'get-pip.py'
-      Invoke-WebRequest -Uri 'https://bootstrap.pypa.io/get-pip.py' -OutFile $getPip
-      & (Join-Path $pythonDir 'python.exe') $getPip
-      & (Join-Path $pythonDir 'python.exe') -m pip install --upgrade pip
-      & (Join-Path $pythonDir 'python.exe') -m pip install pyinstaller
-      & (Join-Path $pythonDir 'python.exe') -m pip install -r (Join-Path $env:CI_PROJECT_DIR 'requirements.txt')
-      $env:Path = "$pythonDir;$env:Path"
+    - if: '$PIPELINE_TYPE == "build_and_deploy" && $RELEASE_TYPE == "GA"'
   script:
     - |
-      $python = Join-Path $env:CI_PROJECT_DIR 'python\python.exe'
-      $version = $env:CI_COMMIT_TAG -replace '^automator-', ''
-      Write-Host "Building Gluesync Automator version $version for Windows"
-      Set-Content -Path (Join-Path $env:CI_PROJECT_DIR 'automator_app\VERSION') -Value $version
-      & $python -m PyInstaller automator-windows.spec --clean --distpath .automator-build/dist --workpath .automator-build/build
-    - Get-ChildItem .automator-build/dist
+      CHANGELOG_URL="https://api.backoffice.molo17.com/changelog/core-hub/$MODULE_VERSION"
+      echo "Checking changelog availability at: $CHANGELOG_URL"
+      HTTP_STATUS=$(curl -o /dev/null -s -w "%{http_code}" "$CHANGELOG_URL")
+      if [ "$HTTP_STATUS" != "200" ]; then
+        echo "ERROR: Changelog for version $MODULE_VERSION not found (HTTP $HTTP_STATUS). Please add the changelog before releasing."
+        exit 1
+      fi
+      echo "Changelog for version $MODULE_VERSION is available."
+  interruptible: true
+
+build_test_all:
+  stage: test
+  retry: 2
+  tags:
+    - hq-linux-docker
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_TAG == null'
+  script:
+    - export GRADLE_USER_HOME=`pwd`/.gradle
+    - gradle check
+  interruptible: true
+
+build_gluesync:
+  stage: build
+  retry: 2
+  parallel:
+    matrix:
+      - GRADLE_TASK: ':corehub:gsBuild'
+        BUILD_TAG: 'core-hub'
+        ADDITIONAL_LIBS_PATH: ''
+      - GRADLE_TASK: ':cassandra:gsBuild'
+        BUILD_TAG: 'cassandra'
+        ADDITIONAL_LIBS_PATH: ''
+      - GRADLE_TASK: ':postgresql:gsBuild'
+        BUILD_TAG: 'postgresql-cdc'
+        ADDITIONAL_LIBS_PATH: ''
+      - GRADLE_TASK: ':mysql:gsBuild'
+        BUILD_TAG: 'mysql-cdc'
+        ADDITIONAL_LIBS_PATH: ''
+      - GRADLE_TASK: ':ibm-iseries:gsBuild'
+        BUILD_TAG: 'ibm-iseries'
+        ADDITIONAL_LIBS_PATH: ''
+      - GRADLE_TASK: ':couchbase:gsBuild'
+        BUILD_TAG: 'couchbase'
+        ADDITIONAL_LIBS_PATH: ''
+      - GRADLE_TASK: ':mssql:changetracking:gsBuild'
+        BUILD_TAG: 'mssql-ct'
+        ADDITIONAL_LIBS_PATH: ''
+      - GRADLE_TASK: ':mssql:cdc:gsBuild'
+        BUILD_TAG: 'mssql-cdc'
+        ADDITIONAL_LIBS_PATH: ''
+      - GRADLE_TASK: ':vertica:gsBuild'
+        BUILD_TAG: 'vertica'
+        ADDITIONAL_LIBS_PATH: ''
+      - GRADLE_TASK: ':kafka:gsBuild'
+        BUILD_TAG: 'kafka'
+        ADDITIONAL_LIBS_PATH: ''
+      - GRADLE_TASK: ':solace:gsBuild'
+        BUILD_TAG: 'solace'
+        ADDITIONAL_LIBS_PATH: ''
+      - GRADLE_TASK: ':mongodb:gsBuild'
+        BUILD_TAG: 'mongodb'
+        ADDITIONAL_LIBS_PATH: ''
+      - GRADLE_TASK: ':sybase:gsBuild'
+        BUILD_TAG: 'sybase'
+        ADDITIONAL_LIBS_PATH: ''
+      - GRADLE_TASK: ':dynamodb:gsBuild'
+        BUILD_TAG: 'dynamodb'
+        ADDITIONAL_LIBS_PATH: ''
+      - GRADLE_TASK: ':snowflake:gsBuild'
+        BUILD_TAG: 'snowflake'
+        ADDITIONAL_LIBS_PATH: ''
+      - GRADLE_TASK: ':oracle:xstream:gsBuild'
+        BUILD_TAG: 'oracle-xstream'
+        ADDITIONAL_LIBS_PATH: ''
+      - GRADLE_TASK: ':oracle:triggers:gsBuild'
+        BUILD_TAG: 'oracle-triggers'
+        ADDITIONAL_LIBS_PATH: ''
+      - GRADLE_TASK: ':oracle:triggers-legacy:gsBuild'
+        BUILD_TAG: 'oracle-triggers-legacy'
+        ADDITIONAL_LIBS_PATH: ''
+      - GRADLE_TASK: ':oracle:cdc:gsBuild'
+        BUILD_TAG: 'oracle-logminer'
+        ADDITIONAL_LIBS_PATH: ''
+      - GRADLE_TASK: ':aerospike:gsBuild'
+        BUILD_TAG: 'aerospike'
+        ADDITIONAL_LIBS_PATH: ''
+      - GRADLE_TASK: ':singlestore:gsBuild'
+        BUILD_TAG: 'singlestore'
+        ADDITIONAL_LIBS_PATH: ''
+      - GRADLE_TASK: ':awss3:gsBuild'
+        BUILD_TAG: 'awss3'
+        ADDITIONAL_LIBS_PATH: ''
+      - GRADLE_TASK: ':cosmosdb:gsBuild'
+        BUILD_TAG: 'cosmosdb'
+        ADDITIONAL_LIBS_PATH: ''
+      - GRADLE_TASK: ':informix:gsBuild'
+        BUILD_TAG: 'informix'
+        ADDITIONAL_LIBS_PATH: ''
+      - GRADLE_TASK: ':gcpstorage:gsBuild'
+        BUILD_TAG: 'google-cloud-storage'
+        ADDITIONAL_LIBS_PATH: ''
+      - GRADLE_TASK: ':ravendb:gsBuild'
+        BUILD_TAG: 'ravendb'
+        ADDITIONAL_LIBS_PATH: ''
+      - GRADLE_TASK: ':google-pubsub:gsBuild'
+        BUILD_TAG: 'google-pubsub'
+        ADDITIONAL_LIBS_PATH: ''
+      - GRADLE_TASK: ':redis:gsBuild'
+        BUILD_TAG: 'redis'
+        ADDITIONAL_LIBS_PATH: ''
+      - GRADLE_TASK: ':cockroachdb:gsBuild'
+        BUILD_TAG: 'cockroachdb'
+        ADDITIONAL_LIBS_PATH: ''
+      - GRADLE_TASK: ':mariadb:gsBuild'
+        BUILD_TAG: 'mariadb-cdc'
+        ADDITIONAL_LIBS_PATH: ''
+      - GRADLE_TASK: ':google-big-query:gsBuild'
+        BUILD_TAG: 'google-bigquery'
+        ADDITIONAL_LIBS_PATH: ''
+      - GRADLE_TASK: ':scylladb:gsBuild'
+        BUILD_TAG: 'scylladb'
+        ADDITIONAL_LIBS_PATH: ''
+      - GRADLE_TASK: ':yugabytedb:gsBuild'
+        BUILD_TAG: 'yugabytedb'
+        ADDITIONAL_LIBS_PATH: ''
+      - GRADLE_TASK: ':gridgain:gsBuild'
+        BUILD_TAG: 'gridgain'
+        ADDITIONAL_LIBS_PATH: ''
+      - GRADLE_TASK: ':db2-luw:triggers:gsBuild'
+        BUILD_TAG: 'db2-luw-triggers'
+        ADDITIONAL_LIBS_PATH: ''
+      - GRADLE_TASK: ':saphana:gsBuild'
+        BUILD_TAG: 'sap-hana'
+        ADDITIONAL_LIBS_PATH: ''
+      - GRADLE_TASK: ':azure-data-lake:gsBuild'
+        BUILD_TAG: 'azure-data-lake'
+        ADDITIONAL_LIBS_PATH: ''
+      - GRADLE_TASK: ':redshift:gsBuild'
+        BUILD_TAG: 'aws-redshift'
+        ADDITIONAL_LIBS_PATH: ''
+  tags:
+    - hq-linux-docker
+  rules:
+    - if: '$PIPELINE_TYPE == "build_and_deploy"'
+  script:
+    - export GRADLE_USER_HOME=`pwd`/.gradle
+    - gradle -Psource=GITLAB_CI -PuiReleaseChannel=$UI_RELEASE_CHANNEL -PuiVersion=$UI_VERSION $GRADLE_TASK
+    - mkdir libs
+    - mkdir -p additional-libs
+    - |
+      if [ "$ADDITIONAL_LIBS_PATH" != "" ] && [ -d "$ADDITIONAL_LIBS_PATH" ]; then
+       echo "Copying additional libraries from $ADDITIONAL_LIBS_PATH..."
+       cp -a $ADDITIONAL_LIBS_PATH/* additional-libs/
+      else
+       echo "No additional libraries to copy for this module."
+      fi
+    - find . -type d -path "*/build/libs/$BUILD_TAG" -exec cp -r '{}' libs/ \;
   artifacts:
-    name: "gluesync-automator-windows-${CI_COMMIT_TAG}"
     paths:
-      - .automator-build/dist/gluesync-automator-windows.exe
-    expire_in: 2 weeks
+      - libs/*
+      - additional-libs/*
+    expire_in: 1 day
+  interruptible: true
 
-# automator_build_macos:
-#   stage: build
-#   image: python:3.9-bullseye
-#   rules:
-#     - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
-#       when: always
-#     - when: never
-#   variables:
-#     PIP_DISABLE_PIP_VERSION_CHECK: "1"
-#     PYTHONDONTWRITEBYTECODE: "1"
-#   before_script:
-#     - python3 --version
-#     - pip3 install --break-system-packages --upgrade pip
-#     - pip3 install --break-system-packages -r requirements.txt pyinstaller
-#   script:
-#     - |
-#       export AUTOMATOR_VERSION="${CI_COMMIT_TAG#automator-}"
-#       echo "Building Gluesync Automator version $AUTOMATOR_VERSION for macOS"
-#       pyinstaller automator-macos.spec --clean --distpath .automator-build/dist --workpath .automator-build/build
-#     - ls -la .automator-build/dist
-#   artifacts:
-#     name: "gluesync-automator-macos-${CI_COMMIT_TAG}"
-#     paths:
-#       - .automator-build/dist/gluesync-automator-macos
-#     expire_in: 2 weeks
-
-automator_publish:
+deploy_gluesync_linux:
   stage: deploy
-  image: alpine:3.20
-  needs:
-    - job: automator_build
-      artifacts: true
-    - job: automator_build_windows
-      artifacts: true
-    - job: automator_build_macos # Uncomment when macOS CI is enabled
-      artifacts: true
-      optional: true # Make it optional since macOS build might be disabled
-  rules:
-    - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
-      when: always
-    - when: never
-  before_script:
-    - apk add --no-cache lftp
-  script:
-    - echo "Checking available build artifacts..."
-    - ls -la .automator-build/dist/ || echo "No .automator-build/dist directory found"
-    - |
-      # Extract version from tag (e.g., automator-2.1.0-beta -> 2.1.0-beta)
-      AUTOMATOR_VERSION="${CI_COMMIT_TAG#automator-}"
-
-      # Determine if this is a pre-release (contains -beta, -alpha, -rc, etc.)
-      if echo "$AUTOMATOR_VERSION" | grep -qE '(-beta|-alpha|-rc|-preview|-dev)'; then
-        VERSION_SUFFIX="-$AUTOMATOR_VERSION"
-        echo "Pre-release detected: $AUTOMATOR_VERSION"
-      else
-        VERSION_SUFFIX=""
-        echo "GA release detected: $AUTOMATOR_VERSION"
-      fi
-
-      cd .automator-build/dist
-      lftp -c "open -u $FTP_USER,$FTP_PASSWORD $FTP_SITE; put gluesync-automator-windows.exe -o /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-windows${VERSION_SUFFIX}.exe" 
-      lftp -c "open -u $FTP_USER,$FTP_PASSWORD $FTP_SITE; put gluesync-automator-linux -o /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-linux${VERSION_SUFFIX}" 
-      if [ -f "gluesync-automator-macos" ]; then
-        lftp -c "open -u $FTP_USER,$FTP_PASSWORD $FTP_SITE; put gluesync-automator-macos -o /molo17.com/public_html/gs-content/gluesync-automator/gluesync-automator-macos${VERSION_SUFFIX}"
-        echo "Uploaded macOS executable"
-      else
-        echo "macOS executable not available (built locally)"
-      fi
-      if [ -f "$CI_PROJECT_DIR/table-list-template.yaml" ]; then
-        lftp -c "open -u $FTP_USER,$FTP_PASSWORD $FTP_SITE; put $CI_PROJECT_DIR/table-list-template.yaml -o /molo17.com/public_html/gs-content/gluesync-automator/table-list-template.yaml.txt"
-        echo "Uploaded table-list-template.yaml.txt"
-      else
-        echo "table-list-template.yaml not found in project root"
-      fi
-
-deploy:
-  stage: deploy
-  image: docker:latest
+  retry: 2
+  tags:
+    - hq-linux-docker
+  image: docker:27.3.1
   services:
     - name: docker:dind
       variables:
         DOCKER_TLS_CERTDIR: ""
-  needs:
-    - job: fetch_agents
-      artifacts: true
-      optional: true
+  rules:
+    - if: '$PIPELINE_TYPE == "build_and_deploy"'
   script:
-    - echo "Building & deploying started..."
-
-    - apk add --no-cache bash git
-
-    # Initialize and update the Git submodule
-    - git submodule init
-    - git submodule update
-
-    - |
-      MODULE_NAME=${CI_COMMIT_TAG#tag-}  # Removes everything before "tag-"
-      MODULE_NAME=${MODULE_NAME%-v*}  # Removes everything after the last "-"
-
-      TAGPART=`echo $CI_COMMIT_TAG | grep -oE '[0-9]+\.[0-9]+\.[0-9](.*)'`
-
-      DEFAULT_NAME=${DOCKER_REGISTRY}/${APP_NAME}
-      ADDITIONAL_TAG="${DEFAULT_NAME}:${TAGPART}"
-
-    - docker login -u danieleangeli -p "$CI_REGISTRY_PASSWORD"
-    - docker build -t $DEFAULT_NAME:latest .
-    - docker tag $DEFAULT_NAME:latest "$ADDITIONAL_TAG"
-    - docker push "$ADDITIONAL_TAG"
-  rules:
-    - if: "$CI_COMMIT_TAG =~ /^tag-/"
-    - if: "$CI_COMMIT_TAG =~ /^beta-/"
-build-sonar:
-  stage: build-sonar
-  image:
-    name: sonarsource/sonar-scanner-cli:11
-    entrypoint: [""]
-  needs:
-    - job: pyinstaller_syntax_check
-      optional: true
-  cache:
-    policy: pull-push
-    key: "sonar-cache-$CI_COMMIT_REF_SLUG"
-    paths:
-      - "${SONAR_USER_HOME}/cache"
-      - sonar-scanner/
-  script:
-    - sonar-scanner -Dsonar.host.url="${SONAR_HOST_URL}" -Dsonar.projectKey="molo17-public_gluesync_gluesync-bootstrapper_422821b0-a562-4286-a737-066ee5d2ee88" -Dsonar.qualitygate.wait=true
-  allow_failure: true
-  rules:
-    - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
-    - if: $CI_COMMIT_BRANCH == 'master'
-    - if: $CI_COMMIT_BRANCH == 'main'
-    - if: $CI_COMMIT_BRANCH == 'develop'
-
-deploy_lambda:
-  stage: deploy
-  image: python:3.9
-  rules:
-    - if: $CI_COMMIT_TAG =~ /^dbmoto-/
-      when: always
-  script:
-    - echo "🚀 Starting Lambda deployment..."
-    - cd dbmoto-converter
-    - apt-get update && apt-get install -y awscli jq curl zip
-    - aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
-    - aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY
-    - aws configure set region $AWS_REGION
-    - export RESULTS_BUCKET="${RESULTS_BUCKET_PREFIX}-${CI_PIPELINE_ID}-${CI_JOB_ID}"
-    - echo "📦 Creating Lambda deployment package..."
-    - pip install -r requirements.txt -t lambda-package/ --quiet
-    - cp parse_dbmoto_metadata_xml.py lambda-package/
-    - cp table-list-template-basic.yaml lambda-package/ 2>/dev/null || true
-    - cp lambda_function.py lambda-package/
-    - cd lambda-package && zip -r ../lambda-package.zip . -q && cd ..
-    - |
-      # Check if stack exists and get its status
-      if aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
-        STACK_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].StackStatus' --output text)
-        echo "📊 Current stack status: $STACK_STATUS"
-        
-        # Handle stack in ROLLBACK_COMPLETE state
-        if [[ "$STACK_STATUS" == "ROLLBACK_COMPLETE" ]]; then
-          echo "🔄 Deleting stack in ROLLBACK_COMPLETE state..."
-          aws cloudformation delete-stack --stack-name "$STACK_NAME" --region "$AWS_REGION"
-          aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" --region "$AWS_REGION"
-          echo "✅ Stack deletion complete"
-        fi
-      fi
-
-      # Set operation type for later use
-      export OPERATION="create-stack"
-      export WAIT_OPERATION="stack-create-complete"
-
-      # Load template body once
-      TEMPLATE_BODY=$(cat cloudformation-template.yaml)
-
-      # Check if we need to update or create the stack
-      if aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
-        echo "🔍 Checking for stack updates..."
-        
-        # Use change sets to check for updates without making changes
-        CHANGE_SET_NAME="changeset-${CI_PIPELINE_ID}-${CI_JOB_ID}"
-        
-        # Create a change set to check for updates
-        aws cloudformation create-change-set \
-          --stack-name "$STACK_NAME" \
-          --region "$AWS_REGION" \
-          --change-set-name "$CHANGE_SET_NAME" \
-          --template-body "$TEMPLATE_BODY" \
-          --parameters \
-              ParameterKey=FtpHost,ParameterValue="$FTP_SITE" \
-              ParameterKey=FtpUser,ParameterValue="$FTP_USER" \
-              ParameterKey=FtpPassword,ParameterValue="$FTP_PASSWORD" \
-              ParameterKey=FtpBasePath,ParameterValue="/molo17.com/public_html/gs-content/dbmoto-conversion/" \
-              ParameterKey=CustomDomainName,ParameterValue="dbmoto-converter.labs.molo17.com" \
-          --capabilities CAPABILITY_IAM
-        
-        # Wait for change set to complete
-        echo "⏳ Waiting for change set creation to complete..."
-        aws cloudformation wait change-set-create-complete \
-          --stack-name "$STACK_NAME" \
-          --region "$AWS_REGION" \
-          --change-set-name "$CHANGE_SET_NAME" \
-          || true  # Continue even if there are no changes
-        
-        # Check if there are changes to apply
-        CHANGE_SET_STATUS=$(aws cloudformation describe-change-set \
-          --stack-name "$STACK_NAME" \
-          --region "$AWS_REGION" \
-          --change-set-name "$CHANGE_SET_NAME" \
-          --query 'Status' \
-          --output text 2>/dev/null || echo "FAILED")
-        
-        if [[ "$CHANGE_SET_STATUS" == "FAILED" ]]; then
-          # Check if the failure is due to no changes
-          CHANGE_SET_REASON=$(aws cloudformation describe-change-set \
-            --stack-name "$STACK_NAME" \
-            --region "$AWS_REGION" \
-            --change-set-name "$CHANGE_SET_NAME" \
-            --query 'StatusReason' \
-            --output text 2>/dev/null || echo "Unknown error")
-          
-          if [[ "$CHANGE_SET_REASON" == *"No updates are to be performed"* ]] || [[ "$CHANGE_SET_REASON" == *"didn't contain changes"* ]]; then
-            echo "✅ No changes detected in the stack. Stack is already up to date."
-            # Delete the change set as it's no longer needed
-            aws cloudformation delete-change-set \
-              --stack-name "$STACK_NAME" \
-              --region "$AWS_REGION" \
-              --change-set-name "$CHANGE_SET_NAME"
-            # Set a flag to skip the update (but we will still update Lambda)
-            export NO_UPDATES_NEEDED=true
-          else
-            echo "❌ Failed to create change set: $CHANGE_SET_REASON"
-            # Delete the failed change set
-            aws cloudformation delete-change-set \
-              --stack-name "$STACK_NAME" \
-              --region "$AWS_REGION" \
-              --change-set-name "$CHANGE_SET_NAME"
-            exit 1
-          fi
-        else
-          echo "🔄 Changes detected, applying update..."
-          # Execute the change set
-          aws cloudformation execute-change-set \
-            --stack-name "$STACK_NAME" \
-            --region "$AWS_REGION" \
-            --change-set-name "$CHANGE_SET_NAME"
-          
-          echo "⏳ Waiting for stack update to complete..."
-          aws cloudformation wait stack-update-complete \
-            --stack-name "$STACK_NAME" \
-            --region "$AWS_REGION"
-          echo "✅ Stack update completed successfully"
-        fi
-      else
-        # Stack doesn't exist, create it
-        echo "🆕 Creating new stack..."
-        aws cloudformation create-stack \
-          --stack-name "$STACK_NAME" \
-          --region "$AWS_REGION" \
-          --template-body "$TEMPLATE_BODY" \
-          --parameters \
-              ParameterKey=FtpHost,ParameterValue="c1107198.sgvps.net" \
-              ParameterKey=FtpUser,ParameterValue="$FTP_USER" \
-              ParameterKey=FtpPassword,ParameterValue="$FTP_PASSWORD" \
-              ParameterKey=FtpBasePath,ParameterValue="/molo17.com/public_html/gs-content/dbmoto-conversion/" \
-              ParameterKey=CustomDomainName,ParameterValue="dbmoto-converter.labs.molo17.com" \
-          --capabilities CAPABILITY_IAM
-          
-        echo "⏳ Waiting for stack creation to complete..."
-        aws cloudformation wait stack-create-complete \
-          --stack-name "$STACK_NAME" \
-          --region "$AWS_REGION"
-        echo "✅ Stack creation completed successfully"
-      fi
-    # Always update Lambda function code for dbmoto deployments
-    - |
-      echo "⏳ Waiting for Lambda function to be ready (max 5 minutes)..."
-      WAIT_START=$(date +%s)
-      TIMEOUT=300
-      LAMBDA_READY=false
-
-      while [ $(( $(date +%s) - WAIT_START )) -lt $TIMEOUT ]; do
-        if aws lambda get-function --function-name dbmoto-xml-converter --region "$AWS_REGION" >/dev/null 2>&1; then
-          LAMBDA_READY=true
-          break
-        fi
-        echo "⏱️  Waiting for Lambda function to be available... ($(( $(date +%s) - WAIT_START ))s elapsed)"
-        sleep 10
-      done
-
-      if [[ "$LAMBDA_READY" == "false" ]]; then
-        echo "❌ Timeout waiting for Lambda function to be available"
-        exit 1
-      fi
-
-      echo "📦 Updating Lambda function code..."
-      aws lambda update-function-code \
-        --function-name dbmoto-xml-converter \
-        --zip-file fileb://lambda-package.zip \
-        --region "$AWS_REGION"
-        
-      echo "⏳ Waiting for Lambda update to complete..."
-      aws lambda wait function-updated --function-name dbmoto-xml-converter --region "$AWS_REGION"
-      echo "✅ Lambda function update completed successfully"
-    - echo "⏳ Checking stack status before waiting..."
-    - |
-      CURRENT_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].StackStatus' --output text)
-      echo "📊 Current stack status: $CURRENT_STATUS"
-
-      if [[ "$CURRENT_STATUS" == "CREATE_COMPLETE" ]] || [[ "$CURRENT_STATUS" == "UPDATE_COMPLETE" ]]; then
-        echo "✅ Stack is already complete, skipping wait!"
-      elif [[ "$CURRENT_STATUS" == *"FAILED"* ]] || [[ "$CURRENT_STATUS" == "ROLLBACK_COMPLETE" ]]; then
-        echo "❌ Stack is in failed state: $CURRENT_STATUS"
-        aws cloudformation describe-stack-events --stack-name "$STACK_NAME" --region "$AWS_REGION" --max-items 10 --output table
-        exit 1
-      else
-        echo "⏳ Waiting for stack deployment (status: $CURRENT_STATUS)..."
-        if [ "$OPERATION" = "create-stack" ]; then
-          timeout 600 aws cloudformation wait stack-create-complete --stack-name "$STACK_NAME" --region "$AWS_REGION" || {
-          EXIT_CODE=$?
-          echo "❌ Stack creation failed or timed out (exit code: $EXIT_CODE)"
-          STACK_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].StackStatus' --output text)
-          echo "📊 Final stack status: $STACK_STATUS"
-          echo ""
-          echo "📋 Failed resources and reasons:"
-          aws cloudformation describe-stack-events \
-            --stack-name "$STACK_NAME" \
-            --region "$AWS_REGION" \
-            --max-items 50 \
-            --query 'StackEvents[?ResourceStatus==`CREATE_FAILED` || ResourceStatus==`ROLLBACK_IN_PROGRESS`].[Timestamp,LogicalResourceId,ResourceType,ResourceStatusReason]' \
-            --output table
-          echo ""
-          echo "📋 All recent events:"
-          aws cloudformation describe-stack-events \
-            --stack-name "$STACK_NAME" \
-            --region "$AWS_REGION" \
-            --max-items 20 \
-            --output table
-          exit 1
-        }
-      else
-        timeout 600 aws cloudformation wait stack-update-complete --stack-name "$STACK_NAME" --region "$AWS_REGION" || {
-          EXIT_CODE=$?
-          echo "❌ Stack update failed or timed out (exit code: $EXIT_CODE)"
-          STACK_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].StackStatus' --output text)
-          echo "📊 Final stack status: $STACK_STATUS"
-          echo ""
-          echo "📋 Failed resources and reasons:"
-          aws cloudformation describe-stack-events \
-            --stack-name "$STACK_NAME" \
-            --region "$AWS_REGION" \
-            --max-items 50 \
-            --query 'StackEvents[?ResourceStatus==`UPDATE_FAILED` || ResourceStatus==`UPDATE_ROLLBACK_IN_PROGRESS`].[Timestamp,LogicalResourceId,ResourceType,ResourceStatusReason]' \
-            --output table
-          echo ""
-          echo "📋 All recent events:"
-          aws cloudformation describe-stack-events \
-            --stack-name "$STACK_NAME" \
-            --region "$AWS_REGION" \
-            --max-items 20 \
-            --output table
-          exit 1
-        }
-        fi
-      fi
-    - echo "✅ Stack deployment completed!"
-    - |
-      API_ENDPOINT=$(aws cloudformation describe-stacks \
-        --stack-name "$STACK_NAME" \
-        --region "$AWS_REGION" \
-        --query 'Stacks[0].Outputs[?OutputKey==`ApiEndpoint`].OutputValue' \
-        --output text)
-      CUSTOM_DOMAIN_ENDPOINT=$(aws cloudformation describe-stacks \
-        --stack-name "$STACK_NAME" \
-        --region "$AWS_REGION" \
-        --query 'Stacks[0].Outputs[?OutputKey==`CustomDomainEndpoint`].OutputValue' \
-        --output text)
-      REGIONAL_DOMAIN=$(aws cloudformation describe-stacks \
-        --stack-name "$STACK_NAME" \
-        --region "$AWS_REGION" \
-        --query 'Stacks[0].Outputs[?OutputKey==`RegionalDomainName`].OutputValue' \
-        --output text)
-      CERT_VALIDATION_NAME=$(aws cloudformation describe-stacks \
-        --stack-name "$STACK_NAME" \
-        --region "$AWS_REGION" \
-        --query 'Stacks[0].Outputs[?OutputKey==`CertificateValidationRecordName`].OutputValue' \
-        --output text 2>/dev/null || echo "")
-      CERT_VALIDATION_VALUE=$(aws cloudformation describe-stacks \
-        --stack-name "$STACK_NAME" \
-        --region "$AWS_REGION" \
-        --query 'Stacks[0].Outputs[?OutputKey==`CertificateValidationRecordValue`].OutputValue' \
-        --output text 2>/dev/null || echo "")
-      RESULTS_BUCKET_NAME=$(aws cloudformation describe-stacks \
-        --stack-name "$STACK_NAME" \
-        --region "$AWS_REGION" \
-        --query 'Stacks[0].Outputs[?OutputKey==`ResultsBucketName`].OutputValue' \
-        --output text)
-      echo "API_ENDPOINT=$API_ENDPOINT" >> deploy.env
-      echo "CUSTOM_DOMAIN_ENDPOINT=$CUSTOM_DOMAIN_ENDPOINT" >> deploy.env
-      echo "REGIONAL_DOMAIN=$REGIONAL_DOMAIN" >> deploy.env
-      echo "CERT_VALIDATION_NAME=$CERT_VALIDATION_NAME" >> deploy.env
-      echo "CERT_VALIDATION_VALUE=$CERT_VALIDATION_VALUE" >> deploy.env
-      echo "RESULTS_BUCKET_NAME=$RESULTS_BUCKET_NAME" >> deploy.env
-    - |
-      echo "🧪 Testing API endpoint..."
-      RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" "$API_ENDPOINT/convert" -X POST 2>/dev/null || echo "000")
-      if [ "$RESPONSE" != "000" ]; then
-        echo "✅ API endpoint is responding (HTTP $RESPONSE)"
-        if [ "$RESPONSE" = "500" ]; then
-          echo "ℹ️  Note: 500 error expected without valid XML file upload"
-        fi
-      else
-        echo "❌ API endpoint is not reachable"
-        exit 1
-      fi
-    - |
-      echo "🌐 Custom Domain Configuration:"
-      echo ""
-      echo "📋 Manual DNS setup required:"
-      echo ""
-      echo "1. SSL Certificate Validation (Required for HTTPS):"
-      echo "   - Go to AWS Certificate Manager console"
-      echo "   - Find certificate for dbmoto-converter.labs.molo17.com"
-      echo "   - Copy the CNAME record name and value"
-      echo "   - Add CNAME record to your DNS (Route 53 or other)"
-      echo ""
-      echo "2. Custom Domain CNAME:"
-      echo "   CNAME: dbmoto-converter.labs.molo17.com"
-      echo "   Value: $REGIONAL_DOMAIN"
-      echo ""
-      echo "3. Once DNS is configured, your API will be available at:"
-      echo "   $CUSTOM_DOMAIN_ENDPOINT/convert"
-      echo ""
-      echo "⚠️  DNS propagation may take 5-15 minutes"
-      echo "⚠️  SSL certificate validation may take additional time"
-
-  artifacts:
-    reports:
-      dotenv: deploy.env
-    paths:
-      - lambda-package.zip
-    expire_in: 1 week
-
-  environment:
-    name: production
-    url: $API_ENDPOINT
-
-# Deploy WordPress plugin to hosting
-deploy_wordpress_plugin:
-  stage: deploy
-  image: alpine:latest
-  rules:
-    - if: $CI_COMMIT_TAG =~ /^dbmoto-/
-      when: always
+    - export GRADLE_USER_HOME=`pwd`/.gradle
+    - sh scripts/docker-build-fat-core-hub.sh --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --supported-deploy-arch=DEPLOY_AMD64_ARM64
   dependencies:
-    - deploy_lambda
-  script:
-    - echo "🚀 Deploying WordPress plugin to hosting..."
-    - apk add --no-cache lftp
-    - cd dbmoto-converter/wordpress-plugin/dbmoto-converter
-    - echo "📤 Uploading plugin files to WordPress hosting..."
-    - lftp -c "open -u $FTP_USER,$FTP_PASSWORD ftp://$FTP_SITE; mirror -R . /molo17.com/public_html/wp-content/plugins/dbmoto-converter/"
-    - echo "✅ WordPress plugin deployed successfully!"
-  when: manual
-  allow_failure: true
+    - build_gluesync
+  interruptible: true
 
-# Manual cleanup job
-cleanup_lambda:
+deploy_gluesync_windows:
   stage: deploy
-  image: amazon/aws-cli:latest
-  when: manual
-  only:
-    - web
-  script:
-    - echo "🧹 Cleaning up Lambda deployment..."
-    - aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
-    - aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY
-    - aws configure set region $AWS_REGION
-    - aws cloudformation delete-stack --stack-name "$STACK_NAME" --region "$AWS_REGION"
-    - echo "⏳ Waiting for stack deletion..."
-    - aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" --region "$AWS_REGION"
-    - echo "✅ Lambda deployment cleaned up successfully"
-
-update_budibase_version:
-  stage: deploy
-  image: alpine:latest
-  needs:
-    - job: automator_publish
-      optional: true
-    - job: deploy
-      optional: true
-  script:
-    - apk add --no-cache bash curl jq
-    - |
-      set -euo pipefail
-
-      if [ -z "${CI_COMMIT_TAG:-}" ]; then
-        echo "[ERROR] Not a tracked tag"
-        exit 1
-      fi
-
-      MODULE_VERSION=$(echo "$CI_COMMIT_TAG" | grep -oE '[0-9]+\.[0-9]+\.[0-9](.*)' || true)
-
-      if [ -z "$MODULE_VERSION" ]; then
-        echo "[ERROR] Unable to extract version from tag: $CI_COMMIT_TAG"
-        exit 1
-      fi
-
-      case "$CI_COMMIT_TAG" in
-        automator-*)
-          BUILD_TAG="automator"
-          ;;
-        *)
-          BUILD_TAG="bootstrapper"
-          ;;
-      esac
-
-      echo "[INFO] Updating Budibase version: BUILD_TAG=$BUILD_TAG, MODULE_VERSION=$MODULE_VERSION"
-
-      SEARCH_PAYLOAD="{
-        \"query\": {
-          \"equal\": {
-            \"internalName\": \"$BUILD_TAG\"
-          }
-        },
-        \"paginate\": false,
-        \"limit\": 1000
-      }"
-
-      SEARCH_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
-        -H "x-budibase-app-id: $BUDIBASE_APP_ID" \
-        -H "Content-Type: application/json" \
-        -H "Accept: application/json" \
-        -H "x-budibase-api-key: $BUDIBASE_API_KEY" \
-        -d "$SEARCH_PAYLOAD" \
-        "$BUDIBASE_BASE_URL/tables/datasource_plus_3dbc0976d090472f82658f287ec8ad6d__AvailableAgents/rows/search")
-
-      SEARCH_BODY=$(printf "%s" "$SEARCH_RESPONSE" | sed -e '$d')
-      SEARCH_STATUS=$(printf "%s" "$SEARCH_RESPONSE" | tail -n 1)
-
-      if [ "$SEARCH_STATUS" -ne 200 ]; then
-        echo "Failed to search for row. HTTP Status: $SEARCH_STATUS"
-        echo "Response: $SEARCH_BODY"
-        echo "Search Payload: $SEARCH_PAYLOAD"
-        exit 1
-      fi
-
-      ROW_ID=$(echo "$SEARCH_BODY" | jq -r '.data[0]._id // empty')
-
-      if [ -z "$ROW_ID" ]; then
-        echo "No matching row found for internalName: $BUILD_TAG"
-        exit 1
-      fi
-
-      # Determine channel from tag / version string:
-      #   beta-*                  → beta only
-      #   version contains -alpha → alpha only
-      #   version contains -beta  → beta only
-      #   everything else (GA)    → GA only
-      if echo "$CI_COMMIT_TAG" | grep -qE '^beta-'; then
-        UPDATE_PAYLOAD="{\"latestVersionBeta\": \"$MODULE_VERSION\"}"
-      elif echo "$MODULE_VERSION" | grep -qE '(-alpha)'; then
-        UPDATE_PAYLOAD="{\"latestVersionAlpha\": \"$MODULE_VERSION\"}"
-      elif echo "$MODULE_VERSION" | grep -qE '(-beta|-dev)'; then
-        UPDATE_PAYLOAD="{\"latestVersionBeta\": \"$MODULE_VERSION\"}"
-      else
-        UPDATE_PAYLOAD="{\"latestVersionGA\": \"$MODULE_VERSION\"}"
-      fi
-
-      UPDATE_RESPONSE=$(curl -s -w "\n%{http_code}" -X PUT \
-        -H "x-budibase-app-id: $BUDIBASE_APP_ID" \
-        -H "Content-Type: application/json" \
-        -H "Accept: application/json" \
-        -H "x-budibase-api-key: $BUDIBASE_API_KEY" \
-        -d "$UPDATE_PAYLOAD" \
-        "$BUDIBASE_BASE_URL/tables/datasource_plus_3dbc0976d090472f82658f287ec8ad6d__AvailableAgents/rows/$ROW_ID")
-
-      UPDATE_BODY=$(printf "%s" "$UPDATE_RESPONSE" | sed -e '$d')
-      UPDATE_STATUS=$(printf "%s" "$UPDATE_RESPONSE" | tail -n 1)
-
-      echo "Budibase API update response code: $UPDATE_STATUS"
-      echo "Budibase API update response: $UPDATE_BODY"
-
-      if [ "$UPDATE_STATUS" -ge 200 ] && [ "$UPDATE_STATUS" -lt 300 ]; then
-          echo "Successfully updated version on budibase"
-      else
-          echo "Failed to update version on budibase. HTTP Status: $UPDATE_STATUS"
-          exit 1
-      fi
+  retry: 2
+  parallel:
+    matrix:
+      - WINDOWS_TAG: "ltsc2019"
+        WINDOWS_RUNNER_VERSION: "2019"
+      - WINDOWS_TAG: "ltsc2022"
+        WINDOWS_RUNNER_VERSION: "2022"
+      # - WINDOWS_TAG: "ltsc2025"
+      #   WINDOWS_RUNNER_VERSION: "2025"
+  tags:
+    - "hq-windows-shell-$WINDOWS_RUNNER_VERSION"
   rules:
-    - if: '$CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/'
-    - if: "$CI_COMMIT_TAG =~ /^release-/"
-    - if: "$CI_COMMIT_TAG =~ /^beta-/"
-    - if: "$CI_COMMIT_TAG =~ /^tag-/"
+    - if: '$PIPELINE_TYPE == "build_and_deploy"'
+  script:
+    - $env:GRADLE_USER_HOME = "$((Get-Location).Path)\.gradle"
+    - ./scripts/docker-build-win-fat-core-hub.ps1 --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE --windows-tag=$WINDOWS_TAG
+  dependencies:
+    - build_gluesync
+  interruptible: true
+  
+notify_gluesync_update:
+  stage: notify
+  retry: 2
+  parallel:
+    matrix:
+      - MODULE_TAG: 'core-hub'
+      - MODULE_TAG: 'cassandra'
+      - MODULE_TAG: 'postgresql-cdc'
+      - MODULE_TAG: 'mysql-cdc'
+      - MODULE_TAG: 'ibm-iseries'
+      - MODULE_TAG: 'couchbase'
+      - MODULE_TAG: 'mssql-ct'
+      - MODULE_TAG: 'mssql-cdc'
+      - MODULE_TAG: 'vertica'
+      - MODULE_TAG: 'kafka'
+      - MODULE_TAG: 'solace'
+      - MODULE_TAG: 'mongodb'
+      - MODULE_TAG: 'sybase'
+      - MODULE_TAG: 'dynamodb'
+      - MODULE_TAG: 'snowflake'
+      - MODULE_TAG: 'oracle-xstream'
+      - MODULE_TAG: 'oracle-triggers'
+      - MODULE_TAG: 'oracle-triggers-legacy'
+      - MODULE_TAG: 'oracle-logminer'
+      - MODULE_TAG: 'aerospike'
+      - MODULE_TAG: 'singlestore'
+      - MODULE_TAG: 'awss3'
+      - MODULE_TAG: 'cosmosdb'
+      - MODULE_TAG: 'informix'
+      - MODULE_TAG: 'google-cloud-storage'
+      - MODULE_TAG: 'ravendb'
+      - MODULE_TAG: 'google-pubsub'
+      - MODULE_TAG: 'redis'
+      - MODULE_TAG: 'cockroachdb'
+      - MODULE_TAG: 'mariadb-cdc'
+      - MODULE_TAG: 'google-bigquery'
+      - MODULE_TAG: 'scylladb'
+      - MODULE_TAG: 'yugabytedb'
+      - MODULE_TAG: 'gridgain'
+      - MODULE_TAG: 'db2-luw-triggers'
+      - MODULE_TAG: 'sap-hana'
+      - MODULE_TAG: 'azure-data-lake'
+      - MODULE_TAG: 'aws-redshift'
+  tags:
+    - hq-linux-docker
+  rules:
+    - if: '$PIPELINE_TYPE == "build_and_deploy"'
+  script:
+    - |
+      if ! command -v jq >/dev/null 2>&1; then
+        curl -fsSL "https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64" -o /usr/local/bin/jq
+        chmod +x /usr/local/bin/jq
+      fi
+    - sh $CI_PROJECT_DIR/scripts/update-budibase.sh --tag=$MODULE_TAG  --module-version=$MODULE_VERSION --release-type=$RELEASE_TYPE
+  dependencies:
+    - deploy_gluesync_linux
+    - deploy_gluesync_windows
+  interruptible: true
+
+notify_webhook:
+  stage: webhook
+  retry: 2
+  tags:
+    - hq-linux-docker
+  rules:
+    - if: '$PIPELINE_TYPE == "build_and_deploy"'
+  script:
+    - |
+      curl -X POST \
+        -H "Content-Type: application/json" \
+        -d "{\"release_tag\":\"$MODULE_VERSION\",\"channel\":\"${RELEASE_TYPE,,}\",\"triggered_by\":\"$GITLAB_USER_LOGIN\",\"pipeline_id\":\"$CI_PIPELINE_ID\"}" \
+        $N8N_BUILD_NOTIFICATIONS
+  dependencies:
+    - notify_gluesync_update
+  interruptible: true

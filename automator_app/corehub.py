@@ -2329,14 +2329,9 @@ def import_users(
 ) -> Dict[str, Any]:
     """Restore user management configuration from a previously exported dict.
 
-    CoreHub does not support a bulk PUT /users endpoint. The backup only
-    contains password *hashes* which cannot be used for creation (CreateUser
-    requires a plaintext password). Therefore:
-
-    - Existing users are updated via PUT /users/{id} (role/profile fields).
-    - New users are created via POST /users with a random temporary password.
-    - OIDC users are skipped entirely (managed by external IdP).
-    - After import, affected users must reset their passwords via the CoreHub UI.
+    Uses the dedicated POST /users/import endpoint (available in CoreHub 1.4+)
+    which accepts password hashes directly, restoring original passwords.
+    Falls back to per-user PUT/POST when the endpoint is unavailable.
     """
     configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
 
@@ -2350,7 +2345,68 @@ def import_users(
     if not isinstance(raw, list):
         return {"status": "skipped", "reason": "invalid users format"}
 
-    # Fetch current users on the target CoreHub to detect existing accounts.
+    # Collect all non-OIDC users from the backup.
+    all_users: list[dict] = []
+    bulk_users: list[dict] = []
+    for user in raw:
+        if not isinstance(user, dict):
+            continue
+        if user.get("isOidcUser"):
+            continue  # OIDC users are managed by external identity provider
+        entry = {
+            "id": user.get("id", ""),
+            "username": user.get("username", ""),
+            "role": user.get("role", "VIEWER"),
+            "changeRequired": user.get("changeRequired", False),
+            "isOidcUser": False,
+            "name": user.get("name") or "",
+            "surname": user.get("surname") or "",
+            "email": user.get("email") or "",
+            "passwordHash": user.get("passwordHash"),
+        }
+        all_users.append(entry)
+        if entry["passwordHash"]:
+            bulk_users.append({
+                "id": entry["id"],
+                "username": entry["username"],
+                "passwordHash": str(entry["passwordHash"]),
+                "role": entry["role"],
+                "changeRequired": entry["changeRequired"],
+                "isOidcUser": False,
+                "name": entry["name"],
+                "surname": entry["surname"],
+                "email": entry["email"],
+            })
+
+    if not all_users:
+        return {"status": "skipped", "reason": "no importable users"}
+
+    # Try the new bulk import endpoint first (only for users with passwordHash).
+    bulk_succeeded = False
+    if bulk_users:
+        try:
+            response = fetch_core_hub(
+                "/users/import",
+                method="POST",
+                token=token,
+                body={"users": bulk_users},
+                expected_error_statuses={404},
+            )
+            if isinstance(response, list):
+                return {
+                    "status": "restored",
+                    "count": len(response),
+                    "note": "passwords restored from backup hashes",
+                }
+        except Exception as exc:  # pylint: disable=broad-except
+            err_str = str(exc)
+            if "404" in err_str or "Not Found" in err_str:
+                logger.info("POST /users/import not available (CoreHub < 1.4); falling back to per-user restore")
+            else:
+                logger.warning("POST /users/import failed: %s; falling back", exc)
+
+    # Fallback: per-user PUT/POST when the import endpoint is unavailable
+    # or when some users lack a passwordHash.
     try:
         existing_resp = fetch_core_hub("/users", token=token)
         if isinstance(existing_resp, list):
@@ -2372,27 +2428,12 @@ def import_users(
     created = updated = skipped = 0
     errors: list[str] = []
 
-    for user in raw:
-        if not isinstance(user, dict):
-            continue
-
-        # Skip OIDC users — they are provisioned by an external identity provider.
-        if user.get("isOidcUser"):
-            skipped += 1
-            continue
-
-        username = str(user.get("username", "")).strip()
+    for user in all_users:
+        username = user["username"]
         if not username:
             continue
 
-        role = user.get("role")
-        name = user.get("name") or ""
-        surname = user.get("surname") or ""
-        email = user.get("email") or ""
-
         if username in existing_by_username:
-            # Update existing user profile (role, name, surname, email).
-            # Password cannot be updated here because we only have a hash.
             existing_id = existing_by_username[username].get("id")
             try:
                 fetch_core_hub(
@@ -2400,10 +2441,10 @@ def import_users(
                     method="PUT",
                     token=token,
                     body={
-                        "role": role,
-                        "name": name,
-                        "surname": surname,
-                        "email": email,
+                        "role": user["role"],
+                        "name": user["name"],
+                        "surname": user["surname"],
+                        "email": user["email"],
                     },
                 )
                 updated += 1
@@ -2411,11 +2452,8 @@ def import_users(
                 logger.warning("Failed to update user %s: %s", username, exc)
                 errors.append(f"update {username}: {exc}")
         else:
-            # Create a new user with a random temporary password.
-            # The admin (or the user) must reset the password afterwards.
             import secrets
             import string
-
             temp_password = "".join(
                 secrets.choice(string.ascii_letters + string.digits) for _ in range(16)
             )
@@ -2427,10 +2465,10 @@ def import_users(
                     body={
                         "username": username,
                         "password": temp_password,
-                        "role": role or "VIEWER",
-                        "name": name,
-                        "surname": surname,
-                        "email": email,
+                        "role": user["role"],
+                        "name": user["name"],
+                        "surname": user["surname"],
+                        "email": user["email"],
                     },
                 )
                 created += 1
@@ -2445,8 +2483,15 @@ def import_users(
             "updated": updated,
             "skipped": skipped,
             "errors": errors,
+            "note": "passwords NOT restored; users must reset passwords via CoreHub UI",
         }
-    return {"status": "restored", "created": created, "updated": updated, "skipped": skipped}
+    return {
+        "status": "restored",
+        "created": created,
+        "updated": updated,
+        "skipped": skipped,
+        "note": "passwords NOT restored; users must reset passwords via CoreHub UI",
+    }
 
 
 def import_oidc_config(

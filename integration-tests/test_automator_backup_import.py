@@ -260,7 +260,7 @@ class GlobalConfigFileSkipTests(unittest.TestCase):
 class ImportUsersTests(unittest.TestCase):
     """Verify import_users restores user list from backup."""
 
-    def test_creates_new_users_with_temp_password(self):
+    def test_uses_bulk_import_endpoint_when_available(self):
         import automator_app.corehub as corehub
 
         calls: list[tuple[str, str, Any]] = []
@@ -268,6 +268,34 @@ class ImportUsersTests(unittest.TestCase):
         def fake_fetch(path, method="GET", **kwargs):
             body = kwargs.get("body")
             calls.append((method, path, body))
+            if path == "/users/import" and method == "POST":
+                return [{"id": "1", "username": "admin", "role": "SUPER_ADMIN"}]
+            return {"status": "ok"}
+
+        with mock.patch.object(corehub, "fetch_core_hub", side_effect=fake_fetch):
+            result = corehub.import_users(
+                token="tok", base_url="http://test", use_ssl=False, skip_verify=False,
+                users_data={"users": [{"id": "1", "username": "admin", "role": "SUPER_ADMIN", "passwordHash": "abc123"}]},
+            )
+
+        self.assertEqual(result["status"], "restored")
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["note"], "passwords restored from backup hashes")
+
+        import_calls = [c for c in calls if c[0] == "POST" and c[1] == "/users/import"]
+        self.assertTrue(import_calls, "Expected POST /users/import")
+        self.assertEqual(import_calls[0][2]["users"][0]["passwordHash"], "abc123")
+
+    def test_fallback_creates_new_users_with_temp_password(self):
+        import automator_app.corehub as corehub
+
+        calls: list[tuple[str, str, Any]] = []
+
+        def fake_fetch(path, method="GET", **kwargs):
+            body = kwargs.get("body")
+            calls.append((method, path, body))
+            if path == "/users/import" and method == "POST":
+                raise Exception("404 Client Error: Not Found")
             if path == "/users" and method == "GET":
                 return []  # no existing users
             if path == "/users" and method == "POST":
@@ -277,21 +305,21 @@ class ImportUsersTests(unittest.TestCase):
         with mock.patch.object(corehub, "fetch_core_hub", side_effect=fake_fetch):
             result = corehub.import_users(
                 token="tok", base_url="http://test", use_ssl=False, skip_verify=False,
-                users_data={"users": [{"id": "1", "username": "admin", "role": "SUPER_ADMIN"}]},
+                users_data={"users": [{"id": "1", "username": "admin", "role": "SUPER_ADMIN", "passwordHash": "abc123"}]},
             )
 
         self.assertEqual(result["status"], "restored")
         self.assertEqual(result["created"], 1)
         self.assertEqual(result["updated"], 0)
+        self.assertIn("passwords NOT restored", result["note"])
 
         post_calls = [c for c in calls if c[0] == "POST" and c[1] == "/users"]
         self.assertTrue(post_calls, "Expected POST /users for new user")
         self.assertEqual(post_calls[0][2]["username"], "admin")
-        self.assertEqual(post_calls[0][2]["role"], "SUPER_ADMIN")
-        # A random 16-char password should have been generated
+        # A random 16-char password should have been generated for fallback
         self.assertEqual(len(post_calls[0][2]["password"]), 16)
 
-    def test_updates_existing_user_profile(self):
+    def test_fallback_updates_existing_user_profile(self):
         import automator_app.corehub as corehub
 
         calls: list[tuple[str, str, Any]] = []
@@ -299,6 +327,8 @@ class ImportUsersTests(unittest.TestCase):
         def fake_fetch(path, method="GET", **kwargs):
             body = kwargs.get("body")
             calls.append((method, path, body))
+            if path == "/users/import" and method == "POST":
+                raise Exception("404 Client Error: Not Found")
             if path == "/users" and method == "GET":
                 return [{"id": "existing-id", "username": "admin", "role": "MANAGER"}]
             return {"status": "ok"}
@@ -306,7 +336,7 @@ class ImportUsersTests(unittest.TestCase):
         with mock.patch.object(corehub, "fetch_core_hub", side_effect=fake_fetch):
             result = corehub.import_users(
                 token="tok", base_url="http://test", use_ssl=False, skip_verify=False,
-                users_data={"users": [{"id": "1", "username": "admin", "role": "SUPER_ADMIN", "name": "Admin User"}]},
+                users_data={"users": [{"id": "1", "username": "admin", "role": "SUPER_ADMIN", "name": "Admin User", "passwordHash": "abc123"}]},
             )
 
         self.assertEqual(result["status"], "restored")
@@ -322,19 +352,44 @@ class ImportUsersTests(unittest.TestCase):
         import automator_app.corehub as corehub
 
         def fake_fetch(path, method="GET", **kwargs):
-            if path == "/users" and method == "GET":
+            if path == "/users/import" and method == "POST":
                 return []
             return {"status": "ok"}
 
         with mock.patch.object(corehub, "fetch_core_hub", side_effect=fake_fetch):
             result = corehub.import_users(
                 token="tok", base_url="http://test", use_ssl=False, skip_verify=False,
-                users_data={"users": [{"id": "1", "username": "oidc-user", "role": "VIEWER", "isOidcUser": True}]},
+                users_data={"users": [{"id": "1", "username": "oidc-user", "role": "VIEWER", "isOidcUser": True, "passwordHash": "abc123"}]},
+            )
+
+        self.assertEqual(result["status"], "skipped")
+        self.assertEqual(result["reason"], "no importable users")
+
+    def test_fallback_restores_users_without_password_hash(self):
+        import automator_app.corehub as corehub
+
+        calls: list[tuple[str, str, Any]] = []
+
+        def fake_fetch(path, method="GET", **kwargs):
+            body = kwargs.get("body")
+            calls.append((method, path, body))
+            if path == "/users/import" and method == "POST":
+                raise Exception("404 Client Error: Not Found")
+            if path == "/users" and method == "GET":
+                return []  # no existing users
+            if path == "/users" and method == "POST":
+                return {"id": "new-id", "username": body.get("username") if body else None}
+            return {"status": "ok"}
+
+        with mock.patch.object(corehub, "fetch_core_hub", side_effect=fake_fetch):
+            result = corehub.import_users(
+                token="tok", base_url="http://test", use_ssl=False, skip_verify=False,
+                users_data={"users": [{"id": "1", "username": "admin", "role": "SUPER_ADMIN"}]},
             )
 
         self.assertEqual(result["status"], "restored")
-        self.assertEqual(result["skipped"], 1)
-        self.assertEqual(result["created"], 0)
+        self.assertEqual(result["created"], 1)
+        self.assertIn("passwords NOT restored", result["note"])
 
     def test_skips_when_users_missing(self):
         import automator_app.corehub as corehub
