@@ -56,6 +56,13 @@ logger = logging.getLogger(__name__)
 
 CHANGELOG_API_BASE_URL = "https://api.backoffice.molo17.com"
 
+# File stems that should be skipped when scanning a backup ZIP for pipeline YAMLs
+# because they are global CoreHub config files, not pipeline definitions.
+GLOBAL_CONFIG_NAMES = {
+    "global-config", "global-configs", "smtp", "webhooks",
+    "thresholds", "schedules", "users", "oidc",
+}
+
 
 def _resource_path(*parts: str) -> Path:
     """Return an absolute path to packaged resources (PyInstaller compatible)."""
@@ -1169,10 +1176,6 @@ def create_app() -> FastAPI:
 
                     # Skip global config YAMLs from full CoreHub backup format
                     # (these are backed up separately and not pipeline configs)
-                    GLOBAL_CONFIG_NAMES = {
-                        "global-config", "global-configs", "smtp", "webhooks",
-                        "thresholds", "schedules", "users", "oidc",
-                    }
                     stem = name.rsplit("/", 1)[-1]  # strip any path
                     stem_no_ext = stem.rsplit(".", 1)[0]
                     if stem_no_ext in GLOBAL_CONFIG_NAMES:
@@ -1638,10 +1641,6 @@ def create_app() -> FastAPI:
                         continue
 
                     # Skip global config YAMLs (backed up separately, not pipeline configs)
-                    GLOBAL_CONFIG_NAMES = {
-                        "global-config", "global-configs", "smtp", "webhooks",
-                        "thresholds", "schedules", "users", "oidc",
-                    }
                     stem = name.rsplit("/", 1)[-1]
                     if stem.rsplit(".", 1)[0] in GLOBAL_CONFIG_NAMES:
                         continue

@@ -5,6 +5,8 @@ Regression tests for Automator backup/import flows.
 Covers:
 - import_pipeline_config_only (import agent config into a new pipeline)
 - duplicate_pipeline (clone a pipeline with new name/schema)
+- import_global_notifications (restore SMTP settings from backup)
+- import-all skip-list for global-config.yaml
 
 Mocks fetch_core_hub on automator_app.corehub since all CoreHub calls
 in these functions go through the locally imported name.
@@ -12,11 +14,16 @@ For duplicate_pipeline, export_pipeline_yaml is also mocked to avoid
 HTTP calls inside export_template_from_corehub.py helpers.
 """
 
+import io
 import logging
 import sys
 import unittest
+import zipfile
 from pathlib import Path
+from typing import Any
 from unittest import mock
+
+import yaml
 
 logging.disable(logging.CRITICAL)
 
@@ -233,6 +240,19 @@ class DuplicatePipelineTests(unittest.TestCase):
             )
 
         self.assertEqual(result["newPipelineId"], "cloned-pipe")
+
+
+class GlobalConfigFileSkipTests(unittest.TestCase):
+    """Verify global-config.yaml files are excluded from pipeline YAML scanning."""
+
+    def test_global_config_in_skip_list(self):
+        import automator_app.app as app_module
+
+        # Stems skipped when scanning ZIP contents for pipeline YAMLs
+        skip_stems = getattr(app_module, "GLOBAL_CONFIG_NAMES", set())
+        self.assertIn("global-config", skip_stems)
+        self.assertIn("global-configs", skip_stems)
+        self.assertIn("smtp", skip_stems)
 
 
 if __name__ == "__main__":

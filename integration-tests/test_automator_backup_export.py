@@ -901,5 +901,344 @@ class ImportFullCorehubBackupTests(unittest.TestCase):
         self.assertEqual(result["pipelines"]["status"], "skipped")
 
 
+class FetchGlobalNotificationConfigTests(unittest.TestCase):
+    """Verify fetch_global_notification_config fetches SMTP with include_secrets."""
+
+    def test_fetches_smtp_without_secrets_masks_password(self):
+        import automator_app.corehub as corehub
+
+        def fake_fetch(path, params=None, **kwargs):
+            self.assertEqual(path, "/global-config/smtp")
+            self.assertIsNone(params)
+            return {"smtpServer": "smtp.example.com", "password": "<hidden>"}
+
+        with mock.patch.object(corehub, "fetch_core_hub", side_effect=fake_fetch):
+            result = corehub.fetch_global_notification_config(
+                token="tok", base_url="http://test", use_ssl=False, skip_verify=False,
+            )
+
+        self.assertEqual(result["password"], "*******")
+        self.assertEqual(result["smtpServer"], "smtp.example.com")
+
+    def test_fetches_smtp_with_secrets_reveals_password(self):
+        import automator_app.corehub as corehub
+
+        def fake_fetch(path, params=None, **kwargs):
+            self.assertEqual(path, "/global-config/smtp")
+            self.assertEqual(params, {"include_secrets": "true"})
+            return {"smtpServer": "smtp.example.com", "password": "real-pass"}
+
+        with mock.patch.object(corehub, "fetch_core_hub", side_effect=fake_fetch):
+            result = corehub.fetch_global_notification_config(
+                token="tok", base_url="http://test", use_ssl=False, skip_verify=False,
+                include_secrets=True,
+            )
+
+        self.assertEqual(result["password"], "real-pass")
+
+    def test_returns_none_on_failure(self):
+        import automator_app.corehub as corehub
+
+        def fake_fetch(path, **kwargs):
+            raise RuntimeError("timeout")
+
+        with mock.patch.object(corehub, "fetch_core_hub", side_effect=fake_fetch):
+            result = corehub.fetch_global_notification_config(
+                token="tok", base_url="http://test", use_ssl=False, skip_verify=False,
+            )
+
+        self.assertIsNone(result)
+
+
+class ExportGlobalConfigYamlTests(unittest.TestCase):
+    """Verify global-config.yaml appears as a separate file in ZIP exports."""
+
+    def test_full_backup_contains_separate_global_config_yaml(self):
+        import automator_app.corehub as corehub
+
+        entities = [_simple_entity("DRIVERS", "demo")]
+        agents = [
+            {
+                "agentType": "SOURCE",
+                "agentTag": "mssql",
+                "agentId": "src-agent",
+                "hostCredentials": {
+                    "connectionName": "src",
+                    "host": "1.2.3.4",
+                    "port": 1433,
+                    "password": "secret123",
+                },
+            },
+        ]
+
+        def fake_fetch(path, **kwargs):
+            routes = {
+                "/pipelines/pipe": {"pipelineId": "pipe", "name": "TestPipe"},
+                "/global-config/smtp": {
+                    "smtpServer": "smtp.example.com",
+                    "portNumber": 587,
+                    "secureConnection": "TLS",
+                    "email": "noreply@example.com",
+                    "username": "noreply@example.com",
+                    "password": "*******",
+                    "alertEmail": "admin@example.com",
+                    "enabledEvents": ["TEST"],
+                    "severityFilter": ["INFO"],
+                    "burstPrevention": {"enabled": True, "windowMinutes": 1, "maxEventsPerEmail": 20},
+                    "pipelineFilter": ["pipe"],
+                    "groupFilter": [],
+                    "entityFilter": [],
+                },
+            }
+            return routes.get(path, {})
+
+        with mock.patch.object(corehub, "fetch_pipeline_entities", return_value=entities), \
+             mock.patch.object(corehub, "build_entities_maps", return_value={"ent-DRIVERS": entities[0]}), \
+             mock.patch.object(corehub, "fetch_groups_map", return_value=({}, {}, {})), \
+             mock.patch.object(corehub, "fetch_pipeline_jobs", return_value=[]), \
+             mock.patch.object(corehub, "infer_agent_schema_types", return_value=("SQL", "SQL")), \
+             mock.patch.object(corehub, "enrich_null_column_types_from_discovery", return_value=0), \
+             mock.patch.object(corehub, "_load_agent_type_catalog", return_value={"mssql": "RDBMS"}), \
+             mock.patch.object(corehub, "get_pipeline_agents", return_value=agents), \
+             mock.patch.object(corehub, "fetch_core_hub", side_effect=fake_fetch):
+            zip_bytes = corehub.export_pipeline_full_backup(
+                token="tok", base_url="http://test", pipeline_id="pipe",
+                use_ssl=False, skip_verify=False,
+            )
+
+        with io.BytesIO(zip_bytes) as buf:
+            with zipfile.ZipFile(buf, "r") as zf:
+                namelist = zf.namelist()
+
+        self.assertTrue(
+            any("global-config.yaml" in n for n in namelist),
+            f"Expected global-config.yaml in ZIP, got: {namelist}",
+        )
+
+        # Pipeline YAML must NOT embed globalNotifications when it's in a ZIP
+        with io.BytesIO(zip_bytes) as buf:
+            with zipfile.ZipFile(buf, "r") as zf:
+                for name in zf.namelist():
+                    if name.endswith(".yaml") and "agents-config" not in name and "global-config" not in name:
+                        pipeline_yaml = yaml.safe_load(zf.read(name).decode("utf-8"))
+                        self.assertNotIn(
+                            "globalNotifications", pipeline_yaml,
+                            "Pipeline YAML should not embed globalNotifications when ZIP has separate file",
+                        )
+
+    def test_export_all_contains_separate_global_config_yaml(self):
+        import automator_app.corehub as corehub
+
+        entities = [_simple_entity("A", "s1")]
+        agents = [
+            {"agentType": "SOURCE", "agentTag": "mssql", "agentId": "a1",
+             "hostCredentials": {"host": "h1", "port": 1433, "connectionName": "c1", "password": "p1"}},
+        ]
+
+        def fake_fetch(path, **kwargs):
+            routes = {
+                "/pipelines": [{"pipelineId": "p1", "name": "PipeOne"}],
+                "/pipelines/p1": {"pipelineId": "p1", "name": "PipeOne"},
+                "/global-config/smtp": {
+                    "smtpServer": "smtp.example.com",
+                    "portNumber": 587,
+                    "secureConnection": "TLS",
+                    "email": "noreply@example.com",
+                    "username": "noreply@example.com",
+                    "password": "<hidden>",
+                    "alertEmail": "admin@example.com",
+                    "enabledEvents": ["TEST"],
+                    "severityFilter": ["INFO"],
+                    "burstPrevention": {"enabled": True, "windowMinutes": 1, "maxEventsPerEmail": 20},
+                    "pipelineFilter": ["p1"],
+                    "groupFilter": [],
+                    "entityFilter": [],
+                },
+            }
+            return routes.get(path, {})
+
+        with mock.patch.object(corehub, "fetch_pipeline_entities", return_value=entities), \
+             mock.patch.object(corehub, "build_entities_maps", return_value={"ent-A": entities[0]}), \
+             mock.patch.object(corehub, "fetch_groups_map", return_value=({}, {}, {})), \
+             mock.patch.object(corehub, "fetch_pipeline_jobs", return_value=[]), \
+             mock.patch.object(corehub, "infer_agent_schema_types", return_value=("SQL", "SQL")), \
+             mock.patch.object(corehub, "enrich_null_column_types_from_discovery", return_value=0), \
+             mock.patch.object(corehub, "_load_agent_type_catalog", return_value={"mssql": "RDBMS"}), \
+             mock.patch.object(corehub, "get_pipeline_agents", return_value=agents), \
+             mock.patch.object(corehub, "fetch_core_hub", side_effect=fake_fetch):
+            zip_bytes = corehub.export_all_pipelines_yaml(
+                token="tok", base_url="http://test",
+                use_ssl=False, skip_verify=False,
+            )
+
+        with io.BytesIO(zip_bytes) as buf:
+            with zipfile.ZipFile(buf, "r") as zf:
+                namelist = zf.namelist()
+
+        self.assertIn("global-config.yaml", namelist)
+
+        # Verify per-pipeline YAML does NOT embed globalNotifications
+        with io.BytesIO(zip_bytes) as buf:
+            with zipfile.ZipFile(buf, "r") as zf:
+                for name in namelist:
+                    if name.startswith("backup_") and name.endswith(".yaml"):
+                        pipeline_yaml = yaml.safe_load(zf.read(name).decode("utf-8"))
+                        self.assertNotIn("globalNotifications", pipeline_yaml)
+
+    def test_single_yaml_export_embeds_global_notifications(self):
+        import automator_app.corehub as corehub
+
+        entities = [_simple_entity("DRIVERS", "demo")]
+
+        def fake_fetch(path, **kwargs):
+            routes = {
+                "/global-config/smtp": {
+                    "smtpServer": "smtp.example.com",
+                    "portNumber": 587,
+                    "secureConnection": "TLS",
+                    "email": "noreply@example.com",
+                    "username": "noreply@example.com",
+                    "password": "real-pass",
+                    "alertEmail": "admin@example.com",
+                    "enabledEvents": ["TEST"],
+                    "severityFilter": ["INFO"],
+                    "burstPrevention": {"enabled": True, "windowMinutes": 1, "maxEventsPerEmail": 20},
+                    "pipelineFilter": ["pipe"],
+                    "groupFilter": [],
+                    "entityFilter": [],
+                },
+            }
+            return routes.get(path, {})
+
+        with mock.patch.object(corehub, "fetch_pipeline_entities", return_value=entities), \
+             mock.patch.object(corehub, "build_entities_maps", return_value={"ent-DRIVERS": entities[0]}), \
+             mock.patch.object(corehub, "fetch_groups_map", return_value=({}, {}, {})), \
+             mock.patch.object(corehub, "fetch_pipeline_jobs", return_value=[]), \
+             mock.patch.object(corehub, "infer_agent_schema_types", return_value=("SQL", "SQL")), \
+             mock.patch.object(corehub, "enrich_null_column_types_from_discovery", return_value=0), \
+             mock.patch.object(corehub, "_load_agent_type_catalog", return_value={"mssql": "RDBMS"}), \
+             mock.patch.object(corehub, "fetch_core_hub", side_effect=fake_fetch):
+            text = corehub.export_pipeline_yaml(
+                token="tok", base_url="http://test", pipeline_id="pipe",
+                use_ssl=False, skip_verify=False,
+                include_global_config=True,
+                include_secrets=True,
+            )
+
+        data = yaml.safe_load(text)
+        self.assertIn("globalNotifications", data)
+        self.assertEqual(data["globalNotifications"]["smtpServer"], "smtp.example.com")
+        self.assertEqual(data["globalNotifications"]["password"], "real-pass")
+
+    def test_single_yaml_export_can_skip_global_notifications(self):
+        import automator_app.corehub as corehub
+
+        entities = [_simple_entity("DRIVERS", "demo")]
+
+        with mock.patch.object(corehub, "fetch_pipeline_entities", return_value=entities), \
+             mock.patch.object(corehub, "build_entities_maps", return_value={"ent-DRIVERS": entities[0]}), \
+             mock.patch.object(corehub, "fetch_groups_map", return_value=({}, {}, {})), \
+             mock.patch.object(corehub, "fetch_pipeline_jobs", return_value=[]), \
+             mock.patch.object(corehub, "infer_agent_schema_types", return_value=("SQL", "SQL")), \
+             mock.patch.object(corehub, "enrich_null_column_types_from_discovery", return_value=0), \
+             mock.patch.object(corehub, "_load_agent_type_catalog", return_value={"mssql": "RDBMS"}):
+            text = corehub.export_pipeline_yaml(
+                token="tok", base_url="http://test", pipeline_id="pipe",
+                use_ssl=False, skip_verify=False,
+                include_global_config=False,
+            )
+
+        data = yaml.safe_load(text)
+        self.assertNotIn("globalNotifications", data)
+
+
+class ImportGlobalNotificationsTests(unittest.TestCase):
+    """Verify import_global_notifications restores SMTP and drops masked passwords."""
+
+    def test_restores_smtp_with_real_password(self):
+        import automator_app.corehub as corehub
+
+        put_calls: list[tuple[str, Any]] = []
+
+        def fake_fetch(path, method="GET", **kwargs):
+            if method == "PUT":
+                put_calls.append((path, kwargs.get("body")))
+            return {"status": "ok"}
+
+        with mock.patch.object(corehub, "fetch_core_hub", side_effect=fake_fetch):
+            result = corehub.import_global_notifications(
+                token="tok", base_url="http://test", use_ssl=False, skip_verify=False,
+                notification_cfg={
+                    "globalNotifications": {
+                        "smtpServer": "smtp.example.com",
+                        "password": "real-pass",
+                    }
+                },
+            )
+
+        self.assertEqual(result["status"], "restored")
+        self.assertEqual(put_calls[0][0], "/global-config/smtp")
+        self.assertEqual(put_calls[0][1]["password"], "real-pass")
+
+    def test_drops_masked_password_to_preserve_existing(self):
+        import automator_app.corehub as corehub
+
+        put_calls: list[tuple[str, Any]] = []
+
+        def fake_fetch(path, method="GET", **kwargs):
+            if method == "PUT":
+                put_calls.append((path, kwargs.get("body")))
+            return {"status": "ok"}
+
+        for sentinel in ("*******", "<hidden>"):
+            put_calls.clear()
+            with mock.patch.object(corehub, "fetch_core_hub", side_effect=fake_fetch):
+                result = corehub.import_global_notifications(
+                    token="tok", base_url="http://test", use_ssl=False, skip_verify=False,
+                    notification_cfg={
+                        "globalNotifications": {
+                            "smtpServer": "smtp.example.com",
+                            "password": sentinel,
+                        }
+                    },
+                )
+
+            self.assertEqual(result["status"], "restored")
+            self.assertNotIn("password", put_calls[0][1])
+
+    def test_skips_when_no_global_notifications_key(self):
+        import automator_app.corehub as corehub
+
+        with mock.patch.object(corehub, "fetch_core_hub"):
+            result = corehub.import_global_notifications(
+                token="tok", base_url="http://test", use_ssl=False, skip_verify=False,
+                notification_cfg={},
+            )
+
+        self.assertEqual(result["status"], "skipped")
+
+    def test_accepts_flat_dict_without_wrapper(self):
+        import automator_app.corehub as corehub
+
+        put_calls: list[tuple[str, Any]] = []
+
+        def fake_fetch(path, method="GET", **kwargs):
+            if method == "PUT":
+                put_calls.append((path, kwargs.get("body")))
+            return {"status": "ok"}
+
+        with mock.patch.object(corehub, "fetch_core_hub", side_effect=fake_fetch):
+            result = corehub.import_global_notifications(
+                token="tok", base_url="http://test", use_ssl=False, skip_verify=False,
+                notification_cfg={
+                    "smtpServer": "smtp.example.com",
+                    "password": "real-pass",
+                },
+            )
+
+        self.assertEqual(result["status"], "restored")
+        self.assertEqual(put_calls[0][0], "/global-config/smtp")
+
+
 if __name__ == "__main__":
     unittest.main()
