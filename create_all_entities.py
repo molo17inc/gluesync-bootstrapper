@@ -754,15 +754,22 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             logger.info(f"Skipping system table: {table_name}")
             continue
 
-        # Skip blacklisted tables
-        if blacklist and table_name in blacklist:
+        # Skip blacklisted tables.
+        # When the agent returns library-qualified names (e.g. AS/400 FILELIB.TABLE),
+        # also check the bare table name (part after the last dot) so that a
+        # blacklist entry 'TABLE' still matches 'FILELIB.TABLE' from discovery.
+        bare_table_name = table_name.rsplit('.', 1)[-1] if '.' in table_name else table_name
+        if blacklist and (table_name in blacklist or bare_table_name in blacklist):
             logger.info(f"Skipping blacklisted table: {table_name}")
             continue
 
         # STRICT WHITELIST ENFORCEMENT:
-        # If whitelist is defined and not empty, ONLY process tables in the whitelist
+        # If whitelist is defined and not empty, ONLY process tables in the whitelist.
+        # Same library-qualifier awareness: if the agent returns FILELIB.TABLE but the
+        # whitelist has TABLE, the bare name is checked as a fallback so tables are
+        # not silently dropped when the source uses qualified names.
         if whitelist:
-            if table_name not in whitelist:
+            if table_name not in whitelist and bare_table_name not in whitelist:
                 logger.info(f"Skipping table {table_name}: not in whitelist for schema {source_schema}")
                 continue
             else:
@@ -798,6 +805,19 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     yaml_table_key = key
                     logger.info(f"Found custom config for table {table_name} under YAML key '{key}' (duplicate table)")
                     break
+
+        # If still no match and the discovered name is library-qualified (e.g. AS/400
+        # FILELIB.TABLE), try the bare table name as the YAML key.  This handles the
+        # common case where the backup YAML uses the unqualified name as the key but the
+        # source agent returns the library-prefixed form during discovery.
+        if not custom_config and '.' in table_name:
+            if bare_table_name in custom_tables:
+                custom_config = custom_tables[bare_table_name]
+                yaml_table_key = bare_table_name
+                logger.info(
+                    f"Matched library-qualified table '{table_name}' to YAML key '{bare_table_name}' "
+                    "via bare-name fallback"
+                )
         
         if custom_config is None:
             custom_config = {}
@@ -840,8 +860,26 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         logger.debug(f"Source custom properties for {table_name}: {source_custom_properties}")
         logger.debug(f"Target custom properties for {table_name}: {target_custom_properties}")
 
-        # Get custom target table name if specified
-        target_table_name = custom_config.get('name', table_name)
+        # Get custom target table name if specified.
+        # The YAML `name` field stores the target table name as recorded by CoreHub.
+        # For AS/400 sources the agent may return a library-qualified name
+        # (e.g. FILELIB.TABLE) which then gets stored verbatim.  When the actual
+        # source table name used as key is the bare form (e.g. TABLE), and the
+        # `name` field is just a library prefix prepended to that bare name, strip
+        # the prefix so the target entity gets the unqualified name.
+        raw_target_name = custom_config.get('name', table_name)
+        if (
+            raw_target_name != table_name
+            and '.' in raw_target_name
+            and raw_target_name.rsplit('.', 1)[-1] == yaml_table_key
+        ):
+            target_table_name = raw_target_name.rsplit('.', 1)[-1]
+            logger.info(
+                f"Stripped library prefix from target table name: '{raw_target_name}' → '{target_table_name}' "
+                f"(source table key: '{yaml_table_key}')"
+            )
+        else:
+            target_table_name = raw_target_name
         logger.info(f"Using target table name: {target_table_name} for source table: {table_name}")
 
         # Get filter configurations (processed later after target_table_id is resolved)
