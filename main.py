@@ -704,7 +704,10 @@ if True:
         """Extract snapshotWriteMethod for a specific entity from YAML configuration."""
         try:
             # Parse entity name to get schema and table
-            parts = entity_name.split('.')
+            # Split at first dot only so table names containing dots
+            # (e.g. "my.table") are handled correctly instead of being
+            # misidentified as multi-segment names and defaulting to UPSERT.
+            parts = entity_name.split('.', 1)
             if len(parts) != 2:
                 return 'UPSERT'  # Default
             

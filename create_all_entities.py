@@ -2980,7 +2980,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
     # Filter out entities that are part of a MultiTable (chainId)
     filtered_entities = []
     for entity in entities:
-        entity_name_parts = entity["entityName"].split('.')
+        # Split only at the first dot so table names that contain dots
+        # (e.g. "my.table") are preserved intact as the table-name portion.
+        entity_name_parts = entity["entityName"].split('.', 1)
         if len(entity_name_parts) > 1:
             table_name = entity_name_parts[-1]
             is_chained = False
@@ -3252,7 +3254,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         entity_id = entity['entityId']
                         entity_name = entity['entityName']
                         # Extract table name from entity name (typically schema.table)
-                        parts = entity_name.split('.')
+                        # Split at first dot only to preserve dots inside table names.
+                        parts = entity_name.split('.', 1)
                         table_name = parts[-1] if len(parts) > 1 else entity_name
                         entities_map[table_name] = entity_id
                         logger.info(f"Found entity: {entity_name} (ID: {entity_id})")

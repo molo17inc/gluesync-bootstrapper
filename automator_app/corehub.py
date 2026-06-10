@@ -3358,11 +3358,12 @@ def duplicate_pipeline(
                                             # Check if this entity should have a UDF
                                             # Match by table name (last part of entity name)
                                             new_entity_name = new_ent.get("entityName") or ""
-                                            new_table_name = new_entity_name.split(".")[-1] if "." in new_entity_name else new_entity_name
+                                            # split('.', 1) preserves dots inside table names
+                                            new_table_name = new_entity_name.split(".", 1)[-1] if "." in new_entity_name else new_entity_name
                                             
                                             for udf_name, udf_meta in udfs_to_export.items():
                                                 orig_entity_name = udf_meta.get("entityName") or ""
-                                                orig_table_name = orig_entity_name.split(".")[-1] if "." in orig_entity_name else orig_entity_name
+                                                orig_table_name = orig_entity_name.split(".", 1)[-1] if "." in orig_entity_name else orig_entity_name
                                                 
                                                 if new_table_name and orig_table_name and new_table_name == orig_table_name:
                                                     # This entity should have this UDF

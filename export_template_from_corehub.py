@@ -400,9 +400,11 @@ def _process_single_entity(
     source_schema = source_table.get("schema")
     source_table_name = source_table.get("name")
 
-    # Fallbacks from entityName if table metadata missing
+    # Fallbacks from entityName if table metadata missing.
+    # Split at the first dot only so table names that themselves contain dots
+    # (e.g. "my.table") are preserved intact.
     if not source_schema or not source_table_name:
-        parts = entity_name.split(".")
+        parts = entity_name.split(".", 1)
         if len(parts) >= 2:
             source_schema = source_schema or parts[0]
             source_table_name = source_table_name or parts[-1]
@@ -420,9 +422,6 @@ def _process_single_entity(
     if not schema_cfg:
         schema_cfg = init_schema_cfg(target_schema)
         schemas[source_schema] = schema_cfg
-
-    # Track whitelist tables (all tables that currently have entities)
-    schema_cfg["tables"]["whitelist"].add(source_table_name)
 
     custom_tables: Dict[str, Any] = schema_cfg["tables"]["custom"]
     
@@ -454,7 +453,11 @@ def _process_single_entity(
                 "unique_key": table_key,
                 "entity_name": entity_name
             })
-    
+
+    # Track whitelist tables using the final key (including any @@N suffix for duplicates)
+    # so that whitelist and custom always have the same set of entries.
+    schema_cfg["tables"]["whitelist"].add(table_key)
+
     table_cfg = {}
     custom_tables[table_key] = table_cfg
 
@@ -952,7 +955,8 @@ def attach_schedules_from_jobs(
                     continue
 
                 ename = ent.get("entityName", "")
-                parts = ename.split(".")
+                # Split at first dot only to preserve dots inside table names.
+                parts = ename.split(".", 1)
                 if len(parts) >= 2:
                     schema_name = parts[0]
                     table_name = parts[-1]
