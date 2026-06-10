@@ -64,6 +64,56 @@ GLOBAL_CONFIG_NAMES = {
 }
 
 
+def _extract_pipeline_id_from_backup_stem(stem_no_ext: str) -> Optional[str]:
+    """Extract the original pipeline ID from a backup YAML filename stem.
+
+    Supported formats:
+    - backup_<safe_name>_<pipelineId>_<YYYYMMDD>_<HHMMSS>  (current exports)
+    - backup_<safe_name>_<pipelineId>                       (legacy exports)
+    - backup_<pipelineId>
+    """
+
+    if not stem_no_ext.startswith("backup_"):
+        return None
+
+    tail = stem_no_ext[len("backup_"):]
+    parts = tail.split("_")
+
+    # Strip trailing timestamp segments (HHMMSS then YYYYMMDD) when present
+    if len(parts) >= 3 and re.fullmatch(r"\d{6}", parts[-1]) and re.fullmatch(r"\d{8}", parts[-2]):
+        parts = parts[:-2]
+
+    return (parts[-1] or None) if parts else None
+
+
+def _extract_export_metadata_from_yaml_text(yaml_text: str) -> tuple[Optional[str], Optional[str]]:
+    """Return (pipelineId, pipelineName) from the embedded exportMetadata key, if present.
+
+    Newer exports embed the original pipeline identity directly in the YAML so
+    imports do not depend on the backup filename. Returns (None, None) for
+    legacy backups or unparsable YAML.
+    """
+
+    try:
+        parsed = yaml.safe_load(yaml_text)
+    except Exception:  # pylint: disable=broad-except
+        return None, None
+
+    if not isinstance(parsed, dict):
+        return None, None
+
+    meta = parsed.get("exportMetadata")
+    if not isinstance(meta, dict):
+        return None, None
+
+    pipeline_id = meta.get("pipelineId")
+    pipeline_name = meta.get("pipelineName")
+    return (
+        str(pipeline_id) if pipeline_id else None,
+        str(pipeline_name) if pipeline_name else None,
+    )
+
+
 def _resource_path(*parts: str) -> Path:
     """Return an absolute path to packaged resources (PyInstaller compatible)."""
 
@@ -1240,19 +1290,19 @@ def create_app() -> FastAPI:
                         errors.append(f"{name}: failed to read from archive: {exc}")
                         continue
 
-                    # Derive original pipeline ID from filename: backup_<safe_name>_<pipelineId>.yaml
-                    old_pipeline_id = None
-                    if stem_no_ext.startswith("backup_"):
-                        tail = stem_no_ext[len("backup_") :]
-                        if "_" in tail:
-                            old_pipeline_id = tail.rsplit("_", 1)[-1]
-                        else:
-                            old_pipeline_id = tail
+                    # Resolve original pipeline identity. Prefer the exportMetadata
+                    # key embedded in the YAML (current exports); fall back to
+                    # parsing the backup filename for legacy backups.
+                    old_pipeline_id, embedded_name = _extract_export_metadata_from_yaml_text(yaml_text)
+                    if not old_pipeline_id:
+                        old_pipeline_id = _extract_pipeline_id_from_backup_stem(stem_no_ext)
 
                     meta = meta_by_old_id.get(str(old_pipeline_id)) if old_pipeline_id is not None else None
                     base_name = None
                     if isinstance(meta, dict):
                         base_name = meta.get("pipelineName")
+                    if not base_name:
+                        base_name = embedded_name
                     if not base_name:
                         base_name = f"Imported pipeline {old_pipeline_id}" if old_pipeline_id else "Imported pipeline"
 
@@ -1717,18 +1767,18 @@ def create_app() -> FastAPI:
                         errors.append(f"{name}: failed to materialize YAML to disk: {exc}")
                         continue
 
-                    # Estimate the pipeline name that would be used on import
+                    # Estimate the pipeline name that would be used on import.
+                    # Prefer the exportMetadata embedded in the YAML; fall back
+                    # to parsing the backup filename for legacy backups.
                     stem = name.rsplit("/", 1)[-1]
                     stem_no_ext = stem.rsplit(".", 1)[0]
-                    old_pipeline_id = None
-                    if stem_no_ext.startswith("backup_"):
-                        tail = stem_no_ext[len("backup_") :]
-                        if "_" in tail:
-                            old_pipeline_id = tail.rsplit("_", 1)[-1]
-                        else:
-                            old_pipeline_id = tail
+                    old_pipeline_id, embedded_name = _extract_export_metadata_from_yaml_text(yaml_text)
+                    if not old_pipeline_id:
+                        old_pipeline_id = _extract_pipeline_id_from_backup_stem(stem_no_ext)
 
-                    base_name = f"Imported pipeline {old_pipeline_id}" if old_pipeline_id else "Imported pipeline"
+                    base_name = embedded_name
+                    if not base_name:
+                        base_name = f"Imported pipeline {old_pipeline_id}" if old_pipeline_id else "Imported pipeline"
                     pipeline_name = base_name
                     if pipeline_name in reserved_names:
                         idx = 1

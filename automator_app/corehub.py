@@ -1058,6 +1058,23 @@ def export_pipeline_yaml(
 
     yaml_data = build_yaml_structure(schemas, groups_by_name)
 
+    # Embed pipeline identity as a first-class YAML key so imports can
+    # resolve the original pipeline without parsing the backup filename.
+    pipeline_name = pipeline_id
+    try:
+        pipeline_resp = fetch_core_hub(f"/pipelines/{pipeline_id}", token=token)
+        if isinstance(pipeline_resp, dict) and pipeline_resp.get("name"):
+            pipeline_name = str(pipeline_resp["name"])
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.debug("export_pipeline_yaml: could not fetch pipeline name: %s", exc)
+    yaml_data = {
+        "exportMetadata": {
+            "pipelineId": pipeline_id,
+            "pipelineName": pipeline_name,
+        },
+        **(yaml_data or {}),
+    }
+
     # Add global notification settings (SMTP) to the YAML export.
     # Skipped when the caller writes global config to a separate file
     # (e.g. inside a ZIP backup) to avoid duplication.
