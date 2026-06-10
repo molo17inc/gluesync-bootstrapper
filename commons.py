@@ -1064,8 +1064,21 @@ def create_group(token, pipeline_id, group_name, description: Optional[str] = No
             token=token
         )
         
+        # Guard: the API must return a list; if it returns a dict or None,
+        # iterating over it would silently process dict keys (strings) instead
+        # of group objects, causing every `.get('name')` call to raise
+        # AttributeError and the function to fall through to a spurious PUT.
+        if not isinstance(groups, list):
+            logger.warning(
+                f"Unexpected response type for groups endpoint: {type(groups).__name__}. "
+                "Cannot check for existing groups; will attempt to create."
+            )
+            groups = []
+        
         # Check if group already exists
         for group in groups:
+            if not isinstance(group, dict):
+                continue
             if group.get('name') == group_name:
                 group_id = group.get('groupId')
                 logger.info(f"Found existing group '{group_name}' with ID: {group_id}")

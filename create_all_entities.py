@@ -1843,8 +1843,19 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         
         # If a specific group was requested and it's not '_default'
         if requested_group and requested_group != '_default':
-            # Try to create or get the group
-            group_id = create_group(token, pipeline_id, requested_group)
+            # Use the pre-created group ID from the upfront groupId_map cache to avoid
+            # making a redundant API call per entity (which causes the import to appear
+            # to loop indefinitely when many entities share the same group).
+            cached_id = groupId_map.get(requested_group)
+            if cached_id and cached_id != '_default':
+                group_id = cached_id
+                logger.debug(f"Using cached group ID for '{requested_group}': {group_id}")
+            else:
+                # Fallback: try to create/get the group (e.g. if upfront pre-creation failed)
+                group_id = create_group(token, pipeline_id, requested_group)
+                if group_id != '_default':
+                    # Cache it so subsequent entities skip the API call
+                    groupId_map[requested_group] = group_id
             
             if group_id != "_default":
                 logger.info(f"Using group '{requested_group}' with ID: {group_id}")
