@@ -13,7 +13,7 @@ API coverage (mapped against develop branch of gluesync-kotlin):
   Maintenance: enter/exit maintenance mode
   Global cfg : get all, get keys, set logging level, release channel
   Notifications: list, count, mark-read
-  Metrics    : get agent metrics
+  Metrics    : get agent/pipeline/global metrics (JSON), Prometheus text (raw)
   Groups     : list
   Mapping fn : list, get base-code
   License    : get instance/license info
@@ -712,10 +712,80 @@ TOOLS: List[types.Tool] = [
 
     # ── METRICS ──────────────────────────────────────────────────────────────
     types.Tool(
+        name="get_pipeline_metrics",
+        description=(
+            "Get aggregated real-time metrics for an entire pipeline: "
+            "total events/sec, lag, throughput across all agents."
+        ),
+        inputSchema={
+            "type": "object",
+            "required": ["pipeline_id"],
+            "properties": {
+                "token": {"type": "string"},
+                "pipeline_id": {"type": "string"},
+            },
+        },
+    ),
+    types.Tool(
         name="get_agent_metrics",
         description=(
             "Get real-time replication metrics for a specific agent: "
             "events/sec, lag, throughput, error counters."
+        ),
+        inputSchema={
+            "type": "object",
+            "required": ["pipeline_id", "agent_id"],
+            "properties": {
+                "token": {"type": "string"},
+                "pipeline_id": {"type": "string"},
+                "agent_id": {"type": "string"},
+            },
+        },
+    ),
+    types.Tool(
+        name="get_entity_metrics",
+        description=(
+            "Get real-time metrics for a specific entity: events processed, "
+            "lag, throughput, last sync time."
+        ),
+        inputSchema={
+            "type": "object",
+            "required": ["pipeline_id", "entity_id"],
+            "properties": {
+                "token": {"type": "string"},
+                "pipeline_id": {"type": "string"},
+                "entity_id": {"type": "string"},
+            },
+        },
+    ),
+    types.Tool(
+        name="get_global_metrics",
+        description=(
+            "Get system-wide CoreHub metrics: total pipelines, agents, entities, "
+            "and overall throughput."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {"token": {"type": "string"}},
+        },
+    ),
+    types.Tool(
+        name="get_prometheus_metrics",
+        description=(
+            "Get the CoreHub Prometheus metrics scrape endpoint in raw OpenMetrics "
+            "text format. Returns system-level metrics: CPU, memory, JVM, GC, "
+            "thread pools, replication lag, entity heartbeat, thresholds, etc."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {"token": {"type": "string"}},
+        },
+    ),
+    types.Tool(
+        name="get_agent_prometheus_metrics",
+        description=(
+            "Get Prometheus metrics for a specific agent in raw OpenMetrics text "
+            "format: events/sec, lag, throughput, error counters, snapshot progress."
         ),
         inputSchema={
             "type": "object",
@@ -812,9 +882,20 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> Sequence[types.Text
                 "by_status": {},
             }
             for ent in entities:
-                status = ent.get("status") or ent.get("syncStatus") or "unknown"
+                status = "unknown"
+                # CoreHub stores status in different places depending on version
+                for key in ("status", "syncStatus", "state", "currentState", "syncState", "entityStatus"):
+                    if ent.get(key):
+                        status = str(ent[key])
+                        break
+                # Also check nested sync object
+                if status == "unknown" and isinstance(ent.get("sync"), dict):
+                    status = str(ent["sync"].get("status") or ent["sync"].get("state") or "unknown")
+                # Also check nested entityStatus
+                if status == "unknown" and isinstance(ent.get("entityStatus"), dict):
+                    status = str(ent["entityStatus"].get("status") or ent["entityStatus"].get("state") or "unknown")
                 summary["by_status"].setdefault(status, []).append(
-                    ent.get("entityName") or ent.get("entityId", "?")
+                    ent.get("entityName") or ent.get("entityId") or ent.get("id", "?")
                 )
             return _text(_fmt(summary))
 
@@ -1110,11 +1191,36 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> Sequence[types.Text
                 token,
             )))
 
-        # ── Metrics ────────────────────────────────────────────────────────
+        # ── Metrics (JSON) ───────────────────────────────────────────────
+        elif name == "get_pipeline_metrics":
+            pid = arguments["pipeline_id"]
+            return _text(_fmt(_call(f"/metrics/{pid}", token)))
+
         elif name == "get_agent_metrics":
             pid = arguments["pipeline_id"]
             aid = arguments["agent_id"]
             return _text(_fmt(_call(f"/metrics/{pid}/agents/{aid}", token)))
+
+        elif name == "get_entity_metrics":
+            pid = arguments["pipeline_id"]
+            eid = arguments["entity_id"]
+            return _text(_fmt(_call(f"/metrics/{pid}/entities/{eid}", token)))
+
+        elif name == "get_global_metrics":
+            return _text(_fmt(_call("/metrics", token)))
+
+        # ── Metrics (Prometheus / OpenMetrics text) ────────────────────────
+        elif name == "get_prometheus_metrics":
+            # The base /metrics endpoint returns Prometheus text when
+            # basicMetricsRoute is mounted (via prometheusMetricsRoutes).
+            raw = _call("/metrics", token)
+            return _text(raw if isinstance(raw, str) else _fmt(raw))
+
+        elif name == "get_agent_prometheus_metrics":
+            pid = arguments["pipeline_id"]
+            aid = arguments["agent_id"]
+            raw = _call(f"/metrics/{pid}/agents/{aid}", token)
+            return _text(raw if isinstance(raw, str) else _fmt(raw))
 
         # ── Export ─────────────────────────────────────────────────────────
         elif name == "export_pipeline_yaml":
