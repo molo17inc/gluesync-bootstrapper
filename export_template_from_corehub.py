@@ -595,7 +595,7 @@ def _process_single_entity(
                 logger.warning(
                     f"Column '{source_name}' in table '{source_table_name}' has no data type "
                     f"in stored entity data (legacy entity with unserialised DataTypeInterface). "
-                    f"The type field will be null in the export; use a recent version of GlueSync "
+                    f"The type field will be null in the export; use a recent version of Gluesync "
                     f"or re-create the entity to populate the type."
                 )
             col_mapping = {

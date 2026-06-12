@@ -4,7 +4,7 @@ Tests for GSSD-956 – null column-type fallback during export and import.
 
 Background
 ----------
-Old GlueSync instances stored ``Column`` with a ``DataTypeInterface`` field
+Old Gluesync instances stored ``Column`` with a ``DataTypeInterface`` field
 that was not registered for kotlinx.serialization.  The field was silently
 omitted from the JSON blob persisted in SQLite, so the GET /entities endpoint
 returned columns with no ``dataType`` key at all.  The Automator exporter

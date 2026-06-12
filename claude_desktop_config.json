@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "gluesync": {
+      "command": "python3",
+      "args": ["-m", "mcp_server.server"],
+      "cwd": "/Users/danieleangeli/Documents/Repositories/gluesync-bootstrapper",
+      "env": {
+        "PYTHONPATH": "/Users/danieleangeli/Documents/Repositories/gluesync-bootstrapper"
+      }
+    }
+  }
+}

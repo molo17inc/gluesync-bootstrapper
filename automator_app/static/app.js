@@ -2163,7 +2163,79 @@ async function loadPipelines() {
   }
 }
 
+// ── MCP one-click setup ─────────────────────────────────────────────────────
+function initMcpSetup() {
+  const installBtn = document.getElementById('mcp-install-btn');
+  const messageEl = document.getElementById('mcp-setup-message');
+  if (!installBtn) return;
+
+  const clients = ['claude', 'windsurf', 'cursor'];
+
+  const setMessage = (text, type = '') => {
+    if (!messageEl) return;
+    messageEl.textContent = text;
+    messageEl.className = `form-message ${type}`.trim();
+  };
+
+  const refreshStatus = async () => {
+    try {
+      const res = await fetch('/api/mcp/status');
+      if (!res.ok) return;
+      const status = await res.json();
+      clients.forEach((client) => {
+        const checkbox = document.getElementById(`mcp-client-${client}`);
+        const statusEl = document.getElementById(`mcp-status-${client}`);
+        const info = status[client] || {};
+        if (statusEl) {
+          statusEl.textContent = info.installed
+            ? '— configured ✓'
+            : info.detected
+              ? '— detected'
+              : '— not detected';
+        }
+        if (checkbox) {
+          checkbox.checked = Boolean(info.detected && !info.installed);
+        }
+      });
+    } catch (err) {
+      console.error('MCP status check failed', err);
+    }
+  };
+
+  installBtn.addEventListener('click', async () => {
+    const selected = clients.filter(
+      (client) => document.getElementById(`mcp-client-${client}`)?.checked,
+    );
+    if (!selected.length) {
+      setMessage('Select at least one client to configure', 'error');
+      return;
+    }
+    setMessage('Configuring…');
+    installBtn.disabled = true;
+    try {
+      const res = await fetch('/api/mcp/install', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clients: selected }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.detail || 'MCP setup failed');
+      }
+      setMessage(data.message || 'MCP server configured', 'success');
+      await refreshStatus();
+    } catch (err) {
+      setMessage(err.message, 'error');
+    } finally {
+      installBtn.disabled = false;
+    }
+  });
+
+  refreshStatus();
+}
+
 initTabs();
 bindEvents();
 updateImportButtonsVisibility();
+initMcpSetup();
 initialize();

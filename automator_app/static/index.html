@@ -691,6 +691,50 @@
                 </fieldset>
               </form>
             </section>
+
+            <section class="card requires-auth" id="mcp-setup-card">
+              <h2>AI Agent integration (MCP)</h2>
+              <p class="muted">
+                Configure AI assistants on this computer to manage Gluesync
+                pipelines through the built-in MCP server. Your Automator login
+                token is used automatically.
+              </p>
+              <div class="form-grid">
+                <fieldset class="fieldset">
+                  <legend>Detected clients</legend>
+                  <label class="checkbox">
+                    <input
+                      type="checkbox"
+                      id="mcp-client-claude"
+                      value="claude"
+                    />
+                    Claude Desktop
+                    <span class="muted" id="mcp-status-claude"></span>
+                  </label>
+                  <label class="checkbox">
+                    <input
+                      type="checkbox"
+                      id="mcp-client-windsurf"
+                      value="windsurf"
+                    />
+                    Windsurf
+                    <span class="muted" id="mcp-status-windsurf"></span>
+                  </label>
+                  <label class="checkbox">
+                    <input
+                      type="checkbox"
+                      id="mcp-client-cursor"
+                      value="cursor"
+                    />
+                    Cursor <span class="muted" id="mcp-status-cursor"></span>
+                  </label>
+                </fieldset>
+              </div>
+              <button type="button" class="primary" id="mcp-install-btn">
+                Set up MCP server
+              </button>
+              <p id="mcp-setup-message" class="form-message"></p>
+            </section>
           </div>
         </div>
       </div>

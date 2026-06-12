@@ -925,7 +925,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
         # ---------------------------------------------------------------
         # Detect legacy backup YAML where all column types are null.
-        # This is caused by an old GlueSync version that stored Column with
+        # This is caused by an old Gluesync version that stored Column with
         # a DataTypeInterface field that was not registered for serialisation,
         # resulting in null being written to SQLite and propagated to exports.
         # Build a discovery-based type lookup so we can resolve types during
@@ -940,7 +940,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         if _null_type_cols and len(_null_type_cols) == len(_yaml_cols) and _yaml_cols:
             logger.warning(
                 f"Table {table_name}: all {len(_yaml_cols)} YAML column type fields are null – "
-                f"this backup was exported from a GlueSync instance with legacy entity storage. "
+                f"this backup was exported from a Gluesync instance with legacy entity storage. "
                 f"Falling back to live CoreHub discovery for column type resolution."
             )
             for disc_col in (columns.get("columns") or []):
@@ -1342,7 +1342,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             # For locked schema, create mapping for each column
             # IMPORTANT: When a whitelist or mapping is specified, only include
             # columns from columns_def, NOT all discovered source columns.
-            # Otherwise, GlueSync would flag all source columns for syncing.
+            # Otherwise, Gluesync would flag all source columns for syncing.
             has_filter = has_column_mappings or is_column_whitelist
             
             # Build a lookup of discovered source columns by name (case-insensitive)

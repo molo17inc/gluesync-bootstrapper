@@ -770,7 +770,7 @@ def _build_table_entry_helper(table, table_lookup, replications, field_mappings,
             "isNullable": field.get("allow_null", True)
         }
 
-        # Store source field name if it differs from target (for GlueSync column mapping)
+        # Store source field name if it differs from target (for Gluesync column mapping)
         if target_field_name != field["name"]:
             col_def["sourceName"] = field["name"]
 

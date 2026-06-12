@@ -424,7 +424,7 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
             target_only_columns = custom_config.get('targetOnlyColumns', [])
 
             # Build key lookup from keys parameter (for backward compatibility)
-            # and from column isPrimaryKey property (preferred for GlueSync 2.2.6.0+)
+            # and from column isPrimaryKey property (preferred for Gluesync 2.2.6.0+)
             key_names = set()
             key_names_lower = set()
             for key in (keys or []):
@@ -440,7 +440,7 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
             }
 
             def _is_primary_key(column_name: str, col_is_primary_key: bool = None) -> bool:
-                # Prefer isPrimaryKey from column if available (GlueSync 2.2.6.0+)
+                # Prefer isPrimaryKey from column if available (Gluesync 2.2.6.0+)
                 if col_is_primary_key is not None:
                     return col_is_primary_key
                 # Fall back to keys-based check for backward compatibility

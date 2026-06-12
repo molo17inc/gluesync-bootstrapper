@@ -63,6 +63,43 @@ class AutomatorState:
         self._corehub_overview: Optional[Dict[str, Any]] = None
 
     # Authentication -----------------------------------------------------
+    def _write_token_file(
+        self,
+        token: str,
+        base_url: str,
+        use_ssl: Optional[bool],
+        skip_verify: Optional[bool],
+    ) -> None:
+        """Write authentication credentials to a file for MCP server (stdio transport)."""
+        try:
+            # Write to project directory so stdio transport can find it without
+            # relying on the HOME env var (which Claude Desktop doesn't pass).
+            import os
+            cwd = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            token_file = Path(cwd) / ".gluesync_mcp_token"
+            with open(token_file, "w") as f:
+                f.write(f"{token}\n")
+                f.write(f"{base_url}\n")
+                if use_ssl is not None:
+                    f.write(f"SSL_ENABLED={use_ssl}\n")
+                if skip_verify is not None:
+                    f.write(f"SSL_SKIP_VERIFY={skip_verify}\n")
+        except Exception:
+            # Silently fail - this is optional
+            pass
+
+    def _remove_token_file(self) -> None:
+        """Remove the token file on logout."""
+        try:
+            import os
+            cwd = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            token_file = Path(cwd) / ".gluesync_mcp_token"
+            if token_file.exists():
+                token_file.unlink()
+        except Exception:
+            # Silently fail
+            pass
+
     def set_auth(
         self,
         token: str,
@@ -76,11 +113,15 @@ class AutomatorState:
             self._base_url = base_url
             self._use_ssl = use_ssl
             self._skip_verify = skip_verify
+            # Write token to file for MCP server (stdio transport)
+            self._write_token_file(token, base_url, use_ssl, skip_verify)
 
     def clear_auth(self) -> None:
         with self._lock:
             self._token = None
             self._corehub_overview = None
+            # Remove token file
+            self._remove_token_file()
 
     # Upload management --------------------------------------------------
     def register_upload(self, file_path: Path, name: str) -> str:

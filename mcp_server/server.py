@@ -6,17 +6,18 @@ that AI agents can automate pipeline management, debugging and development
 tasks without human interaction.
 
 API coverage (mapped against develop branch of gluesync-kotlin):
-  Pipelines  : list, get, create, update, delete, snapshot-status
-  Agents     : list, get, node-info, schemas, assign/unassign
+  Pipelines  : list, get, status, delete, snapshot-status, checkpoint reset
+  Agents     : list, node-info, discovery (schemas/tables/columns), assign/unassign
   Entities   : list, get, delete, upsert
   Commands   : start/stop/redo/one-time-snapshot (entity & group level)
   Maintenance: enter/exit maintenance mode
-  Global cfg : get all, get keys, get/set logging level, get/set release channel
+  Global cfg : get all, get keys, set logging level, release channel
   Notifications: list, count, mark-read
   Metrics    : get agent metrics
-  Groups     : list, get
+  Groups     : list
   Mapping fn : list, get base-code
-  Checkpoint : patch (reset)
+  License    : get instance/license info
+  Export     : pipeline YAML backup
   Version    : get
 
 Transports
@@ -35,6 +36,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 import mcp.types as types
@@ -47,12 +50,51 @@ logger = logging.getLogger(__name__)
 # Helpers
 # ---------------------------------------------------------------------------
 
+# Global token provider for SSE transport (set by Automator)
+_token_provider: Optional[callable] = None
+
+def set_token_provider(provider: callable) -> None:
+    """Set a callable that returns the CoreHub token (for SSE transport)."""
+    global _token_provider
+    _token_provider = provider
+
+def _read_token_from_file() -> Optional[str]:
+    """Read token from .gluesync_mcp_token in the project root (written by Automator)."""
+    try:
+        # Resolve relative to this file's location: <project_root>/mcp_server/server.py
+        # (Claude Desktop ignores the cwd config option and runs the process from /)
+        token_file = Path(__file__).resolve().parent.parent / ".gluesync_mcp_token"
+        logger.info("Looking for token file at: %s (exists=%s)", token_file, token_file.exists())
+        if token_file.exists():
+            with open(token_file, "r") as f:
+                lines = f.readlines()
+                logger.info("Token file has %d lines", len(lines))
+                if lines:
+                    token = lines[0].strip()
+                    logger.info("Token read successfully (length=%d)", len(token))
+                    if len(lines) > 1:
+                        # Also set CORE_HUB_URL from file
+                        base_url = lines[1].strip()
+                        os.environ["CORE_HUB_URL"] = base_url
+                        logger.info("Set CORE_HUB_URL=%s", base_url)
+                    return token
+    except Exception as exc:
+        logger.warning("Failed to read token file: %s", exc)
+    return None
+
 def _token(arguments: Dict[str, Any]) -> str:
-    tok = arguments.get("token") or os.environ.get("COREHUB_TOKEN", "")
+    # Priority: tool argument > token provider (SSE) > token file > environment variable
+    tok = arguments.get("token")
+    if not tok and _token_provider:
+        tok = _token_provider()
+    if not tok:
+        tok = _read_token_from_file()
+    if not tok:
+        tok = os.environ.get("COREHUB_TOKEN", "")
     if not tok:
         raise ValueError(
-            "CoreHub token is required. Pass 'token' in the tool arguments "
-            "or set the COREHUB_TOKEN environment variable."
+            "CoreHub token is required. Pass 'token' in the tool arguments, "
+            "set the COREHUB_TOKEN environment variable, or authenticate via the Automator."
         )
     return tok
 
@@ -178,6 +220,38 @@ TOOLS: List[types.Tool] = [
         },
     ),
     types.Tool(
+        name="get_agent",
+        description=(
+            "Get the full configuration for a specific agent in a pipeline: "
+            "host, port, credentials mask, specific configuration, certificates."
+        ),
+        inputSchema={
+            "type": "object",
+            "required": ["pipeline_id", "agent_id"],
+            "properties": {
+                "token": {"type": "string"},
+                "pipeline_id": {"type": "string"},
+                "agent_id": {"type": "string"},
+            },
+        },
+    ),
+    types.Tool(
+        name="get_agent_raw",
+        description=(
+            "Get the raw configuration for a specific agent including secrets. "
+            "Requires SUPER_ADMIN role."
+        ),
+        inputSchema={
+            "type": "object",
+            "required": ["pipeline_id", "agent_id"],
+            "properties": {
+                "token": {"type": "string"},
+                "pipeline_id": {"type": "string"},
+                "agent_id": {"type": "string"},
+            },
+        },
+    ),
+    types.Tool(
         name="get_agent_node_info",
         description=(
             "Get the node information for a specific agent: data type matrix, "
@@ -241,6 +315,36 @@ TOOLS: List[types.Tool] = [
         },
     ),
 
+    types.Tool(
+        name="assign_agent",
+        description=(
+            "Assign (attach) an existing agent to a pipeline as SOURCE or TARGET."
+        ),
+        inputSchema={
+            "type": "object",
+            "required": ["pipeline_id", "agent_id", "agent_type"],
+            "properties": {
+                "token": {"type": "string"},
+                "pipeline_id": {"type": "string"},
+                "agent_id": {"type": "string"},
+                "agent_type": {"type": "string", "enum": ["SOURCE", "TARGET"]},
+            },
+        },
+    ),
+    types.Tool(
+        name="unassign_agent",
+        description="Unassign (detach) an agent from a pipeline.",
+        inputSchema={
+            "type": "object",
+            "required": ["pipeline_id", "agent_id"],
+            "properties": {
+                "token": {"type": "string"},
+                "pipeline_id": {"type": "string"},
+                "agent_id": {"type": "string"},
+            },
+        },
+    ),
+
     # ── ENTITIES ────────────────────────────────────────────────────────────
     types.Tool(
         name="get_pipeline_entities",
@@ -267,6 +371,28 @@ TOOLS: List[types.Tool] = [
                 "token": {"type": "string"},
                 "pipeline_id": {"type": "string"},
                 "entity_id": {"type": "string"},
+            },
+        },
+    ),
+    types.Tool(
+        name="upsert_entities",
+        description=(
+            "Create or update one or more entities in a pipeline. Each entity "
+            "must be a full entity payload in the same JSON format returned by "
+            "get_entity / get_pipeline_entities (entityName, agentEntities, ...). "
+            "Use this to fix entity configurations programmatically."
+        ),
+        inputSchema={
+            "type": "object",
+            "required": ["pipeline_id", "entities"],
+            "properties": {
+                "token": {"type": "string"},
+                "pipeline_id": {"type": "string"},
+                "entities": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": "Full entity payloads to create or update",
+                },
             },
         },
     ),
@@ -487,7 +613,9 @@ TOOLS: List[types.Tool] = [
         name="get_notifications",
         description=(
             "Retrieve recent CoreHub notifications (errors, warnings, info). "
-            "Filter by pipeline, level, and date range."
+            "Each notification carries pipelineId, agentId, entityId and groupId "
+            "so you can correlate errors with the exact pipeline and entity they "
+            "belong to."
         ),
         inputSchema={
             "type": "object",
@@ -495,8 +623,12 @@ TOOLS: List[types.Tool] = [
                 "token": {"type": "string"},
                 "limit": {"type": "integer", "default": 50},
                 "offset": {"type": "integer", "default": 0},
+                "text_to_search": {"type": "string"},
                 "pipeline_id": {"type": "string"},
-                "levels": {
+                "agent_id": {"type": "string"},
+                "entity_id": {"type": "string"},
+                "group_id": {"type": "string"},
+                "level": {
                     "type": "array",
                     "items": {"type": "string", "enum": ["INFO", "WARNING", "ERROR"]},
                 },
@@ -506,11 +638,75 @@ TOOLS: List[types.Tool] = [
         },
     ),
     types.Tool(
+        name="get_notification",
+        description="Get a single notification by its unique ID.",
+        inputSchema={
+            "type": "object",
+            "required": ["notification_id"],
+            "properties": {
+                "token": {"type": "string"},
+                "notification_id": {"type": "string"},
+            },
+        },
+    ),
+    types.Tool(
         name="get_notification_count",
         description="Get unread notification counts grouped by severity.",
         inputSchema={
             "type": "object",
             "properties": {"token": {"type": "string"}},
+        },
+    ),
+    types.Tool(
+        name="mark_notifications_read",
+        description=(
+            "Mark one or more notifications as read by ID. "
+            "Pass an empty list to mark ALL notifications as read."
+        ),
+        inputSchema={
+            "type": "object",
+            "required": ["notification_ids"],
+            "properties": {
+                "token": {"type": "string"},
+                "notification_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Notification IDs to mark as read (empty = all)",
+                },
+            },
+        },
+    ),
+
+    # ── MAPPING FUNCTIONS (UDF) ──────────────────────────────────────────────
+    types.Tool(
+        name="list_mapping_functions",
+        description=(
+            "List the mapping functions (UDFs) referenced by the entities of a "
+            "pipeline, with name, type and the entities that use them."
+        ),
+        inputSchema={
+            "type": "object",
+            "required": ["pipeline_id"],
+            "properties": {
+                "token": {"type": "string"},
+                "pipeline_id": {"type": "string"},
+            },
+        },
+    ),
+    types.Tool(
+        name="get_mapping_function_code",
+        description=(
+            "Get the source code of a mapping function (UDF) by name. "
+            "Returns the code and language type (Java, Kotlin, Python, ...)."
+        ),
+        inputSchema={
+            "type": "object",
+            "required": ["pipeline_id", "udf_name"],
+            "properties": {
+                "token": {"type": "string"},
+                "pipeline_id": {"type": "string"},
+                "udf_name": {"type": "string"},
+            },
         },
     ),
 
@@ -548,6 +744,19 @@ TOOLS: List[types.Tool] = [
                 "base_url": {"type": "string",
                              "description": "CoreHub base URL, e.g. https://localhost:1717"},
             },
+        },
+    ),
+
+    # ── LICENSE ──────────────────────────────────────────────────────────────
+    types.Tool(
+        name="get_license_info",
+        description=(
+            "Get the CoreHub license / instance information: plan, expiry and "
+            "licensed features."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {"token": {"type": "string"}},
         },
     ),
 
@@ -626,6 +835,16 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> Sequence[types.Text
             pid = arguments["pipeline_id"]
             return _text(_fmt(_call(f"/pipelines/{pid}/agents", token)))
 
+        elif name == "get_agent":
+            pid = arguments["pipeline_id"]
+            aid = arguments["agent_id"]
+            return _text(_fmt(_call(f"/pipelines/{pid}/agents/{aid}", token)))
+
+        elif name == "get_agent_raw":
+            pid = arguments["pipeline_id"]
+            aid = arguments["agent_id"]
+            return _text(_fmt(_call(f"/pipelines/{pid}/agents/{aid}?includeSecrets=true", token)))
+
         elif name == "get_agent_node_info":
             pid = arguments["pipeline_id"]
             aid = arguments["agent_id"]
@@ -662,6 +881,25 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> Sequence[types.Text
             from commons import get_table_columns
             return _text(_fmt(get_table_columns(token, pid, aid, schema, table)))
 
+        elif name == "assign_agent":
+            pid = arguments["pipeline_id"]
+            aid = arguments["agent_id"]
+            agent_type = arguments["agent_type"].upper()
+            return _text(_fmt(_call(
+                f"/pipelines/{pid}/agents/{aid}?agentType={agent_type}",
+                token,
+                method="PUT",
+            )))
+
+        elif name == "unassign_agent":
+            pid = arguments["pipeline_id"]
+            aid = arguments["agent_id"]
+            return _text(_fmt(_call(
+                f"/pipelines/{pid}/agents/{aid}",
+                token,
+                method="DELETE",
+            )))
+
         # ── Entities ───────────────────────────────────────────────────────
         elif name == "get_pipeline_entities":
             pid = arguments["pipeline_id"]
@@ -671,6 +909,16 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> Sequence[types.Text
             pid = arguments["pipeline_id"]
             eid = arguments["entity_id"]
             return _text(_fmt(_call(f"/pipelines/{pid}/entities/{eid}", token)))
+
+        elif name == "upsert_entities":
+            pid = arguments["pipeline_id"]
+            entities = arguments["entities"]
+            return _text(_fmt(_call(
+                f"/pipelines/{pid}/config/entities",
+                token,
+                method="PUT",
+                body={"entities": entities},
+            )))
 
         elif name == "delete_entities":
             pid = arguments["pipeline_id"]
@@ -778,18 +1026,89 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> Sequence[types.Text
             limit = arguments.get("limit", 50)
             offset = arguments.get("offset", 0)
             parts = [f"limit={limit}", f"offset={offset}"]
+            if arguments.get("text_to_search"):
+                parts.append(f"textToSearch={arguments['text_to_search']}")
             if arguments.get("pipeline_id"):
-                parts.append(f"pipelinesId={arguments['pipeline_id']}")
-            for lv in (arguments.get("levels") or []):
-                parts.append(f"levels={lv}")
+                parts.append(f"pipelineId={arguments['pipeline_id']}")
+            if arguments.get("agent_id"):
+                parts.append(f"agentId={arguments['agent_id']}")
+            if arguments.get("entity_id"):
+                parts.append(f"entityId={arguments['entity_id']}")
+            if arguments.get("group_id"):
+                parts.append(f"groupId={arguments['group_id']}")
+            for lv in (arguments.get("level") or []):
+                parts.append(f"level={lv}")
             if arguments.get("from_date"):
                 parts.append(f"fromDate={arguments['from_date']}")
             if arguments.get("to_date"):
                 parts.append(f"toDate={arguments['to_date']}")
             return _text(_fmt(_call(f"/notifications?{'&'.join(parts)}", token)))
 
+        elif name == "get_notification":
+            nid = arguments["notification_id"]
+            return _text(_fmt(_call(f"/notifications/{nid}", token)))
+
         elif name == "get_notification_count":
             return _text(_fmt(_call("/notifications/count", token)))
+
+        elif name == "mark_notifications_read":
+            nids = arguments.get("notification_ids") or []
+            if len(nids) == 1:
+                # Single notification → POST /notifications/{id}/read
+                return _text(_fmt(_call(
+                    f"/notifications/{nids[0]}/read", token, method="POST"
+                )))
+            elif nids:
+                # Multiple → POST /notifications/read with ids in body
+                return _text(_fmt(_call(
+                    "/notifications/read",
+                    token,
+                    method="POST",
+                    body={"notificationsId": nids},
+                )))
+            else:
+                # All → POST /notifications/read with empty body
+                return _text(_fmt(_call("/notifications/read", token, method="POST")))
+
+        # ── Mapping functions (UDF) ────────────────────────────────────────
+        elif name == "list_mapping_functions":
+            pid = arguments["pipeline_id"]
+            entities_resp = _call(f"/pipelines/{pid}/entities", token)
+            udfs: Dict[str, Dict[str, Any]] = {}
+
+            def _scan_custom_props(obj: Any, entity_name: str) -> None:
+                if isinstance(obj, dict):
+                    udf_entries = obj.get("udf")
+                    if isinstance(udf_entries, list):
+                        for u in udf_entries:
+                            if isinstance(u, dict) and u.get("name"):
+                                entry = udfs.setdefault(
+                                    str(u["name"]),
+                                    {"name": u["name"], "type": u.get("type"), "usedByEntities": []},
+                                )
+                                if entity_name not in entry["usedByEntities"]:
+                                    entry["usedByEntities"].append(entity_name)
+                    for v in obj.values():
+                        _scan_custom_props(v, entity_name)
+                elif isinstance(obj, list):
+                    for v in obj:
+                        _scan_custom_props(v, entity_name)
+
+            items = entities_resp if isinstance(entities_resp, list) else entities_resp.get("entities", []) if isinstance(entities_resp, dict) else []
+            for item in items:
+                ent = item.get("entity", item) if isinstance(item, dict) else item
+                if isinstance(ent, dict):
+                    ent_name = str(ent.get("entityName") or ent.get("id") or "unknown")
+                    _scan_custom_props(ent, ent_name)
+            return _text(_fmt(list(udfs.values())))
+
+        elif name == "get_mapping_function_code":
+            pid = arguments["pipeline_id"]
+            udf_name = arguments["udf_name"]
+            return _text(_fmt(_call(
+                f"/pipelines/{pid}/config/entities/mapping-functions/{udf_name}",
+                token,
+            )))
 
         # ── Metrics ────────────────────────────────────────────────────────
         elif name == "get_agent_metrics":
@@ -814,6 +1133,10 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> Sequence[types.Text
                 skip_verify=None,
             )
             return _text(yaml_text)
+
+        # ── License ────────────────────────────────────────────────────
+        elif name == "get_license_info":
+            return _text(_fmt(_call("/global-config/license", token)))
 
         # ── Version ────────────────────────────────────────────────────────
         elif name == "get_corehub_version":
@@ -865,16 +1188,27 @@ async def read_resource(uri: str) -> str:
 # ── ENTRY POINT (stdio transport) ───────────────────────────────────────────
 
 async def _run_stdio() -> None:
+    from io import TextIOWrapper
+    import anyio
     from mcp.server.stdio import stdio_server
-    async with stdio_server() as (read_stream, write_stream):
+    from mcp.server.models import ServerCapabilities
+
+    # Reserve the real stdout exclusively for the JSON-RPC protocol and
+    # redirect sys.stdout to stderr so stray print() calls in imported
+    # modules (e.g. commons.py) cannot corrupt the protocol stream.
+    protocol_stdout = anyio.wrap_file(
+        TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+    )
+    sys.stdout = sys.stderr
+
+    async with stdio_server(stdout=protocol_stdout) as (read_stream, write_stream):
         await server.run(
             read_stream,
             write_stream,
             InitializationOptions(
                 server_name="gluesync-automator",
                 server_version="1.0.0",
-                capabilities=server.get_capabilities(
-                    notification_options=None,
+                capabilities=ServerCapabilities(
                     experimental_capabilities={},
                 ),
             ),
@@ -884,6 +1218,12 @@ async def _run_stdio() -> None:
 def run_stdio() -> None:
     """Entry point for stdio transport (Claude Desktop, OpenClaw, etc.)."""
     import asyncio
+    # Configure logging to stderr for debugging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[logging.StreamHandler(sys.stderr)]
+    )
     asyncio.run(_run_stdio())
 
 
