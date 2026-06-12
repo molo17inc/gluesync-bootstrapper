@@ -375,6 +375,23 @@ TOOLS: List[types.Tool] = [
         },
     ),
     types.Tool(
+        name="get_pipeline_entities_status",
+        description=(
+            "Get real-time runtime status for every entity in a pipeline: "
+            "isSyncActive, isMigrationActive, isBusy, errorState. "
+            "This is the same data the Gluesync MPP UI uses to display "
+            "entity status (Active / Hold / Error)."
+        ),
+        inputSchema={
+            "type": "object",
+            "required": ["pipeline_id"],
+            "properties": {
+                "token": {"type": "string"},
+                "pipeline_id": {"type": "string"},
+            },
+        },
+    ),
+    types.Tool(
         name="upsert_entities",
         description=(
             "Create or update one or more entities in a pipeline. Each entity "
@@ -867,35 +884,23 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> Sequence[types.Text
 
         elif name == "get_pipeline_status":
             pid = arguments["pipeline_id"]
-            entities_resp = _call(f"/pipelines/{pid}/entities", token)
-            entities = []
-            if isinstance(entities_resp, list):
-                for item in entities_resp:
-                    e = item.get("entity", item) if isinstance(item, dict) and "entity" in item else item
-                    entities.append(e)
-            elif isinstance(entities_resp, dict) and "entities" in entities_resp:
-                entities = entities_resp["entities"]
+            status_resp = _call(f"/pipelines/{pid}/entities-status", token)
+            statuses = status_resp if isinstance(status_resp, list) else []
 
             summary: Dict[str, Any] = {
                 "pipeline_id": pid,
-                "total_entities": len(entities),
+                "total_entities": len(statuses),
                 "by_status": {},
             }
-            for ent in entities:
-                status = "unknown"
-                # CoreHub stores status in different places depending on version
-                for key in ("status", "syncStatus", "state", "currentState", "syncState", "entityStatus"):
-                    if ent.get(key):
-                        status = str(ent[key])
-                        break
-                # Also check nested sync object
-                if status == "unknown" and isinstance(ent.get("sync"), dict):
-                    status = str(ent["sync"].get("status") or ent["sync"].get("state") or "unknown")
-                # Also check nested entityStatus
-                if status == "unknown" and isinstance(ent.get("entityStatus"), dict):
-                    status = str(ent["entityStatus"].get("status") or ent["entityStatus"].get("state") or "unknown")
+            for st in statuses:
+                if st.get("errorState"):
+                    status = "error"
+                elif st.get("isSyncActive") or st.get("isMigrationActive"):
+                    status = "active"
+                else:
+                    status = "hold"
                 summary["by_status"].setdefault(status, []).append(
-                    ent.get("entityName") or ent.get("entityId") or ent.get("id", "?")
+                    st.get("entityId", "?")
                 )
             return _text(_fmt(summary))
 
@@ -910,6 +915,10 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> Sequence[types.Text
         elif name == "reset_pipeline_checkpoint":
             pid = arguments["pipeline_id"]
             return _text(_fmt(_call(f"/pipelines/{pid}/checkpoint", token, method="PATCH")))
+
+        elif name == "get_pipeline_entities_status":
+            pid = arguments["pipeline_id"]
+            return _text(_fmt(_call(f"/pipelines/{pid}/entities-status", token)))
 
         # ── Agents ─────────────────────────────────────────────────────────
         elif name == "list_pipeline_agents":
