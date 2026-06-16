@@ -1,0 +1,43 @@
+# Skeleton agents configuration - EDIT BEFORE IMPORTING.
+# Replace every CHANGE_ME value with the real agent tags and credentials
+# of the Gluesync agents that will serve these pipelines.
+agents:
+- agentType: SOURCE
+  agentTag: CHANGE_ME-source-agent-tag
+  hostCredentials:
+    host: CHANGE_ME
+    port: 0
+    username: CHANGE_ME
+    password: CHANGE_ME
+  customHostCredentials: {}
+  specificConfiguration: {}
+- agentType: TARGET
+  agentTag: CHANGE_ME-target-agent-tag
+  hostCredentials:
+    host: CHANGE_ME
+    port: 0
+    username: CHANGE_ME
+    password: CHANGE_ME
+  customHostCredentials: {}
+  specificConfiguration: {}
+pipelines:
+- pipelineId: dc27b7f6
+  pipelineName: s_SRVMONSQL3EFCOTEST to t_TESTBOXAS400 (UDF entities)
+  _sourceConnection: s_SRVMONSQL3EFCOTEST
+  _targetConnection: t_TESTBOXAS400
+- pipelineId: 363e1a21
+  pipelineName: s_TESTBOXAS400 to t_SRVMONSQL3EFCODEV (UDF entities)
+  _sourceConnection: s_TESTBOXAS400
+  _targetConnection: t_SRVMONSQL3EFCODEV
+- pipelineId: a2954f81
+  pipelineName: s_TESTBOXAS400 to t_SRVMONSQL3EFCOSBOX (UDF entities)
+  _sourceConnection: s_TESTBOXAS400
+  _targetConnection: t_SRVMONSQL3EFCOSBOX
+- pipelineId: 17192d62
+  pipelineName: s_TESTBOXAS400 to t_SRVMONSQL3EFCOTEST (UDF entities)
+  _sourceConnection: s_TESTBOXAS400
+  _targetConnection: t_SRVMONSQL3EFCOTEST
+- pipelineId: e610cb1b
+  pipelineName: s_TESTBOXAS400 to t_SRVMONSQLDMZTEFCOTEST (UDF entities)
+  _sourceConnection: s_TESTBOXAS400
+  _targetConnection: t_SRVMONSQLDMZTEFCOTEST
