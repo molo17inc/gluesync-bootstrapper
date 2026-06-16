@@ -147,6 +147,54 @@ def _enrich_column(col_dict, source_col):
             col_dict[field] = source_col[field]
     return col_dict
 
+def _resolve_field_functions(field_functions_list, target_columns, default_table_id, table_name, schema_name):
+    resolved_fns = []
+    if not isinstance(field_functions_list, list):
+        return resolved_fns
+        
+    for fn in field_functions_list:
+        if not isinstance(fn, dict):
+            continue
+            
+        expr = fn.get('expression')
+        if not isinstance(expr, dict):
+            continue
+            
+        column_name = fn.get('column')
+        column_id = fn.get('columnId')
+        
+        # If columnId is not specified, resolve it from target_columns by name
+        if column_id is None and column_name:
+            # Case-insensitive match on name or alias
+            match = next((col for col in target_columns if col.get('name', '').lower() == str(column_name).lower() or col.get('alias', '').lower() == str(column_name).lower()), None)
+            if match:
+                column_id = match.get('id')
+            else:
+                logger.warning(f"Could not resolve column ID for field function column '{column_name}' in table '{table_name}'. Checking if it's a new technical column.")
+                # If not found in target columns, generate a fallback ID using get_table_id
+                column_id = get_table_id(schema_name, column_name)
+                
+        # Resolve tableOrObjectId
+        table_or_object_id = fn.get('tableOrObjectId')
+        if table_or_object_id is None:
+            table_or_object_id = default_table_id
+            
+        # Ensure correct types
+        try:
+            if column_id is not None:
+                column_id = int(column_id)
+            if table_or_object_id is not None:
+                table_or_object_id = int(table_or_object_id)
+        except (TypeError, ValueError):
+            pass
+            
+        resolved_fns.append({
+            "columnId": column_id,
+            "tableOrObjectId": table_or_object_id,
+            "expression": expr
+        })
+    return resolved_fns
+
 def _is_column_mappings(columns_list):
     """
     Return True if the columns list contains column mappings (not column definitions).
@@ -1711,6 +1759,19 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
         print(f"Columns definition for {table_name}: {columns_def}")
 
+        # Resolve field functions if specified
+        field_functions = custom_config.get('fieldFunctions', [])
+        resolved_field_functions = _resolve_field_functions(
+            field_functions, 
+            target_columns_def, 
+            target_table_id, 
+            target_table_name,
+            yaml_target_schema
+        )
+        if resolved_field_functions:
+            target_entity_type["fieldFunctions"] = resolved_field_functions
+            logger.info(f"Configured {len(resolved_field_functions)} field functions for table {table_name}")
+
         # Process target keys with proper IDs
         target_keys = []
         if custom_config and 'keys' in custom_config and custom_config['keys'] is not None:
@@ -2305,6 +2366,19 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 "isPK": col.get("isPK", False) or _is_in_keys(col["name"], custom_config), "isIdentity": (discovered_target_col.get("isIdentity") if discovered_target_col else None) or col.get("isIdentity", False), "isNullable": discovered_target_col.get("isNullable") if discovered_target_col and "isNullable" in discovered_target_col else col.get("isNullable", False)
             }, discovered_target_col if 'discovered_target_col' in locals() and discovered_target_col else col))
 
+        # Resolve field functions if specified
+        field_functions = custom_config.get('fieldFunctions', [])
+        resolved_field_functions = _resolve_field_functions(
+            field_functions, 
+            target_columns_def, 
+            target_table_id, 
+            target_table_name,
+            yaml_target_schema
+        )
+        if resolved_field_functions:
+            target_entity_type["fieldFunctions"] = resolved_field_functions
+            logger.info(f"Configured {len(resolved_field_functions)} field functions for duplicate table {yaml_table_key}")
+
         # Build target keys
         target_keys = []
         if custom_config and 'keys' in custom_config and custom_config['keys'] is not None:
@@ -2653,6 +2727,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         target_tables_properties = {}
         target_columns = []
         target_keys = []
+        field_functions_payload = []
 
         # Process each table for the target (in YAML order)
         for table_key, table_data in tables_list:
@@ -2838,6 +2913,17 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             })
             target_columns.append(target_table_columns)
 
+            # Resolve and accumulate field functions for this table in the MultiTable chain
+            table_field_functions = table_data.get('fieldFunctions', []) if table_data else []
+            resolved_fns = _resolve_field_functions(
+                table_field_functions,
+                target_table_columns,
+                target_table_id,
+                table_key,
+                target_schema
+            )
+            field_functions_payload.extend(resolved_fns)
+
             # Process keys for target with IDs
             custom_config = table_data
             if custom_config and 'keys' in custom_config and custom_config['keys'] is not None:
@@ -2967,21 +3053,26 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             target_custom_properties["preSnapshotCommand"] = pre_snapshot_cmd
 
         # Create the target entity for MultiTable
+        target_entity_type = {
+            "type": "Target",
+            "allowedOperations": allowed_operations,
+            "snapshotWritingConcurrency": mt_target_props.get('snapshotWritingConcurrency', 1),
+            "columnsMappingMatrix": columns_mapping_matrix,
+            "tablesWithUnlockedSchema": [],
+            "tablesWithUnlockedDataTypes": [],
+            "useBulkOperationsDuringCDC": mt_target_props.get('useBulkOperationsDuringCDC', False),
+            "useBulkOperationsWhileSnapshot": mt_target_props.get('useBulkOperationsWhileSnapshot', False)
+        }
+        if field_functions_payload:
+            target_entity_type["fieldFunctions"] = field_functions_payload
+            logger.info(f"Configured {len(field_functions_payload)} field functions globally for MultiTable chain {entity_name}")
+
         target_entity = {
             "type": "MultiTable",
             "entityId": "",
             "entityName": entity_name,
             "agentEntityId": "",
-            "entityType": {
-                "type": "Target",
-                "allowedOperations": allowed_operations,
-                "snapshotWritingConcurrency": mt_target_props.get('snapshotWritingConcurrency', 1),
-                "columnsMappingMatrix": columns_mapping_matrix,
-                "tablesWithUnlockedSchema": [],
-                "tablesWithUnlockedDataTypes": [],
-                "useBulkOperationsDuringCDC": mt_target_props.get('useBulkOperationsDuringCDC', False),
-                "useBulkOperationsWhileSnapshot": mt_target_props.get('useBulkOperationsWhileSnapshot', False)
-            },
+            "entityType": target_entity_type,
             "agentId": target_agent_id,
             "orderIndex": 0,
             "customProperties": target_custom_properties,

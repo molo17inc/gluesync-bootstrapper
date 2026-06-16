@@ -70,7 +70,7 @@ dbo:
       task_type: "pipeline_redo"
       schedule:
         days_of_week: ["sunday"]
-        week_of_month: 1  # first Sunday of each month
+        week_of_month: 1 # first Sunday of each month
         hour: 1
         minute: 30
       with_snapshot: true
@@ -208,7 +208,7 @@ dbo:
           - name: "Quarterly driver redo"
             description: "Redo driver entity to refresh CDC at quarter boundaries"
             task_type: "entity_redo"
-            cron_expression: "0 1 1 1,4,7,10 *"  # 01:00 on the first day of each quarter
+            cron_expression: "0 1 1 1,4,7,10 *" # 01:00 on the first day of each quarter
             with_snapshot: true
             snapshot_write_method: "UPSERT"
             enabled: true
@@ -246,6 +246,17 @@ dbo:
         # UPSERT: Update existing records or insert new ones (default)
         # INSERT: Only insert new records, skip existing ones
         snapshotWriteMethod: "INSERT"
+        # Field Functions: transformation expressions applied on specific columns
+        fieldFunctions:
+          - column: FIRST_NAME
+            expression:
+              type: Str2Sht
+          - column: DRIVING_LICENSE_EXPIRE_DATE
+            expression:
+              type: Str2DateTime
+              pattern: "yyyy-MM-dd'T'HH:mm:ss.SSSSSS"
+              isTechnicalField: false
+              requireUserInput: true
         customProperties:
           target:
             ttlValue: 20000000
@@ -309,7 +320,7 @@ dbo:
           - YEAR: "year"
           - source: REGISTRATION_DATE
             target: registrationDate
-            targetDataType: varchar(50)   # force target column to be VARCHAR(50)
+            targetDataType: varchar(50) # force target column to be VARCHAR(50)
         # Entity-level schedule configurations
         schedules:
           - name: "Weekly vehicles snapshot"
@@ -360,6 +371,14 @@ dbo:
           - ADDRESS_ID: "addressId"
           - NOTES: "notes"
           - DRIVER_ID: "driverId"
+        # Field functions inside MultiTable entities are specified on each component table
+        fieldFunctions:
+          - column: ORDER_DATE
+            expression:
+              type: Str2DateTime
+              pattern: "yyyy-MM-dd'T'HH:mm:ss.SSSSSS"
+              isTechnicalField: false
+              requireUserInput: true
         customProperties:
           source:
             maxItemsCountPerIteration: 1000

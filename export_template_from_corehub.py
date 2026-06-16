@@ -629,6 +629,30 @@ def _process_single_entity(
         if inv:
             table_cfg["snapshotDeleteFilter"] = inv
 
+    # fieldFunctions on target entityType
+    field_fns = target_et.get("fieldFunctions", [])
+    if isinstance(field_fns, list) and field_fns:
+        yaml_fns = []
+        for fn in field_fns:
+            if not isinstance(fn, dict):
+                continue
+            col_id = fn.get("columnId")
+            expr = fn.get("expression")
+            if col_id is not None and expr:
+                # Resolve col_id to column name from target_columns or source_columns
+                col_name = None
+                for col in target_columns + source_columns:
+                    if col.get("id") == col_id:
+                        col_name = col.get("name")
+                        break
+                if col_name:
+                    yaml_fns.append({
+                        "column": col_name,
+                        "expression": expr
+                    })
+        if yaml_fns:
+            table_cfg["fieldFunctions"] = yaml_fns
+
     # unlockedSchema detection
     tables_with_unlocked = target_et.get("tablesWithUnlockedSchema") or []
     if tables_with_unlocked:
@@ -900,6 +924,46 @@ def _process_multitable_entity(
             if where_clause:
                 table_cfg["whereClause"] = str(where_clause)
                 logger.debug(f"Exported whereClause for MultiTable {table_name}: {where_clause}")
+
+        # Extract fieldFunctions for this MultiTable component
+        target_et = target_ae.get("entityType", {}) or {}
+        field_fns = target_et.get("fieldFunctions", [])
+        if isinstance(field_fns, list) and field_fns:
+            # Resolve target table ID
+            target_tbl_obj = next((t for t in target_tables if t.get("name") == target_table_name), None)
+            target_tbl_id = target_tbl_obj.get("id") if target_tbl_obj else None
+            
+            if target_tbl_id is not None:
+                yaml_fns = []
+                for fn in field_fns:
+                    if not isinstance(fn, dict):
+                        continue
+                    # Ensure tableOrObjectId matches this table in the chain
+                    try:
+                        fn_table_id = int(fn.get("tableOrObjectId", 0))
+                        curr_target_id = int(target_tbl_id)
+                    except (TypeError, ValueError):
+                        continue
+                        
+                    if fn_table_id == curr_target_id:
+                        col_id = fn.get("columnId")
+                        expr = fn.get("expression")
+                        if col_id is not None and expr:
+                            col_name = None
+                            # Search in source and target columns for this specific table
+                            this_src_cols = column_groups.get(table_name, [])
+                            this_tgt_cols = _group_entries(target_ae.get("columns")).get(target_table_name, [])
+                            for col in this_src_cols + this_tgt_cols:
+                                if col.get("id") == col_id:
+                                    col_name = col.get("name")
+                                    break
+                            if col_name:
+                                yaml_fns.append({
+                                    "column": col_name,
+                                    "expression": expr
+                                })
+                if yaml_fns:
+                    table_cfg["fieldFunctions"] = yaml_fns
 
 
 def attach_schedules_from_jobs(

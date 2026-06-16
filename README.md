@@ -461,6 +461,59 @@ UDF processing logs are written to the standard log file with `UDF` prefix. Look
    - Include edge cases in your tests (null values, empty strings, etc.)
    - Verify behavior with different input types
 
+## Field Functions
+
+Gluesync support for field functions allows you to apply built-in transformation expressions on specific columns during database synchronization. This is useful for formatting datetimes, mapping numeric types, or applying specialized offsets.
+
+### Configuration
+
+Field functions are configured at the table/entity level in the `table-list-template.yaml` using a `fieldFunctions` array. Each entry requires:
+
+- `column`: The name of the column (from the target or source columns list) to apply the function to.
+- `expression`: A dictionary representing the transformation expression, containing:
+  - `type`: The type of transformation function (e.g. `Str2DateTime`, `Dbl2Dec`, `TsOff`, `Dec2Sht`, `DateTime2Str`).
+  - Specific parameters depending on the function type (e.g. `pattern`, `zoneName`, `isTechnicalField`, `requireUserInput`).
+
+### Examples
+
+#### Example 1: Standard Table Field Function
+
+```yaml
+DRIVERS:
+  keys: [ID]
+  fieldFunctions:
+    - column: FIRST_NAME
+      expression:
+        type: Str2Sht
+    - column: DRIVING_LICENSE_EXPIRE_DATE
+      expression:
+        type: Str2DateTime
+        pattern: "yyyy-MM-dd'T'HH:mm:ss.SSSSSS"
+        isTechnicalField: false
+        requireUserInput: true
+```
+
+#### Example 2: MultiTable Chain Component Field Function
+
+For MultiTable entities, configure the `fieldFunctions` under the specific component tables inside the chain:
+
+```yaml
+ORDERS_HEADERS:
+  chainId: "orders_chain"
+  keys: [ID]
+  fieldFunctions:
+    - column: ORDER_DATE
+      expression:
+        type: Str2DateTime
+        pattern: "yyyy-MM-dd'T'HH:mm:ss.SSSSSS"
+        isTechnicalField: false
+        requireUserInput: true
+```
+
+### Backup & Restore Support
+
+The exporter scripts (`export_template_from_corehub.py` and `export_all_pipelines.py`) automatically decode configured `fieldFunctions` from existing CoreHub target agent definitions and save them back into your generated YAML backups. Re-importing those YAML files using the bootstrapper fully restores the field function mappings along with their column and table ID bindings.
+
 ### Agent Configuration
 
 The agent configuration defines the connection details for source and target databases. Example:
