@@ -1,0 +1,591 @@
+import java.util.Map;
+import kotlin.Pair;
+import com.molo17.gluesync.commons.model.api.MappingFunctionOperation;
+import org.slf4j.Logger;
+import java.lang.String;
+import java.awt.datatransfer.UnsupportedFlavorException;
+import java.math.BigDecimal;
+import java.time.LocalTime;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+
+/* 
+ * That's a Gluesync UDF
+ * Gluesync UDFs are custom functions that are used to perform custom operations on the data being processed by Gluesync.
+ * 
+ * The function is invoked by Gluesync whatever the operation is (INSERT, UPDATE, DELETE), as well as while performing the Snapshot task.
+ * The function is invoked with the following parameters:
+ * - newValues: the new values of the row
+ * - oldValues: the old values of the row (for UPDATE and DELETE operations)
+ * - operation: the operation performed on the row (INSERT, UPDATE, DELETE), operation is an enum that can be Insert, Update, Delete
+ * 
+ * The function should return a Pair of the following values:
+ * - the operation performed on the row (INSERT, UPDATE, DELETE): this is the operation that will be performed on the target table, it can be different from the operation performed on the source table
+ * - the new values of the row: this is the new values of the row that will be inserted or updated on the target table
+ *
+ * You can also hook into the logger object to log messages, such as .debug(), .info(), or .error(). 
+ */
+
+public class UDF_be71f917f68b4c009846d16db4b6d27d {
+
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, Logger logger) {
+        // Source columns: _RRN, CMAC, CMACT, CMACTV, CMADD1, CMADD2, CMADD3, CMADD4, CMADD5, CMADTE, CMAMLP, CMAMTD, CMARCN, CMAYTD, CMBAC, CMBAD1, CMBAD2, CMBAD3, CMBAD4, CMBAD5, CMBCCD, CMBCOT, CMBCTC, CMBEML, CMBFAX, CMBLCL, CMBNAM, CMBOSP, CMBPHO, CMBTCC, CMBTYP, CMBZIP, CMCDTE, CMCLAS, CMCMTD, CMCONT, CMCOUN, CMCRSC, CMCRST, CMCRTY, CMCTCD, CMCTIM, CMCTYP, CMCUR, CMCURR, CMCUSR, CMCVAT, CMCYTD, CMDATE, CMDEL, CMDISC, CMDNO, CMDSCD, CMDTLP, CMEML, CMEMP, CMFAX, CMFCCD, CMFCTC, CMFOB, CMFORC, CMGLCD, CMIADR, CMID, CMLOC, CMLSCA, CMLTPL, CMMLNG, CMMTXP, CMNAME, CMNO, CMOREX, CMPBAL, CMPEN, CMPHON, CMPQFL, CMPRON, CMPTIV, CMPTSP, CMPTST, CMREGN, CMSAC, CMSAD1, CMSAD2, CMSAD3, CMSAD4, CMSAD5, CMSCCD, CMSCOD, CMSCOT, CMSCPL, CMSCTC, CMSEML, CMSFAX, CMSLLY, CMSLL2, CMSLMT, CMSLSM, CMSLYR, CMSNAM, CMSORT, CMSPCN, CMSPHO, CMSPMT, CMSTAT, CMSTCC, CMSTNO, CMSZIP, CMTAX1, CMTAX2, CMTAX3, CMTAX4, CMTDUE, CMTER, CMTOCD, CMTOCS, CMTOFL, CMTOPD, CMTOPF, CMTOPS, CMTOQD, CMTOQS, CMTOWD, CMTOWS, CMTRMS, CMTSCP, CMUEVT, CMUPGM, CMUTGT, CMUTIM, CMUUSR, CMWHAR, CMXCNO, CMZIP, CM0120, CM030, CM060, CM090, COCO, CMDDCO
+        // Target columns: CMAC, CMACT, CMACTV, CMADD1, CMADD2, CMADD3, CMADD4, CMADD5, CMADTE, CMAMLP, CMAMTD, CMARCN, CMAYTD, CMBAC, CMBAD1, CMBAD2, CMBAD3, CMBAD4, CMBAD5, CMBCCD, CMBCOT, CMBCTC, CMBEML, CMBFAX, CMBLCL, CMBNAM, CMBOSP, CMBPHO, CMBTCC, CMBTYP, CMBZIP, CMCDTETM, CMCLAS, CMCMTD, CMCONT, CMCOUN, CMCRSC, CMCRST, CMCRTY, CMCTCD, CMCTYP, CMCUR, CMCURR, CMCUSR, CMCVAT, CMCYTD, CMDATETM, CMDEL, CMDISC, CMDNO, CMDSCD, CMDTLP, CMEML, CMEMP, CMFAX, CMFCCD, CMFCTC, CMFOB, CMFORC, CMGLCD, CMIADR, CMID, CMLOC, CMLSCA, CMLTPL, CMMLNG, CMMTXP, CMNAME, CMNO, CMOREX, CMPBAL, CMPEN, CMPHON, CMPQFL, CMPRON, CMPTIV, CMPTSP, CMPTST, CMREGN, CMSAC, CMSAD1, CMSAD2, CMSAD3, CMSAD4, CMSAD5, CMSCCD, CMSCOD, CMSCOT, CMSCPL, CMSCTC, CMSEML, CMSFAX, CMSLLY, CMSLL2, CMSLMT, CMSLSM, CMSLYR, CMSNAM, CMSORT, CMSPCN, CMSPHO, CMSPMT, CMSTAT, CMSTCC, CMSTNO, CMSZIP, CMTAX1, CMTAX2, CMTAX3, CMTAX4, CMTDUE, CMTER, CMTOCD, CMTOCS, CMTOFL, CMTOPD, CMTOPF, CMTOPS, CMTOQD, CMTOQS, CMTOWD, CMTOWS, CMTRMS, CMTSCP, CMUEVT, CMUPGM, CMUTGT, CMUUSR, CMWHAR, CMXCNO, CMZIP, CM0120, CM030, CM060, CM090, COCO, CMDDCO
+        
+         Map<String,Object> modified_values =newValues;
+		 LocalDate  dtCMCDATE= null;
+		 LocalDate  dtCMCDTE= null;	
+	  
+		// modified_values = newValues;
+		if (operation == MappingFunctionOperation.Delete) {
+ 			modified_values.put("CMADTE", null);
+			 modified_values.put("CMCDTETM",null);
+			 modified_values.put("CMDATETM",null);
+		}
+         
+         	
+         if (operation != MappingFunctionOperation.Delete) {
+           
+           
+            logger.debug("I'm inside an INSERT OR UPDATE operation");
+			//logger.info(newValues.get("CMCTIM").toString());
+			
+			BigDecimal decCMADTE = new BigDecimal(newValues.get("CMADTE").toString());
+			BigDecimal decCMCDTE = new BigDecimal(newValues.get("CMCDTE").toString());
+			BigDecimal decCMCTIM = new BigDecimal(newValues.get("CMCTIM").toString());
+			BigDecimal decCMDATE = new BigDecimal(newValues.get("CMDATE").toString());
+			BigDecimal decCMUTIM = new BigDecimal(newValues.get("CMUTIM").toString());
+
+
+			 try {
+			    
+				
+				modified_values.put("CMADTE",(LocalDate)makeDateTime("YYYYMMDD",(BigDecimal)decCMADTE));
+				
+				dtCMCDTE = (LocalDate)makeDateTime("YYYYMMDD",decCMCDTE); 
+//logger.info(dtCMDATE.toString());
+//logger.info(newValues.get("CMCTIM").toString());
+//logger.info(makeDateTime(dtCMDATE,decCMCTIM).toString());	
+				modified_values.put("CMCDTETM",makeDateTime(dtCMCDTE,decCMCTIM));
+				modified_values.put("CMDATETM",makeDateTime((LocalDate)makeDateTime("YYYYMMDD",decCMDATE),(BigDecimal)decCMUTIM));
+    		} catch (Exception e) {
+				//logger.debug(e.toString());
+        		throw new RuntimeException(e); // Wrap in unchecked exception
+    		} 
+	    }
+        
+        return new Pair<>(operation, modified_values);
+    }
+    /*
+        ''' <summary>
+        ''' This is a helper function that gets the time from a DateTime value and returns it as a string.
+        ''' </summary>
+        ''' <param name="fullDate">DateTime value used to get the time.</param>
+        ''' <returns>String representation of the time portion of a DateTime value.</returns>
+        ''' <remarks>This is a helper function to make the code for the public method <c>ParseTimeValue</c>
+        ''' more modular.  Note that validation occurs here instead of the calling function.</remarks>
+	*/
+	public static String getTimeString(LocalDateTime fullDate){
+	  String stringDate;
+
+	  stringDate = fullDate.toString();
+
+	  int i = 8;
+
+	  while(true){
+	    if(stringDate.substring(i, 1) == " "){
+	      break;
+	    }
+
+	    i++;
+          }
+
+	  return stringDate.substring(i + 1, (stringDate.length() - i - 1));
+	}
+
+	/*
+        ''' <summary>
+        ''' This is a helper function that gets the time from a DateTime value and returns it as a decimal.
+        ''' </summary>
+        ''' <param name="fullDate">DateTime value used to get the time.</param>
+        ''' <returns>Decimal representation of the time portion of a DateTime value.</returns>
+        ''' <remarks>This is a helper function to make the code for the public method <c>ParseTimeValue</c>
+        ''' more modular.  Note that validation occurs here instead of the calling function.</remarks>
+	*/
+	public static BigDecimal getTimeDecimal(LocalDateTime fullDate){
+	  return new BigDecimal((fullDate.getHour() * 10000) + (fullDate.getMinute() * 100) + fullDate.getSecond());
+	}
+
+	/*
+        ''' <summary>
+        ''' This is a helper function that gets the time from a DateTime value and returns it as a date.
+        ''' </summary>
+        ''' <param name="fullDate">DateTime value used to get the time.</param>
+        ''' <returns>Date representation of the time portion of a DateTime value.</returns>
+        ''' <remarks>This is a helper function to make the code for the public method <c>ParseTimeValue</c>
+        ''' more modular.  Note that validation occurs here instead of the calling function.</remarks>
+        ''' <description>To do:  Need to verify that DB2 Time field will accept the time from the date 
+        ''' return type.</description>
+	*/
+	public static LocalTime getTimeDate(LocalDateTime fullDate){
+	  return LocalTime.of(fullDate.getHour(), fullDate.getMinute(), fullDate.getSecond());
+	}
+
+	/*
+        ''' <summary>
+        ''' This is a helper function that gets the date from a Decimal representation of a date in MMDDYY
+        ''' format and returns it as a DateTime.
+        ''' </summary>
+        ''' <param name="fullDate">Decimal value used to get the Date.</param>
+        ''' <returns>DateTime value of the Decimal value passed in the <paramref name="fullDate"/> argument.
+        ''' </returns>
+        ''' <remarks>This is a helper function to make the code for the public method <c>MakeDateTime</c>
+        ''' more modular.</remarks>
+	*/
+	public static Object getDateMMDDYY(BigDecimal fullDate) throws Exception{
+	  /*'Prepare date for integer division and wierd numbers like -999999*/
+	  int divDate = fullDate.abs().intValue();
+	  /*'Calculate the month, day and year*/
+          int day = (divDate % 10000) / 100;
+	  int month = divDate / 10000;
+	  int year = divDate % 100;
+
+          /*'Sets the century below 40 century 2000, above 40, 1900 and
+            'passes the Month, Day, Year, and Century to the next function.
+            'Century based upon assumption, no real way to know with a
+            'DECIMAL(6,0) 01/01/1940 to 12/31/2039 as valid dates
+	  */
+	  if(year < 40){
+	    year = 2000 + year;
+	  }else{
+	    year = 1900 + year;
+	  }
+
+	  /*'Pass the month, day and year to the original
+            'MakeDateTime function for validation. */
+	  return UDF_be71f917f68b4c009846d16db4b6d27d.makeDateTime("YYYY", new BigDecimal(month), new BigDecimal(day), new BigDecimal(year));
+	}
+
+	/*
+        ''' <summary>
+        ''' This is a helper function that gets the date from a Decimal representation of a date in CYYMMDD
+        ''' format and returns it as a DateTime.
+        ''' </summary>
+        ''' <param name="fullDate">Decimal value used to get the Date.</param>
+        ''' <returns>DateTime value of the Decimal value passed in the <paramref name="fullDate"/> argument.
+        ''' </returns>
+        ''' <remarks>This is a helper function to make the code for the public method <c>MakeDateTime</c>
+        ''' more modular.</remarks>
+	*/
+	public static Object getDateCYYMMDD(BigDecimal fullDate) throws Exception{
+	  /*'Prepare date for integer division and wierd numbers like -999999*/
+	  int divDate = fullDate.abs().intValue();
+	  /*'Calculate the month, day and year*/
+          int month = (divDate % 10000) / 100;
+	  int day = divDate % 100;
+	  int year;
+	  int century = divDate / 1000000;
+
+	  switch(century){
+	    case 0:
+	      year = 1900 + (divDate / 10000);
+	      break;
+	    case 1:
+	      year = 2000 + ((divDate / 10000) - 100);
+	      break;
+	    default:
+	      return null;
+	  }
+
+	  /*'Pass the month, day and year to the original
+            'MakeDateTime function for validation. */
+	  return UDF_be71f917f68b4c009846d16db4b6d27d.makeDateTime("YYYY", new BigDecimal(month), new BigDecimal(day), new BigDecimal(year));
+	}
+
+	/*
+        ''' <summary>
+        ''' This is a helper function that gets the date from a Decimal representation of a date in YYMMDD
+        ''' format and returns it as a DateTime.
+        ''' </summary>
+        ''' <param name="fullDate">Decimal value used to get the Date.</param>
+        ''' <returns>DateTime value of the Decimal value passed in the <paramref name="fullDate"/> argument.
+        ''' </returns>
+        ''' <remarks>This is a helper function to make the code for the public method <c>MakeDateTime</c>
+        ''' more modular.</remarks>
+	*/
+	public static Object getDateYYMMDD(BigDecimal fullDate) throws Exception{
+	  /*'Prepare date for integer division and wierd numbers like -999999*/
+	  int divDate = fullDate.abs().intValue();
+	  /*'Calculate the month, day and year*/
+          int month = (divDate % 10000) / 100;
+	  int day = divDate % 100;
+	  int year = divDate / 10000;
+
+          /*'Sets the century below 40 century 2000, above 40, 1900 and
+            'passes the Month, Day, Year, and Century to the next function.
+            'Century based upon assumption, no real way to know with a
+            'DECIMAL(6,0) 01/01/1940 to 12/31/2039 as valid dates
+	  */
+	  if(year < 40){
+	    year = 2000 + year;
+	  }else{
+	    year = 1900 + year;
+	  }
+
+	  /*'Pass the month, day and year to the original
+            'MakeDateTime function for validation. */
+	  return UDF_be71f917f68b4c009846d16db4b6d27d.makeDateTime("YYYY", new BigDecimal(month), new BigDecimal(day), new BigDecimal(year));
+	}
+
+	/*
+        ''' <summary>
+        ''' This is a helper function that gets the date from a Decimal representation of a date in YYYYMMDD
+        ''' format and returns it as a DateTime.
+        ''' </summary>
+        ''' <param name="fullDate">Decimal value used to get the Date.</param>
+        ''' <returns>DateTime value of the Decimal value passed in the <paramref name="fullDate"/> argument.
+        ''' </returns>
+        ''' <remarks>This is a helper function to make the code for the public method <c>MakeDateTime</c>
+        ''' more modular.</remarks>
+	*/
+	public static Object getDateYYYYMMDD(BigDecimal fullDate) throws Exception{
+	  /*'Prepare date for integer division and weird numbers like -999999*/
+	  int divDate = fullDate.abs().intValue();
+	  /*'Calculate the month, day and year*/
+          int month = (divDate % 10000) / 100;
+	  int day = divDate % 100;
+	  int year = divDate / 10000;
+
+	  /*'Pass the month, day and year to the original
+            'MakeDateTime function for validation. */
+	  return UDF_be71f917f68b4c009846d16db4b6d27d.makeDateTime("YYYY", new BigDecimal(month), new BigDecimal(day), new BigDecimal(year));
+	}
+
+	/*
+        ''' <summary>
+        ''' Converts nullable DB2 MM, DD, YY or YYYY decimal fields to nullable MSSQL DateTime
+        ''' field.
+        ''' </summary>
+        ''' <param name="formatYear">Format pattern indicating the size of the year.</param>
+        ''' <param name="month">Decimal value for month part of the new date.</param>
+        ''' <param name="day">Decimal value for day part of the new date.</param>
+        ''' <param name="year">Decimal value for year part of the new date.  Either YY or YYYY format.</param>
+        ''' <exception cref="ArgumentOutOfRangeException">
+        ''' <paramref name="formatYear"/> is not "YY" or "YYYY".
+        ''' </exception>
+        ''' <returns>Nullable DateTime with validation rules for SQL Server DateTime type</returns>
+        ''' <remarks>Use this function to make an SQL Server datetime from individual
+        ''' DB2 decimal date parts.  The size of the year fields in DB2 will vary, so
+        '''  the formatYear parameter is required to distinguish long or short year.</remarks>
+	*/
+	public static Object makeDateTime(String formatYear, BigDecimal month, BigDecimal day, BigDecimal year) throws Exception{
+	  int fullYear;
+	  int intMonth = month.intValue();
+	  int intDay = day.intValue();
+	  int intYear = year.intValue();
+
+	  if(formatYear.toUpperCase() == "YY"){
+	    if(intYear <= 39){
+	      fullYear = 2000 + intYear;
+	    }else{
+	      fullYear = 1900 + intYear;
+	    }
+	  } else if(formatYear.toUpperCase() == "YYYY"){
+	    fullYear = year.intValue();
+          } else{
+	    throw new Exception("Valid year formats are YY or YYYY");
+          }
+	  /*
+            ' 30 days has September, April, June and November all the rest     
+            ' have 31 except for February which is fine it has 28 days
+            ' although leap year makes it 29.  An imperfect, but "close enough“     
+            ' way to calculate leap years is when the following is true:
+            '      0 == year (mod 4)
+	  */
+	  /* Validate the months */
+	  if((intMonth < 1) || (intMonth > 12)){
+	    return null;
+	  }
+	  /* No months have a day less than 1 or greater than 31 */
+	  if((intDay < 1) || (intDay > 31)){
+	    return null;
+	  }
+	  /* The low datetime value in MSSQL 1/1/1753 */
+	  if(fullYear < 1753){
+	    return null;
+	  }
+	  /* Validate the days per month */
+	  if(((intMonth == 4) || (intMonth == 6) || (intMonth == 9) || (intMonth == 11)) && (intDay > 30)){
+	    return null;
+	  } else if(intMonth == 2){ /* February is a special case */
+	    /* Leap year */
+	    if((fullYear % 4) == 0){
+	      if(intDay > 29){
+	        return null;
+	      }
+	    } else {
+	      /* Normal year */
+	      if(intDay > 28){
+	        return null;
+	      }
+	    }
+	  }
+
+	  /* If we're here, then we have a valid date.  Now convert the passed parameters to an actual date. */
+	  return LocalDate.of(fullYear, intMonth, intDay);
+	}
+
+	/*
+        ''' <summary>
+        ''' Converts nullable DB2 MM, DD, YY, C decimal fields to nullable MSSQL DateTime
+        ''' field.
+        ''' </summary>
+        ''' <param name="month">Decimal value for month part of the new date.</param>
+        ''' <param name="day">Decimal value for day part of the new date.</param>
+        ''' <param name="shortYear">Decimal value for year part of the new date in YY format.</param>
+        ''' <param name="century">Decimal value for century part of the new date.</param>
+        ''' <returns>Nullable DateTime with validation rules for SQL Server DateTime type</returns>
+        ''' <remarks>Use this function to make an SQL Server datetime from individual
+        ''' DB2 decimal date parts.  The century argument will be evaluated for two different representations
+        ''' of century.  If the century is less than 19, then it will be evaluated like a century represented as
+        ''' 0 for 1900 and 1 for 2000.  Otherwise the century will be evaluated like a century represented as the
+        ''' thousands and hundreds place of a full year.  As an example of the first case, if a value of 8 was
+        ''' passed for the year and a value of 1 for the century, the result would be a full year of 2008.
+        ''' For the second case, passing a value of 8 for the year and a value of 20 for the century will yield
+        ''' a full year of 2008.</remarks>
+	*/
+/*
+	public static Object makeDateTime(BigDecimal month, BigDecimal day, BigDecimal shortYear, BigDecimal century) throws Exception{
+	  BigDecimal fullYear;
+	  int intCentury = century.intValue();
+	  int intShortYear = shortYear.intValue();
+
+	  if(intCentury < 19){
+            // Convert the year to full year based on 0 or 1 for the century. 
+	    fullYear = new BigDecimal(1900 + (100 * intCentury) + intShortYear);
+	  } else {
+	    // Convert the year to full year based on 19 or 20 for the century.
+	    fullYear = new BigDecimal((100 * intCentury) + intShortYear);
+	  }
+
+	  return makeDateTime("YYYY", month, day, fullYear);
+	}
+*/
+	/*
+        ''' <summary>
+        ''' Converts nullable DB2 MMDDYY, C decimal fields to nullable MSSQL DateTime
+        ''' field.
+        ''' </summary>
+        ''' <param name="formatDate">Format pattern indicating the date format of the fullDate parameter.</param>
+        ''' <param name="fullDate">Decimal value for the date to be converted to SQL Server DateTime.</param>
+        ''' <param name="century">Decimal value for century part of the new date.</param>
+        ''' <exception cref="ArgumentOutOfRangeException">
+        ''' <paramref name="formatDate"/> can only be "MMDDYY".  Other formats will be added as needed.
+        ''' </exception>
+        ''' <returns>Nullable DateTime with validation rules for SQL Server DateTime type</returns>
+        ''' <remarks>Use this function to make an SQL Server datetime from a single DB2 decimal representing a
+        ''' a full date along with a decimal representing century.  Currently, any DB2 table that uses this type
+        ''' of century will only have a date in
+        ''' decimal format matching the "MMDDYY" pattern.  This function can be expanded to handle other formats
+        ''' as encountered.  The century argument will be evaluated for two different representations
+        ''' of century.  If the century is less than 19, then it will be evaluated like a century represented as
+        ''' 0 for 1900 and 1 for 2000.  Otherwise the century will be evaluated like a century represented as the
+        ''' thousands and hundreds place of a full year.  As an example of the first case, if a value of 8 was
+        ''' passed for the year and a value of 1 for the century, the result would be a full year of 2008.
+        ''' For the second case, passing a value of 8 for the year and a value of 20 for the century will yield
+        ''' a full year of 2008.</remarks>
+	*/
+/*
+	public static Object makeDateTime(String formatDate, BigDecimal fullDate, BigDecimal century) throws Exception{
+	  int divDate = fullDate.intValue();
+	  int day;
+	  int month;
+	  int year;
+	  int fullYear;
+	  int intCentury = century.intValue();
+
+	  if(formatDate.toUpperCase() == "MMDDYY"){
+	    day = divDate / 10000;
+	    month = ( divDate / 100 ) - ( day * 10000 );
+	    year = divDate - ( month * 10000 ) - ( day * 100 );
+	  }
+	  else{
+	    throw new Exception("Valid format is MMDDYY");
+	  }
+
+	  if(intCentury < 19){
+	    fullYear = 1900 + (100 * intCentury) + year;
+	  }
+	  else{
+	    fullYear = (100 * intCentury) + year;
+	  }
+
+	  return makeDateTime("YYYY", new BigDecimal(month), new BigDecimal(day), new BigDecimal(fullYear));
+	}
+*/
+	/*
+        ''' <summary>
+        ''' Converts nullable DB2 YYYYMMDD/MMDDYY/YYMMDD/CYYMMDD decimal fields to nullable MSSQL
+        ''' DateTime field.
+        ''' </summary>
+        ''' <param name="formatDate">Format pattern indicating the date format of the fullDate parameter.</param>
+        ''' <param name="fullDate">Decimal value for the date to be converted to SQL Server DateTime.</param>
+        ''' <exception cref="ArgumentOutOfRangeException">
+        ''' <paramref name="formatDate"/> is not "YYYYMMDD", "MMDDYY", "YYMMDD", or "CYYMMDD".
+        ''' </exception>
+        ''' <returns>Nullable DateTime with validation rules for SQL Server DateTime type</returns>
+        ''' <remarks>
+        ''' Use this function to make an SQL Server datetime from a single DB2 decimal representing a
+        ''' a full date.
+        ''' </remarks>
+	*/
+	public static Object makeDateTime(String formatDate, BigDecimal fullDate) throws Exception{
+	  switch(formatDate.toUpperCase()){
+	    case "CYYMMDD":
+	      return getDateCYYMMDD(fullDate);
+	    case "MMDDYY":
+	      return getDateMMDDYY(fullDate);
+	    case "YYMMDD":
+	      return getDateYYMMDD(fullDate);
+	    case "YYYYMMDD":
+	      return getDateYYYYMMDD(fullDate);
+	    default:
+   	      throw new Exception("Valid formats are CYYMMDD, MMDDYY, YYMMDD, and YYYYMMDD.");
+          }
+	}
+
+	/*
+        ''' <summary>
+        ''' Converts DB2 date field to nullable MSSQL DateTime field.
+        ''' </summary>
+        ''' <param name="fullDate">Date value to be converted to SQL Server DateTime.</param>
+        ''' <returns>Nullable DateTime with validation rules for SQL Server DateTime type</returns>
+        ''' <remarks>Use this function to make an SQL Server datetime from a DB2 date type.</remarks>
+	*/
+	public static Object makeDateTime(LocalDate fullDate){
+	  if(fullDate == null){
+	    return fullDate;
+	  }
+
+	  if(fullDate.compareTo(LocalDate.parse("1753-01-01")) < 0){
+	    return null;
+	  }
+
+	  return fullDate;
+	}
+
+	/*
+        ''' <summary>
+        ''' Combines nullable DB2 date field with nullable time field into nullable MSSQL
+        ''' DateTime field.
+        ''' </summary>
+        ''' <param name="fullDate">Date value to be combined into SQL Server DateTime.</param>
+        ''' <param name="fullTime">Time value to be combined into SQL Server DateTime.</param>
+        ''' <returns>Nullable DateTime with validation rules for SQL Server DateTime type</returns>
+        ''' <remarks>Use this function to make an SQL Server datetime from a DB2 date type
+        ''' combined with a time type.</remarks>
+	*/
+/*
+	public static Object makeDateTime(LocalDate fullDate, LocalTime fullTime){
+	  if(fullDate == null){
+	    return fullDate;
+	  }
+
+	  if(fullDate.compareTo(LocalDate.parse("1753-01-01")) < 0){
+	    return null;
+	  }
+
+	  if(fullTime == null){
+	    return fullDate;
+	  }
+
+	  return LocalDateTime.of(fullDate, fullTime);
+	}
+*/
+	/*
+        ''' <summary>
+        ''' Combines nullable DB2 date field with nullable decimal time field into nullable MSSQL
+        ''' DateTime field.
+        ''' </summary>
+        ''' <param name="fullDate">Date value to be combined into SQL Server DateTime.</param>
+        ''' <param name="fullTime">Time value to be combined into SQL Server DateTime.</param>
+        ''' <returns>Nullable DateTime with validation rules for SQL Server DateTime type</returns>
+        ''' <remarks><para>Use this function to make an SQL Server DateTime from a DB2 date type
+        ''' combined with a decimal type representing time.</para>
+        ''' <para>In order to combine a Decimal date with a Decimal Time, pass a call to the
+        ''' <c>MakeDateTime(String, Decimal)</c> method for the <paramref name="fullDate"/> argument.
+        ''' <example><c>MakeDateTime(MakeDateTime("CYYMMDD",[DecimalDate]),[DecimalTime])</c></example>
+        ''' </para>
+        ''' </remarks>
+	*/
+
+
+	public static Object makeDateTime(LocalDate fullDate, BigDecimal fullTime){
+	  if(fullDate == null){
+	    return fullDate;
+	  }
+
+	  if(fullDate.compareTo(LocalDate.parse("1753-01-01")) < 0){
+	    return null;
+	  }
+
+	  int tempTime = fullTime.abs().intValue();
+	  int hours = tempTime / 10000;
+	  int minutes = (tempTime % 10000) / 100;
+	  int seconds = tempTime % 100;
+
+	  if((hours > 23) || (minutes > 59) || (seconds > 59)){
+	    return fullDate;
+	  }
+
+	  return LocalDateTime.of(fullDate, LocalTime.of(hours, minutes, seconds));
+	}
+	/*
+         * <summary>
+         * Parses SQL Server DateTime to one of the following: MM, DD, YYYY, YY, C, CC, CYYMMDD, MMDDYY, 
+         * YYMMDD, or YYYYMMDD Decimal fields.
+         * </summary>
+         * <param name="formatDate">Format pattern indicating the part of the date to extract.</param>
+         * <param name="fullDate">DateTime value to be parsed to DB2 Decimal.</param>
+         * <exception cref="ArgumentOutOfRangeException">
+         * <paramref name="formatDate"/> is not "MM", "DD", "YY", "YYYY", "C", "CC", "CYYMMDD",
+         * "MMDDYY", "YYMMDD", or "YYYYMMDD".
+         * </exception>
+         * <returns>DB2 Decimal value of the part of the Date specified with the formatDate parameter.
+         * 0 will be returned for nulls.</returns>
+         * <remarks><para>Use this function to parse any or all parts of the date part of an SQL Server DateTime to a 
+         * DB2 Decimal.  If the DateTime value is null, then 0 will be returned to avoid problems with DB2 tables
+         * that don't allow nulls.</para>
+         * <para><strong>Note:  Specify "C" to extract the century in the form of 0 for 1900 and 1 for 2000.
+         * Specify "CC" to extract the century in the form of 19 for 1900 and 20 for 2000, etc.</strong></para>
+         * </remarks>
+	 */
+/*
+	public static int parseDateValue(String formatDate, LocalDateTime fullDate) throws Exception{
+	  switch(formatDate.toUpperCase()){
+ 	    case "MM":
+	      return fullDate.getMonthValue();
+	    case "DD":
+	      return fullDate.getDayOfMonth();
+	    case "YYYY":
+	      return fullDate.getYear();
+	    case "YY":
+	      return fullDate.getYear() - ( ( fullDate.getYear() / 100 ) * 100 );
+	    case "C":
+	      return ( fullDate.getYear() / 100 ) - 19;
+	    case "CC":
+	      return fullDate.getYear() / 100;
+	    case "CYYMMDD":
+	      return ( ( ( fullDate.getYear() / 100 ) - 19 ) * 1000000 ) + ( ( fullDate.getYear() - ( ( fullDate.getYear() / 100 ) * 100 ) ) * 10000 ) + ( fullDate.getMonthValue() * 100 ) + fullDate.getDayOfMonth();
+	    case "MMDDYY":
+	      return ( fullDate.getMonthValue() * 10000 ) + ( fullDate.getDayOfMonth() * 100 ) + ( fullDate.getYear() - ( ( fullDate.getYear() / 100 ) * 100 ) );
+	    case "YYMMDD":
+	      return ( ( fullDate.getYear() - ( ( fullDate.getYear() / 100 ) * 100 ) ) * 10000 ) + ( fullDate.getMonthValue() * 100 ) + fullDate.getDayOfMonth();
+	    case "YYYYMMDD":
+	      return ( fullDate.getYear() * 10000 ) + ( fullDate.getMonthValue() * 100 ) + fullDate.getDayOfMonth();
+	    default:
+   	      throw new Exception("Valid formats are CYYMMDD, MMDDYY, YYMMDD, and YYYYMMDD.");
+          }
+	}
+*/
+ }
