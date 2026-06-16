@@ -474,6 +474,56 @@ Field functions are configured at the table/entity level in the `table-list-temp
   - `type`: The type of transformation function (e.g. `Str2DateTime`, `Dbl2Dec`, `TsOff`, `Dec2Sht`, `DateTime2Str`).
   - Specific parameters depending on the function type (e.g. `pattern`, `zoneName`, `isTechnicalField`, `requireUserInput`).
 
+### Available Expression Types
+
+The following table lists all pre-built field transformation functions supported by Gluesync, grouped by category, with their corresponding technical expression `type` strings and available parameters:
+
+| Category | Function Name | YAML `type` String | Parameters | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| **Temporal to String** | Convert Date to String | `Date2Str` | `pattern` (default: `yyyy-MM-dd`) | Formats a local date value as text. |
+| | Convert Time to String | `Time2Str` | `pattern` (default: `HH:mm:ss.SSSSSSSS`) | Formats a local time value as text. |
+| | Convert Date and Time to String | `DateTime2Str` | `pattern` (default: `yyyy-MM-dd'T'HH:mm:ss.SSSSSS`) | Formats a local date and time value as text. |
+| | Convert Time with Offset to String | `OffsetTime2Str` | `pattern` (default: `HH:mm:ss.SSSSSSSSSXXX`) | Formats a timezone offset-aware time as text. |
+| | Convert Date and Time with Offset to String | `OffsetDateTime2Str` | `pattern` (default: `yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXX`) | Formats an offset-aware date/time as text. |
+| **String to Temporal** | Convert String to Date | `Str2Date` | `pattern` (default: `yyyy-MM-dd`) | Parses a date text into a temporal representation. |
+| | Convert String to Time | `Str2Time` | `pattern` (default: `HH:mm:ss.SSSSSSSS`) | Parses a time text into a temporal representation. |
+| | Convert String to Date and Time | `Str2DateTime` | `pattern` (default: `yyyy-MM-dd'T'HH:mm:ss.SSSSSS`) | Parses a combined date/time text. |
+| | Convert String to Time with Offset | `Str2OffsetTime` | `pattern` (default: `HH:mm:ss.SSSSSSSSSXXX`) | Parses an offset-aware time text. |
+| | Convert String to Date and Time with Offset | `Str2OffsetDateTime` | `pattern` (default: `yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXX`) | Parses an offset-aware date/time text. |
+| **Numeric Casting** | Convert Decimal to Short | `Dec2Sht` | None | Converts a high-precision decimal to a short. |
+| | Convert Decimal to Int | `Dec2Int` | None | Converts a high-precision decimal to an integer. |
+| | Convert Decimal to Long | `Dec2Lng` | None | Converts a high-precision decimal to a long. |
+| | Convert Decimal to Float | `Dec2Flt` | None | Converts a decimal to a single-precision float. |
+| | Convert Decimal to Double | `Dec2Dbl` | None | Converts a decimal to a double-precision float. |
+| | Short to Convert Decimal | `Sht2Dec` | None | Converts a short to a high-precision decimal. |
+| | Int to Convert Decimal | `Int2Dec` | None | Converts an integer to a high-precision decimal. |
+| | Long to Convert Decimal | `Lng2Dec` | None | Converts a long to a high-precision decimal. |
+| | Float to Convert Decimal | `Flt2Dec` | None | Converts a float to a high-precision decimal. |
+| | Double to Convert Decimal | `Dbl2Dec` | None | Converts a double to a high-precision decimal. |
+| **Text & Binary** | Byte Array to String | `Bytes2Str` | `charsetName` (default: `UTF-8`) | Decodes binary data into readable text. |
+| | String to Byte Array | `Str2Bytes` | `charsetName` (default: `UTF-8`) | Encodes a text field into binary data. |
+| | Trim String | `Trim` | None | Trims leading/trailing whitespace. |
+| | Number to String | `Num2Str` | None | Converts any numeric value to text. |
+| **Technical & Constants** | Local Timestamp | `LocalTs` | None | Injects the system timestamp. |
+| | Timestamp with Offset | `OffsetTs` | `zoneName` (default: `Europe/Rome`) | Injects system timestamp with timezone. |
+| | Fixed short number | `ConstSht` | `value` (default: `0`) | Injects a static short integer constant. |
+| | Fixed integer number | `ConstInt` | `value` (default: `0`) | Injects a static integer constant. |
+| | Fixed long number | `ConstLng` | `value` (default: `0`) | Injects a static long integer constant. |
+| | Fixed float number | `ConstFlt` | `value` (default: `0.0`) | Injects a static single-precision float constant. |
+| | Fixed double number | `ConstDbl` | `value` (default: `0.0`) | Injects a static double-precision float constant. |
+| | Fixed big decimal number | `ConstDec` | `value` (default: `0.0`) | Injects a static decimal constant. |
+| | Fixed string | `ConstStr` | `value` (default: `""`) | Injects a static string constant. |
+| **Advanced Temporal** | Convert Date to DateTime adding Time | `Date2DateTime` | None | Combines date with the current system time. |
+| | Convert Time to DateTime adding Date | `Time2DateTime` | None | Combines time with the current system date. |
+| | Convert Offset Time to Offset DateTime adding Date | `OffsetTime2OffsetDateTime` | None | Promotes offset time to full offset timestamp. |
+| | Convert Date to Offset DateTime adding Offset Time | `Date2OffsetDateTime` | None | Promotes date to full offset timestamp. |
+| | Convert Offset DateTime to Offset Time | `OffsetDateTime2OffsetTime` | None | Extracts only the time and offset components. |
+| | Convert Offset DateTime to Date | `OffsetDateTime2Date` | None | Extracts only the date component. |
+| | Convert Offset DateTime to DateTime | `OffsetDateTime2DateTime` | None | Extracts date and time, dropping timezone details. |
+| | Convert Date to DateTime adding Parsed Time | `Date2DateTimeWithParsedTime` | `time` (default: `00:00:00`) | Combines date with a custom time string. |
+| | Convert Time to DateTime adding Parsed Date | `Time2DateTimeWithParsedDate` | `date` (default: `1970-01-01`) | Combines time with a custom date string. |
+| | Convert DateTime to Offset DateTime with Zone | `DateTime2OffsetDateTimeWithZone` | `zoneName` (default: `Europe/Rome`) | Applies specific timezone to a timestamp. |
+
 ### Examples
 
 #### Example 1: Standard Table Field Function

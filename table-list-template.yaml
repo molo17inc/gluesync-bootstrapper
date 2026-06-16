@@ -246,7 +246,14 @@ dbo:
         # UPSERT: Update existing records or insert new ones (default)
         # INSERT: Only insert new records, skip existing ones
         snapshotWriteMethod: "INSERT"
-        # Field Functions: transformation expressions applied on specific columns
+        # Field Functions: transformation expressions applied on specific columns.
+        # Supported type strings include:
+        #   - Temporal to String: Date2Str, Time2Str, DateTime2Str, OffsetTime2Str, OffsetDateTime2Str
+        #   - String to Temporal: Str2Date, Str2Time, Str2DateTime, Str2OffsetTime, Str2OffsetDateTime
+        #   - Numeric Casting:   Dec2Sht, Dec2Int, Dec2Lng, Dec2Flt, Dec2Dbl, Sht2Dec, Int2Dec, Lng2Dec, Flt2Dec, Dbl2Dec
+        #   - Text & Binary:     Bytes2Str, Str2Bytes, Trim, Num2Str
+        #   - Tech & Constants:  LocalTs, OffsetTs, ConstSht, ConstInt, ConstLng, ConstFlt, ConstDbl, ConstDec, ConstStr
+        #   - Adv Temporal:      Date2DateTime, Time2DateTime, OffsetTime2OffsetDateTime, Date2OffsetDateTime, OffsetDateTime2OffsetTime, OffsetDateTime2Date, OffsetDateTime2DateTime, Date2DateTimeWithParsedTime, Time2DateTimeWithParsedDate, DateTime2OffsetDateTimeWithZone
         fieldFunctions:
           - column: FIRST_NAME
             expression:
