@@ -451,10 +451,20 @@ deploy:
       DEFAULT_NAME=${DOCKER_REGISTRY}/${APP_NAME}
       ADDITIONAL_TAG="${DEFAULT_NAME}:${TAGPART}"
 
-    - docker login -u danieleangeli -p "$CI_REGISTRY_PASSWORD"
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u danieleangeli --password-stdin
+    - echo "$NEXUS_REPO_PASSWORD" | docker login -u gluesync --password-stdin nexus.hq.molo17.com
+
+    - |
+      NEXUS_NAME="nexus.hq.molo17.com/molo17-local/${APP_NAME}"
+
     - docker build -t $DEFAULT_NAME:latest .
     - docker tag $DEFAULT_NAME:latest "$ADDITIONAL_TAG"
     - docker push "$ADDITIONAL_TAG"
+
+    - docker tag $DEFAULT_NAME:latest "${NEXUS_NAME}:${TAGPART}"
+    - docker push "${NEXUS_NAME}:${TAGPART}"
+    - docker tag $DEFAULT_NAME:latest "${NEXUS_NAME}:latest"
+    - docker push "${NEXUS_NAME}:latest"
   rules:
     - if: "$CI_COMMIT_TAG =~ /^tag-/"
     - if: "$CI_COMMIT_TAG =~ /^beta-/"
