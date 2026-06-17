@@ -53,6 +53,7 @@ from create_all_entities import (
     main as create_entities_main,
     set_create_table_if_not_exists,
 )
+import create_user_defined_functions as udf_module
 from export_template_from_corehub import (
     fetch_pipeline_entities,
     build_entities_maps,
@@ -302,6 +303,14 @@ def run_create_entities(
     prev_flag_create_tables = CREATE_TABLE_IF_NOT_EXISTS
     set_create_table_if_not_exists(create_tables)
     os.environ['CREATE_TABLE_IF_NOT_EXISTS'] = 'true' if create_tables else 'false'
+
+    # Always point UDF lookup at the directory of the uploaded YAML so that
+    # UDF source files placed next to it are discovered automatically.
+    if yaml_file:
+        yaml_dir = os.path.dirname(os.path.abspath(yaml_file))
+        if yaml_dir and os.path.isdir(yaml_dir):
+            udf_module.UDF_PATH = yaml_dir
+            logger.info(f"UDF_PATH set to YAML directory: {yaml_dir}")
 
     handler = None
     root_logger = logging.getLogger()
