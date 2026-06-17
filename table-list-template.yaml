@@ -36,7 +36,7 @@ groups:
 dbo:
   target: dbo
   # Optional type hints used when importing/exporting pipelines
-  # SQL ~ RDBMS, NoSQL for document / non-relational targets
+  # SQL ~ RDBMS, NoSQL for document / non-relational targets, ObjectStore for file storage targets (FTP, FTPS, SFTP, WebDAV, SMB, NFS)
   sourceType: SQL
   targetType: NoSQL
   transactionsAudit:

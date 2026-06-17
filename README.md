@@ -28,7 +28,7 @@ Gluesync Bootstrapper is a configuration tool for setting up database schema map
 
 - **Real-time data synchronization**: Between source and target databases
 - **Transactions Auditing**: Automated end-to-end tracking of data movement (records processed, duration, metrics) into a dedicated audit table
-- **Support for multiple database systems**: MS SQL Server, Couchbase, etc.
+- **Support for multiple database systems**: MS SQL Server, Couchbase, FTP/FTPS/SFTP/WebDAV/SMB/NFS file storage, etc.
 - Configurable filtering and transformation rules
 - Customizable document key generation
 - Flexible polling intervals and batch processing
@@ -477,10 +477,76 @@ The agent configuration defines the connection details for source and target dat
         "port": 1433,
         "databaseName": "demo"
       }
+    },
+    {
+      "agentType": "TARGET",
+      "agentTag": "universal-file-store-agent",
+      "hostCredentials": {
+        "connectionName": "FTP target",
+        "host": "ftp.example.com",
+        "port": 21,
+        "username": "ftpuser",
+        "password": "ftppass",
+        "protocol": "FTP",
+        "enableTls": false,
+        "customPath": "/data/exports",
+        "fileType": "Parquet"
+      }
     }
   ]
 }
 ```
+
+### Universal file store agent
+
+The bootstrapper supports configuring the **Universal file store agent** as a target. This agent enables replication to network file storage endpoints using protocols such as FTP, FTPS, SFTP, WebDAV, SMB, and NFS.
+
+#### Supported protocols
+
+| Protocol | Default port | Description |
+| :--- | :--- | :--- |
+| FTP | 21 | Standard File Transfer Protocol |
+| FTPS | 990 | FTP over implicit TLS |
+| SFTP | 22 | SSH File Transfer Protocol |
+| WebDAV | 80 | Web-based Distributed Authoring and Versioning |
+| WebDAVS | 443 | WebDAV over HTTPS |
+| SMB / CIFS | 445 | Server Message Block file sharing |
+| NFS | 2049 | Network File System |
+
+#### Supported file formats
+
+| Format | Description |
+| :--- | :--- |
+| Parquet | Columnar storage optimized for analytics (default) |
+| JSON | Line-delimited JSON records |
+| CSV | Comma-separated values |
+
+#### Configuration example
+
+```json
+{
+  "agentType": "TARGET",
+  "agentTag": "universal-file-store-agent",
+  "hostCredentials": {
+    "connectionName": "FTP target",
+    "host": "ftp.example.com",
+    "port": 21,
+    "username": "ftpuser",
+    "password": "ftppass",
+    "protocol": "FTP",
+    "enableTls": false,
+    "customPath": "/data/exports",
+    "fileType": "Parquet"
+  }
+}
+```
+
+#### Connection fields
+
+- `protocol`: The file transfer protocol. Options: `FTP`, `FTPS`, `SFTP`, `WebDAV`, `WebDAVS`, `SMB`, `NFS`.
+- `enableTls`: Enable secure transport. Defaults to `false`.
+- `customPath`: Remote root directory for file output. Defaults to `/`.
+- `fileType`: Output file format. Options: `Parquet`, `JSON`, `CSV`. Defaults to `Parquet`.
 
 ## Getting Started
 
