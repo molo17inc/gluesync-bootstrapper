@@ -776,6 +776,44 @@ def _build_table_entry_helper(table, table_lookup, replications, field_mappings,
 
         columns.append(col_def)
 
+    # Add expression-based columns (SrcExpression with no SrcFieldID).
+    # These exist in the target but are computed — the source table has no corresponding
+    # field, so they are not picked up by the loop above and must be added separately.
+    if table_field_mappings and target_table_id and table_lookup.get(target_table_id):
+        target_table_data = table_lookup[target_table_id]["table"]
+        for mapping_key, mapping in table_field_mappings.items():
+            if mapping.get("type") != "expression":
+                continue
+            trg_field_id = mapping.get("target_field_id")
+            src_expr = mapping.get("src_expression", "")
+            if not trg_field_id:
+                continue
+            # [!RecordID] expressions are handled separately as _RRN — skip here
+            if "[!RecordID]" in src_expr:
+                continue
+            target_field_name = field_id_to_name.get((target_table_id, trg_field_id))
+            if not target_field_name:
+                continue
+            # Avoid duplicates in case the column was already added via direct mapping
+            if any(col["name"] == target_field_name for col in columns):
+                continue
+            # Get type info from the target table field list
+            target_field_info = next(
+                (f for f in target_table_data.get("fields", []) if f["name"] == target_field_name),
+                None
+            )
+            if target_field_info:
+                expr_col = {
+                    "name": target_field_name,
+                    "type": target_field_info.get("type") or "VARCHAR",
+                    "dataLength": target_field_info.get("data_length", 0),
+                    "numericPrecision": target_field_info.get("numeric_precision", 0),
+                    "numericScale": target_field_info.get("numeric_scale", 0),
+                    "isNullable": target_field_info.get("allow_null", True)
+                }
+                columns.append(expr_col)
+                print(f"        Added expression column: {target_field_name} (expr: {src_expr[:60]!r})")
+
     # Add special _RRN column if there's a [!RecordID] mapping for this replication
     if record_id_mappings and repl_id_for_table in record_id_mappings:
         for trg_field_id, src_expr in record_id_mappings[repl_id_for_table].items():
@@ -832,11 +870,46 @@ def _build_table_entry_helper(table, table_lookup, replications, field_mappings,
             table_config["keys"] = ["_RRN"]
             print(f"      No primary keys found for table {table['name']}, using _RRN as key (fallback)")
         else:
-            # Use all source column names as composite key
-            # Use sourceName if present, otherwise name (which equals source name in that case)
-            all_column_keys = [col.get("sourceName") or col.get("name") for col in columns if (col.get("sourceName") or col.get("name"))]
-            table_config["keys"] = all_column_keys
-            print(f"      No primary keys found for table {table['name']}, using all {len(all_column_keys)} columns as composite key (fallback)")
+            # Try to derive PKs from the target table when the source has none.
+            # This handles AS/400 tables where the PK is only defined on the SQL Server side.
+            target_derived_keys = []
+            if target_table_id and table_lookup.get(target_table_id):
+                target_table_data = table_lookup[target_table_id]["table"]
+                target_pk_names = target_table_data.get("primary_keys", [])
+                if target_pk_names:
+                    # Build a reverse mapping: target_field_id -> src_field_id
+                    reverse_field_map = {}
+                    for src_fid, mapping in table_field_mappings.items():
+                        if mapping.get("type") == "direct" and mapping.get("target_field_id"):
+                            reverse_field_map[mapping["target_field_id"]] = src_fid
+
+                    for target_pk_name in target_pk_names:
+                        # Resolve the target field id for this PK name
+                        target_pk_fid = next(
+                            (fid for (tid, fid), fname in field_id_to_name.items()
+                             if tid == target_table_id and fname == target_pk_name),
+                            None
+                        )
+                        if target_pk_fid:
+                            src_fid = reverse_field_map.get(target_pk_fid)
+                            if src_fid:
+                                # Map back to the source field name
+                                src_name = field_id_to_name.get((table["id"], src_fid), target_pk_name)
+                                target_derived_keys.append(src_name)
+                            else:
+                                # No direct mapping — use target field name as-is
+                                target_derived_keys.append(target_pk_name)
+                        else:
+                            target_derived_keys.append(target_pk_name)
+
+            if target_derived_keys:
+                table_config["keys"] = target_derived_keys
+                print(f"      No source PKs for table {table['name']}, derived from target: {target_derived_keys}")
+            else:
+                # Last resort: use all source column names as composite key
+                all_column_keys = [col.get("sourceName") or col.get("name") for col in columns if (col.get("sourceName") or col.get("name"))]
+                table_config["keys"] = all_column_keys
+                print(f"      No primary keys found for table {table['name']}, using all {len(all_column_keys)} columns as composite key (last-resort fallback)")
 
     # Add group/chain assignments if this table is in any replication
     if table["id"] in table_assignments:
