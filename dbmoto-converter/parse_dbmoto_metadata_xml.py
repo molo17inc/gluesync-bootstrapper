@@ -814,22 +814,32 @@ def _build_table_entry_helper(table, table_lookup, replications, field_mappings,
                 columns.append(expr_col)
                 print(f"        Added expression column: {target_field_name} (expr: {src_expr[:60]!r})")
 
-    # Add special _RRN column if there's a [!RecordID] mapping for this replication
+    # Add special _RRN column if there's a [!RecordID] mapping for this replication.
+    # If the target field name already exists in columns (e.g. a same-named physical
+    # source column was added above), update it in-place instead of duplicating.
     if record_id_mappings and repl_id_for_table in record_id_mappings:
         for trg_field_id, src_expr in record_id_mappings[repl_id_for_table].items():
             # Look up target field name - this becomes the column name (target side)
             target_field_name = field_id_to_name.get((target_table_id, trg_field_id), "ID")
-            rrn_col = {
-                "name": target_field_name,
-                "type": "DECIMAL",
-                "dataLength": 15,
-                "numericPrecision": 15,
-                "numericScale": 0,
-                "isNullable": False,
-                "sourceName": "_RRN"
-            }
-            columns.append(rrn_col)
-            print(f"      Added _RRN source column mapped to target field '{target_field_name}'")
+            # Check if the column already exists from the direct-mapping pass
+            existing = next((c for c in columns if c["name"] == target_field_name), None)
+            if existing is not None:
+                # The [!RecordID] expression overrides the direct field mapping:
+                # mark the existing entry as sourced from _RRN.
+                existing["sourceName"] = "_RRN"
+                print(f"      Updated existing column '{target_field_name}' to sourceName=_RRN (overrides direct field mapping)")
+            else:
+                rrn_col = {
+                    "name": target_field_name,
+                    "type": "DECIMAL",
+                    "dataLength": 15,
+                    "numericPrecision": 15,
+                    "numericScale": 0,
+                    "isNullable": False,
+                    "sourceName": "_RRN"
+                }
+                columns.append(rrn_col)
+                print(f"      Added _RRN source column mapped to target field '{target_field_name}'")
 
     # Determine the mapped target table name if available
     export_table_name = table["name"]

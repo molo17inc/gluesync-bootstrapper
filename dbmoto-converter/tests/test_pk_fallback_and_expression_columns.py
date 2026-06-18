@@ -426,6 +426,86 @@ class TestExpressionColumnsIncluded(unittest.TestCase):
             f"MYRRN should appear exactly once, got: {col_names}",
         )
 
+    def test_recordid_expression_on_same_named_source_field_no_duplicate(self):
+        """Real-world case: the source table has a physical column named RECORDID
+        AND a [!RecordID] expression maps to the same-named target column.
+        The column must appear exactly once, with sourceName='_RRN'."""
+
+        # Add a source field named RECORDID (physical column, PrimaryKeyPos=0)
+        extra_src_field = """
+        <DBMMFields>
+          <FieldID>5</FieldID><TableID>1</TableID>
+          <Name>RECORDID</Name><Ordinal>5</Ordinal>
+          <Type>DECIMAL</Type><InternalType>12</InternalType>
+          <Size>9</Size><Precision>9</Precision><Scale>0</Scale>
+          <IsUnsigned>N</IsUnsigned><Ccsid>0</Ccsid>
+          <AllowNull>N</AllowNull>
+          <PrimaryKeyPos>0</PrimaryKeyPos>
+          <IsAutoIncrement>N</IsAutoIncrement>
+        </DBMMFields>"""
+
+        # Target also has a RECORDID field (ID=23)
+        extra_tgt_field = """
+        <DBMMFields>
+          <FieldID>23</FieldID><TableID>2</TableID>
+          <Name>RECORDID</Name><Ordinal>5</Ordinal>
+          <Type>DECIMAL</Type><InternalType>12</InternalType>
+          <Size>9</Size><Precision>9</Precision><Scale>0</Scale>
+          <IsUnsigned>N</IsUnsigned><Ccsid>0</Ccsid>
+          <AllowNull>N</AllowNull>
+          <PrimaryKeyPos>0</PrimaryKeyPos>
+          <IsAutoIncrement>N</IsAutoIncrement>
+        </DBMMFields>"""
+
+        # Direct field mapping: source RECORDID (5) → target RECORDID (23)
+        direct_mapping = """
+        <DBMMFieldMappings>
+          <FieldMappingID>204</FieldMappingID>
+          <ReplicationID>1</ReplicationID>
+          <SrcFieldID>5</SrcFieldID>
+          <TrgFieldID>23</TrgFieldID>
+          <IsForth>Y</IsForth>
+        </DBMMFieldMappings>"""
+
+        # [!RecordID] expression mapping also targets RECORDID (23)
+        recordid_mapping = """
+        <DBMMFieldMappings>
+          <FieldMappingID>205</FieldMappingID>
+          <ReplicationID>1</ReplicationID>
+          <TrgFieldID>23</TrgFieldID>
+          <SrcExpression>[!RecordID]</SrcExpression>
+          <IsForth>Y</IsForth>
+        </DBMMFieldMappings>"""
+
+        xml = _build_xml(
+            src_pks={"CHCO": 1},
+            tgt_pks={"CHCO": 1},
+            extra_field_mappings=(
+                extra_src_field + extra_tgt_field + direct_mapping + recordid_mapping
+            ),
+        )
+        yamls = _run_pipeline(xml, self.output_dir)
+
+        # The _RRN update only applies to the source-side YAML (AS400_source__DEMO.yaml).
+        # The target-side YAML (SqlServer_target__dbo.yaml) has its own direct RECORDID
+        # column without _RRN, which is correct for that direction.
+        src_yaml = yamls.get("AS400_source__DEMO.yaml")
+        self.assertIsNotNone(src_yaml, f"AS400_source__DEMO.yaml not found. Got: {list(yamls.keys())}")
+        cfg = src_yaml["DEMO"]["tables"]["custom"]["MYTABLE"]
+
+        col_names = [c["name"] for c in cfg["columns"]]
+        # Must not be duplicated
+        self.assertEqual(
+            col_names.count("RECORDID"), 1,
+            f"RECORDID should appear exactly once, got columns: {col_names}",
+        )
+        # The surviving entry must have sourceName=_RRN
+        recordid_col = next(c for c in cfg["columns"] if c["name"] == "RECORDID")
+        self.assertEqual(
+            recordid_col.get("sourceName"), "_RRN",
+            "RECORDID column must have sourceName=_RRN when [!RecordID] mapping exists",
+        )
+
     def test_direct_mapped_column_not_duplicated_by_expression_path(self):
         """A column that already exists via a direct mapping must not be
         added again even if a stale expression entry is somehow present."""
