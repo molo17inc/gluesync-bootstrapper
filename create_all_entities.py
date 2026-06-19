@@ -3428,12 +3428,25 @@ def main(pipeline_id, source_schema, target_schema, source_type, target_type, ya
     try:
         yaml_config = load_yaml_config(yaml_file) if yaml_file else None
 
-        # If UDF_PATH is empty, fall back to the YAML file's directory so that
-        # UDF source files placed next to the YAML (or in udf-generated/ subdirs)
-        # are discovered automatically during entity creation.
+        # Resolve UDF_PATH when it is not already set.
+        # Priority:
+        # 1. The YAML file's own directory (covers ZIP-upload flow where YAML and
+        #    UDF files land in the same extract_dir, and the manual workaround where
+        #    the user places UDF files next to the YAML).
+        # 2. The dedicated gluesync_automator_udfs temp directory created by the
+        #    /api/import/all endpoint.
+        # find_udf_definition_in_path also searches upload_* siblings and the udfs
+        # dir on its own, so setting UDF_PATH here is mainly for the error message.
         if yaml_file and not udf_module.UDF_PATH:
+            import tempfile as _tmp
             yaml_dir = os.path.dirname(os.path.abspath(yaml_file))
-            if yaml_dir and os.path.isdir(yaml_dir):
+            udfs_import_dir = os.path.join(_tmp.gettempdir(), "gluesync_automator_udfs")
+            # Prefer the dedicated import directory if it exists and is non-empty,
+            # otherwise fall back to the YAML's own directory.
+            if os.path.isdir(udfs_import_dir) and any(Path(udfs_import_dir).rglob("*")):
+                udf_module.UDF_PATH = udfs_import_dir
+                logger.info(f"UDF_PATH not set; using import UDFs directory: {udfs_import_dir}")
+            elif yaml_dir and os.path.isdir(yaml_dir):
                 udf_module.UDF_PATH = yaml_dir
                 logger.info(f"UDF_PATH not set; falling back to YAML directory: {yaml_dir}")
 

@@ -94,10 +94,44 @@ def get_udf_function_for_table(table_name: str, udf: list[dict]) -> dict:
     return next((item for item in udf if item.get("name") == table_name), {})
 
 def find_udf_definition_in_path(udf_name: str, udf_type: UdfFunctionType) -> PosixPath:
+    """Search for a UDF source file by name + type extension.
+
+    Search order:
+    1. ``UDF_PATH`` (the explicitly configured or fallback path).
+    2. Any ``upload_*/`` sibling sub-directory of ``UDF_PATH``'s parent —
+       covers the case where the user previously uploaded a backup ZIP via
+       the Automator upload button so UDF files were extracted into a UUID
+       sub-folder of the temp directory.
+    3. ``gluesync_automator_udfs`` inside the system temp directory —
+       the dedicated extraction folder used by the ``/api/import/all``
+       endpoint.
+    """
+    import tempfile
+
     filename = f"{udf_name}{udf_type.extension()}"
-    path_location = Path(UDF_PATH)
-    file_path = next((p for p in path_location.rglob(filename)), None)
-    return file_path
+
+    search_roots: list[Path] = []
+    if UDF_PATH:
+        search_roots.append(Path(UDF_PATH))
+        # Also search sibling upload_* directories (from a ZIP upload session)
+        parent = Path(UDF_PATH).parent
+        for sibling in parent.iterdir() if parent.is_dir() else []:
+            if sibling.is_dir() and sibling.name.startswith("upload_"):
+                search_roots.append(sibling)
+
+    # Always try the dedicated UDF import directory used by import/all
+    udf_import_root = Path(tempfile.gettempdir()) / "gluesync_automator_udfs"
+    if udf_import_root.is_dir() and udf_import_root not in search_roots:
+        search_roots.append(udf_import_root)
+
+    for root in search_roots:
+        if not root.is_dir():
+            continue
+        found = next((p for p in root.rglob(filename)), None)
+        if found:
+            return found
+
+    return None
 
 def read_file(filepath):
     try:
@@ -226,7 +260,21 @@ def check_and_compile_udf_function(table_name: str, udf_definition: dict, pipeli
             raise
     else:
         expected_filename = f"{udf_name}{udf_type.extension()}"
-        error_msg = f"Missing UDF file for '{udf_name}' (table: {table_name}, type: {udf_type}). Expected filename: {expected_filename} in directory: {UDF_PATH or 'current directory'}"
+        search_dirs = [UDF_PATH] if UDF_PATH else []
+        import tempfile as _tmpmod
+        _udfs_dir = str(Path(_tmpmod.gettempdir()) / "gluesync_automator_udfs")
+        if _udfs_dir not in search_dirs:
+            search_dirs.append(_udfs_dir)
+        search_dirs_str = ", ".join(search_dirs) if search_dirs else "(none configured)"
+        error_msg = (
+            f"Missing UDF file for '{udf_name}' (table: {table_name}, type: {udf_type}). "
+            f"Expected filename: {expected_filename}. "
+            f"Searched in: {search_dirs_str}. "
+            f"To fix this: if you are importing a pipeline backup that includes UDFs, "
+            f"upload the full backup ZIP file (not just the YAML) through the Automator "
+            f"upload interface — the ZIP bundles the UDF source files automatically. "
+            f"Alternatively, place {expected_filename!r} manually in: {UDF_PATH or _udfs_dir}"
+        )
         logger.error(error_msg)
         raise FileNotFoundError(error_msg)
 
