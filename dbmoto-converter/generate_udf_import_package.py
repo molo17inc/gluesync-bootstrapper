@@ -776,7 +776,7 @@ def build_java_udf(
     # is assigned.
     target_cols_upper = [c.upper() for c in target_columns]
     recordid_line = ""
-    if "RECORDID" in target_cols_upper and not any(m["target"].upper() == "RECORDID" for m in mappings):
+    if "RECORDID" in target_cols_upper:
         recordid_line = '        modified_values.put("RECORDID", newValues.get("_RRN"));\n'
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
