@@ -1,7 +1,7 @@
 DbMoto field-mapping-to-function UDF generation report
 ======================================================================
 Source XML: efcocrp-meta.xml
-Generated at: 2026-06-19T08:48:08.097386
+Generated at: 2026-06-19T15:43:05.628224
 
 Entities with UDF: 364
 Expressions decoded: 1156

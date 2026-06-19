@@ -764,20 +764,20 @@ def build_java_udf(
     puts = []
     for m in mappings:
         mapping_comments.append(f" *   {m['target']} <- {m['expression']}")
+        if m["target"].upper() == "RECORDID":
+            continue
         delete_puts.append(f'            modified_values.put("{m["target"]}", null);')
         if m.get("todo"):
             puts.append(f"                // TODO: {m['todo']}")
-        if m["target"].upper() == "RECORDID":
-            puts.append('                modified_values.put("RECORDID", newValues.get("_RRN"));')
-        else:
-            puts.append(f'                modified_values.put("{m["target"]}", {m["java"]});')
+        puts.append(f'                modified_values.put("{m["target"]}", {m["java"]});')
 
-    # If RECORDID is present in the target columns but had no explicit DbMoto
-    # mapping, wire it from the built-in _RRN source field.
+    # Build the RECORDID wiring line (if needed) so it executes for every
+    # operation, including Delete, and is placed right after modified_values
+    # is assigned.
     target_cols_upper = [c.upper() for c in target_columns]
+    recordid_line = ""
     if "RECORDID" in target_cols_upper and not any(m["target"].upper() == "RECORDID" for m in mappings):
-        delete_puts.append('            modified_values.put("RECORDID", null);')
-        puts.append('                modified_values.put("RECORDID", newValues.get("_RRN"));')
+        recordid_line = '        modified_values.put("RECORDID", newValues.get("_RRN"));\n'
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     header = f"""import java.util.Map;
@@ -811,7 +811,7 @@ import java.time.LocalDateTime;
         // Target columns: {', '.join(target_columns)}
 
         Map<String, Object> modified_values = newValues;
-
+{recordid_line}
         if (operation == MappingFunctionOperation.Delete) {{
 {chr(10).join(delete_puts)}
             return new Pair<>(operation, modified_values);

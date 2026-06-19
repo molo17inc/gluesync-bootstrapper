@@ -4,7 +4,7 @@
 # Generated from DbMoto metadata: efcocrp-meta.xml
 # Pipeline ID     : a2954f81
 # Pipeline name   : s_TESTBOXAS400 to t_SRVMONSQL3EFCOSBOX (UDF entities)
-# Generated at    : 2026-06-19T08:48:07.022935
+# Generated at    : 2026-06-19T15:43:04.585774
 # Contains only the entities that require a field-mapping-to-function UDF.
 # ---------------------------------------------------------------
 exportMetadata:
