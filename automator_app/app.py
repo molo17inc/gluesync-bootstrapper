@@ -30,6 +30,7 @@ import os
 import shutil
 import sys
 import tempfile
+import uuid
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -505,16 +506,58 @@ def create_app() -> FastAPI:
 
     @app.post("/api/upload", response_model=UploadResponse)
     async def upload_yaml(file: UploadFile = File(...)) -> UploadResponse:
-        if not file.filename.lower().endswith(('.yaml', '.yml')):
-            raise HTTPException(status_code=400, detail="Only YAML files are supported")
+        if not file.filename.lower().endswith(('.yaml', '.yml', '.zip')):
+            raise HTTPException(status_code=400, detail="Only YAML or ZIP files are supported")
 
         temp_dir = Path(tempfile.gettempdir()) / "gluesync_automator"
         temp_dir.mkdir(parents=True, exist_ok=True)
-        suffix = Path(file.filename).suffix or ".yaml"
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, dir=temp_dir) as tmp:
-            contents = await file.read()
-            tmp.write(contents)
-            temp_path = Path(tmp.name)
+
+        contents = await file.read()
+        if not contents:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+        if file.filename.lower().endswith('.zip'):
+            # Extract YAML and UDF source files from the ZIP into the temp
+            # directory so that the UDF_PATH fallback in create_all_entities
+            # can discover UDF source files (under udf-* subfolders) via rglob.
+            extract_dir = temp_dir / f"upload_{uuid.uuid4().hex[:8]}"
+            extract_dir.mkdir(parents=True, exist_ok=True)
+            yaml_path: Optional[Path] = None
+            try:
+                with zipfile.ZipFile(io.BytesIO(contents)) as zf:
+                    for member in zf.namelist():
+                        if member.startswith("__MACOSX/") or member.rsplit("/", 1)[-1].startswith("._"):
+                            continue
+                        lower = member.lower()
+                        # Extract YAML files
+                        if lower.endswith((".yaml", ".yml")) and "agents-config" not in lower:
+                            dest = extract_dir / Path(member).name
+                            with zf.open(member) as src, open(dest, "wb") as dst:
+                                shutil.copyfileobj(src, dst)
+                            if yaml_path is None:
+                                yaml_path = dest
+                        # Extract UDF source files (under udf-* paths)
+                        elif ("udf-" in member or member.lstrip("/").startswith("udf-")) and (
+                            lower.endswith(".java") or lower.endswith(".kt")
+                            or lower.endswith(".js") or lower.endswith(".py") or lower.endswith(".rb")
+                        ):
+                            dest = extract_dir / member
+                            dest.parent.mkdir(parents=True, exist_ok=True)
+                            with zf.open(member) as src, open(dest, "wb") as dst:
+                                shutil.copyfileobj(src, dst)
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail=f"Failed to extract ZIP: {exc}") from exc
+
+            if yaml_path is None:
+                raise HTTPException(status_code=400, detail="ZIP does not contain a YAML configuration file")
+            temp_path = yaml_path
+            # Set UDF_PATH so create_all_entities.main can find UDF source files
+            create_user_defined_functions.UDF_PATH = str(extract_dir)
+        else:
+            suffix = Path(file.filename).suffix or ".yaml"
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, dir=temp_dir) as tmp:
+                tmp.write(contents)
+                temp_path = Path(tmp.name)
 
         file_id = state.register_upload(temp_path, file.filename)
         return UploadResponse(fileId=file_id, filename=file.filename)
@@ -1092,7 +1135,11 @@ def create_app() -> FastAPI:
                 "Failed to extract UDF source files from backup; UDF compilation will be skipped: %s",
                 exc,
             )
-            udf_root = None
+            # Still set UDF_PATH to the (possibly empty) directory so that
+            # create_all_entities.main doesn't fall back to the YAML temp dir
+            # (where UDF files are never present) and produce confusing errors.
+            if udf_root is not None and udf_root.is_dir():
+                create_user_defined_functions.UDF_PATH = str(udf_root)
 
         # First pass: find and parse agents-config.yaml for shared agents + metadata
         try:

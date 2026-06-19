@@ -1206,7 +1206,11 @@ def main():
             f.write("No warnings.\n")
     print(f"  Written report: {report_path}")
 
-    # ZIP package for Automator import
+    # ZIP package for Automator import.
+    # UDFs are placed under a 'udf-import/' folder so that the Automator's
+    # Import All extraction logic (which looks for paths containing 'udf-')
+    # picks them up and rglob can find them recursively, matching the export
+    # format used by the Automator's own backup feature (udf-<agentId>/).
     if not cli.no_zip:
         zip_path = os.path.join(output_dir, f"automator_udf_import_{timestamp}.zip")
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -1215,7 +1219,7 @@ def main():
                 zf.write(yf, os.path.basename(yf))
             for java_file in sorted(os.listdir(udf_dir)):
                 if java_file.endswith(".java"):
-                    zf.write(os.path.join(udf_dir, java_file), f"udf-generated/{java_file}")
+                    zf.write(os.path.join(udf_dir, java_file), f"udf-import/{java_file}")
         print(f"\nImport package ready: {zip_path}")
         print("Edit agents-config.yaml inside the package (or regenerate after editing) before importing via Automator 'Import all'.")
 

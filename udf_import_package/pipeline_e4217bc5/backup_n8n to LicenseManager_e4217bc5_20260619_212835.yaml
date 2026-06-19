@@ -1,0 +1,139 @@
+# ---------------------------------------------------------------
+# Gluesync Automator – Pipeline Configuration Export
+# ---------------------------------------------------------------
+# CoreHub URL     : https://gluesync.hq.molo17.com
+# CoreHub version : 2.2.8 - build 8
+# Pipeline ID     : e4217bc5
+# Pipeline name   : n8n to LicenseManager
+# Exported at     : 2026-06-19T19:28:35Z (UTC)
+# ---------------------------------------------------------------
+exportMetadata:
+  pipelineId: e4217bc5
+  pipelineName: n8n to LicenseManager
+public:
+  target: dbo
+  sourceType: SQL
+  targetType: SQL
+  tables:
+    whitelist:
+    - jira_issue_user
+    custom:
+      jira_issue_user:
+        name: CustomerContacts
+        entityName: Sync jira issue users
+        keys:
+        - user_email
+        columns:
+        - source: last_sync_at
+          target: last_sync_at
+          type: timestamp with time zone
+          dataLength: 0
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+          isPK: false
+          id: -8969149696666379067
+          ordinalPosition: 7
+        - source: custom_field_id
+          target: custom_field_id
+          type: bigint
+          dataLength: 0
+          numericPrecision: 64
+          numericScale: 0
+          isNullable: true
+          isPK: false
+          id: -4486907833779462187
+          ordinalPosition: 6
+        - source: user_display_name
+          target: user_display_name
+          type: character varying
+          dataLength: 255
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+          isPK: false
+          id: -3171977468043224674
+          ordinalPosition: 3
+        - source: user_account_id
+          target: user_account_id
+          type: character varying
+          dataLength: 128
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+          isPK: false
+          id: -2179190924123768867
+          ordinalPosition: 2
+        - source: user_key
+          target: user_key
+          type: character varying
+          dataLength: 255
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+          isPK: false
+          id: -1556087439113643575
+          ordinalPosition: 1
+        - source: role_type
+          target: role_type
+          type: character varying
+          dataLength: 50
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+          isPK: false
+          id: 1287241556554486033
+          ordinalPosition: 5
+        - source: user_email
+          target: user_email
+          type: character varying
+          dataLength: 255
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: false
+          isPK: true
+          id: 1376252038389061616
+          ordinalPosition: 4
+        - source: customer_id
+          target: customer_id
+          type: integer
+          dataLength: 0
+          numericPrecision: 32
+          numericScale: 0
+          isNullable: true
+          isPK: false
+          id: 2177726255389951954
+          ordinalPosition: 9
+        - source: timezone
+          target: timezone
+          type: character varying
+          dataLength: 100
+          numericPrecision: 0
+          numericScale: 0
+          isNullable: true
+          isPK: false
+          id: 4135129016957258169
+          ordinalPosition: 8
+        unlockedSchema: true
+        customProperties:
+          source:
+            maxFetchItemsCountPerIteration: 1000
+            maxTransactionMessageKbSize: 1024
+            pollingIntervalMilliseconds: 2500
+          target:
+            maxWriteBatchSize: 1000
+            maxDeleteBatchSize: 1000
+            maxWriteBulkSize: 250000
+            udf:
+            - name: UDF_fd84c12ae981451693ff25e33f6a7f00
+              type: Java
+            snapshotWritingConcurrency: 2
+            allowedOperations:
+            - INSERT
+            - UPDATE
+            - DELETE
+            - TRUNCATE
+groups:
+  default:
+    id: _default
+    color: '#00000000'
