@@ -3429,24 +3429,16 @@ def main(pipeline_id, source_schema, target_schema, source_type, target_type, ya
         yaml_config = load_yaml_config(yaml_file) if yaml_file else None
 
         # Resolve UDF_PATH when it is not already set.
-        # Priority:
-        # 1. The YAML file's own directory (covers ZIP-upload flow where YAML and
-        #    UDF files land in the same extract_dir, and the manual workaround where
-        #    the user places UDF files next to the YAML).
-        # 2. The dedicated gluesync_automator_udfs temp directory created by the
-        #    /api/import/all endpoint.
-        # find_udf_definition_in_path also searches upload_* siblings and the udfs
-        # dir on its own, so setting UDF_PATH here is mainly for the error message.
+        # With the app-owned workspace design, the Automator UI extracts each
+        # upload/import's YAML + UDF files into a single session directory under
+        # the workspace root, and sets UDF_PATH to it. When running standalone
+        # (no UDF_PATH), fall back to the YAML's own directory — which, for
+        # Automator-driven runs, IS that session directory and therefore already
+        # contains the UDF files. find_udf_definition_in_path additionally scans
+        # the whole workspace root, so UDFs are found even without this hint.
         if yaml_file and not udf_module.UDF_PATH:
-            import tempfile as _tmp
             yaml_dir = os.path.dirname(os.path.abspath(yaml_file))
-            udfs_import_dir = os.path.join(_tmp.gettempdir(), "gluesync_automator_udfs")
-            # Prefer the dedicated import directory if it exists and is non-empty,
-            # otherwise fall back to the YAML's own directory.
-            if os.path.isdir(udfs_import_dir) and any(Path(udfs_import_dir).rglob("*")):
-                udf_module.UDF_PATH = udfs_import_dir
-                logger.info(f"UDF_PATH not set; using import UDFs directory: {udfs_import_dir}")
-            elif yaml_dir and os.path.isdir(yaml_dir):
+            if yaml_dir and os.path.isdir(yaml_dir):
                 udf_module.UDF_PATH = yaml_dir
                 logger.info(f"UDF_PATH not set; falling back to YAML directory: {yaml_dir}")
 

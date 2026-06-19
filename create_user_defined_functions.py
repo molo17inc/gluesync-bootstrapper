@@ -20,6 +20,7 @@
 
 import base64
 import os
+import sys
 import json
 from enum import Enum
 
@@ -93,36 +94,49 @@ class UdfFunctionCompileRequest(BaseModel):
 def get_udf_function_for_table(table_name: str, udf: list[dict]) -> dict:
     return next((item for item in udf if item.get("name") == table_name), {})
 
+def get_automator_workspace_root() -> Path:
+    """Return the app-owned Automator working directory, if it exists.
+
+    Mirrors automator_app.app.get_workspace_root() so the bootstrapper scripts
+    can locate UDF files extracted by the Automator UI without importing the web
+    app (these scripts also run standalone). Kept in sync intentionally.
+    """
+    override = os.environ.get("GLUESYNC_AUTOMATOR_WORKDIR")
+    if override:
+        return Path(override)
+    if sys.platform == "win32":
+        local_appdata = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+        base = Path(local_appdata) if local_appdata else Path.home() / "AppData" / "Local"
+        return base / "Gluesync" / "Automator" / "work"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "Gluesync" / "Automator" / "work"
+    xdg = os.environ.get("XDG_DATA_HOME")
+    base = Path(xdg) if xdg else Path.home() / ".local" / "share"
+    return base / "gluesync" / "automator" / "work"
+
+
 def find_udf_definition_in_path(udf_name: str, udf_type: UdfFunctionType) -> PosixPath:
     """Search for a UDF source file by name + type extension.
 
     Search order:
     1. ``UDF_PATH`` (the explicitly configured or fallback path).
-    2. Any ``upload_*/`` sibling sub-directory of ``UDF_PATH``'s parent —
-       covers the case where the user previously uploaded a backup ZIP via
-       the Automator upload button so UDF files were extracted into a UUID
-       sub-folder of the temp directory.
-    3. ``gluesync_automator_udfs`` inside the system temp directory —
-       the dedicated extraction folder used by the ``/api/import/all``
-       endpoint.
+    2. The app-owned Automator workspace root and all its session
+       sub-directories — covers uploads/imports performed through the
+       Automator UI, whose YAML + UDF files share a single session folder
+       under %LOCALAPPDATA%\\Gluesync\\Automator\\work (or the platform
+       equivalent), instead of the volatile OS temp directory.
     """
-    import tempfile
-
     filename = f"{udf_name}{udf_type.extension()}"
 
     search_roots: list[Path] = []
     if UDF_PATH:
         search_roots.append(Path(UDF_PATH))
-        # Also search sibling upload_* directories (from a ZIP upload session)
-        parent = Path(UDF_PATH).parent
-        for sibling in parent.iterdir() if parent.is_dir() else []:
-            if sibling.is_dir() and sibling.name.startswith("upload_"):
-                search_roots.append(sibling)
 
-    # Always try the dedicated UDF import directory used by import/all
-    udf_import_root = Path(tempfile.gettempdir()) / "gluesync_automator_udfs"
-    if udf_import_root.is_dir() and udf_import_root not in search_roots:
-        search_roots.append(udf_import_root)
+    # Always include the app-owned workspace root so UDFs extracted by the
+    # Automator UI are found even if UDF_PATH was not (or could not be) set.
+    workspace_root = get_automator_workspace_root()
+    if workspace_root.is_dir() and workspace_root not in search_roots:
+        search_roots.append(workspace_root)
 
     for root in search_roots:
         if not root.is_dir():
@@ -261,10 +275,9 @@ def check_and_compile_udf_function(table_name: str, udf_definition: dict, pipeli
     else:
         expected_filename = f"{udf_name}{udf_type.extension()}"
         search_dirs = [UDF_PATH] if UDF_PATH else []
-        import tempfile as _tmpmod
-        _udfs_dir = str(Path(_tmpmod.gettempdir()) / "gluesync_automator_udfs")
-        if _udfs_dir not in search_dirs:
-            search_dirs.append(_udfs_dir)
+        workspace_dir = str(get_automator_workspace_root())
+        if workspace_dir not in search_dirs:
+            search_dirs.append(workspace_dir)
         search_dirs_str = ", ".join(search_dirs) if search_dirs else "(none configured)"
         error_msg = (
             f"Missing UDF file for '{udf_name}' (table: {table_name}, type: {udf_type}). "
@@ -273,7 +286,7 @@ def check_and_compile_udf_function(table_name: str, udf_definition: dict, pipeli
             f"To fix this: if you are importing a pipeline backup that includes UDFs, "
             f"upload the full backup ZIP file (not just the YAML) through the Automator "
             f"upload interface — the ZIP bundles the UDF source files automatically. "
-            f"Alternatively, place {expected_filename!r} manually in: {UDF_PATH or _udfs_dir}"
+            f"Alternatively, place {expected_filename!r} manually in: {UDF_PATH or workspace_dir}"
         )
         logger.error(error_msg)
         raise FileNotFoundError(error_msg)
