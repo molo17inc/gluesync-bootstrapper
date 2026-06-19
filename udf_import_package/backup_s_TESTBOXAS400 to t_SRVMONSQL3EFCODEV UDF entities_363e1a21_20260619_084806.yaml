@@ -4,7 +4,7 @@
 # Generated from DbMoto metadata: efcocrp-meta.xml
 # Pipeline ID     : 363e1a21
 # Pipeline name   : s_TESTBOXAS400 to t_SRVMONSQL3EFCODEV (UDF entities)
-# Generated at    : 2026-06-10T14:23:36.387082
+# Generated at    : 2026-06-19T08:48:06.167662
 # Contains only the entities that require a field-mapping-to-function UDF.
 # ---------------------------------------------------------------
 exportMetadata:
@@ -82,25 +82,23 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: CNCRTDTTM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: CNUPDDTTM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - CUSNBR
-          - ACTTYP
-          - CNCONBR
-          - CNDATCRT
-          - CNDATUPD
-          - CNTIMCRT
-          - CNTIMUPD
-          - CNUSRCRT
-          - CNUSRUPD
-          - CNPGMNAM
           chainId: Finance Group
           entityName: ACPRODLIB.ACPAGCAT
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: CNCRTDTTM
-            type: datetime
-          - name: CNUPDDTTM
-            type: datetime
           customProperties:
             target:
               udf:
@@ -369,24 +367,8 @@ schemas:
             isNullable: false
           keys:
           - TSCO
-          - YEAR
-          - PERIOD
-          - WEEK
           - DATADATE
           - TSPN
-          - IMCLS
-          - IMDSC
-          - ONHAND
-          - ISSUED
-          - IMLCOS
-          - INV$
-          - ISS$
-          - QIS30DA
-          - COST30D
-          - AVEUSE
-          - AVECOS
-          - AVE$
-          - COMMENT
           chainId: EpmMetrics Refresh
           entityName: EPMMETRICS.FINVTURNS
           unlockedSchema: true
@@ -504,23 +486,9 @@ schemas:
             numericScale: 0
             isNullable: false
           keys:
-          - TSCO
-          - YEAR
-          - PERIOD
-          - WEEK
           - TSDTTR
           - TSPN
-          - IMCLS
-          - IMDSC
-          - TSREFN
           - TSDFOR
-          - TSAINF
-          - TSTQTY
-          - TOTSQF
-          - TOTPCS
-          - YIELD
-          - POSTEDCOST
-          - NOTE
           chainId: EpmMetrics Refresh
           entityName: EPMMETRICS.GLASSYIELD
           unlockedSchema: true
@@ -754,21 +722,6 @@ schemas:
             isNullable: false
           keys:
           - SEQNUM
-          - TSCO
-          - YEAR
-          - PERIOD
-          - WEEK
-          - TSDTTR
-          - WRKCNT
-          - WOSLNO
-          - TSREFN
-          - TSDFOR
-          - RCODE
-          - REISDSC
-          - TSTAGN
-          - TSPN
-          - TSTQTY
-          - ACTCST
           chainId: EpmMetrics Refresh
           entityName: EPMMETRICS.ITP26BX1
           unlockedSchema: true
@@ -903,37 +856,31 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: PRDTETME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: false
+          - name: PMCRTDTM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: PMUPDDTM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
-          - YEAR
-          - PERIOD
-          - WEEK
           - PRCO
-          - PRDATE
+          - PRDTETME
           - PRESS
-          - GROSLBS
-          - GOODLBS
-          - DWNTIME
-          - DIETRIAL
-          - TOTTIME
-          - SETUPS
-          - PULLED
-          - PMCRTD
-          - PMUPDD
-          - PMCRTT
-          - PMUPDT
-          - PMCRTU
-          - PMUPDU
-          - PMPGMN
           chainId: EpmMetrics Refresh
           entityName: EPMMETRICS.PRESSDATA1
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: PRDTETME
-            type: datetime
-          - name: PMCRTDTM
-            type: datetime
-          - name: PMUPDDTM
-            type: datetime
           customProperties:
             target:
               udf:
@@ -1029,27 +976,17 @@ schemas:
             numericPrecision: 20
             numericScale: 4
             isNullable: false
+          - name: TSDDTTR
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - SEQNUM
-          - YEAR
-          - PERIOD
-          - WEEK
-          - TSDTTR
-          - TSCO
-          - TSCODE
-          - DOLRWC
-          - TSSLSN
-          - DASH
-          - TSPN
-          - TSTQTY
-          - OSPRI
-          - WTS$
           chainId: EpmMetrics Refresh
           entityName: EPMMETRICS.PRODCRED2
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: TSDDTTR
-            type: datetime
           customProperties:
             target:
               udf:
@@ -1314,37 +1251,6 @@ schemas:
           - CNMBR
           - CDASH
           - ITMNO
-          - MARK
-          - PRTNB
-          - CTQTY
-          - CTLEN
-          - JBFIN
-          - JBFINI
-          - DTL1
-          - DTL2
-          - FLOOR#
-          - NOPRT
-          - HSTATS
-          - ORDATE
-          - RECTIM
-          - USER
-          - DATSYS
-          - TIMSYS
-          - LFIRST
-          - CP
-          - NOTHRM
-          - PDCATE
-          - PARTDESC
-          - TLTOOL
-          - BRTOOL
-          - AVCO
-          - AVCRTD
-          - AVUPDD
-          - AVCRTT
-          - AVUPDT
-          - AVCRTU
-          - AVUPDU
-          - AVPGMN
           chainId: RecordID Esprodlib Group
           entityName: ESPRODLIB.E3PJBREQ
           unlockedSchema: true
@@ -1434,28 +1340,23 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: EGCRTDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: EGUPDDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - USER
-          - UNAME
-          - UGROUP
-          - UGRPL
-          - SYSUSR
-          - EGCONBR
-          - EGDATCRT
-          - EGDATUPD
-          - EGTIMCRT
-          - EGTIMUPD
-          - EGUSRCRT
-          - EGUSRUPD
-          - EGPGMNAM
           chainId: EEP Group II
           entityName: ESPRODLIB.ESPUSER
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: EGCRTDT
-            type: datetime
-          - name: EGUPDDT
-            type: datetime
           customProperties:
             target:
               udf:
@@ -1932,6 +1833,24 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: RELDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: MHCRTDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: MHUPDDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - CONBR
           - PARENT
@@ -1942,13 +1861,6 @@ schemas:
           chainId: EEP Group II
           entityName: ESPRODLIB.FEFMHR
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: RELDATETIME
-            type: datetime
-          - name: MHCRTDATETIME
-            type: datetime
-          - name: MHUPDDATETIME
-            type: datetime
           customProperties:
             target:
               udf:
@@ -2029,27 +1941,25 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: MCCRTDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: MCUPDDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - MCCO
           - MCCODE
           - MCSRTC
-          - MCDES1
-          - MCDESC
-          - MCCRTD
-          - MCUPDD
-          - MCCRTT
-          - MCUPDT
-          - MCCRTU
-          - MCUPDU
-          - MCPGMN
           chainId: EEP Group II
           entityName: ESPRODLIB.FEMAPMST
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: MCCRTDATE
-            type: datetime
-          - name: MCUPDDATE
-            type: datetime
           customProperties:
             target:
               udf:
@@ -2568,6 +2478,30 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: BOCRTDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: BOUPDDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: BOEBLDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: BOFBLDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - BOECO
           - BOEPRF
@@ -2577,95 +2511,10 @@ schemas:
           - BOCYEAR
           - BOCNMBR
           - BOCDASH
-          - BOORIG
           - BOSEQ#
-          - BOSSEQ#
-          - BEORF
-          - BOPCAT
-          - BOPSER
-          - BOCAT
-          - BOSER
-          - BOTYPE
-          - BODPRF
-          - BODSC
-          - BOXDESC
-          - BOUTMS
-          - BOCLS
-          - BOCODE
-          - BOBUY
-          - BOABC
-          - BOACD
-          - BOSTS
-          - BOLDTM
-          - BOINST
-          - BOLSHZ
-          - BOPCCOD
-          - BOIMCLS
-          - BODIE
-          - BOSHIPS
-          - BODATE
-          - BOQTY
-          - BOGLASS
-          - BOUTPRC
-          - BOACT$
-          - BOUTNPRC
-          - BONET$
-          - BOWGT
-          - BOMHR
-          - BOMHACT$
-          - BOMHUPRC
-          - BOMHNET$
-          - BOESF
-          - BOEUPRC
-          - BOEACT$
-          - BOENUPRC
-          - BOENET$
-          - BOISF
-          - BOIUPRC
-          - BOIACT$
-          - BOINUPRC
-          - BOINET$
-          - BOEFINSF
-          - BOEFUPRC
-          - BOEFACT$
-          - BOEFUNPRC
-          - BOEFNET$
-          - BOIFINSF
-          - BOIFUPRC
-          - BOIFACT$
-          - BOIFUNPRC
-          - BOIFNET$
-          - BOSOURCE
-          - BOCOM1
-          - BOCOM2
-          - BOCRTU
-          - BOCRTD
-          - BOCRTT
-          - BOUPDU
-          - BOUPDD
-          - BOUPDT
-          - BOPGMN
-          - BOEBLU
-          - BOEBLD
-          - BOEBLT
-          - BOEBLP
-          - BOFBLU
-          - BOFBLD
-          - BOFBLT
-          - BOFBLP
-          - BOPN
           chainId: EEP Group II
           entityName: ESPRODLIB.FENGBOFMST
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: BOCRTDT
-            type: datetime
-          - name: BOUPDDT
-            type: datetime
-          - name: BOEBLDT
-            type: datetime
-          - name: BOFBLDT
-            type: datetime
           customProperties:
             target:
               udf:
@@ -2806,6 +2655,18 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: EQCRTDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: EQUPDDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - EQCO
           - EQPRF
@@ -2815,11 +2676,6 @@ schemas:
           chainId: EEP Group II
           entityName: ESPRODLIB.FESTSQUOTE
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: EQCRTDATETIME
-            type: datetime
-          - name: EQUPDDATETIME
-            type: datetime
           customProperties:
             target:
               udf:
@@ -2876,6 +2732,12 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: QTDCDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: false
           keys:
           - QTDPRF
           - QTDYR
@@ -2887,9 +2749,6 @@ schemas:
           chainId: EEP Group II
           entityName: ESPRODLIB.FESTSUMCMD
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: QTDCDATETIME
-            type: datetime
           customProperties:
             target:
               udf:
@@ -2940,6 +2799,12 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: QTHCDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: false
           keys:
           - QTHPRF
           - QTHYR
@@ -2950,9 +2815,6 @@ schemas:
           chainId: EEP Group II
           entityName: ESPRODLIB.FESTSUMCMH
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: QTHCDATETIME
-            type: datetime
           customProperties:
             target:
               udf:
@@ -3261,65 +3123,26 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: QTCRTDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: QTUPDDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - QTPRF
           - QTYR
           - QTNBR
           - QTDSH
-          - QTJOBNAME
-          - QTESTMATOR
-          - QTESTGROUP
-          - QTRECDATE
-          - QTSETUPDT
-          - QTSALESREP
-          - QTCUSTNUM
-          - QTJOBTOTAL
-          - QTJOBTYPE
-          - QTDOD
-          - QTLMIMPACT
-          - QTNEWDIE
-          - QTBLAST
-          - QTNATACCT
-          - QTEFCO
-          - QTENG
-          - QTQUOTED
-          - QTBUDGET
-          - QTBOGLASS
-          - QTBOHARDWR
-          - QTQUOTEDRW
-          - QTBASIC
-          - QTFULLENG
-          - QTSTATUS
-          - QTPENDTYPE
-          - QTRESCOD
-          - QTVERBAL
-          - QTPOGIVEN
-          - QTLETTER
-          - QTAPPROVYR
-          - QTAPPROVMO
-          - QTSHIPYR
-          - QTSHIPMO
-          - QTSHOPS
-          - QTDRAWTYPE
-          - QTPRODTECH
-          - QTSDCKLST
-          - QTPRJINF
-          - QTCRTD
-          - QTUPDD
-          - QTCRTT
-          - QTUPDT
-          - QTCRTU
-          - QTUPDU
-          - QTPGMN
-          - QTENVIROPD
           chainId: EEP Group II
           entityName: ESPRODLIB.FESTSUMRYH
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: QTCRTDT
-            type: datetime
-          - name: QTUPDDT
-            type: datetime
           customProperties:
             target:
               udf:
@@ -3424,6 +3247,24 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: JBDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: TMCRTDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: TMUPDDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - JBCODE
           - JBMIN$
@@ -3431,13 +3272,6 @@ schemas:
           chainId: EEP Group I
           entityName: ESPRODLIB.FJBMULT
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: JBDATETIME
-            type: datetime
-          - name: TMCRTDATETIME
-            type: datetime
-          - name: TMUPDDATETIME
-            type: datetime
           customProperties:
             target:
               udf:
@@ -3589,34 +3423,29 @@ schemas:
             numericScale: 0
             isNullable: false
             sourceName: PFPGMN
+          - name: FctDat
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: FcteDat
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: PfCrtDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - PFPART
-          - PFCLS
-          - WGTFCT
-          - CSTFCT
-          - ENGCSTSAV
-          - IMWHTNEW
-          - IMLLTLNEW
-          - PARTOLD
-          - IMWHTOLD
-          - IMLLTLOLD
-          - FCTDAT
-          - FCTEDAT
-          - ACTCOD
-          - PFDESC
-          - PFCOMM
-          - PFCOMM1
-          - PFCOMM2
-          - PFCRTD
-          - PFCRTT
-          - PFCRTU
-          - PFPGMN
           chainId: EEP Group I
           entityName: ESPRODLIB.FPARTFCT
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: PfCrtDT
-            type: datetime
           customProperties:
             target:
               udf:
@@ -3687,15 +3516,6 @@ schemas:
             isNullable: false
           keys:
           - PREFSYSTM
-          - SERIES
-          - PDCATE
-          - RDCRTD
-          - RDUPDD
-          - RDCRTT
-          - RDUPDT
-          - RDCRTU
-          - RDUPDU
-          - RDPGMN
           chainId: EEP Group II
           entityName: ESPRODLIB.FPRFXREF
           unlockedSchema: true
@@ -4469,6 +4289,36 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: RSDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: RCRBEGDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: RCRENDDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: RMCRTDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: RMUPDDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - CONBR
           - ESTPRF
@@ -4485,17 +4335,6 @@ schemas:
           chainId: EEP Group II
           entityName: ESPRODLIB.FRCPSUM
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: RSDATETIME
-            type: datetime
-          - name: RCRBEGDATETIME
-            type: datetime
-          - name: RCRENDDATETIME
-            type: datetime
-          - name: RMCRTDATETIME
-            type: datetime
-          - name: RMUPDDATETIME
-            type: datetime
           customProperties:
             target:
               udf:
@@ -4786,23 +4625,42 @@ schemas:
             numericPrecision: 8
             numericScale: 2
             isNullable: false
+          - name: SHIPDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SXCRTDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SXUPDDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SHDDATE1
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SHDDATE2
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - SHCO
           - SHBLNO
           chainId: EEP Group I
           entityName: ESPRODLIB.FSHIPBNO
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: SHIPDATE
-            type: datetime
-          - name: SXCRTDATETIME
-            type: datetime
-          - name: SXUPDDATETIME
-            type: datetime
-          - name: SHDDATE1
-            type: datetime
-          - name: SHDDATE2
-            type: datetime
           customProperties:
             target:
               udf:
@@ -4883,6 +4741,18 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: SXCRTDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SXUPDDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - SHYR
           - SHNBR
@@ -4890,11 +4760,6 @@ schemas:
           chainId: EEP Group I
           entityName: ESPRODLIB.FSHIPCOM
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: SXCRTDATETIME
-            type: datetime
-          - name: SXUPDDATETIME
-            type: datetime
           customProperties:
             target:
               udf:
@@ -5209,6 +5074,30 @@ schemas:
             numericPrecision: 3
             numericScale: 0
             isNullable: false
+          - name: SHINDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SHUPDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: BWCRTDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: BWUPDDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - SHYR
           - SHNBR
@@ -5217,15 +5106,6 @@ schemas:
           chainId: EEP Group I
           entityName: ESPRODLIB.FSHIPPER
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: SHINDATETIME
-            type: datetime
-          - name: SHUPDATETIME
-            type: datetime
-          - name: BWCRTDATETIME
-            type: datetime
-          - name: BWUPDDATETIME
-            type: datetime
           customProperties:
             target:
               udf:
@@ -5420,6 +5300,24 @@ schemas:
             numericPrecision: 9
             numericScale: 0
             isNullable: false
+          - name: SHSHDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SXCRTDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SXUPDDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - SHCO
           - SHYR
@@ -5430,13 +5328,6 @@ schemas:
           chainId: EEP Group I
           entityName: ESPRODLIB.FSHIPTRS
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: SHSHDATE
-            type: datetime
-          - name: SXCRTDATETIME
-            type: datetime
-          - name: SXUPDDATE
-            type: datetime
           customProperties:
             target:
               udf:
@@ -5765,16 +5656,23 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: CACRTDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: CAUPDDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - PRTIDT
           chainId: EEP Group I
           entityName: ESPRODLIB.FSPPDSC
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: CACRTDATETIME
-            type: datetime
-          - name: CAUPDDATETIME
-            type: datetime
           customProperties:
             target:
               udf:
@@ -6179,81 +6077,25 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: FTDATCTM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: FTDATUTM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - ESTNBR
-          - JOBNAM
-          - AGENT
-          - DATSYS
-          - TIMSYS
-          - USER
-          - AGTNBR
-          - PRNTID
           - ESTYR
           - ESTDSH
-          - AGNTCT
-          - JBLOC1
-          - JBLOC2
-          - CUSNBR
-          - CUSNAM
-          - CUSTCT
-          - SOLDT1
-          - SOLDT2
-          - SOLDTC
-          - SOLDTS
-          - SOLDZ1
-          - SOLDZ2
-          - AREACD
-          - PHNENO
-          - EXT
-          - RECDBY
-          - RCVDTE
-          - RQDATE
-          - ASNDTE
-          - PRTDTE
-          - SNTVIA
-          - TYPCUR
-          - BIDDTE
-          - BIDTIM
-          - BIDTM2
-          - CHKOUT
-          - CHKDTE
-          - TTO
-          - FTO
-          - CTO
-          - PPS
-          - FPS
-          - PPSDT
-          - FPSDT
-          - FPSANM
-          - FPSADT
-          - ESTPRF
-          - REVISE
-          - CTS
-          - PSP
-          - PSPDT
-          - UGRPL
-          - MTO
-          - PCC
-          - FSP
-          - FSPDT
-          - STATE
-          - PPPJB
-          - FTCO
-          - FTDATC
-          - FTDATU
-          - FTTIMC
-          - FTTIMU
-          - FTUSRC
-          - FTUSRU
-          - FTPGMN
           chainId: EEP Group I
           entityName: ESPRODLIB.FTPQUOTE
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: FTDATCTM
-            type: datetime
-          - name: FTDATUTM
-            type: datetime
           customProperties:
             target:
               udf:
@@ -6382,6 +6224,18 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: HLDATCRTDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: HLDATUPDDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           - name: RECORDID
             type: DECIMAL
             dataLength: 15
@@ -6394,11 +6248,6 @@ schemas:
           chainId: RecordID Esprodlib Group
           entityName: ESPRODLIB.INPMREFF
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: HLDATCRTDATE
-            type: datetime
-          - name: HLDATUPDDATE
-            type: datetime
           customProperties:
             target:
               udf:
@@ -6541,27 +6390,9 @@ schemas:
             isNullable: false
           keys:
           - CUSNBR
-          - CUSNAM
-          - CUSTPO
-          - AGTNBR
-          - AGENT
           - CYEAR
           - CNMBR
           - CDASH
-          - ESTPRF
-          - ESTYR
-          - ESTNBR
-          - ESTDSH
-          - JOBNAM
-          - DATEIS
-          - JICONBR
-          - JIDATCRT
-          - JIDATUPD
-          - JITIMCRT
-          - JITIMUPD
-          - JIUSRCRT
-          - JIUSRUPD
-          - JIPGMNAM
           chainId: EEP Group I
           entityName: ESPRODLIB.JBPREF
           unlockedSchema: true
@@ -6723,6 +6554,18 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: CQCRTDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: CQUPDDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - FTYPE
           - FCLASS
@@ -6732,11 +6575,6 @@ schemas:
           chainId: EEP Group I
           entityName: ESPRODLIB.MTPFNDES
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: CQCRTDT
-            type: datetime
-          - name: CQUPDDT
-            type: datetime
           customProperties:
             target:
               udf:
@@ -6853,33 +6691,25 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: BCCRTDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: BCUPDDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
-          - BSERIES
-          - QTYSH
-          - BALLNG
-          - VNTWGT
-          - BALNBR
-          - BALLMT
-          - DATSYS
-          - TIMSYS
           - NEWCST
-          - BALCST
-          - BCCO
-          - BCCRTD
-          - BCUPDD
-          - BCCRTT
-          - BCUPDT
-          - BCCRTU
-          - BCUPDU
-          - BCPGMN
+          - BALNBR
+          - BSERIES
           chainId: EEP Group I
           entityName: ESPRODLIB.PEEPBAL
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: BCUPDDT
-            type: datetime
-          - name: BCCRTDT
-            type: datetime
           customProperties:
             target:
               udf:
@@ -7038,40 +6868,24 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: ANUPDDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: ANCRTDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
-          - ANPGMN
-          - ANUPDU
-          - ANCRTU
-          - ANUPDT
-          - ANCRTT
-          - ANUPDD
-          - ANCRTD
-          - PRFGLSREF
-          - ANCO
-          - STKSHTHT
-          - STKSHTWD
-          - MMAXSQFT
-          - MMAXHGT
-          - MMAXWTH
-          - UMAXSQFT
-          - UMAXHGT
-          - UMAXWTH
-          - OPTYN
-          - AGLST
-          - SQFTWT
-          - PARTD2
-          - PARTDS
-          - PRTGLS
           - GTHICK
           - GTYPE
           chainId: Test EEP Group II
           entityName: ESPRODLIB.E3PGLSDS
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: ANUPDDT
-            type: datetime
-          - name: ANCRTDT
-            type: datetime
           customProperties:
             target:
               udf:
@@ -7188,19 +7002,19 @@ schemas:
             numericPrecision: 3
             numericScale: 0
             isNullable: false
+          - name: QDSRTDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: QDUPDDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
-          - QDPGMN
-          - QDUPDU
-          - QDCRTU
-          - QDUPDT
-          - QDCRTT
-          - QDUPDD
-          - QDSRTD
-          - QDCODE
-          - QDUSER
-          - QDTIME
-          - QDDATE
-          - QDPCT
           - QDBRK
           - QDSER
           - QDCAT
@@ -7210,11 +7024,6 @@ schemas:
           chainId: EEP Group I
           entityName: ESPRODLIB.FQTYDSC
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: QDUPDDT
-            type: datetime
-          - name: QDSRTDT
-            type: datetime
           customProperties:
             target:
               udf:
@@ -7373,20 +7182,25 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: LFCRTDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: ALDATET
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: LFUPDDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
-          - LFPGMN
-          - LFUPDU
-          - LFCRTU
-          - LFUPDT
-          - LFCRTT
-          - LFUPDD
-          - LFCRTD
-          - ALUSER
-          - ALTIME
-          - ALDATE
-          - ALMHRS
-          - ALDIFF
-          - ALUTCT
           - ALHTGE
           - ALWDGE
           - ALHTLE
@@ -7398,17 +7212,9 @@ schemas:
           - ALMOD
           - ALPAR
           - ALCO
-          - ALCODE
           chainId: Test EEP Group II
           entityName: ESPRODLIB.FALABOR
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: LFUPDDT
-            type: datetime
-          - name: LFCRTDT
-            type: datetime
-          - name: ALDATET
-            type: datetime
           customProperties:
             target:
               udf:
@@ -7507,6 +7313,18 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: CSUPDDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: CSCRTDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           - name: RECORDID
             type: DECIMAL
             dataLength: 15
@@ -7519,11 +7337,6 @@ schemas:
           chainId: Test RecordID Esprodlib Group
           entityName: ESPRODLIB.FTPGSCST
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: CSUPDDT
-            type: datetime
-          - name: CSCRTDT
-            type: datetime
           customProperties:
             target:
               udf:
@@ -7713,24 +7526,22 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: RDCRTDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: RDUPTDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
-          - RDPGMN
-          - RDUPTU
-          - RDUPTT
-          - RDUPTD
-          - RDCRTU
-          - RDCRTT
-          - RDCRTD
-          - FINFCTAND
-          - FINFCTPNT
           - FINEXT
           entityName: ESPRODLIB.FFINCSTAL
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: RDUPTDT
-            type: datetime
-          - name: RDCRTDT
-            type: datetime
           customProperties:
             target:
               udf:
@@ -7793,23 +7604,22 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: RDUPTDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: RDCRTDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
-          - RDPGMN
-          - RDUPTU
-          - RDUPTT
-          - RDUPTD
-          - RDCRTU
-          - RDCRTT
-          - RDCRTD
-          - RCVFCT
           - RCVEXT
           entityName: ESPRODLIB.FRCVCSTAL
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: RDUPTDT
-            type: datetime
-          - name: RDCRTDT
-            type: datetime
           customProperties:
             target:
               udf:
@@ -7872,23 +7682,22 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: RDUPTDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: RDCRTDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
-          - RDPGMN
-          - RDUPTU
-          - RDUPTT
-          - RDUPTD
-          - RDCRTU
-          - RDCRTT
-          - RDCRTD
-          - THMFCT
           - THMEXT
           entityName: ESPRODLIB.FTHMCSTAL
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: RDUPTDT
-            type: datetime
-          - name: RDCRTDT
-            type: datetime
           customProperties:
             target:
               udf:
@@ -8276,69 +8085,12 @@ schemas:
             numericScale: 0
             isNullable: false
           keys:
-          - WSYSTM
-          - WDWIDE
-          - WDHIGH
-          - UNITPRICE
-          - UNITCOST
-          - SILLOPT
-          - SERIES
-          - RIGHTJBOPT
-          - RDUPDU
-          - RDUPDT
-          - RDUPDD
-          - RDPGMN
-          - RDCRTU
-          - RDCRTT
-          - RDCRTD
-          - PRTSHP
-          - PREFVERSTP
-          - PREFVERS
-          - PREFREF
-          - PREFORDER
-          - PREFNUM
-          - PDCATE
-          - NUMBLITES
-          - MRKPRICE
-          - MKTOTWGT
-          - MKTOTMHR
-          - MKQTY
-          - MKGLSWGT
-          - MKGLSSQFT2
-          - MKGLSSQFT1
-          - MKGLSPRIC2
-          - MKGLSPRIC1
-          - MKGLSCOST2
-          - MKGLSCOST1
-          - MKFINSQFT2
-          - MKFINSQFT1
-          - MKFINPRIC2
-          - MKFINPRIC1
-          - MKFINCOST2
-          - MKFINCOST1
-          - MKDESC
-          - MKALUMPRIC
-          - MKALUMLBS
-          - MKALUMCOST
-          - MARK
-          - LEFTJBOPT
-          - JOBNAM
-          - JBGLSI
-          - JBGLS
-          - JBFINI
-          - JBFIN
           - IMCO
-          - HEADOPT
-          - FINISHDESC
+          - MARK
+          - ESTDSH
+          - ESTNBR
           - ESTYR
           - ESTPRF
-          - ESTNBR
-          - ESTDSH
-          - DISCOUNT
-          - CYEAR
-          - CONFIG
-          - CNMBR
-          - CDASH
           entityName: ESPRODLIB.FPRFMRK
           unlockedSchema: true
           customProperties:
@@ -8764,75 +8516,12 @@ schemas:
             numericScale: 0
             isNullable: false
           keys:
-          - WSYSTM
-          - WSHAPE
-          - WDWIDE
-          - WDHIGH
-          - VDIM
-          - TMSTMP
-          - THERM
-          - SLLEG
-          - SERIES
-          - SASHFRM
-          - RJLEG
-          - RIBN
-          - REFSER
-          - RADAPT
-          - QTYDSC
-          - PDCATE
-          - PARENT
-          - MTGRAIL
-          - MRUPDU
-          - MRUPDT
-          - MRUPDD
-          - MRPGMN
-          - MRCRTU
-          - MRCRTT
-          - MRCRTD
-          - MODELFRM
-          - MODEL
-          - MKQTY
-          - MAXVRT
-          - MAXHRZ
-          - MARK
-          - LJLEG
-          - LADAPT
-          - JBGLS
-          - JBFINI
-          - JBFIN
-          - INFO3
-          - INFO2
-          - INFO1
           - IMCO
-          - HV
-          - HDLEG
-          - GLZTYPE
-          - GLSBT
-          - GLAZE
-          - FDIM
-          - EXTFLD9
-          - EXTFLD8
-          - EXTFLD7
-          - EXTFLD6
-          - EXTFLD5
-          - EXTFLD4
-          - EXTFLD3
-          - EXTFLD2
-          - EXTFLD1
+          - MARK
+          - ESTDSH
+          - ESTNBR
           - ESTYR
           - ESTPRF
-          - ESTNBR
-          - ESTDSH
-          - DTSTMP
-          - DHL5
-          - DHL4
-          - DHL3
-          - DHL2
-          - DHL1
-          - CYEAR
-          - CNMBR
-          - CLROPN
-          - CDASH
           entityName: ESPRODLIB.EEPMARKD
           unlockedSchema: true
           customProperties:
@@ -9040,31 +8729,7 @@ schemas:
           - ESTYR
           - ESTNBR
           - ESTDSH
-          - CYEAR
-          - CNMBR
-          - CDASH
           - ITEM#
-          - ITMMRK
-          - QTYBAY
-          - MTLTHC
-          - WDTH
-          - NOBRKS
-          - LENGTH
-          - JBFIN
-          - FS#
-          - BAYMRK
-          - PRINT
-          - PRTD
-          - BKCAT
-          - RNDTOP
-          - QTYDSC
-          - BKCRTD
-          - BKUPDD
-          - BKCRTT
-          - BKUPDT
-          - BKCRTU
-          - BKUPDU
-          - BKPGMN
           chainId: EEP Group III
           entityName: FBPRODLIB.EEPBKML
           unlockedSchema: true
@@ -9274,6 +8939,18 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: FRCRTDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: FRUPDDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - ESTPRF
           - ESTYR
@@ -9284,11 +8961,6 @@ schemas:
           chainId: EEP Group III
           entityName: FBPRODLIB.EEPJFNRQ
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: FRCRTDATETIME
-            type: datetime
-          - name: FRUPDDATETIME
-            type: datetime
           customProperties:
             target:
               udf:
@@ -9716,71 +9388,8 @@ schemas:
           - ESTYR
           - ESTNBR
           - ESTDSH
-          - CYEAR
-          - CNMBR
-          - CDASH
           - MARK
-          - MKQTY
-          - WDWIDE
-          - WDHIGH
           - IMCO
-          - PARENT
-          - MODEL
-          - PDCATE
-          - WSYSTM
-          - SERIES
-          - THERM
-          - HV
-          - RIBN
-          - JBFIN
-          - JBFINI
-          - HDLEG
-          - SLLEG
-          - LJLEG
-          - RJLEG
-          - JBGLS
-          - GLAZE
-          - MAXVRT
-          - MAXHRZ
-          - WSHAPE
-          - DTSTMP
-          - TMSTMP
-          - QTYDSC
-          - LADAPT
-          - RADAPT
-          - FDIM
-          - VDIM
-          - CLROPN
-          - DHL1
-          - DHL2
-          - DHL3
-          - DHL4
-          - DHL5
-          - MRCRTD
-          - MRUPDD
-          - MRCRTT
-          - MRUPDT
-          - MRCRTU
-          - MRUPDU
-          - MRPGMN
-          - REFSER
-          - GLSBT
-          - INFO1
-          - INFO2
-          - INFO3
-          - SASHFRM
-          - MODELFRM
-          - MTGRAIL
-          - GLZTYPE
-          - EXTFLD1
-          - EXTFLD2
-          - EXTFLD3
-          - EXTFLD4
-          - EXTFLD5
-          - EXTFLD6
-          - EXTFLD7
-          - EXTFLD8
-          - EXTFLD9
           chainId: EEP Group III
           entityName: FBPRODLIB.EEPMARKD
           unlockedSchema: true
@@ -10140,58 +9749,9 @@ schemas:
           - ESTYR
           - ESTNBR
           - ESTDSH
-          - CYEAR
-          - CNMBR
-          - CDASH
           - PDCATE
-          - WSYSTM
-          - SERIES
           - BAYMRK
           - REF#
-          - BAYQTY
-          - WDWIDE
-          - WDHIGH
-          - JBFIN
-          - JBFINI
-          - AHEAD
-          - AJAMB
-          - AMULL
-          - ASILL
-          - MISC
-          - CLIPS
-          - WLDKD
-          - ENGQTY
-          - ATTL
-          - ATBR
-          - BTTL
-          - BTBR
-          - CTTL
-          - CTBR
-          - RDIM
-          - PRINT
-          - QTYDSC
-          - DTSTMP
-          - TMSTMP
-          - AFLDB
-          - APARTA
-          - APARTB
-          - ASIZEA
-          - ASIZEB
-          - ASNGLA
-          - ASNGLB
-          - PARENT
-          - MODEL
-          - MSSDES
-          - LBRCD1
-          - LBRCD2
-          - PCQTY
-          - ARCRTD
-          - ARUPDD
-          - ARCRTT
-          - ARUPDT
-          - ARCRTU
-          - ARUPDU
-          - ARPGMN
           chainId: EEP Group III
           entityName: FBPRODLIB.EEPMKACS
           unlockedSchema: true
@@ -10502,10 +10062,6 @@ schemas:
             isNullable: true
           keys:
           - INVENTORY_ID
-          - COLOR_NAME
-          - COLOR_CODE
-          - COMPANY_NUM
-          - TIME_STAMP
           chainId: BI Group
           entityName: INTRANET.PAINT_INVENTORY
           unlockedSchema: true
@@ -10555,11 +10111,6 @@ schemas:
             isNullable: true
           keys:
           - LOC_ID
-          - LOC
-          - QTY
-          - KITCHEN
-          - INVENTORY_ID
-          - TIME_STAMP
           chainId: BI Group
           entityName: INTRANET.PAINT_LOC
           unlockedSchema: true
@@ -11747,53 +11298,7 @@ schemas:
             numericScale: 0
             isNullable: false
           keys:
-          - ACT
-          - ACTIVE
-          - AMTBSE
-          - AMTDOL
-          - AMTDSC
-          - AMTDUE
-          - AMTSTX
-          - APHOLD
-          - APP
-          - AUDOPR
-          - AUDTIM
-          - CO
-          - CURRCD
-          - DOCEXT
-          - DOCPO
-          - DOCSRC
-          - DTEAPL
-          - DTEDSC
-          - DTEDUE
-          - DTEEFF
-          - DTEREF
-          - DTETRN
-          - EXRATE
-          - EXSRCE
-          - FAMBSE
-          - FAMDSC
-          - FAMDUE
-          - FISCAL
-          - FORAMT
-          - FSCLCC
-          - LOC
-          - NAMEID
-          - PARTPY
-          - PAYEE
-          - PAYTYP
-          - PERIOD
           - REFER
-          - STATUS
-          - STAXCD
-          - TRMDAY
-          - TRMPCT
-          - TYPTRN
-          - VENDNO
-          - WEEK
-          - WKDUE
-          - YEAR
-          - YRDUE
           chainId: KBM Group I
           entityName: KBM400D011.MAPTRAN
           unlockedSchema: true
@@ -12589,6 +12094,12 @@ schemas:
             numericPrecision: 2
             numericScale: 0
             isNullable: false
+          - name: DTETRNDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           - name: RECORDID
             type: DECIMAL
             dataLength: 15
@@ -12601,9 +12112,6 @@ schemas:
           chainId: RecordID KBM Group I
           entityName: KBM400D011.MGLPOST
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: DTETRNDATE
-            type: datetime
           customProperties:
             target:
               udf:
@@ -12860,31 +12368,23 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: FYEAR
+            type: decimal
+            dataLength: 5
+            numericPrecision: 4
+            numericScale: 0
+            isNullable: false
+          - name: DTEREFDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: false
           keys:
-          - AUDOPR
-          - AUDTIM
-          - CDEEND
-          - CENTRY
-          - DAYWK
-          - DAYYR
-          - DTEREF
-          - FISCAL
-          - FRQDED
-          - FSCLCC
-          - FULLDT
-          - PERIOD
-          - QTR
-          - WEEK
-          - YEAR
-          - FULDTD
+          - DTEREFDATE
           chainId: KBM Group I
           entityName: KBM400D011.GLDATE
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: DTEREFDATE
-            type: datetime
-          - name: FYEAR
-            type: decimal
           customProperties:
             target:
               udf:
@@ -13114,41 +12614,8 @@ schemas:
             numericScale: 0
             isNullable: false
           keys:
-          - ACTIVE
-          - AUDOPR
-          - AUDTIM
-          - BILLTO
-          - CRDLIM
-          - CRDSTS
-          - DAYSPY
-          - FRQSTM
           - NAMEID
-          - POSTAR
-          - TYPAR
-          - TYPSTM
           - SHIPTO
-          - SUBSTM
-          - SRVCCD
-          - TERMCD
-          - DISCCD
-          - RESPER
-          - OPENED
-          - DTEFOL
-          - INVDTE
-          - INVAMT
-          - INVNO
-          - LSTPMT
-          - LSTPDT
-          - QTEHLD
-          - OPNORD
-          - CRDHLD
-          - WTSORD
-          - SHPNIV
-          - OPENAR
-          - DSPTAR
-          - DTERVW
-          - HIGHAR
-          - HIGHDT
           chainId: KBM Group VI
           entityName: KBM400GLBL.ARMAST
           unlockedSchema: true
@@ -13287,27 +12754,9 @@ schemas:
             numericScale: 0
             isNullable: false
           keys:
-          - ACTIVE
-          - AMTDOL
-          - APP
-          - AUDOPR
-          - AUDTIM
           - BANKNO
-          - CURRCD
-          - DOCEXT
           - DOCSRC
-          - DTECLR
-          - DTETRN
-          - FISCAL
-          - FORAMT
-          - FSCLCC
-          - NAMEID
-          - PAYEE
-          - PERIOD
-          - REFER
           - TYPTRN
-          - WEEK
-          - YEAR
           chainId: KBM Group VI
           entityName: KBM400GLBL.MBANKTRAN
           unlockedSchema: true
@@ -13589,6 +13038,18 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: DFCRTDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: DFUPDDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           - name: RECORDID
             type: DECIMAL
             dataLength: 15
@@ -13601,11 +13062,6 @@ schemas:
           chainId: RecordID KBM Group II
           entityName: KBM400GLBL.GLDFLT
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: DFCRTDATE
-            type: datetime
-          - name: DFUPDDATE
-            type: datetime
           customProperties:
             target:
               udf:
@@ -14485,154 +13941,24 @@ schemas:
             numericPrecision: 3
             numericScale: 0
             isNullable: false
+          - name: CMCDTETM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: CMDATETM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
-          - CMAC
-          - CMACT
-          - CMACTV
-          - CMADD1
-          - CMADD2
-          - CMADD3
-          - CMADD4
-          - CMADD5
-          - CMADTE
-          - CMAMLP
-          - CMAMTD
-          - CMARCN
-          - CMAYTD
-          - CMBAC
-          - CMBAD1
-          - CMBAD2
-          - CMBAD3
-          - CMBAD4
-          - CMBAD5
-          - CMBCCD
-          - CMBCOT
-          - CMBCTC
-          - CMBEML
-          - CMBFAX
-          - CMBLCL
-          - CMBNAM
-          - CMBOSP
-          - CMBPHO
-          - CMBTCC
-          - CMBTYP
-          - CMBZIP
-          - CMCDTE
-          - CMCLAS
-          - CMCMTD
-          - CMCONT
-          - CMCOUN
-          - CMCRSC
-          - CMCRST
-          - CMCRTY
-          - CMCTCD
-          - CMCTIM
-          - CMCTYP
-          - CMCUR
-          - CMCURR
-          - CMCUSR
-          - CMCVAT
-          - CMCYTD
-          - CMDATE
-          - CMDEL
-          - CMDISC
-          - CMDNO
-          - CMDSCD
-          - CMDTLP
-          - CMEML
-          - CMEMP
-          - CMFAX
-          - CMFCCD
-          - CMFCTC
-          - CMFOB
-          - CMFORC
-          - CMGLCD
-          - CMIADR
-          - CMID
-          - CMLOC
-          - CMLSCA
-          - CMLTPL
-          - CMMLNG
-          - CMMTXP
-          - CMNAME
           - CMNO
-          - CMOREX
-          - CMPBAL
-          - CMPEN
-          - CMPHON
-          - CMPQFL
-          - CMPRON
-          - CMPTIV
-          - CMPTSP
-          - CMPTST
-          - CMREGN
-          - CMSAC
-          - CMSAD1
-          - CMSAD2
-          - CMSAD3
-          - CMSAD4
-          - CMSAD5
-          - CMSCCD
-          - CMSCOD
-          - CMSCOT
-          - CMSCPL
-          - CMSCTC
-          - CMSEML
-          - CMSFAX
-          - CMSLLY
-          - CMSLL2
-          - CMSLMT
-          - CMSLSM
-          - CMSLYR
-          - CMSNAM
-          - CMSORT
-          - CMSPCN
-          - CMSPHO
-          - CMSPMT
-          - CMSTAT
-          - CMSTCC
-          - CMSTNO
-          - CMSZIP
-          - CMTAX1
-          - CMTAX2
-          - CMTAX3
-          - CMTAX4
-          - CMTDUE
-          - CMTER
-          - CMTOCD
-          - CMTOCS
-          - CMTOFL
-          - CMTOPD
-          - CMTOPF
-          - CMTOPS
-          - CMTOQD
-          - CMTOQS
-          - CMTOWD
-          - CMTOWS
-          - CMTRMS
-          - CMTSCP
-          - CMUEVT
-          - CMUPGM
-          - CMUTGT
-          - CMUTIM
-          - CMUUSR
-          - CMWHAR
-          - CMXCNO
-          - CMZIP
-          - CM0120
-          - CM030
-          - CM060
-          - CM090
           - COCO
-          - CMDDCO
           chainId: Test DMZ KBM Group
           entityName: KBM400MFG.FHCUSMST
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: CMCDTETM
-            type: datetime
-          - name: CMDATETM
-            type: datetime
           customProperties:
             target:
               udf:
@@ -15475,162 +14801,51 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: CDLSDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: CDUDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: CHODDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: false
+          - name: SACTDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SPRMDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SREQDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - CDBO
-          - CDBSTS
-          - CDBTYP
-          - CDCBUR
-          - CDCCDL
-          - CDCCDS
-          - CDCCGL
-          - CDCCRB
-          - CDCFXM
-          - CDCLAB
-          - CDCMAT
-          - CDCMTL
-          - CDCODL
-          - CDCODS
-          - CDCOGL
-          - CDCOM1
-          - CDCOM2
-          - CDCOM3
-          - CDCONT
-          - CDCOPR
-          - CDCORB
-          - CDCSPN
-          - CDCUOM
-          - CDCUS1
-          - CDCUS2
-          - CDCVBR
-          - CDCVRM
-          - CDC01
-          - CDC02
-          - CDC03
-          - CDC04
-          - CDC05
-          - CDC06
-          - CDC07
-          - CDC08
-          - CDC09
-          - CDC10
-          - CDDESC
-          - CDDISC
-          - CDDSCD
-          - CDDTLD
-          - CDEXMT
-          - CDFLG1
-          - CDFRCD
-          - CDFRGT
-          - CDFRIN
-          - CDFSTC
-          - CDFSTI
-          - CDGLCD
-          - CDHTYP
-          - CDICDL
-          - CDICDS
-          - CDICGL
-          - CDICRB
-          - CDID
           - CDLINE
-          - CDLSCT
-          - CDLSDA
-          - CDLSMO
-          - CDLSYR
-          - CDMDPR
-          - CDMICD
-          - CDMIIN
-          - CDMISC
-          - CDMTXP
-          - CDNBSP
-          - CDNOSD
-          - CDORTP
-          - CDPGRP
-          - CDPN
-          - CDPOST
-          - CDPPDL
-          - CDPPDS
-          - CDPPGL
-          - CDPPRB
-          - CDPQDL
-          - CDPQDS
-          - CDPQGL
-          - CDPQRB
-          - CDPQTY
-          - CDPRDM
-          - CDPRIC
-          - CDPRJ
-          - CDPRSC
-          - CDQTIN
-          - CDQTLS
-          - CDQTY
-          - CDQTYR
-          - CDQWSP
-          - CDSCOD
-          - CDSDPT
-          - CDSPCT
-          - CDSQTY
-          - CDSTS
-          - CDTAX
-          - CDTINC
-          - CDTODL
-          - CDTODS
-          - CDTOGL
-          - CDTORB
-          - CDTSDL
-          - CDTSDS
-          - CDTSGL
-          - CDTSRB
-          - CDTXCD
-          - CDTXIM
-          - CDTXIN
-          - CDUDTE
-          - CDUEVT
-          - CDUPDM
-          - CDUPGM
-          - CDUPRI
-          - CDUTGT
-          - CDUTIM
-          - CDUUSR
-          - CDVATC
-          - CDWHAR
-          - CHACO
-          - CHBTCN
           - CHCO
-          - CHODCT
-          - CHODDA
-          - CHODMO
-          - CHODYR
+          - CHODDATE
           - CHONO
-          - SACTCT
-          - SACTDA
-          - SACTMO
-          - SACTYR
-          - SPRMCT
-          - SPRMDA
-          - SPRMMO
-          - SPRMYR
-          - SREQCT
-          - SREQDA
-          - SREQMO
-          - SREQYR
-          - CDDCO
-          - CDASH
           chainId: Test DMZ KBM Group
           entityName: KBM400MFG.FHDETMST
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: CDLSDATE
-            type: datetime
-          - name: CDUDATE
-            type: datetime
-          - name: CHODDATE
-            type: datetime
-          - name: SACTDATE
-            type: datetime
-          - name: SPRMDATE
-            type: datetime
-          - name: SREQDATE
-            type: datetime
           customProperties:
             target:
               udf:
@@ -16299,129 +15514,36 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: CHDTDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: CHODDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: CHORDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: CHUDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
-          - CHACO
-          - CHBAC
-          - CHBCCD
-          - CHBCOT
-          - CHBCTC
-          - CHBFAX
-          - CHBLCL
-          - CHBPHO
-          - CHBTCN
-          - CHBTYP
-          - CHCM01
-          - CHCM02
-          - CHCM03
-          - CHCM04
-          - CHCM05
-          - CHCM06
-          - CHCM07
-          - CHCM08
-          - CHCM09
-          - CHCM10
           - CHCO
-          - CHCRTY
-          - CHCSPO
-          - CHCURR
-          - CHCVAT
-          - CHDLSP
-          - CHDTCC
-          - CHDTLA
-          - CHERTS
-          - CHFCEX
-          - CHFOB
-          - CHGFLG
-          - CHGLCD
-          - CHGORD
-          - CHNO
-          - CHNOAK
-          - CHNOIV
-          - CHNOSD
-          - CHODCT
-          - CHODDA
-          - CHODMO
-          - CHODYR
           - CHONO
-          - CHORCT
-          - CHORDA
-          - CHORMO
-          - CHORYR
-          - CHPQFL
-          - CHPQFR
-          - CHPRJ
-          - CHREGN
-          - CHSAC
-          - CHSCCD
-          - CHSCOT
-          - CHSCTC
-          - CHSFAX
-          - CHSMTX
-          - CHSORT
-          - CHSPHO
-          - CHSSEQ
-          - CHSTAT
-          - CHSTCN
-          - CHSTS
-          - CHTER
-          - CHTODT
-          - CHTOFL
-          - CHTOFR
-          - CHTOST
-          - CHUDTE
-          - CHUEVT
-          - CHUPGM
-          - CHUTGT
-          - CHUTIM
-          - CHUUSR
-          - CHWHAR
-          - CMBAD1
-          - CMBAD2
-          - CMBAD3
-          - CMBAD4
-          - CMBAD5
-          - CMBEML
-          - CMBNAM
-          - CMBOSP
-          - CMBZIP
-          - CMDISC
-          - CMDSCD
-          - CMPRON
-          - CMPTIV
-          - CMPTSP
-          - CMSAD1
-          - CMSAD2
-          - CMSAD3
-          - CMSAD4
-          - CMSAD5
-          - CMSCOD
-          - CMSEML
-          - CMSLSM
-          - CMSNAM
-          - CMSPCN
-          - CMSPCT
-          - CMSPMT
-          - CMSZIP
-          - CMTAX1
-          - CMTAX2
-          - CMTAX3
-          - CMTAX4
-          - CMTRMS
-          - CUSTFC
-          - CMDDCO
-          - CHODCN
           chainId: Test DMZ KBM Group
           entityName: KBM400MFG.FHHDRMST
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: CHDTDATE
-            type: datetime
-          - name: CHODDATE
-            type: datetime
-          - name: CHORDATE
-            type: datetime
-          - name: CHUDATE
-            type: datetime
           customProperties:
             target:
               udf:
@@ -16952,21 +16074,18 @@ schemas:
             numericPrecision: 9
             numericScale: 0
             isNullable: false
-          - name: RECORDID
-            type: DECIMAL
-            dataLength: 15
-            numericPrecision: 15
-            numericScale: 0
-            isNullable: false
             sourceName: _RRN
+          - name: INDDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - _RRN
           chainId: RecordID KBM Group III
           entityName: KBM400MFG.FHINVDET
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: INDDATE
-            type: datetime
           customProperties:
             target:
               udf:
@@ -17485,6 +16604,36 @@ schemas:
             numericPrecision: 6
             numericScale: 0
             isNullable: false
+          - name: INDUDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: INHDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: INHUDTTM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: INIDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: INRFDATETM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           - name: RECORDID
             type: DECIMAL
             dataLength: 15
@@ -17497,17 +16646,6 @@ schemas:
           chainId: RecordID KBM Group III
           entityName: KBM400MFG.FHINVHDR
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: INDUDATE
-            type: datetime
-          - name: INHDATE
-            type: datetime
-          - name: INHUDTTM
-            type: datetime
-          - name: INIDATE
-            type: datetime
-          - name: INRFDATETM
-            type: datetime
           customProperties:
             target:
               udf:
@@ -18044,6 +17182,48 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: ODTRGDTTM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SACTDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: CDDTLDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: NACTDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: NDDTLDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: CHODDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: NHODDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           - name: RECORDID
             type: DECIMAL
             dataLength: 15
@@ -18056,21 +17236,6 @@ schemas:
           chainId: RecordID KBM Group V
           entityName: KBM400MFG.FHOEDAUD
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: ODTRGDTTM
-            type: datetime
-          - name: SACTDATE
-            type: datetime
-          - name: CDDTLDATE
-            type: datetime
-          - name: NACTDATE
-            type: datetime
-          - name: NDDTLDATE
-            type: datetime
-          - name: CHODDATE
-            type: datetime
-          - name: NHODDATE
-            type: datetime
           customProperties:
             target:
               udf:
@@ -18319,57 +17484,32 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: OACTDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: OSLSDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: OSODDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
-          - OACTCT
-          - OACTDA
-          - OACTMO
-          - OACTYR
           - OSCO
-          - OSLDOF
           - OSLINE
-          - OSLMDT
-          - OSLSDA
-          - OSLSMO
-          - OSLSYR
-          - OSNBSP
-          - OSODDA
-          - OSODMO
-          - OSODYR
           - OSORD
-          - OSPHAN
           - OSPN
-          - OSPRI
-          - OSPRSC
-          - OSQTLS
-          - OSQTY
-          - OSQTYR
-          - OSQWSP
-          - OSSEQ
-          - OSSQTY
-          - OSSTS
-          - OSTQTY
-          - OSTYP
-          - OSDCO
-          - OSMTYP
-          - OSWHAT
-          - OSNUMB
-          - OCYEAR
-          - OCNMBR
-          - OCDASH
-          - OESTPRF
-          - OESTYR
-          - OESTNBR
-          - OESTDSH
           chainId: Test DMZ KBM Group
           entityName: KBM400MFG.FHOPSMST
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: OACTDATE
-            type: datetime
-          - name: OSLSDATE
-            type: datetime
-          - name: OSODDATE
-            type: datetime
           customProperties:
             target:
               udf:
@@ -18834,24 +17974,47 @@ schemas:
             numericPrecision: 9
             numericScale: 0
             isNullable: false
+          - name: SHUDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SHODDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SHSPRDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SHSREDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SHLSDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SHINDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - SHUSEQ
           chainId: KBM Group II
           entityName: KBM400MFG.FHSHPHIS
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: SHODDATE
-            type: datetime
-          - name: SHSPRDATE
-            type: datetime
-          - name: SHSREDATE
-            type: datetime
-          - name: SHLSDATE
-            type: datetime
-          - name: SHINDATE
-            type: datetime
-          - name: SHUDATETIME
-            type: datetime
           customProperties:
             target:
               udf:
@@ -19286,6 +18449,18 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: TSDUDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: TSDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: false
           - name: RECORDID
             type: DECIMAL
             dataLength: 15
@@ -19298,11 +18473,6 @@ schemas:
           chainId: RecordID Kbm400mfg.Fkitsave Group
           entityName: KBM400MFG.FKITSAVE
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: TSDUDATE
-            type: datetime
-          - name: TSDATETIME
-            type: datetime
           customProperties:
             target:
               udf:
@@ -19491,43 +18661,20 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: LMDATELR
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
-          - LMBOSS
           - LMCODE
-          - LMLDES
-          - LMSDES
           - LMPN
-          - LMTYPE
-          - LMROPD
-          - LMROPT
-          - LMROQT
-          - LMRS
-          - LMSEQ
           - LMCO
           - LMLOT
-          - LMTQTY
-          - LMMOLR
-          - LMDALR
-          - LMYRLR
-          - LMAQTY
-          - LMID
-          - LMDCNT
-          - LMDNCC
-          - LMPKRV
-          - LMOVIS
-          - LMCTLR
-          - LMDNCT
-          - LMWARE
-          - LMGLCD
-          - LMDTCC
-          - LMDTLC
-          - LMDTLR
           chainId: KBM Group I
           entityName: KBM400MFG.FKLOCMST
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: LMDATELR
-            type: datetime
           customProperties:
             target:
               udf:
@@ -19806,6 +18953,18 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: PSEXDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: PSUDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           - name: RECORDID
             type: DECIMAL
             dataLength: 15
@@ -19818,11 +18977,6 @@ schemas:
           chainId: RecordID Kbm400mfg.Fkpstruc Group
           entityName: KBM400MFG.FKPSTRUC
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: PSEXDATE
-            type: datetime
-          - name: PSUDATE
-            type: datetime
           customProperties:
             target:
               udf:
@@ -19945,23 +19099,24 @@ schemas:
             numericPrecision: 9
             numericScale: 0
             isNullable: false
-          - name: RECORDID
-            type: DECIMAL
-            dataLength: 15
-            numericPrecision: 15
-            numericScale: 0
-            isNullable: false
             sourceName: _RRN
+          - name: ALDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: PODADATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - _RRN
           chainId: RecordID KBM Group IV
           entityName: KBM400MFG.FLALOCAT
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: ALDATE
-            type: datetime
-          - name: PODADATE
-            type: datetime
           customProperties:
             target:
               udf:
@@ -20342,83 +19497,44 @@ schemas:
             numericPrecision: 6
             numericScale: 0
             isNullable: false
+          - name: PECSDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: false
+          - name: PEMCGDATETM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: PEMCRDATETM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: PEMPGDATETM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: PEMPRDATETM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
-          - PEBSTS
-          - PEBTYP
           - PECO
-          - PECOMP
-          - PECSCT
-          - PECSDA
-          - PECSDT
-          - PECSMO
-          - PECSYR
-          - PEDTA
-          - PEDTAK
-          - PEDTAV
-          - PEDTCC
-          - PEDTK
-          - PEDTLR
-          - PEDTO
-          - PEDTOR
-          - PEFLG1
+          - PECSDATE
           - PELINE
-          - PEMCCQ
-          - PEMCDG
-          - PEMCEM
-          - PEMCGN
-          - PEMCID
-          - PEMCRC
-          - PEMCRD
-          - PEMCRV
-          - PEMCTG
-          - PEMCTR
-          - PEMPCQ
-          - PEMPDG
-          - PEMPDR
-          - PEMPEM
-          - PEMPGN
-          - PEMPID
-          - PEMPRD
-          - PEMPRV
-          - PEMPTG
-          - PEMPTR
-          - PEMVCQ
-          - PEMVEM
-          - PEMVRD
           - PENO
-          - PEPN
-          - PEQOUS
-          - PEQSRA
-          - PEQSRV
-          - PEQTA
-          - PEQTC
-          - PEQTK
-          - PEQTO
-          - PERDTY
-          - PESEQ
-          - PEUDTE
-          - PEUEVT
-          - PEUPGM
-          - PEUTGT
-          - PEUTIM
-          - PEUUSR
-          - PEVEND
-          - PEWHSE
-          - PRMCDR
           chainId: KBM Group II
           entityName: KBM400MFG.FLPODET
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: PECSDATE
-            type: datetime
-          - name: PEMCGDATETM
-            type: datetime
-          - name: PEMCRDATETM
-            type: datetime
-          - name: PEMPGDATETM
-            type: datetime
-          - name: PEMPRDATETM
-            type: datetime
           customProperties:
             target:
               udf:
@@ -20955,103 +20071,25 @@ schemas:
             numericPrecision: 9
             numericScale: 0
             isNullable: false
+          - name: POEDATETM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: POUDATETM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
-          - POABOM
-          - POACN
-          - POACQT
-          - POACT
-          - POAPVN
-          - POBLKT
-          - POBLLT
-          - POBTYP
-          - POBUYR
-          - POCATG
-          - POCCUP
-          - POCFLG
-          - POCHG
           - POCO
-          - POCOST
-          - POCSME
-          - POCURR
-          - POCXBY
-          - PODACC
-          - PODATE
-          - PODTCC
-          - PODTCR
-          - PODTED
-          - PODTEF
-          - PODTEX
-          - PODTRC
-          - PODTRL
-          - POECC
-          - POEDD
-          - POEDIC
-          - POEMM
-          - POERTS
-          - POETM
-          - POEYY
-          - POFCEX
-          - POFCUC
-          - POGLCD
-          - POINSP
-          - POLDRC
           - POLINE
-          - POLOC
-          - POLSEQ
           - PONO
-          - PONOWC
-          - PONPMT
-          - PONSPN
-          - PONXOP
-          - POOPOP
-          - POOPWO
-          - POPAID
-          - POPN
-          - POPPDA
-          - POPPDQ
-          - POPROJ
-          - POPRTD
-          - POPRV
-          - POQRTV
-          - POQRW
-          - POQSCP
-          - POQSRA
-          - POQSRV
-          - POQTAD
-          - POQTNO
-          - POQTRC
-          - POQTY
-          - POQTY1
-          - POQTY2
-          - POQTY3
-          - PORDTP
-          - POSCSF
-          - POSCST
-          - POSET
-          - POSORD
-          - POSTS
-          - POTAXE
-          - POTOOL
-          - POTQC
-          - POUDTE
-          - POUEVT
-          - POUNTM
-          - POUPGM
-          - POUTGT
-          - POUTIM
-          - POUUSR
-          - POVEND
-          - POWHSE
-          - POWIPA
-          - POWIPQ
           chainId: KBM Group II
           entityName: KBM400MFG.FLPOSUM
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: POEDATETM
-            type: datetime
-          - name: POUDATETM
-            type: datetime
           customProperties:
             target:
               udf:
@@ -21553,88 +20591,8 @@ schemas:
             numericScale: 0
             isNullable: false
           keys:
-          - VMAC
-          - VMACT
-          - VMACTV
-          - VMADR1
-          - VMADR2
-          - VMADR3
-          - VMADTE
-          - VMAPVN
-          - VMATPY
-          - VMBUYR
-          - VMCC01
-          - VMCC02
-          - VMCC03
-          - VMCC04
-          - VMCC05
-          - VMCC06
-          - VMCC07
-          - VMCC08
-          - VMCC09
-          - VMCC10
-          - VMCL
-          - VMCMT
-          - VMCNTC
           - VMCO
-          - VMCOUN
-          - VMCS
-          - VMCTCD
-          - VMCTRY
-          - VMCURR
-          - VMDBNO
-          - VMDSCD
-          - VMDYPY
-          - VMEDGR
-          - VMEDIC
-          - VMFAXN
-          - VMFED
-          - VMGLCD
-          - VMID
-          - VMLDGR
-          - VMLOC
-          - VMLVSN
-          - VMMISC
-          - VMMLNG
-          - VMNAME
           - VMNO
-          - VMOREX
-          - VMPAC
-          - VMPAD1
-          - VMPAD2
-          - VMPAD3
-          - VMPAEE
-          - VMPCNT
-          - VMPCTO
-          - VMPCTU
-          - VMPFXN
-          - VMPHON
-          - VMPNAM
-          - VMPPHN
-          - VMPTYP
-          - VMPZIP
-          - VMRGAF
-          - VMSCC
-          - VMSHPC
-          - VMSHPM
-          - VMSPCK
-          - VMSTC
-          - VMTRCD
-          - VMTRMS
-          - VMTXBL
-          - VMUDTE
-          - VMUEVT
-          - VMUPGM
-          - VMUTGT
-          - VMUTIM
-          - VMUUSR
-          - VMVRDY
-          - VMVSDS
-          - VMVSPY
-          - VMVSTX
-          - VMXCNO
-          - VMZIP
-          - VM1099
           chainId: KBM Group I
           entityName: KBM400MFG.FLVENDM
           unlockedSchema: true
@@ -22121,85 +21079,8 @@ schemas:
             numericScale: 0
             isNullable: false
           keys:
-          - VHACN
-          - VHAPVN
-          - VHCNTD
           - VHCO
-          - VHCRCV
-          - VHCRTC
-          - VHCSCH
-          - VHDRCV
-          - VHDREJ
-          - VHDRET
-          - VHDRWK
-          - VHDSCH
-          - VHDSCP
-          - VHDSTK
-          - VHDTCV
-          - VHDTRJ
-          - VHDTRT
-          - VHDTRW
-          - VHDTSC
-          - VHDTSK
-          - VHDTSP
-          - VHEDAY
-          - VHETYP
-          - VHGLRF
-          - VHIMCS
-          - VHINVN
-          - VHLOT
-          - VHMRCV
-          - VHMREJ
-          - VHMRET
-          - VHMRWK
-          - VHMSCH
-          - VHMSCP
-          - VHMSTK
           - VHNO
-          - VHORWK
-          - VHOSLC
-          - VHPDFG
-          - VHPN
-          - VHPOCS
-          - VHPOLN
-          - VHPON
-          - VHPOUM
-          - VHPQTY
-          - VHPROJ
-          - VHPSTK
-          - VHQRCV
-          - VHQREJ
-          - VHQRET
-          - VHQRWK
-          - VHQSCH
-          - VHQSCP
-          - VHQSRA
-          - VHQSTK
-          - VHQTY1
-          - VHQTY2
-          - VHQTY3
-          - VHRDTY
-          - VHREJN
-          - VHRPDT
-          - VHSCND
-          - VHSVIA
-          - VHTRWK
-          - VHVDPN
-          - VHVEND
-          - VHVNDC
-          - VHVNDL
-          - VHVRNO
-          - VHWHSE
-          - VHWRCN
-          - VHYRCV
-          - VHYREJ
-          - VHYRET
-          - VHYRWK
-          - VHYSCH
-          - VHYSCP
-          - VHYSTK
-          - VHDFECTCDE
-          - VHNONCONF
           chainId: KBM Group II
           entityName: KBM400MFG.FLVNDHST
           unlockedSchema: true
@@ -22517,25 +21398,30 @@ schemas:
             numericPrecision: 9
             numericScale: 0
             isNullable: false
-          - name: RECORDID
-            type: DECIMAL
-            dataLength: 15
-            numericPrecision: 15
-            numericScale: 0
-            isNullable: false
             sourceName: _RRN
+          - name: ALDATE1
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: ALDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: ALRVDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - _RRN
           chainId: RecordID KBM Group IV
           entityName: KBM400MFG.FMALOCAT
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: ALDATE1
-            type: datetime
-          - name: ALDATE
-            type: datetime
-          - name: ALRVDATE
-            type: datetime
           customProperties:
             target:
               udf:
@@ -22604,10 +21490,6 @@ schemas:
           - DEOPNO
           - DELINE
           - DESUBL
-          - DEDESC
-          - DEDATE
-          - DUPDDT
-          - DUPDTT
           chainId: KBM Group II
           entityName: KBM400MFG.FMWDEXTD
           unlockedSchema: true
@@ -23069,94 +21951,39 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: WDACDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: WDDUDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: WDSTDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: WDUDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
-          - RTALTC
           - RTCO
-          - RTCRFC
-          - RTDRGN
-          - RTINDR
-          - RTNBSC
-          - RTNBSU
-          - RTOPCD
           - RTOPNO
-          - RTOUTS
-          - RTPTRV
-          - RTSDSC
-          - RTSTLB
-          - RTSTMV
-          - RTSTSU
-          - RTSUCD
-          - RTTOLR
-          - RTWCNO
-          - WDACDD
-          - WDACMM
-          - WDACYY
-          - WDCD
-          - WDDSTS
-          - WDDUCC
-          - WDDUDD
-          - WDDUMM
-          - WDDUYY
           - WDLINE
-          - WDMHGP
-          - WDMHRP
-          - WDMVPT
-          - WDNOVM
-          - WDOPCT
-          - WDPTNO
-          - WDQTCM
-          - WDQTIN
-          - WDQTLM
-          - WDRNRP
-          - WDRSTS
           - WDSLNO
-          - WDSLOC
-          - WDSTBR
-          - WDSTBT
-          - WDSTDD
-          - WDSTLR
-          - WDSTLT
-          - WDSTMH
-          - WDSTMM
-          - WDSTMR
-          - WDSTMT
-          - WDSTOP
-          - WDSTOR
-          - WDSTOT
-          - WDSTYY
-          - WDSURP
-          - WDTFRZ
-          - WDTFXM
-          - WDTMTL
-          - WDTUS1
-          - WDTUS2
-          - WDTVRM
-          - WDUDTE
-          - WDUEVT
-          - WDUFXM
-          - WDUMTL
-          - WDUPGM
-          - WDUTGT
-          - WDUTIM
-          - WDUUSR
-          - WDUUS1
-          - WDUUS2
-          - WDUVRM
-          - WDVRBR
-          - WDVRBT
           - WOWONO
           chainId: Test DMZ KBM Group
           entityName: KBM400MFG.FMWODET
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: WDACDATE
-            type: datetime
-          - name: WDDUDATE
-            type: datetime
-          - name: WDSTDATE
-            type: datetime
-          - name: WDUDATETIME
-            type: datetime
           customProperties:
             target:
               udf:
@@ -23711,126 +22538,86 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: WOCDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: WODLDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: WODTCLDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: WODTCMDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: WODTLRDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: WODTORDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: WODTSTDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: WOMCTGDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: WOMCTRDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: WOMPDGDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: WOMPDRDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: WOUDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
-          - WOACD
-          - WOAIQ
-          - WOAOQ
-          - WOBALT
-          - WOBS
-          - WOCCC
-          - WOCDD
-          - WOCMM
           - WOCO
-          - WOCOCS
-          - WOCOPN
-          - WOCUEC
-          - WOCYY
-          - WODLCC
-          - WODLSA
-          - WODTCC
-          - WODTCL
-          - WODTCM
-          - WODTLR
-          - WODTOR
-          - WODTST
-          - WODUOM
-          - WOGLCD
-          - WOGNPN
-          - WOIO
-          - WOLINE
-          - WOLOT
-          - WOLSPD
-          - WOLSPQ
-          - WOLULN
-          - WOMCDG
-          - WOMCDR
-          - WOMCEM
-          - WOMCID
-          - WOMCRD
-          - WOMCTG
-          - WOMCTR
-          - WOMPDG
-          - WOMPDR
-          - WOMPEM
-          - WOMPID
-          - WOMPRD
-          - WOMPSA
-          - WOMPTG
-          - WOMPTR
-          - WOMSG
-          - WOMVPT
-          - WONOSP
-          - WONOUT
-          - WOODUE
-          - WOOQTY
-          - WOPLNR
           - WOPN
-          - WOPOC
-          - WOPPD
-          - WOPPQ
-          - WOPRJ
-          - WOPRTD
-          - WOPRTY
-          - WOPRV
-          - WOQTRC
-          - WOQTSC
-          - WOQTWH
-          - WOQTY
-          - WORALT
-          - WOSCST
-          - WOSLNO
-          - WOSPLT
-          - WOSTS
-          - WOTBUR
-          - WOTFXM
-          - WOTLAB
-          - WOTMAT
-          - WOTMTL
-          - WOTUS1
-          - WOTUS2
-          - WOTVAR
-          - WOTVRM
           - WOTYPE
-          - WOUDTE
-          - WOUEVT
-          - WOUNTM
-          - WOUPGM
-          - WOUTGT
-          - WOUTIM
-          - WOUUSR
           - WOWONO
-          - WOWRKR
-          - WOWTRS
-          - WOYLD
-          - WOYUOM
           chainId: Test DMZ KBM Group
           entityName: KBM400MFG.FMWOSUM
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: WOCDATE
-            type: datetime
-          - name: WODLDATE
-            type: datetime
-          - name: WODTCLDT
-            type: datetime
-          - name: WODTCMDT
-            type: datetime
-          - name: WODTLRDT
-            type: datetime
-          - name: WODTORDT
-            type: datetime
-          - name: WODTSTDT
-            type: datetime
-          - name: WOMCTGDATE
-            type: datetime
-          - name: WOMCTRDATE
-            type: datetime
-          - name: WOMPDGDATE
-            type: datetime
-          - name: WOMPDRDATE
-            type: datetime
-          - name: WOUDATE
-            type: datetime
           customProperties:
             target:
               udf:
@@ -24103,59 +22890,28 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: RTEFDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: false
+          - name: RTEXDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: false
           keys:
           - RTCO
           - RTPN
-          - RTWCNO
           - RTOPNO
           - RTALTC
-          - RTSTLB
-          - RTSTMH
-          - RTSTSU
-          - RTNBSC
-          - RTDRGN
-          - RTTOLR
-          - RTOUTS
-          - RTOPCT
-          - RTSUCD
-          - RTINDR
-          - RTOPCD
-          - RTNBSU
-          - RTEFMO
-          - RTEFDA
-          - RTEFYR
-          - RTEXMO
-          - RTEXDA
-          - RTEXYR
-          - RTSTMV
-          - RTSMLB
-          - RTSMSU
-          - RTSMMH
-          - RTSMOC
-          - RTCRFC
-          - RTCRSU
-          - RTCRLB
-          - RTCROC
-          - RTCRMH
-          - RTPTRV
-          - RTSDSC
-          - RTMHGP
-          - RTEFCT
-          - RTEXCT
-          - RTUDTE
-          - RTUEVT
-          - RTUPGM
-          - RTUTGT
-          - RTUTIM
-          - RTUUSR
+          - RTEFDATE
+          - RTEXDATE
           chainId: KBM Group VI
           entityName: KBM400MFG.FPROUTNG
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: RTEFDATE
-            type: datetime
-          - name: RTEXDATE
-            type: datetime
           customProperties:
             target:
               udf:
@@ -24248,27 +23004,19 @@ schemas:
             numericPrecision: 15
             numericScale: 6
             isNullable: false
+          - name: MGEFDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: false
           keys:
           - WCCO
           - WCNO
-          - MGCAP
-          - MGMAX
-          - MGSHFT
-          - SFTLEN
-          - EFFFAC
-          - MCHPWC
-          - PPLPWC
-          - MGEFYR
-          - MGEFMO
-          - MGEFDA
-          - MGEFCT
-          - WCCPQT
+          - MGEFDATE
           chainId: KBM Group VI
           entityName: KBM400MFG.FPWRKCAP
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: MGEFDATE
-            type: datetime
           customProperties:
             target:
               udf:
@@ -24511,6 +23259,12 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: SCDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: false
           - name: RECORDID
             type: DECIMAL
             dataLength: 15
@@ -24523,9 +23277,6 @@ schemas:
           chainId: RecordID KBM Group V
           entityName: KBM400MFG.FQSPCDET
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: SCDATETIME
-            type: datetime
           customProperties:
             target:
               udf:
@@ -24672,36 +23423,20 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: CZUDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - CZCO
-          - CZEML
-          - CZFAX
           - CZKEY
-          - CZKLNG
-          - CZNAME
-          - CZNOTE
-          - CZPHN
           - CZSEQ
-          - CZSKA1
-          - CZSKA2
-          - CZSKA3
-          - CZSKN1
-          - CZSKN2
-          - CZSKN3
-          - CZTITL
           - CZTYPE
-          - CZUDTE
-          - CZUEVT
-          - CZUPGM
-          - CZUTGT
-          - CZUTIM
-          - CZUUSR
           chainId: KBM Group II
           entityName: KBM400MFG.FTCNTMST
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: CZUDATE
-            type: datetime
           customProperties:
             target:
               udf:
@@ -24758,21 +23493,18 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: MDCALDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
-          - MDAY
           - MDCAL
-          - MDCALD
-          - MDAYWK
-          - MDWRK
           - MDCO
-          - MDCACC
-          - MDCADD
           chainId: KBM Group I
           entityName: KBM400MFG.FTMDAY
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: MDCALDATE
-            type: datetime
           customProperties:
             target:
               udf:
@@ -24901,17 +23633,24 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: SMCTDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SMUPDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - SMCO
           - SMCODE
           chainId: KBM Group II
           entityName: KBM400MFG.FTSHPMTH
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: SMCTDATETIME
-            type: datetime
-          - name: SMUPDATETIME
-            type: datetime
           customProperties:
             target:
               udf:
@@ -25232,67 +23971,24 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: SLCTDTTM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SLUPDTTM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - SLCO
           - SLCODE
-          - SLNAME
-          - SLSMTD
-          - SLSYTD
-          - SLCOMM
-          - SLCMRT1
-          - SLCMRT2
-          - SLCMRT3
-          - SLCMRT4
-          - SLCMRT5
-          - SLCMRT6
-          - SLFNAME
-          - SLLNAME
-          - SLAGENT
-          - SLMADRI
-          - SLMCITY
-          - SLMSTAT
-          - SLMZIP
-          - SLDADRI
-          - SLDCITY
-          - SLDSTAT
-          - SLDZIP
-          - SLPHONE
-          - SLCUSNBR
-          - SLCNTPRS
-          - SLSPEED
-          - SLFAX
-          - SLEMAIL
-          - SLURL
-          - SLCCAT
-          - SLCELL
-          - SLPAGER
-          - SLFLAG1
-          - SLFLAG2
-          - SLFLAG3
-          - SLFLAG4
-          - SLFLAG5
-          - SLCOMM1
-          - SLCOMM2
-          - SLCOMM3
-          - SLCOMM4
-          - SLCOMM5
-          - SLFEDEX
-          - SLACTIV
-          - SLNAMEL
-          - SLCTDT
-          - SLCTTM
-          - SLCTID
-          - SLUPDT
-          - SLUPTM
-          - SLUPID
           chainId: Test DMZ KBM Group
           entityName: KBM400MFG.FTSLSMAN
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: SLCTDTTM
-            type: datetime
-          - name: SLUPDTTM
-            type: datetime
           customProperties:
             target:
               udf:
@@ -25386,6 +24082,12 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: DTRDATE2
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           - name: RECORDID
             type: DECIMAL
             dataLength: 15
@@ -25397,9 +24099,6 @@ schemas:
           - _RRN
           entityName: KBM400MFG.FOREQDET
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: DTRDATE2
-            type: datetime
           customProperties:
             target:
               udf:
@@ -26053,6 +24752,24 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: OHTRGDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: false
+          - name: CHODDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: NHODDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - OHTYPE
           - OHONO
@@ -26060,13 +24777,6 @@ schemas:
           chainId: Test KBM Group VI
           entityName: KBM400MFG.FHOEHAUD
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: NHODDATETIME
-            type: datetime
-          - name: CHODDATETIME
-            type: datetime
-          - name: OHTRGDATETIME
-            type: datetime
           customProperties:
             target:
               udf:
@@ -26211,16 +24921,23 @@ schemas:
             numericPrecision: 9
             numericScale: 0
             isNullable: false
+          - name: CRCTDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: CRUPDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - CRGROUP
           chainId: KBM Group IV
           entityName: KBMEFCOADD.CUSREPF
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: CRCTDATETIME
-            type: datetime
-          - name: CRUPDATETIME
-            type: datetime
           customProperties:
             target:
               udf:
@@ -26361,6 +25078,18 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: MPCRTDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: MPUPDDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           - name: RecordID
             type: DECIMAL
             dataLength: 15
@@ -26373,11 +25102,6 @@ schemas:
           chainId: KBM Group III
           entityName: KBMEFCOADD.EXFSPRBF
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: MPCRTDT
-            type: datetime
-          - name: MPUPDDT
-            type: datetime
           customProperties:
             target:
               udf:
@@ -26510,23 +25234,8 @@ schemas:
           - AWCO
           - AWPN
           - AWWONO
-          - AWSLNO
-          - AWLINE
-          - AWLEAD
           - AWCWO#
           - AWCPN
-          - AWCDUE
-          - AWCSTR
-          - AWCQTY
-          - AWPWO#
-          - AWPPN
-          - AWPDUE
-          - AWPSTR
-          - AWPQTY
-          - AWLEVL
-          - AWPHAN
-          - AWCWOCO
-          - AWPWOCO
           chainId: KBM Group III
           entityName: KBMEFCOADD.FAUTWODET
           unlockedSchema: true
@@ -26658,33 +25367,22 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: TSDTTRTM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: false
           keys:
           - CYEAR
           - CNMBR
           - CDASH
           - MARK
-          - MKQTY
-          - SERIES
-          - OSPN
-          - TSTQTY
-          - TSDTTR
-          - TSTIME
-          - USRPRF
-          - TSQOH
-          - TSUTMS
-          - TSREFN
-          - TSCUSN
-          - TSSLSN
-          - TSLINE
+          - TSDTTRTM
           - TSSESN
-          - TR
-          - BMSUFFIX
           chainId: KBM Group VI
           entityName: KBMEFCOADD.FBUILDMK
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: TSDTTRTM
-            type: datetime
           customProperties:
             target:
               udf:
@@ -26891,16 +25589,23 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: FCCRTDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: FCUPDDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - SEQUENCE
           chainId: KBM Group IV
           entityName: KBMEFCOADD.FCOMINIS
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: FCCRTDATETIME
-            type: datetime
-          - name: FCUPDDATETIME
-            type: datetime
           customProperties:
             target:
               udf:
@@ -26991,18 +25696,15 @@ schemas:
             numericScale: 0
             isNullable: false
             sourceName: RASEQ#
+          - name: Radatecrt
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: false
           keys:
-          - RAUSERID
-          - RAPART#
-          - RACO
-          - RAQTY
-          - RAREISWO
-          - RAREASON
-          - RADATECRT
-          - RATIMECRT
-          - RADO#
+          - Radatecrt
           - RAWOCRT
-          - RAFORM#
           - RASEQ#
           chainId: KBM Group VI
           entityName: KBMEFCOADD.FDOREIS1
@@ -27297,6 +25999,12 @@ schemas:
             numericPrecision: 5
             numericScale: 2
             isNullable: false
+          - name: SYSDATM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - EFCOCO
           - ESTGRP
@@ -27306,51 +26014,9 @@ schemas:
           - ESTNBR
           - ESTDSH
           - CODE
-          - RCVCEN
-          - RCVDAT
-          - REQCEN
-          - REQDAT
-          - COMCEN
-          - COMDAT
-          - PROJH
-          - PROJ$
-          - HUNGH
-          - HUNG$
-          - SLIDH
-          - SLID$
-          - CURWH
-          - CURW$
-          - SFMOH
-          - SFMO$
-          - ROTOH
-          - ROTO$
-          - SYSDAT
-          - SYSCEN
-          - SYSTIM
-          - USERH1
-          - USER$1
-          - USERH2
-          - USER$2
-          - USERH3
-          - USER$3
-          - USERH4
-          - USER$4
-          - LCODE
-          - LREASON
-          - SGDRH
-          - SGDR$
-          - ENDRH
-          - ENDR$
-          - TRDRH
-          - TRDR$
-          - GRSMGN$
-          - GRSMGN
           chainId: KBM Group III
           entityName: KBMEFCOADD.FEHEST01
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: SYSDATM
-            type: datetime
           customProperties:
             target:
               udf:
@@ -27665,66 +26331,24 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: PMCRTDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: PMUPDDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - IMCO
           - IMPN
-          - OLDPN
-          - DTECRT
-          - JOBNBR
-          - ECNNBR
-          - PURGE
-          - MATERL
-          - PTWDTH
-          - PTLGTH
-          - FINISH
-          - FAMSUB
-          - FAMILY
-          - CYEAR
-          - CNUMBR
-          - CDASH
-          - SRIES1
-          - SRIES2
-          - SRIES3
-          - SRIES4
-          - SRIES5
-          - SRIES6
-          - SRIES7
-          - SRIES8
-          - SRIES9
-          - SRIE10
-          - SQTY1
-          - SQTY2
-          - SQTY3
-          - SQTY4
-          - SQTY5
-          - SQTY6
-          - SQTY7
-          - SQTY8
-          - SQTY9
-          - SQTY10
-          - DOLRWC
-          - PMCRTD
-          - PMUPDD
-          - PMCRTT
-          - PMUPDT
-          - PMCRTU
-          - PMUPDU
-          - PMPGMN
-          - PGFINDTL
-          - PGFINMTH
-          - PGSUBPNT
-          - PGEDGES
-          - PGSHAPE
-          - PGCUTLNG
-          - PGTOOLWC
           chainId: KBM Group VI
           entityName: KBMEFCOADD.FEKMPBCK
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: PMCRTDT
-            type: datetime
-          - name: PMUPDDT
-            type: datetime
           customProperties:
             target:
               udf:
@@ -28225,105 +26849,51 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: WDSTDTE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: WDACDTE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: WDDUDTE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: WDCRTDTM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: WDUPDDTM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: WDUDTETM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - RTCO
           - WOWONO
           - RTOPNO
-          - RTALTC
-          - RTWCNO
-          - RTSTSU
-          - RTSTLB
-          - WDQTCM
-          - WDDSTS
-          - RTSDSC
-          - RTDRGN
-          - RTTOLR
-          - WDSLOC
-          - RTCRFC
-          - WDTFRZ
-          - RTSTMV
-          - WDRSTS
-          - WDQTLM
-          - WDCD
-          - RTSUCD
-          - RTINDR
           - WDSLNO
-          - WDSURP
-          - WDRNRP
-          - WDOPCT
-          - WDQTIN
-          - RTOPCD
-          - RTNBSC
-          - RTPTRV
-          - RTNBSU
-          - RTOUTS
-          - WDPTNO
-          - WDMVPT
-          - WDNOVM
           - WDLINE
-          - WDMHGP
-          - WDSTMH
-          - WDMHRP
-          - WDSTLR
-          - WDSTLT
-          - WDSTBR
-          - WDSTBT
-          - WDVRBR
-          - WDVRBT
-          - WDSTMR
-          - WDSTMT
-          - WDSTOR
-          - WDSTOT
-          - WDDUYY
-          - WDDUMM
-          - WDDUDD
-          - WDACYY
-          - WDACMM
-          - WDACDD
-          - WDSTYY
-          - WDSTMM
-          - WDSTDD
-          - WDSTOP
-          - WDTMTL
-          - WDTFXM
-          - WDTVRM
-          - WDTUS1
-          - WDTUS2
-          - WDUMTL
-          - WDUFXM
-          - WDUVRM
-          - WDUUS1
-          - WDUUS2
-          - WDDUCC
-          - WDCRTD
-          - WDUPDD
-          - WDCRTT
-          - WDUPDT
-          - WDCRTU
-          - WDUPDU
-          - WDPGMN
-          - WDUDTE
-          - WDUEVT
-          - WDUPGM
-          - WDUTGT
-          - WDUTIM
-          - WDUUSR
           chainId: Test DMZ KBM Group
           entityName: KBMEFCOADD.FEKMWOD
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: WDSTDTE
-            type: datetime
-          - name: WDACDTE
-            type: datetime
-          - name: WDDUDTE
-            type: datetime
-          - name: WDCRTDTM
-            type: datetime
-          - name: WDUPDDTM
-            type: datetime
-          - name: WDUDTETM
-            type: datetime
           customProperties:
             target:
               udf:
@@ -28410,28 +26980,26 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: SCCRTDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SCUPDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - PSCO
           - PSPMRN
           - PSCMRN
           - PSSEQ
-          - PSCML1
-          - PSCML2
-          - SCCRTD
-          - SCUPDD
-          - SCCRTT
-          - SCUPDT
-          - SCCRTU
-          - SCUPDU
-          - SCPGMN
           chainId: KBM Group III
           entityName: KBMEFCOADD.FEKW525
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: SCCRTDATE
-            type: datetime
-          - name: SCUPDATE
-            type: datetime
           customProperties:
             target:
               udf:
@@ -28536,35 +27104,37 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: OCCRTDTM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: OCUPDDTM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: WOSTRTRDTM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: WOCOMPDTM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - RTCO
           - WOWONO
           - RTOPNO
-          - SCEMP
-          - WOCDT
-          - OCLRSN
-          - OCDYLT
-          - OCCRTD
-          - OCUPDD
-          - OCCRTT
-          - OCUPDT
-          - OCCRTU
-          - OCUPDU
-          - OCPGMN
-          - WOSTRTDT
-          - WOSTRTTM
           chainId: KBM Group VI
           entityName: KBMEFCOADD.FEMMWOOP
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: OCCRTDTM
-            type: datetime
-          - name: OCUPDDTM
-            type: datetime
-          - name: WOSTRTRDTM
-            type: datetime
-          - name: WOCOMPDTM
-            type: datetime
           customProperties:
             target:
               udf:
@@ -28648,16 +27218,6 @@ schemas:
           keys:
           - ERCODE
           - ERWRKCTR
-          - ERFSPROB
-          - ERDELETED
-          - ERCO
-          - ERCRTD
-          - ERUPDD
-          - ERCRTT
-          - ERUPDT
-          - ERCRTU
-          - ERUPDU
-          - ERPGMN
           chainId: Test DMZ KBM Group
           entityName: KBMEFCOADD.FERRCODE
           unlockedSchema: true
@@ -28759,30 +27319,27 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: CMCRTDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: CMUPDDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
-          - CMCOMP
           - CYEAR
           - CNMBRA
           - CDASH
-          - PRONO
           - PRBNBR
           - PRBLNO
-          - PRBLN
-          - CMCRTD
-          - CMCRTT
-          - CMCRTU
-          - CMUPDD
-          - CMUPDT
-          - CMUPDU
-          - CMPGMN
           chainId: KBM Group VI
           entityName: KBMEFCOADD.FERRCOMM
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: CMCRTDT
-            type: datetime
-          - name: CMUPDDT
-            type: datetime
           customProperties:
             target:
               udf:
@@ -29165,62 +27722,26 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: RBCRTDTM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: RBUPDDTM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - CYEAR
           - CNMBRA
           - CDASH
           - PRBNBR
-          - PRONO
-          - PRPRJ
-          - CMNO
-          - PRUPBY
-          - CMSLSM
-          - PRBTYP
-          - PRPDCT
-          - PRWC
-          - PRERR
-          - PRSERR
-          - PRBDTE
-          - PRATTO
-          - PRATFM
-          - PRCNCT
-          - PRMETH
-          - PRCOST
-          - PRAPCS
-          - PRPRCS
-          - PRBCCS
-          - PRSCCS
-          - PRRENT
-          - PRAIRF
-          - PRRSDT
-          - PRMLT
-          - PHISTO
-          - ERCOMP
-          - FSOFC
-          - RBCRTD
-          - RBUPDD
-          - RBCRTT
-          - RBUPDT
-          - RBCRTU
-          - RBUPDU
-          - RBPGMN
-          - PRINVNUM
-          - PRINVDATE
-          - PRCNTPHONE
-          - PRCNTADD1
-          - PRCNTADD2
-          - PRCNTADD3
-          - PRCNTADD4
-          - PRCNTADD5
-          - FSCON1
           chainId: KBM Group VI
           entityName: KBMEFCOADD.FERRTRAC
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: RBCRTDTM
-            type: datetime
-          - name: RBUPDDTM
-            type: datetime
           customProperties:
             target:
               udf:
@@ -29529,65 +28050,24 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: SXCRTDTM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SXUPDDTM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - EFCOCO
-          - ESTPRF
-          - ESTYR
-          - ESTNBR
-          - ESTDSH
           - EFCO#
-          - ESTMTR
-          - PRTENG
-          - JOBNAM
-          - ARCHTC
-          - ARCHT1
-          - ARCADR
-          - ARCHCT
-          - ARCHST
-          - ARCZIP
-          - GENCRT
-          - GENCT1
-          - GENADR
-          - GENCTY
-          - GENCST
-          - GENZIP
-          - ERRCTR
-          - ERRCT1
-          - ERRADR
-          - ERRCTY
-          - ERRCST
-          - ERRZIP
-          - BLGOWN
-          - BLGON1
-          - BLGADR
-          - BLGCTY
-          - BLGCST
-          - BLGZIP
-          - EFDODC
-          - APPRVW
-          - REFYR
-          - REFNBR
-          - REFDSH
-          - BKCHGC
-          - COMM1
-          - COMM2
-          - SXCRTD
-          - SXUPDD
-          - SXCRTT
-          - SXUPDT
-          - SXCRTU
-          - SXUPDU
-          - SXPGMN
-          - DEST_ZIP
-          - SO_LOI
           chainId: Test DMZ KBM Group
           entityName: KBMEFCOADD.FESOMM01
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: SXCRTDTM
-            type: datetime
-          - name: SXUPDDTM
-            type: datetime
           customProperties:
             target:
               udf:
@@ -29662,16 +28142,23 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: CRCRTDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: CRUPDDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - CRCODE
           chainId: DMZ KBM Group
           entityName: KBMEFCOADD.FESTCSTRT
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: CRCRTDATETIME
-            type: datetime
-          - name: CRUPDDATETIME
-            type: datetime
           customProperties:
             target:
               udf:
@@ -29812,16 +28299,23 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: FRCRTDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: FRUPDDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - FRZIP3
           chainId: DMZ KBM Group
           entityName: KBMEFCOADD.FESTFRTRT
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: FRCRTDATETIME
-            type: datetime
-          - name: FRUPDDATETIME
-            type: datetime
           customProperties:
             target:
               udf:
@@ -29914,29 +28408,24 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: EXCRTDTM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: EXUPDUTM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - EXCHONO
           - EXCDASH
-          - EXDTCOMMIT
-          - EXUSRSET
-          - EXUSRCHG
-          - EXORCOMMIT
-          - EXCOMMITO
-          - EXUPDD
-          - EXCRTD
-          - EXCRTT
-          - EXCRTU
-          - EXUPDU
-          - EXUPDT
-          - EXPGMN
           chainId: KBM Group IV
           entityName: KBMEFCOADD.FEXCOMMIT
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: EXCRTDTM
-            type: datetime
-          - name: EXUPDUTM
-            type: datetime
           customProperties:
             target:
               udf:
@@ -29980,7 +28469,6 @@ schemas:
           - FMWONO
           - FMPPN
           - FMCPN
-          - FMCRDT
           chainId: KBM Group III
           entityName: KBMEFCOADD.FFREEMISC
           unlockedSchema: true
@@ -30092,19 +28580,8 @@ schemas:
           - FXFIXCO#
           - FXFIXSO#
           - FXPRBCO#
-          - FXPRBJOB
           - FXPRBJB5
-          - FXPRBDSH
           - FXFSPRB#
-          - FXMLTPRB
-          - FXCRTD
-          - FXCRTT
-          - FXCRTU
-          - FXCRTP
-          - FXUPDD
-          - FXUPDT
-          - FXUPDU
-          - FXUPDP
           chainId: KBM Group III
           entityName: KBMEFCOADD.FFSJOBFX
           unlockedSchema: true
@@ -30256,10 +28733,6 @@ schemas:
           keys:
           - MSUSERID
           - MSOPTION
-          - MSCOUNT
-          - MSFIRUSE
-          - MSLASUSE
-          - MSOPTNUM
           chainId: KBM Group IV
           entityName: KBMEFCOADD.FMNUHSUM
           unlockedSchema: true
@@ -30331,25 +28804,23 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: RECRTDTM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: REUPDDTM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - REICOD
-          - REIDSC
-          - RECO
-          - RECRTD
-          - REUPDD
-          - RECRTT
-          - REUPDT
-          - RECRTU
-          - REUPDU
-          - REPGMN
           chainId: KBM Group IV
           entityName: KBMEFCOADD.FMREISCD
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: RECRTDTM
-            type: datetime
-          - name: REUPDDTM
-            type: datetime
           customProperties:
             target:
               udf:
@@ -30502,39 +28973,23 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: RICRTDTM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: RIUPDDTM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - FORM
-          - WO
-          - NAME
-          - WRKCNT
-          - DATE
-          - TIMERE
-          - ISSTO
-          - CMNT1
-          - CMNT2
-          - CMNT3
-          - DUALSL
-          - ARGON
-          - PATCH
-          - INSTMN
-          - CNVSPC
-          - CN
-          - RICO
-          - RICRTD
-          - RIUPDD
-          - RICRTT
-          - RIUPDT
-          - RICRTU
-          - RIUPDU
-          - RIPGMN
           chainId: KBM Group III
           entityName: KBMEFCOADD.FMREISHD
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: RICRTDTM
-            type: datetime
-          - name: RIUPDDTM
-            type: datetime
           customProperties:
             target:
               udf:
@@ -30963,85 +29418,25 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: FMCRTDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: FMUPDDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - FMEXP#
           - FMJOB#
-          - FMJBNM
-          - FMRQBY
-          - FMREDT
-          - FMRQDT
-          - FMNXDY
-          - FM2NDY
-          - FMGRND
-          - FMSOTH
-          - FMAGNM
-          - FMAG#
-          - FMCS#
-          - FMSADN
-          - FMSAD1
-          - FMSAD2
-          - FMSAD3
-          - FMACCD
-          - FMBILN
-          - FMBIL1
-          - FMBIL2
-          - FMBIL3
-          - FMCOM1
-          - FMCOM2
-          - FMCOM3
-          - FMCOM4
-          - FMCOM5
-          - FMCOLL
-          - FMPRPD
-          - FMGLAS
-          - FMSTAT
-          - FMDLSL
-          - FMNTRN
-          - FMNTER
-          - FMEXTR
-          - FMOTHR
-          - FMRELS
-          - FMRLBY
-          - FMESDT
-          - FMRVDT
-          - FMGLBD
-          - FMSCRQ
-          - FMFTYP
-          - FMCLTP
-          - FMGLT1
-          - FMGLT2
-          - FMGLT3
-          - FMGLT4
-          - FMGLT5
-          - FMRMK1
-          - FMRMK2
-          - FMRMK3
-          - FMVIA
-          - FMREG
-          - FMTER
-          - FMSHIP
-          - FMPO#
-          - FMFGBY
-          - FMFGDT
-          - FMDELT
           - FMCO#
-          - FMMLTPRB
-          - FMCRTD
-          - FMUPDD
-          - FMCRTT
-          - FMUPDT
-          - FMCRTU
-          - FMUPDU
-          - FMPGMN
-          - FMSACCD
           chainId: KBM Group V
           entityName: KBMEFCOADD.FMSTEXP
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: FMCRTDT
-            type: datetime
-          - name: FMUPDDT
-            type: datetime
           customProperties:
             target:
               udf:
@@ -31248,48 +29643,24 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: JLCRTDTETM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: JLUPDDTETM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
-          - JLPRJNUM
-          - JLGRPNUM
-          - JLPODTE
-          - JLSTATE
-          - JLESTPR
-          - JLESTYR
-          - JLESTNBR
-          - JLESTDSH
-          - JLREQDTE
-          - JLESTDTE
-          - JLCONAMT
-          - JLREG
-          - JLTAX
-          - JLREPNUM
-          - JLCUSNUM
-          - JLPONUM
-          - JLJOBNAM
-          - JLGLSWAR
-          - JLWINWAR
-          - JLSTFWAR
-          - JLCTWWAR
-          - JLFINWAR
-          - JLANDWAR
-          - JLCRTDTE
-          - JLUPDDTE
-          - JLCRTTIM
-          - JLUPDTIM
-          - JLCRTUSR
-          - JLUPDUSR
-          - JLPGMUSD
           - JLCOUNT
-          - JLDORWAR
-          - JLPTXCPT
+          - JLPRJNUM
           chainId: Test DMZ KBM Group
           entityName: KBMEFCOADD.FPRJORDL
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: JLCRTDTETM
-            type: datetime
-          - name: JLUPDDTETM
-            type: datetime
           customProperties:
             target:
               udf:
@@ -31424,36 +29795,24 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: PSCRTDTETM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: PSUPDDTETM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - PSPRJNUM
           - PSSONUM
-          - PSCO
-          - PSTYPE
-          - PSJOBNAM
-          - PSESTPR
-          - PSESTYR
-          - PSESTNBR
-          - PSESTDSH
-          - PSAMT
-          - PSCRTYET
-          - PSCONSTRUC
-          - PSLEED
-          - PSCRTDTE
-          - PSUPDDTE
-          - PSCRTTIM
-          - PSUPDTIM
-          - PSCRTUSR
-          - PSUPDUSR
-          - PSPGMUSD
-          - PSPTXCPT
           chainId: Test DMZ KBM Group
           entityName: KBMEFCOADD.FPRJSLSO
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: PSCRTDTETM
-            type: datetime
-          - name: PSUPDDTETM
-            type: datetime
           customProperties:
             target:
               udf:
@@ -31732,45 +30091,6 @@ schemas:
           - PDCATE
           - SERIES
           - WSYSTM
-          - GSTS
-          - SERPRD
-          - VALEEP
-          - UOM
-          - PDESC
-          - WDWTYPE
-          - STYPE
-          - PTYP
-          - STHRML
-          - THRMTYP
-          - ASPEC
-          - CSPEC
-          - NWTHCK
-          - FRMDPH
-          - ISSL
-          - ISFB
-          - PDCATSL
-          - DISPLAY
-          - LADDERPGM
-          - MATRIXPGM
-          - WARS
-          - WARM
-          - PMAT
-          - GMETH
-          - CMDTY
-          - VALGEEP
-          - SPTYP
-          - HNGTYP
-          - PRCCT
-          - CODEA
-          - CODEB
-          - HRSADJ
-          - EFCRTD
-          - EFUPDD
-          - EFCRTT
-          - EFUPDT
-          - EFCRTU
-          - EFUPDU
-          - EFPGMN
           chainId: KBM Group VI
           entityName: KBMEFCOADD.FPROD
           unlockedSchema: true
@@ -31884,32 +30204,25 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: VPCRTDTETM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: VPCHGDTETM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - VPVENDOR
-          - VPBUYER
           - VPYEAR
           - VPQTR
-          - VPPXCTN
-          - VPRSPON
-          - VPNEWPROD
-          - VPFAILURE
-          - VPSRVPART
-          - VPWRRNTY
-          - VPCOMMNT
-          - VPCRTUSER
-          - VPCHGUSER
-          - VPCRTDTE
-          - VPCHGDTE
-          - VPCRTTME
-          - VPCHGTME
           chainId: KBM Group III
           entityName: KBMEFCOADD.FQTRVNDPF
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: VPCRTDTETM
-            type: datetime
-          - name: VPCHGDTETM
-            type: datetime
           customProperties:
             target:
               udf:
@@ -32021,32 +30334,26 @@ schemas:
             numericPrecision: 10
             numericScale: 0
             isNullable: false
+          - name: RDCRTDTETM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: RDCHGDTETM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - RDCO
           - RDPN
-          - RDCODE
-          - RDQTY
           - RDNCR#
-          - RDPONO
-          - RDVNDNO
-          - RDLOCCDE
-          - RDLABORCST
-          - RDCMMNT
-          - RDCTRUSR
-          - RDCHGUSR
-          - RDCRTDTE
-          - RDCHGDTE
-          - RDCRTTME
-          - RDCHGTME
           - RDCOUNT
           chainId: KBM Group III
           entityName: KBMEFCOADD.FRCVDFECT
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: RDCRTDTETM
-            type: datetime
-          - name: RDCHGDTETM
-            type: datetime
           customProperties:
             target:
               udf:
@@ -32199,15 +30506,18 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: RSCRTDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - RSCO
           - RSWONO
           chainId: KBM Group III
           entityName: KBMEFCOADD.FREISWOSUP
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: RSCRTDATETIME
-            type: datetime
           customProperties:
             target:
               udf:
@@ -32361,30 +30671,27 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: SECCrtDtTm
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SECUpdDtTm
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
-          - SECO
           - SESLSORD
           - SESCHTYPE
           - SESCHNUM
           - SESCHSEQ
-          - SECOMM
           - SECOMSEQ
-          - SECCUSER
-          - SECCPGMN
-          - SECCRTDT
-          - SECCRTTM
-          - SECUUSER
-          - SECUPGMN
-          - SECUPDDT
-          - SECUPDTM
           chainId: KBM Group V
           entityName: KBMEFCOADD.FSENGCOMM
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: SECCrtDtTm
-            type: datetime
-          - name: SECUpdDtTm
-            type: datetime
           customProperties:
             target:
               udf:
@@ -32501,31 +30808,25 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: SEDCrtDtTm
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SEDUpdDtTm
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
-          - SECO
           - SESLSORD
           - SEDASH
           - SESCHTYPE
-          - SESCHNAME
-          - SESCHNUM
-          - SESCHSEQ
-          - SESTATUS
-          - SEDCUSER
-          - SEDCPGMN
-          - SEDCRTDT
-          - SEDCRTTM
-          - SEDUUSER
-          - SEDUPGMN
-          - SEDUPDDT
-          - SEDUPDTM
           chainId: KBM Group V
           entityName: KBMEFCOADD.FSENGDSH
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: SEDCrtDtTm
-            type: datetime
-          - name: SEDUpdDtTm
-            type: datetime
           customProperties:
             target:
               udf:
@@ -32656,33 +30957,25 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: SEECrtDdtTm
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SEEUpdDtTm
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
-          - SECO
           - SEUSERID
-          - SENAME
           - SEYEAR
           - SEWEEK
-          - SEEMPHRS
-          - SEAVLHRS
-          - SEOVRTIM
-          - SEMISCHRS
-          - SEHRSCOMPL
-          - SEECUSER
-          - SEECPGMN
-          - SEECRTDT
-          - SEECRTTM
-          - SEEUUSER
-          - SEEUPGMN
-          - SEEUPDDT
-          - SEEUPDTM
           chainId: KBM Group V
           entityName: KBMEFCOADD.FSENGHRS
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: SEECrtDdtTm
-            type: datetime
-          - name: SEEUpdDtTm
-            type: datetime
           customProperties:
             target:
               udf:
@@ -32844,38 +31137,51 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: SESchDate
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SEStartDte
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SEStrlDue
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SECmplDate
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SEJCrtDtTm
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SEJUpdDtTm
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
-          - SECO
           - SEUSERID
           - SESLSORD
           - SESCHTYPE
           - SESCHNUM
           - SESCHSEQ
-          - SESCHDATE
-          - SEYEAR
-          - SEWEEK
-          - SESTARTDTE
-          - SESTRLDUE
-          - SESCHHRS
-          - SEHRSCOMPL
-          - SECMPLDATE
-          - SESTATUS
-          - SEJCUSER
-          - SEJCPGMN
-          - SEJCRTDT
-          - SEJCRTTM
-          - SEJUUSER
-          - SEJUPGMN
-          - SEJUPDDT
-          - SEJUPDTM
           chainId: KBM Group V
           entityName: KBMEFCOADD.FSENGJOB
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: SEJCrtDtTm
-            type: datetime
-          - name: SEJUpdDtTm
-            type: datetime
           customProperties:
             target:
               udf:
@@ -33215,65 +31521,110 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: SESchDate
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SEShopDue
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SEShopRcvd
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SECustDue
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SEStrlRcvd
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SERTFDue
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SESDDueDte
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SESDRcvDte
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SEMailDate
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SEStrlDue
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SEStartDte
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SEEstDue
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SERvsdDue
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SECmplDate
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SECrtDtTm
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SEUpdDtTm
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
-          - SECO
           - SESLSORD
           - SESCHTYPE
-          - SESCHNAME
           - SESCHNUM
           - SESCHSEQ
-          - SESTATE
-          - SENODASHES
-          - SENOSDASHS
-          - SESCHDATE
-          - SESCHWEEK
-          - SESCHEDFLG
-          - SESHOP
-          - SESHOPDUE
-          - SESHOPRCVD
-          - SECUSTDUE
-          - SESTRLRCVD
-          - SERTFDUE
-          - SEDODBLAST
-          - SESTRLCALC
-          - SESDDUEDTE
-          - SESDRCVDTE
-          - SEMAILDATE
-          - SESTRLDUE
-          - SEESTHRS
-          - SESTARTDTE
-          - SESTRWEEK
-          - SEESTDUE
-          - SERVSDHRS
-          - SERVSDDUE
-          - SEACTHRS
-          - SETOTHRS
-          - SECMPLHRS
-          - SETOTCMPL
-          - SECMPLDATE
-          - SESTATUS
-          - SEENGINEER
-          - SEPESEAL
-          - SECALCAMT
-          - SESTRLAMT
-          - SECONSAMT
-          - SEPRFTAMT
-          - SECUSER
-          - SECPGMN
-          - SECRTDT
-          - SECRTTM
-          - SEUUSER
-          - SEUPGMN
-          - SEUPDDT
-          - SEUPDTM
           chainId: KBM Group V
           entityName: KBMEFCOADD.FSENGSCH
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: SECrtDtTm
-            type: datetime
-          - name: SEUpdDtTm
-            type: datetime
           customProperties:
             target:
               udf:
@@ -33512,37 +31863,6 @@ schemas:
           - SDESTYR
           - SDESTNBR
           - SDESTDSH
-          - SDAMT
-          - SDMSTRTR
-          - SDCALC
-          - SDLOI
-          - SDCRTYET
-          - SDSTATE
-          - SDCRTDTE
-          - SDUPDDTE
-          - SDCRTTIM
-          - SDUPDTIM
-          - SDCRTUSR
-          - SDUPDUSR
-          - SDPGMUSD
-          - SDSUHR
-          - SDBW
-          - SDADT
-          - SDRDT
-          - SDRDAYS
-          - SDBSCH
-          - SDSFRV
-          - SDCAP$
-          - SDCUSREQDT
-          - SDSCHED
-          - SD201
-          - SD499
-          - SD520
-          - SDMULTPR
-          - SD165
-          - SDLOCSTATE
-          - SDPTXCPT
-          - SDINT
           chainId: KBM Group IV
           entityName: KBMEFCOADD.FSLSDSHX
           unlockedSchema: true
@@ -33620,11 +31940,7 @@ schemas:
           - SODLINE
           - SODOPT
           - SODCDAT
-          - SODCTIM
           - SODSEQ
-          - SODCMNT
-          - SODPART
-          - SODDASH
           chainId: KBM Group III
           entityName: KBMEFCOADD.FSOCMNTD
           unlockedSchema: true
@@ -33708,12 +32024,6 @@ schemas:
           - SOHLINE
           - SOHOPT
           - SOHCDAT
-          - SOHCTIM
-          - SOHUSER
-          - SOHPART
-          - SOHCMPD
-          - SOHDASH
-          - SOHSHIP
           chainId: KBM Group III
           entityName: KBMEFCOADD.FSOCMNTH
           unlockedSchema: true
@@ -33826,18 +32136,6 @@ schemas:
           - SOSSO
           - SOSDASH
           - SOSDATE
-          - SOSTIME
-          - SOSCAR
-          - SOSTRL
-          - SOSCNM
-          - SOSDEPDT
-          - SOSDDT
-          - SOSDTM
-          - SOSDSCU
-          - SOSDSCR
-          - SOSLL
-          - SOSWTS
-          - SOSBIL
           chainId: KBM Group III
           entityName: KBMEFCOADD.FSOSHIPH
           unlockedSchema: true
@@ -33918,15 +32216,8 @@ schemas:
           keys:
           - WSCO
           - WSWONO
-          - WSSONO
           - WSOPNO
-          - WSOLDDTE
-          - WSNEWDTE
-          - WSRSNCODE
           - WSCRTDTE
-          - WSCRTTIM
-          - WSCRTUSR
-          - WSCRTPGM
           chainId: KBM Group III
           entityName: KBMEFCOADD.FWOSTEPA
           unlockedSchema: true
@@ -34262,67 +32553,20 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: WKCOMPDTTM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - WRPART
-          - MKTTLHRS
-          - MKTTLDLR
-          - WKCOMPDATE
-          - WKCOMPTIME
           - WRWCNO
-          - RPDUE
-          - WRSORD
-          - WRDASH
-          - SOURCE
           - WRWHAT
-          - MARKQTY
-          - SHIPDATE2
-          - RPSTATE
           - JOBMARK
-          - LITEQTY
-          - RDTP_FLAG
-          - GRID_FLAG
-          - BLIND_FLAG
-          - STRUCTUAL
-          - PANELS
-          - MUNTN_FLAG
-          - OPEN_FLAG
-          - CONFIG
-          - MKHEIGHT
-          - MKWIDTH
-          - SFTYPE
-          - SFHWD
-          - SFMOREMTN
-          - SFGLAZED
-          - WRCO
-          - GLASSTYPE1
-          - GLASSTYPE2
-          - GLASSTYPE3
-          - DURA_FLAG
-          - GSNAP_FLAG
-          - GGLAZ_FLAG
-          - GINTR_FLAG
-          - MKMATDLR
-          - FTYPEEXT
-          - FCLASSEXT
-          - FCOLOREXT
-          - FMISCEXT
-          - FTYPEINT
-          - FCLASSINT
-          - FCOLORINT
-          - FMISCINT
-          - FOAM_FLAG
-          - BUTT_FLAG
-          - WELD_FLAG
-          - MKWEIGHT
-          - FIXEDLITES
-          - OPERLITES
-          - RPCSRWC
           chainId: KBM Group VI
           entityName: KBMEFCOADD.FWRKSCHDLB
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: WKCOMPDTTM
-            type: datetime
           customProperties:
             target:
               udf:
@@ -34583,6 +32827,18 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: FHCRTDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: FHUPDDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           - name: RECORDID
             type: DECIMAL
             dataLength: 15
@@ -34595,11 +32851,6 @@ schemas:
           chainId: RecordID KBM Group VI
           entityName: KBMEFCOADD.KMPNEWD3
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: FHCRTDATE
-            type: datetime
-          - name: FHUPDDATE
-            type: datetime
           customProperties:
             target:
               udf:
@@ -34686,28 +32937,26 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: LRCRTDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: LRUPDDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - LRCOMNUM
           - LRWRKCTR
           - LRLTEDSC
-          - LRRSNCDE
           - LRCOUNTR
-          - LRSTATUS
-          - LRCRTDTE
-          - LRUPDDTE
-          - LRCRTTIM
-          - LRUPDTIM
-          - LRCRTUSR
-          - LRUPDUSR
-          - LRPGMUSD
           chainId: KBM Group VI
           entityName: KBMEFCOADD.LATEROUTF
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: LRCRTDATETIME
-            type: datetime
-          - name: LRUPDDATETIME
-            type: datetime
           customProperties:
             target:
               udf:
@@ -34836,6 +33085,30 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: MLDUEDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: MLCOMDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: MLCRTDTETM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: MLUPDDTETM
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - MLCONUM
           - MLWRKCTR
@@ -34843,32 +33116,9 @@ schemas:
           - MLFISWK
           - MLJOBNUM
           - MLPART
-          - MLWRKORD
-          - MLMISQTY
-          - MLMISDOL
-          - MLDUEDTE
-          - MLLTEDSC
-          - MLSTATUS
-          - MLCOMDTE
-          - MLCRTDTE
-          - MLUPDDTE
-          - MLCRTTIM
-          - MLUPDTIM
-          - MLCRTUSR
-          - MLUPDUSR
-          - MLPGMUSD
           chainId: KBM Group IV
           entityName: KBMEFCOADD.MISSLISTF
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: MLDUEDATE
-            type: datetime
-          - name: MLCOMDATE
-            type: datetime
-          - name: MLCRTDTETM
-            type: datetime
-          - name: MLUPDDTETM
-            type: datetime
           customProperties:
             target:
               udf:
@@ -34943,6 +33193,18 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: RACTDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: RAUPDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - RACO
           - RASLSREP
@@ -34951,11 +33213,6 @@ schemas:
           chainId: KBM Group IV
           entityName: KBMEFCOADD.REPAREAF
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: RACTDATETIME
-            type: datetime
-          - name: RAUPDATETIME
-            type: datetime
           customProperties:
             target:
               udf:
@@ -35096,6 +33353,18 @@ schemas:
             numericPrecision: 9
             numericScale: 0
             isNullable: false
+          - name: SACTDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SAUPDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - SACO
           - SACNTY
@@ -35105,11 +33374,6 @@ schemas:
           chainId: KBM Group IV
           entityName: KBMEFCOADD.SLSAREAF
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: SACTDATETIME
-            type: datetime
-          - name: SAUPDATETIME
-            type: datetime
           customProperties:
             target:
               udf:
@@ -35232,6 +33496,18 @@ schemas:
             numericPrecision: 7
             numericScale: 0
             isNullable: false
+          - name: LDCRTDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: LDUPDDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           - name: RECORDID
             type: DECIMAL
             dataLength: 15
@@ -35244,11 +33520,6 @@ schemas:
           chainId: RecordID KBM Group VII
           entityName: KBMEFCOADD.FEKMLODD
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: LDCRTDT
-            type: datetime
-          - name: LDUPDDT
-            type: datetime
           customProperties:
             target:
               udf:
@@ -35311,23 +33582,22 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
-          keys:
-          - EGGROUP
-          - EGDESC
-          - EGDATCRT
-          - EGDATUPD
-          - EGTIMCRT
-          - EGTIMUPD
-          - EGUSRCRT
-          - EGUSRUPD
-          - EGPGMNAM
-          entityName: KBMEFCOADD.FESTGRP
-          unlockedSchema: true
-          targetOnlyColumns:
           - name: EGCRTDT
             type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           - name: EGUPDDT
             type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          keys:
+          - EGGROUP
+          entityName: KBMEFCOADD.FESTGRP
+          unlockedSchema: true
           customProperties:
             target:
               udf:
@@ -35430,18 +33700,7 @@ schemas:
           - WSCO
           - WSFCCYY
           - WSFWEEK
-          - WSDEPT
           - WSWRKCTR
-          - WSRHOURS
-          - WSFPO
-          - WSPLO
-          - WSCAPACITY
-          - WSREL$
-          - WSFPO$
-          - WSPLO$
-          - WSPLANHRS
-          - WSPLANDLR
-          - WSDTESTMP
           entityName: KBMEFCOADD.FFYSCHDL
           unlockedSchema: true
           customProperties:
@@ -37050,17 +35309,24 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: LJCRTDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: LJUPDDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - LJCHCO
           - LJJOB
           chainId: Test KBM Group V
           entityName: KBMEFCOADD.FLIENJOBS
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: LJCRTDATETIME
-            type: datetime
-          - name: LJUPDDATETIME
-            type: datetime
           customProperties:
             target:
               udf:
@@ -37189,33 +35455,19 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: QDCRTDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: false
           keys:
-          - QDCRTTIME
-          - QDCRTDATE
-          - QDCRTUSER
-          - QDWONO
-          - QDREASON
-          - QD900DATE
-          - QD1000DATE
-          - QDCSGRP
-          - QDWRKCTR
-          - QD_R_QTY
-          - QD_H_QTY
-          - QD_O_QTY
-          - QDSERIES
-          - QDSUFFIX
-          - QDITEM#
-          - QDMARK
-          - QD_MPS#
-          - QDPART#
+          - QDCRTDATETIME
           - QDJOB#
           - QDSEQ#
           chainId: Test KBM Group V
           entityName: KBMEFCOADD.FQADEFECT
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: QDCRTDATETIME
-            type: datetime
           customProperties:
             target:
               udf:
@@ -37284,16 +35536,23 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: ERUPDDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: ERCRTDATETIME
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - ERCODE
           chainId: Test DMZ KBM Group
           entityName: KBMEFCOADD.FERRCODMST
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: ERUPDDATETIME
-            type: datetime
-          - name: ERCRTDATETIME
-            type: datetime
           customProperties:
             target:
               udf:
@@ -37470,6 +35729,12 @@ schemas:
             numericPrecision: 3
             numericScale: 0
             isNullable: false
+          - name: CTCRTDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           - name: RecordID
             type: DECIMAL
             dataLength: 15
@@ -37482,9 +35747,6 @@ schemas:
           chainId: RecordID KBM Group VII
           entityName: KBMEFCOADD.FJOBCUTLST
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: CTCRTDT
-            type: datetime
           customProperties:
             target:
               udf:
@@ -37565,15 +35827,22 @@ schemas:
             numericPrecision: 3
             numericScale: 0
             isNullable: false
+          - name: EWUPDDATETIME
+            type: datetime2
+            dataLength: 6
+            numericPrecision: 19
+            numericScale: 0
+            isNullable: true
+          - name: EWCRTDATETIME
+            type: datetime2
+            dataLength: 6
+            numericPrecision: 19
+            numericScale: 0
+            isNullable: true
           keys:
           - EWWCTR
           entityName: KBMEFCOADD.FERRWCTR
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: EWUPDDATETIME
-            type: datetime2
-          - name: EWCRTDATETIME
-            type: datetime2
           customProperties:
             target:
               udf:
@@ -37714,36 +35983,23 @@ schemas:
             numericPrecision: 5
             numericScale: 0
             isNullable: false
-          keys:
-          - TIMMIN
-          - TANK
-          - STIME
-          - STATUS
-          - SDATE
-          - PCOLOR
-          - PCLASS
-          - MILLS
-          - LOAD
-          - LHUPDU
-          - LHUPDT
-          - LHUPDD
-          - LHPGMN
-          - LHCRTU
-          - LHCRTT
-          - LHCRTD
-          - EDATE
-          - COLOR
-          - CODE
-          - CHCO
-          - BEAM
-          - AMPSET
-          entityName: KBMEFCOADD.FEKMLODH
-          unlockedSchema: true
-          targetOnlyColumns:
           - name: LHUPDDATETIME
             type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           - name: LHCRTDATETIME
             type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          keys:
+          - LOAD
+          - CHCO
+          entityName: KBMEFCOADD.FEKMLODH
+          unlockedSchema: true
           customProperties:
             target:
               udf:
@@ -37795,12 +36051,6 @@ schemas:
             numericScale: 0
             isNullable: false
           keys:
-          - BRUSER
-          - BRTIME
-          - BRTEXT
-          - BRLOC
-          - BRDLT
-          - BRDATE
           - BRBARCD
           entityName: KBMEFCOADD.FGDSBUL
           unlockedSchema: true
@@ -37975,33 +36225,13 @@ schemas:
             numericScale: 0
             isNullable: false
           keys:
-          - GDYY
-          - GDWNDW
-          - GDSWHS
-          - GDSUSR
           - GDSTIME
-          - GDSPCK
-          - GDSLOC
           - GDSDTE
-          - GDSCO
-          - GDSCAN
-          - GDPN
-          - GDNBR
-          - GDLUSR
-          - GDLTRL
-          - GDLTIME
-          - GDLDTE
-          - GDLCAR
-          - GDLBTP
-          - GDJBNO
-          - GDDSH
-          - GDCUSR
           - GDCTNB
-          - GDCTN
-          - GDCTIME
+          - GDWNDW
+          - GDDSH
+          - GDJBNO
           - GDCO
-          - GDCINIT
-          - GDCDTE
           entityName: KBMEFCOADD.FGDSSTO
           unlockedSchema: true
           customProperties:
@@ -38126,6 +36356,12 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: WISSDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - WCO
           - WJOB
@@ -38133,9 +36369,6 @@ schemas:
           chainId: Test KBM Group IV
           entityName: KBMEFCOADD.FWARRANT
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: WISSDATE
-            type: datetime
           customProperties:
             target:
               udf:
@@ -38320,6 +36553,18 @@ schemas:
             numericPrecision: 3
             numericScale: 0
             isNullable: false
+          - name: SMSDDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: SMCDATE
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           - name: RECORDID
             type: DECIMAL
             dataLength: 15
@@ -38332,11 +36577,6 @@ schemas:
           chainId: RecordID KBM Group VII
           entityName: KBMEFCOMOD.FDSHPMST
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: SMSDDATE
-            type: datetime
-          - name: SMCDATE
-            type: datetime
           customProperties:
             target:
               udf:
@@ -38480,6 +36720,12 @@ schemas:
             numericPrecision: 25
             numericScale: 2
             isNullable: true
+          - name: TIMEPERIOD
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
           - COMPANY
           - SLSORDNO
@@ -38502,12 +36748,10 @@ schemas:
           - TIME_CENTURY
           - BOOKINGAMT
           - INVOICEAMT
+          - TIMEPERIOD
           chainId: Sales Group
           entityName: SALES.FBOOKINV
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: TIMEPERIOD
-            type: datetime
           customProperties:
             target:
               udf:
@@ -39081,6 +37325,18 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: RDCRTDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: RDUPDDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           - name: RECORDID
             type: DECIMAL
             dataLength: 15
@@ -39093,11 +37349,6 @@ schemas:
           groupId: Do Not Enable To Be Removed
           entityName: ESPRODQA.FPARTATTR
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: RDUPDDT
-            type: datetime
-          - name: RDCRTDT
-            type: datetime
           customProperties:
             target:
               udf:
@@ -39158,11 +37409,6 @@ schemas:
             numericScale: 0
             isNullable: false
           keys:
-          - WFREQQTY
-          - WFPOQTY
-          - WFPONO
-          - WFPODTCR
-          - WFPECSDT
           - WFIMPN
           - WFCO
           entityName: UTILITY.FSTEPWRK2
@@ -39414,44 +37660,13 @@ schemas:
             numericScale: 0
             isNullable: false
           keys:
-          - USEDRTV
-          - STRTPER
-          - STRTORD
-          - STRTFTPER
-          - STRTFTORD
-          - SCRN_TYPES
-          - QTYORD
-          - PCWC
-          - PCTQTY
-          - PCTIME
-          - PCSTRTQTY
-          - PCSTRTFEET
-          - PCSLSN
-          - PCREV$
-          - PCPSF
-          - PCPN
-          - PCFDQTY
-          - PCFDFEET
-          - PCDTTR
-          - PCCOST
-          - PCCO
-          - PCASF
-          - PCALLB
-          - PAINTPER
-          - PAINTORD
-          - LBSPER
-          - LBSORD
-          - FINTYPE
-          - FDQTYPER
-          - FDQTYORD
-          - FDFEETPER
-          - FDFEETORD
-          - ANODPER
-          - ANODORD
           - PCUSEQ
           - PCTSSESN
-          - YEAR
-          - PERIOD
+          - PCPN
+          - PCTIME
+          - PCDTTR
+          - PCWC
+          - PCCO
           chainId: ACCT Group I
           entityName: ACCT.FPRCRMET33
           unlockedSchema: true
@@ -39692,44 +37907,13 @@ schemas:
             numericScale: 0
             isNullable: false
           keys:
-          - USEDRTV
-          - STRTPER
-          - STRTORD
-          - STRTFTPER
-          - STRTFTORD
-          - SCRN_TYPES
-          - QTYORD
-          - PCWC
-          - PCTQTY
-          - PCTIME
-          - PCSTRTQTY
-          - PCSTRTFEET
-          - PCSLSN
-          - PCREV$
-          - PCPSF
-          - PCPN
-          - PCFDQTY
-          - PCFDFEET
-          - PCDTTR
-          - PCCOST
-          - PCCO
-          - PCASF
-          - PCALLB
-          - PAINTPER
-          - PAINTORD
-          - LBSPER
-          - LBSORD
-          - FINTYPE
-          - FDQTYPER
-          - FDQTYORD
-          - FDFEETPER
-          - FDFEETORD
-          - ANODPER
-          - ANODORD
           - PCUSEQ
           - PCTSSESN
-          - YEAR
-          - PERIOD
+          - PCPN
+          - PCTIME
+          - PCDTTR
+          - PCWC
+          - PCCO
           chainId: ACCT Group I
           entityName: ACCT.FPRCRMETMO
           unlockedSchema: true
@@ -39970,44 +38154,13 @@ schemas:
             numericScale: 0
             isNullable: false
           keys:
-          - USEDRTV
-          - STRTPER
-          - STRTORD
-          - STRTFTPER
-          - STRTFTORD
-          - SCRN_TYPES
-          - QTYORD
-          - PCWC
-          - PCTQTY
-          - PCTIME
-          - PCSTRTQTY
-          - PCSTRTFEET
-          - PCSLSN
-          - PCREV$
-          - PCPSF
-          - PCPN
-          - PCFDQTY
-          - PCFDFEET
-          - PCDTTR
-          - PCCOST
-          - PCCO
-          - PCASF
-          - PCALLB
-          - PAINTPER
-          - PAINTORD
-          - LBSPER
-          - LBSORD
-          - FINTYPE
-          - FDQTYPER
-          - FDQTYORD
-          - FDFEETPER
-          - FDFEETORD
-          - ANODPER
-          - ANODORD
           - PCUSEQ
           - PCTSSESN
-          - YEAR
-          - PERIOD
+          - PCPN
+          - PCTIME
+          - PCDTTR
+          - PCWC
+          - PCCO
           chainId: ACCT Group I
           entityName: ACCT.FPRCRMETWK
           unlockedSchema: true

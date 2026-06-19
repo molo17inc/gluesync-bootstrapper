@@ -767,7 +767,17 @@ def build_java_udf(
         delete_puts.append(f'            modified_values.put("{m["target"]}", null);')
         if m.get("todo"):
             puts.append(f"                // TODO: {m['todo']}")
-        puts.append(f'                modified_values.put("{m["target"]}", {m["java"]});')
+        if m["target"].upper() == "RECORDID":
+            puts.append('                modified_values.put("RECORDID", newValues.get("_RRN"));')
+        else:
+            puts.append(f'                modified_values.put("{m["target"]}", {m["java"]});')
+
+    # If RECORDID is present in the target columns but had no explicit DbMoto
+    # mapping, wire it from the built-in _RRN source field.
+    target_cols_upper = [c.upper() for c in target_columns]
+    if "RECORDID" in target_cols_upper and not any(m["target"].upper() == "RECORDID" for m in mappings):
+        delete_puts.append('            modified_values.put("RECORDID", null);')
+        puts.append('                modified_values.put("RECORDID", newValues.get("_RRN"));')
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     header = f"""import java.util.Map;

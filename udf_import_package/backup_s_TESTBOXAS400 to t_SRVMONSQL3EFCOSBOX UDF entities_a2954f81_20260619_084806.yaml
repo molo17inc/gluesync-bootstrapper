@@ -4,7 +4,7 @@
 # Generated from DbMoto metadata: efcocrp-meta.xml
 # Pipeline ID     : a2954f81
 # Pipeline name   : s_TESTBOXAS400 to t_SRVMONSQL3EFCOSBOX (UDF entities)
-# Generated at    : 2026-06-10T14:23:37.191254
+# Generated at    : 2026-06-19T08:48:07.022935
 # Contains only the entities that require a field-mapping-to-function UDF.
 # ---------------------------------------------------------------
 exportMetadata:
@@ -443,71 +443,8 @@ schemas:
           - ESTYR
           - ESTNBR
           - ESTDSH
-          - CYEAR
-          - CNMBR
-          - CDASH
           - MARK
-          - MKQTY
-          - WDWIDE
-          - WDHIGH
           - IMCO
-          - PARENT
-          - MODEL
-          - PDCATE
-          - WSYSTM
-          - SERIES
-          - THERM
-          - HV
-          - RIBN
-          - JBFIN
-          - JBFINI
-          - HDLEG
-          - SLLEG
-          - LJLEG
-          - RJLEG
-          - JBGLS
-          - GLAZE
-          - MAXVRT
-          - MAXHRZ
-          - WSHAPE
-          - DTSTMP
-          - TMSTMP
-          - QTYDSC
-          - LADAPT
-          - RADAPT
-          - FDIM
-          - VDIM
-          - CLROPN
-          - DHL1
-          - DHL2
-          - DHL3
-          - DHL4
-          - DHL5
-          - MRCRTD
-          - MRUPDD
-          - MRCRTT
-          - MRUPDT
-          - MRCRTU
-          - MRUPDU
-          - MRPGMN
-          - REFSER
-          - GLSBT
-          - INFO1
-          - INFO2
-          - INFO3
-          - SASHFRM
-          - MODELFRM
-          - MTGRAIL
-          - GLZTYPE
-          - EXTFLD1
-          - EXTFLD2
-          - EXTFLD3
-          - EXTFLD4
-          - EXTFLD5
-          - EXTFLD6
-          - EXTFLD7
-          - EXTFLD8
-          - EXTFLD9
           chainId: EEP Group III
           entityName: FBPRODLIB.EEPMARKD
           unlockedSchema: true
@@ -867,58 +804,9 @@ schemas:
           - ESTYR
           - ESTNBR
           - ESTDSH
-          - CYEAR
-          - CNMBR
-          - CDASH
           - PDCATE
-          - WSYSTM
-          - SERIES
           - BAYMRK
           - REF#
-          - BAYQTY
-          - WDWIDE
-          - WDHIGH
-          - JBFIN
-          - JBFINI
-          - AHEAD
-          - AJAMB
-          - AMULL
-          - ASILL
-          - MISC
-          - CLIPS
-          - WLDKD
-          - ENGQTY
-          - ATTL
-          - ATBR
-          - BTTL
-          - BTBR
-          - CTTL
-          - CTBR
-          - RDIM
-          - PRINT
-          - QTYDSC
-          - DTSTMP
-          - TMSTMP
-          - AFLDB
-          - APARTA
-          - APARTB
-          - ASIZEA
-          - ASIZEB
-          - ASNGLA
-          - ASNGLB
-          - PARENT
-          - MODEL
-          - MSSDES
-          - LBRCD1
-          - LBRCD2
-          - PCQTY
-          - ARCRTD
-          - ARUPDD
-          - ARCRTT
-          - ARUPDT
-          - ARCRTU
-          - ARUPDU
-          - ARPGMN
           chainId: EEP Group III
           entityName: FBPRODLIB.EEPMKACS
           unlockedSchema: true
@@ -1242,52 +1130,10 @@ schemas:
           - ESTYR
           - ESTNBR
           - ESTDSH
-          - CYEAR
-          - CNMBR
-          - CDASH
           - MARK
-          - QUANTITY
-          - WIDTH
-          - HEIGHT
-          - PDCATE
-          - WSYSTM
-          - SERIES
           - JBGLS
           - TYPECD
-          - REFPART
-          - PARTDESC
-          - PRTSHP
-          - PARTMRK
-          - GLSCOST
-          - GLSPRICE
-          - DISCOUNT
-          - GLSTOTPRIC
-          - GLSSQFT1
-          - GLSCOST1
-          - GLSPRIC1
-          - GLSSQFT2
-          - GLSCOST2
-          - GLSPRIC2
-          - TOTMHR
-          - TOTWGT
-          - PREFNUM
-          - PREFVERS
-          - PREFORDER
-          - PREFVERSTP
-          - PREFREF
-          - RDCRTD
-          - RDUPDD
-          - RDCRTT
-          - RDUPDT
-          - RDCRTU
-          - RDUPDU
-          - RDPGMN
           - PRFGLSNBR
-          - PRFINTNMTN
-          - SCNMESH
-          - SCNWIDTH
-          - SCNHEIGHT
-          - SCNJBFIN
           chainId: EEP Group III
           entityName: FBPRODLIB.FPRFGLS
           unlockedSchema: true
@@ -1572,50 +1418,11 @@ schemas:
             numericScale: 0
             isNullable: false
           keys:
-          - PARENT
-          - MODEL
-          - PDCATE
-          - SERIES
           - WSYSTM
-          - GSTS
-          - SERPRD
-          - VALEEP
-          - UOM
-          - PDESC
-          - WDWTYPE
-          - STYPE
-          - PTYP
-          - STHRML
-          - THRMTYP
-          - ASPEC
-          - CSPEC
-          - NWTHCK
-          - FRMDPH
-          - ISSL
-          - ISFB
-          - PDCATSL
-          - DISPLAY
-          - LADDERPGM
-          - MATRIXPGM
-          - WARS
-          - WARM
-          - PMAT
-          - GMETH
-          - CMDTY
-          - VALGEEP
-          - SPTYP
-          - HNGTYP
-          - PRCCT
-          - CODEA
-          - CODEB
-          - HRSADJ
-          - EFCRTD
-          - EFUPDD
-          - EFCRTT
-          - EFUPDT
-          - EFCRTU
-          - EFUPDU
-          - EFPGMN
+          - SERIES
+          - PDCATE
+          - MODEL
+          - PARENT
           chainId: KBM Group VI
           entityName: KBMEFCOADD.FPROD
           unlockedSchema: true
@@ -1912,40 +1719,24 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: ANUPDDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: ANCRTDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
-          - ANPGMN
-          - ANUPDU
-          - ANCRTU
-          - ANUPDT
-          - ANCRTT
-          - ANUPDD
-          - ANCRTD
-          - PRFGLSREF
-          - ANCO
-          - STKSHTHT
-          - STKSHTWD
-          - MMAXSQFT
-          - MMAXHGT
-          - MMAXWTH
-          - UMAXSQFT
-          - UMAXHGT
-          - UMAXWTH
-          - OPTYN
-          - AGLST
-          - SQFTWT
-          - PARTD2
-          - PARTDS
-          - PRTGLS
           - GTHICK
           - GTYPE
           chainId: Test EEP Group II
           entityName: ESPRODLIB.E3PGLSDS
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: ANUPDDT
-            type: datetime
-          - name: ANCRTDT
-            type: datetime
           customProperties:
             target:
               udf:
@@ -2104,20 +1895,25 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: LFCRTDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: ALDATET
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: LFUPDDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
-          - LFPGMN
-          - LFUPDU
-          - LFCRTU
-          - LFUPDT
-          - LFCRTT
-          - LFUPDD
-          - LFCRTD
-          - ALUSER
-          - ALTIME
-          - ALDATE
-          - ALMHRS
-          - ALDIFF
-          - ALUTCT
           - ALHTGE
           - ALWDGE
           - ALHTLE
@@ -2129,17 +1925,9 @@ schemas:
           - ALMOD
           - ALPAR
           - ALCO
-          - ALCODE
           chainId: Test EEP Group II
           entityName: ESPRODLIB.FALABOR
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: LFUPDDT
-            type: datetime
-          - name: LFCRTDT
-            type: datetime
-          - name: ALDATET
-            type: datetime
           customProperties:
             target:
               udf:
@@ -2256,19 +2044,19 @@ schemas:
             numericPrecision: 3
             numericScale: 0
             isNullable: false
+          - name: QDSRTDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: QDUPDDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
-          - QDPGMN
-          - QDUPDU
-          - QDCRTU
-          - QDUPDT
-          - QDCRTT
-          - QDUPDD
-          - QDSRTD
-          - QDCODE
-          - QDUSER
-          - QDTIME
-          - QDDATE
-          - QDPCT
           - QDBRK
           - QDSER
           - QDCAT
@@ -2278,11 +2066,6 @@ schemas:
           chainId: EEP Group I
           entityName: ESPRODLIB.FQTYDSC
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: QDUPDDT
-            type: datetime
-          - name: QDSRTDT
-            type: datetime
           customProperties:
             target:
               udf:
@@ -2381,6 +2164,18 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: CSUPDDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: CSCRTDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           - name: RECORDID
             type: DECIMAL
             dataLength: 15
@@ -2393,11 +2188,6 @@ schemas:
           chainId: Test RecordID Esprodlib Group
           entityName: ESPRODLIB.FTPGSCST
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: CSUPDDT
-            type: datetime
-          - name: CSCRTDT
-            type: datetime
           customProperties:
             target:
               udf:
@@ -2514,33 +2304,25 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: BCCRTDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: BCUPDDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           keys:
-          - BSERIES
-          - QTYSH
-          - BALLNG
-          - VNTWGT
-          - BALNBR
-          - BALLMT
-          - DATSYS
-          - TIMSYS
           - NEWCST
-          - BALCST
-          - BCCO
-          - BCCRTD
-          - BCUPDD
-          - BCCRTT
-          - BCUPDT
-          - BCCRTU
-          - BCUPDU
-          - BCPGMN
+          - BALNBR
+          - BSERIES
           chainId: EEP Group I
           entityName: ESPRODLIB.PEEPBAL
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: BCUPDDT
-            type: datetime
-          - name: BCCRTDT
-            type: datetime
           customProperties:
             target:
               udf:
@@ -3025,6 +2807,18 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
+          - name: RDCRTDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: RDUPDDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
           - name: RECORDID
             type: DECIMAL
             dataLength: 15
@@ -3037,11 +2831,6 @@ schemas:
           groupId: Do Not Enable To Be Removed
           entityName: ESPRODQA.FPARTATTR
           unlockedSchema: true
-          targetOnlyColumns:
-          - name: RDUPDDT
-            type: datetime
-          - name: RDCRTDT
-            type: datetime
           customProperties:
             target:
               udf:
