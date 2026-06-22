@@ -328,8 +328,12 @@
                     </label>
                   </div>
                   <label>
-                    YAML configuration
-                    <input type="file" id="yaml-file" accept=".yaml,.yml" />
+                    YAML configuration or pipeline backup (ZIP with UDFs)
+                    <input
+                      type="file"
+                      id="yaml-file"
+                      accept=".yaml,.yml,.zip"
+                    />
                   </label>
                   <button type="submit" class="primary" disabled id="run-btn">
                     Start entity creation

@@ -598,12 +598,14 @@ def create_app() -> FastAPI:
                         if member.startswith("__MACOSX/") or member.rsplit("/", 1)[-1].startswith("._"):
                             continue
                         lower = member.lower()
-                        # Extract YAML files
-                        if lower.endswith((".yaml", ".yml")) and "agents-config" not in lower:
+                        # Extract YAML files (skip agents-config and global-config
+                        # which are not entity-creation YAMLs)
+                        if lower.endswith((".yaml", ".yml")) and "agents-config" not in lower and "global-config" not in lower:
                             dest = extract_dir / Path(member).name
                             with zf.open(member) as src, open(dest, "wb") as dst:
                                 shutil.copyfileobj(src, dst)
-                            if yaml_path is None:
+                            # Prefer backup_*.yaml as the primary YAML
+                            if yaml_path is None or dest.name.startswith("backup_"):
                                 yaml_path = dest
                         # Extract UDF source files (under udf-* paths)
                         elif ("udf-" in member or member.lstrip("/").startswith("udf-")) and (

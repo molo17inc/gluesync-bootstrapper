@@ -1566,7 +1566,7 @@ function bindEvents() {
   configForm.addEventListener('submit', async (event) => {
     event.preventDefault();
     if (!stateManager.yamlFileId) {
-      ui.setConfigMessage('Please upload a YAML configuration file first', 'error');
+      ui.setConfigMessage('Please upload a YAML or pipeline backup ZIP file first', 'error');
       return;
     }
 
