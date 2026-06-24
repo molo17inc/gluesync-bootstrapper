@@ -4,7 +4,7 @@
 # Generated from DbMoto metadata: efcocrp-meta.xml
 # Pipeline ID     : a2954f81
 # Pipeline name   : s_TESTBOXAS400 to t_SRVMONSQL3EFCOSBOX (UDF entities)
-# Generated at    : 2026-06-19T21:50:13.121146
+# Generated at    : 2026-06-23T17:03:59.137324
 # Contains only the entities that require a field-mapping-to-function UDF.
 # ---------------------------------------------------------------
 exportMetadata:
@@ -446,13 +446,13 @@ schemas:
           - MARK
           - IMCO
           chainId: EEP Group III
-          entityName: FBPRODLIB.EEPMARKD
           unlockedSchema: true
           customProperties:
             target:
               udf:
               - name: UDF_FBPRODLIB_EEPMARKD
                 type: Java
+          entityName: FBPRODLIB.EEPMARKD
         EEPMKACS:
           name: Eepmkacs
           columns:
@@ -808,13 +808,13 @@ schemas:
           - BAYMRK
           - REF#
           chainId: EEP Group III
-          entityName: FBPRODLIB.EEPMKACS
           unlockedSchema: true
           customProperties:
             target:
               udf:
               - name: UDF_FBPRODLIB_EEPMKACS
                 type: Java
+          entityName: FBPRODLIB.EEPMKACS
         FPRFGLS:
           name: Fprfgls
           columns:
@@ -1135,13 +1135,13 @@ schemas:
           - TYPECD
           - PRFGLSNBR
           chainId: EEP Group III
-          entityName: FBPRODLIB.FPRFGLS
           unlockedSchema: true
           customProperties:
             target:
               udf:
               - name: UDF_FBPRODLIB_FPRFGLS
                 type: Java
+          entityName: FBPRODLIB.FPRFGLS
   KBMEFCOADD:
     target: kbmefcoadd
     sourceType: SQL
@@ -1424,13 +1424,13 @@ schemas:
           - MODEL
           - PARENT
           chainId: KBM Group VI
-          entityName: KBMEFCOADD.FPROD
           unlockedSchema: true
           customProperties:
             target:
               udf:
               - name: UDF_KBMEFCOADD_FPROD
                 type: Java
+          entityName: KBMEFCOADD.FPROD
   ESPRODLIB:
     target: Esprodlib
     sourceType: SQL
@@ -1558,13 +1558,13 @@ schemas:
           keys:
           - CMPSTE
           chainId: EEP Group II
-          entityName: ESPRODLIB.FMINSCMP
           unlockedSchema: true
           customProperties:
             target:
               udf:
               - name: UDF_ESPRODLIB_FMINSCMP
                 type: Java
+          entityName: ESPRODLIB.FMINSCMP
           _disabledInDbMoto: true
         E3PGLSDS:
           name: E3pglsds
@@ -1719,29 +1719,17 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
-          - name: ANUPDDT
-            type: datetime
-            dataLength: 8
-            numericPrecision: 23
-            numericScale: 3
-            isNullable: true
-          - name: ANCRTDT
-            type: datetime
-            dataLength: 8
-            numericPrecision: 23
-            numericScale: 3
-            isNullable: true
           keys:
           - GTHICK
           - GTYPE
           chainId: Test EEP Group II
-          entityName: ESPRODLIB.E3PGLSDS
           unlockedSchema: true
           customProperties:
             target:
               udf:
               - name: UDF_ESPRODLIB_E3PGLSDS
                 type: Java
+          entityName: ESPRODLIB.E3PGLSDS
         FALABOR:
           name: Falabor
           columns:
@@ -1895,24 +1883,6 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
-          - name: LFCRTDT
-            type: datetime
-            dataLength: 8
-            numericPrecision: 23
-            numericScale: 3
-            isNullable: true
-          - name: ALDATET
-            type: datetime
-            dataLength: 8
-            numericPrecision: 23
-            numericScale: 3
-            isNullable: true
-          - name: LFUPDDT
-            type: datetime
-            dataLength: 8
-            numericPrecision: 23
-            numericScale: 3
-            isNullable: true
           keys:
           - ALHTGE
           - ALWDGE
@@ -1926,13 +1896,13 @@ schemas:
           - ALPAR
           - ALCO
           chainId: Test EEP Group II
-          entityName: ESPRODLIB.FALABOR
           unlockedSchema: true
           customProperties:
             target:
               udf:
               - name: UDF_ESPRODLIB_FALABOR
                 type: Java
+          entityName: ESPRODLIB.FALABOR
         FQTYDSC:
           name: FQtydsc
           columns:
@@ -2044,18 +2014,6 @@ schemas:
             numericPrecision: 3
             numericScale: 0
             isNullable: false
-          - name: QDSRTDT
-            type: datetime
-            dataLength: 8
-            numericPrecision: 23
-            numericScale: 3
-            isNullable: true
-          - name: QDUPDDT
-            type: datetime
-            dataLength: 8
-            numericPrecision: 23
-            numericScale: 3
-            isNullable: true
           keys:
           - QDBRK
           - QDSER
@@ -2064,13 +2022,13 @@ schemas:
           - QDPAR
           - QDCO
           chainId: EEP Group I
-          entityName: ESPRODLIB.FQTYDSC
           unlockedSchema: true
           customProperties:
             target:
               udf:
               - name: UDF_ESPRODLIB_FQTYDSC
                 type: Java
+          entityName: ESPRODLIB.FQTYDSC
         FTPGSCST:
           name: Ftpgscst
           columns:
@@ -2164,18 +2122,6 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
-          - name: CSUPDDT
-            type: datetime
-            dataLength: 8
-            numericPrecision: 23
-            numericScale: 3
-            isNullable: true
-          - name: CSCRTDT
-            type: datetime
-            dataLength: 8
-            numericPrecision: 23
-            numericScale: 3
-            isNullable: true
           - name: RECORDID
             type: DECIMAL
             dataLength: 15
@@ -2186,13 +2132,13 @@ schemas:
           keys:
           - _RRN
           chainId: Test RecordID Esprodlib Group
-          entityName: ESPRODLIB.FTPGSCST
           unlockedSchema: true
           customProperties:
             target:
               udf:
               - name: UDF_ESPRODLIB_FTPGSCST
                 type: Java
+          entityName: ESPRODLIB.FTPGSCST
         PEEPBAL:
           name: Peepbal
           columns:
@@ -2304,30 +2250,18 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
-          - name: BCCRTDT
-            type: datetime
-            dataLength: 8
-            numericPrecision: 23
-            numericScale: 3
-            isNullable: true
-          - name: BCUPDDT
-            type: datetime
-            dataLength: 8
-            numericPrecision: 23
-            numericScale: 3
-            isNullable: true
           keys:
           - NEWCST
           - BALNBR
           - BSERIES
           chainId: EEP Group I
-          entityName: ESPRODLIB.PEEPBAL
           unlockedSchema: true
           customProperties:
             target:
               udf:
               - name: UDF_ESPRODLIB_PEEPBAL
                 type: Java
+          entityName: ESPRODLIB.PEEPBAL
   ESPRODQA:
     target: Esprodlib
     sourceType: SQL
@@ -2807,18 +2741,6 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
-          - name: RDCRTDT
-            type: datetime
-            dataLength: 8
-            numericPrecision: 23
-            numericScale: 3
-            isNullable: true
-          - name: RDUPDDT
-            type: datetime
-            dataLength: 8
-            numericPrecision: 23
-            numericScale: 3
-            isNullable: true
           - name: RECORDID
             type: DECIMAL
             dataLength: 15
@@ -2829,11 +2751,11 @@ schemas:
           keys:
           - _RRN
           groupId: Do Not Enable To Be Removed
-          entityName: ESPRODQA.FPARTATTR
           unlockedSchema: true
           customProperties:
             target:
               udf:
               - name: UDF_ESPRODQA_FPARTATTR
                 type: Java
+          entityName: ESPRODQA.FPARTATTR
           _disabledInDbMoto: true

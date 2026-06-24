@@ -4,7 +4,7 @@
 # Generated from DbMoto metadata: efcocrp-meta.xml
 # Pipeline ID     : dc27b7f6
 # Pipeline name   : s_SRVMONSQL3EFCOTEST to t_TESTBOXAS400 (UDF entities)
-# Generated at    : 2026-06-19T16:50:42.663445
+# Generated at    : 2026-06-23T17:03:58.404321
 # Contains only the entities that require a field-mapping-to-function UDF.
 # ---------------------------------------------------------------
 exportMetadata:
@@ -76,18 +76,12 @@ schemas:
             numericPrecision: 0
             numericScale: 0
             isNullable: false
-          - name: JOBTITLE
-            type: CHAR
-            dataLength: 50
-            numericPrecision: 0
-            numericScale: 0
-            isNullable: false
           keys:
           - JobCode
-          entityName: HR.ADPJobTitles
           unlockedSchema: true
           customProperties:
             target:
               udf:
               - name: UDF_HR_ADPJOBTITLES
                 type: Java
+          entityName: HR.ADPJobTitles

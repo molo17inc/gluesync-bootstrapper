@@ -106,6 +106,151 @@ TYPE_ALIASES = {
     "TIMESTMP": "TIMESTAMP",
 }
 
+# ---------------------------------------------------------------------------
+# Super-type classification for locked/unlocked schema decision logic
+# ---------------------------------------------------------------------------
+
+# Map DbMoto/SQL native types to a "super-type" category.
+# Types within the same super-type are considered compatible (e.g. int/long
+# are both "number"); types in different super-types are considered
+# incompatible (e.g. string vs number) and require unlocked schema + UDF.
+_SUPER_TYPE_MAP = {
+    # String family
+    "STRING": "string", "VARCHAR": "string", "CHAR": "string",
+    "TEXT": "string", "CLOB": "string", "NCHAR": "string",
+    "NVARCHAR": "string", "NTEXT": "string", "CHARACTER": "string",
+    "GRAPHIC": "string", "VARGRAPHIC": "string",
+    # Number family (integers + floats + decimals)
+    "INT": "number", "INTEGER": "number", "SMALLINT": "number",
+    "BIGINT": "number", "TINYINT": "number",
+    "FLOAT": "number", "DOUBLE": "number", "REAL": "number",
+    "DECIMAL": "number", "NUMERIC": "number", "NUMBER": "number",
+    "MONEY": "number", "SMALLMONEY": "number",
+    # Date/time family
+    "DATE": "datetime", "TIME": "datetime", "DATETIME": "datetime",
+    "TIMESTAMP": "datetime", "TIMESTMP": "datetime",
+    "SMALLDATETIME": "datetime",
+    # Boolean
+    "BOOLEAN": "boolean", "BOOL": "boolean", "BIT": "boolean",
+    # Binary
+    "BINARY": "binary", "VARBINARY": "binary", "IMAGE": "binary",
+    "BLOB": "binary",
+}
+
+
+def _get_super_type(type_str: str) -> str:
+    """Classify a native data type into a super-type category.
+
+    Returns one of: 'string', 'number', 'datetime', 'boolean', 'binary', 'unknown'.
+    Types within the same super-type are considered compatible (int/long, double/float).
+    Types in different super-types are incompatible (string vs number, etc.).
+    """
+    if not type_str:
+        return "unknown"
+    normalized = type_str.strip().upper()
+    # Apply type alias normalization
+    normalized = TYPE_ALIASES.get(normalized, normalized)
+    # Direct lookup
+    if normalized in _SUPER_TYPE_MAP:
+        return _SUPER_TYPE_MAP[normalized]
+    # Try prefix matching for parameterized types like VARCHAR(255), DECIMAL(10,2)
+    base = re.split(r'[\s(]', normalized)[0]
+    if base in _SUPER_TYPE_MAP:
+        return _SUPER_TYPE_MAP[base]
+    return "unknown"
+
+
+def _has_dbmoto_function(table_field_mappings: dict) -> bool:
+    """Check if any field mapping for this replication uses a DbMoto SrcExpression function.
+
+    A DbMoto "function" is an expression-based mapping where SrcExpression contains
+    a function call like MakeDateTime([FIELD1], [FIELD2], ...) rather than a simple
+    field reference like [FIELD1].
+
+    Returns True if at least one mapping has type='expression' with a SrcExpression
+    that is NOT a simple field reference (i.e. contains a function call).
+    """
+    if not table_field_mappings:
+        return False
+    for mapping in table_field_mappings.values():
+        if mapping.get("type") != "expression":
+            continue
+        src_expr = mapping.get("src_expression", "")
+        if not src_expr:
+            continue
+        # Skip [!RecordID] expressions - these are special, not functions
+        if "[!RecordID]" in src_expr:
+            continue
+        # A simple field reference is just [FIELDNAME] - not a function
+        stripped = src_expr.strip()
+        if re.fullmatch(r'\[[^\]]+\]', stripped):
+            continue
+        # Anything else (MakeDateTime(...), [F].ToUpper(), etc.) is a function
+        return True
+    return False
+
+
+def _compare_column_types(source_fields: list, target_fields: list, table_field_mappings: dict,
+                          field_id_to_name: dict, source_table_id: str, target_table_id: str) -> tuple:
+    """Compare source and target column data types for mapped fields.
+
+    Returns (types_match, warnings) where:
+    - types_match: True if all mapped columns have compatible super-types
+    - warnings: list of warning strings for same-super-type but different native type
+    """
+    warnings = []
+    all_compatible = True
+
+    # Build reverse mapping: target_field_id -> src_field_id
+    reverse_map = {}
+    for src_fid, mapping in table_field_mappings.items():
+        if mapping.get("type") == "direct" and mapping.get("target_field_id"):
+            reverse_map[mapping["target_field_id"]] = src_fid
+
+    # For each direct mapping, compare source type vs target type
+    for src_fid, mapping in table_field_mappings.items():
+        if mapping.get("type") != "direct":
+            continue
+        trg_fid = mapping.get("target_field_id")
+        if not trg_fid:
+            continue
+
+        # Get source field type
+        src_field_name = field_id_to_name.get((source_table_id, src_fid))
+        if not src_field_name:
+            continue
+        src_field = next((f for f in source_fields if f["name"] == src_field_name), None)
+        if not src_field:
+            continue
+        src_type = src_field.get("type", "VARCHAR")
+
+        # Get target field type
+        trg_field_name = field_id_to_name.get((target_table_id, trg_fid))
+        if not trg_field_name:
+            continue
+        trg_field = next((f for f in target_fields if f["name"] == trg_field_name), None)
+        if not trg_field:
+            continue
+        trg_type = trg_field.get("type", "VARCHAR")
+
+        src_super = _get_super_type(src_type)
+        trg_super = _get_super_type(trg_type)
+
+        if src_super != trg_super and src_super != "unknown" and trg_super != "unknown":
+            all_compatible = False
+            warnings.append(
+                f"Type mismatch: {src_field_name} ({src_type}/{src_super}) -> "
+                f"{trg_field_name} ({trg_type}/{trg_super})"
+            )
+        elif src_type.upper() != trg_type.upper() and src_super == trg_super:
+            # Same super-type but different native type (e.g. int vs long) - just a warning
+            warnings.append(
+                f"Type variation within same super-type: {src_field_name} ({src_type}) -> "
+                f"{trg_field_name} ({trg_type}) - compatible"
+            )
+
+    return all_compatible, warnings
+
 
 def parse_connect_params(params_text: str) -> Dict[str, str]:
     """Parse the semicolon-separated ConnectParams string into a dict with lowercase keys."""
@@ -925,6 +1070,177 @@ def _build_table_entry_helper(table, table_lookup, replications, field_mappings,
     if table["id"] in table_assignments:
         table_config.update(table_assignments[table["id"]])
 
+    # -----------------------------------------------------------------------
+    # 4-case locked/unlocked schema decision logic
+    # -----------------------------------------------------------------------
+    # Case 1: No DbMoto function + same column count
+    #   - Types match    → locked schema, no UDF
+    #   - Types differ   → ERROR (unhandled case)
+    # Case 2: No DbMoto function + different column count → ERROR (unhandled)
+    # Case 3: DbMoto function + same column count
+    #   - Types match    → locked schema + UDF
+    #   - Types differ   → unlocked schema + UDF
+    # Case 4: DbMoto function + different column count → unlocked schema + UDF
+    # -----------------------------------------------------------------------
+
+    has_function = _has_dbmoto_function(table_field_mappings)
+
+    # Get target table fields for comparison
+    target_table_fields = []
+    if target_table_id and table_lookup.get(target_table_id):
+        target_table_fields = table_lookup[target_table_id]["table"].get("fields", [])
+
+    source_field_count = len(table.get("fields", []))
+    target_field_count = len(target_table_fields)
+
+    # When the target table has no field definitions in the XML metadata,
+    # we cannot reliably compare column counts or data types. Fall back to
+    # safe defaults based on function presence only.
+    target_metadata_available = target_field_count > 0
+
+    same_column_count = source_field_count == target_field_count if target_metadata_available else True
+
+    # Compare data types for mapped columns
+    types_match = True
+    type_warnings = []
+    if target_metadata_available and table_field_mappings:
+        types_match, type_warnings = _compare_column_types(
+            table.get("fields", []),
+            target_table_fields,
+            table_field_mappings,
+            field_id_to_name,
+            table["id"],
+            target_table_id or ""
+        )
+
+    # Log type warnings (same super-type but different native type, e.g. int→long)
+    for w in type_warnings:
+        if "compatible" in w:
+            print(f"      WARNING: {w}")
+            conversion_stats['warnings'].append(f"Table {table['name']}: {w}")
+
+    # Determine schema mode and UDF requirement
+    if not target_metadata_available:
+        # Target table metadata not available in XML — use safe defaults
+        if has_function:
+            # Function present → assume unlocked schema + UDF (safe default)
+            table_config["unlockedSchema"] = True
+            table_config["customProperties"] = {
+                "target": {
+                    "udf": [
+                        {"name": f"UDF_{table['name'].upper()}", "type": "Java"}
+                    ]
+                }
+            }
+            print(f"      Schema decision: unlocked schema + UDF (function present, target metadata unavailable)")
+        else:
+            # No function → locked schema, no UDF (safe default)
+            print(f"      Schema decision: locked schema, no UDF (no function, target metadata unavailable)")
+    elif not has_function and same_column_count:
+        # Case 1: No function, same column count
+        if types_match:
+            # Case 1a: Types match → locked schema, no UDF
+            print(f"      Schema decision: locked schema, no UDF (no function, same column count, types match)")
+        else:
+            # Case 1b: Types differ → ERROR
+            error_msg = (f"Table {table['name']}: no DbMoto function, same column count, "
+                        f"but incompatible data types detected. This case is not handled. "
+                        f"Check if DbMoto has automatic type conversions. "
+                        f"Details: {'; '.join(type_warnings)}")
+            print(f"      ERROR: {error_msg}")
+            conversion_stats['errors'].append(error_msg)
+            table_config["_schema_error"] = error_msg
+    elif not has_function and not same_column_count:
+        # Case 2: No function, different column count → ERROR
+        error_msg = (f"Table {table['name']}: no DbMoto function but column count differs "
+                    f"(source: {source_field_count}, target: {target_field_count}). "
+                    f"This case is not handled.")
+        print(f"      ERROR: {error_msg}")
+        conversion_stats['errors'].append(error_msg)
+        table_config["_schema_error"] = error_msg
+    elif has_function and same_column_count:
+        # Case 3: Function + same column count
+        if types_match:
+            # Case 3a: Types match → locked schema + UDF
+            table_config["customProperties"] = {
+                "target": {
+                    "udf": [
+                        {"name": f"UDF_{table['name'].upper()}", "type": "Java"}
+                    ]
+                }
+            }
+            print(f"      Schema decision: locked schema + UDF (function present, same column count, types match)")
+        else:
+            # Case 3b: Types differ → unlocked schema + UDF
+            table_config["unlockedSchema"] = True
+            table_config["customProperties"] = {
+                "target": {
+                    "udf": [
+                        {"name": f"UDF_{table['name'].upper()}", "type": "Java"}
+                    ]
+                }
+            }
+            print(f"      Schema decision: unlocked schema + UDF (function present, same column count, types differ)")
+            for w in type_warnings:
+                if "mismatch" in w:
+                    print(f"        Type mismatch: {w}")
+    elif has_function and not same_column_count:
+        # Case 4: Function + different column count → unlocked schema + UDF
+        table_config["unlockedSchema"] = True
+
+        # Build targetOnlyColumns: target columns that have no source counterpart
+        # (expression-based mappings with no SrcFieldID produce target-only columns)
+        target_only_cols = []
+        if target_table_id and table_lookup.get(target_table_id):
+            target_table_data = table_lookup[target_table_id]["table"]
+            # Collect all target field names that are mapped via expressions
+            # (these are computed columns with no direct source field)
+            expression_target_names = set()
+            for mapping_key, mapping in table_field_mappings.items():
+                if mapping.get("type") == "expression":
+                    trg_fid = mapping.get("target_field_id")
+                    if trg_fid:
+                        trg_name = field_id_to_name.get((target_table_id, trg_fid))
+                        if trg_name:
+                            expression_target_names.add(trg_name)
+
+            # Also collect target fields that are NOT mapped from any source field
+            mapped_target_fids = set()
+            for mapping in table_field_mappings.values():
+                if mapping.get("type") == "direct" and mapping.get("target_field_id"):
+                    mapped_target_fids.add(mapping["target_field_id"])
+
+            for trg_field in target_table_data.get("fields", []):
+                trg_fid = None
+                # Find the target field ID
+                for (tid, fid), fname in field_id_to_name.items():
+                    if tid == target_table_id and fname == trg_field["name"]:
+                        trg_fid = fid
+                        break
+                # If this target field is not mapped from any source field, it's target-only
+                if trg_fid and trg_fid not in mapped_target_fids:
+                    target_only_cols.append({
+                        "name": trg_field["name"],
+                        "type": trg_field.get("type") or "VARCHAR",
+                        "dataLength": trg_field.get("data_length", 0),
+                        "numericPrecision": trg_field.get("numeric_precision", 0),
+                        "numericScale": trg_field.get("numeric_scale", 0),
+                        "isNullable": trg_field.get("allow_null", True)
+                    })
+
+        if target_only_cols:
+            table_config["targetOnlyColumns"] = target_only_cols
+            print(f"      Added {len(target_only_cols)} target-only columns for unlocked schema table {table['name']}")
+
+        table_config["customProperties"] = {
+            "target": {
+                "udf": [
+                    {"name": f"UDF_{table['name'].upper()}", "type": "Java"}
+                ]
+            }
+        }
+        print(f"      Schema decision: unlocked schema + UDF (function present, different column count: source={source_field_count}, target={target_field_count})")
+
     return whitelist_name, table_config, is_disabled, target_schema_name, target_conn_name
 
 def export_as_yaml(connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name, record_id_mappings=None, output_dir=None, template_file=None, journal_checkpoints=None, refresh_filters=None):
@@ -1094,11 +1410,18 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                                 "whitelist": [],
                                 "custom": {},
                                 "disabled_whitelist": [],
-                                "disabled_custom": {}
+                                "disabled_custom": {},
+                                "error_whitelist": [],
+                                "error_custom": {}
                             }
 
                         group_bucket = schema_groups[group_key]
-                        if is_disabled:
+                        has_schema_error = table_config.pop("_schema_error", None)
+                        if has_schema_error:
+                            if whitelist_name not in group_bucket["error_whitelist"]:
+                                group_bucket["error_whitelist"].append(whitelist_name)
+                            group_bucket["error_custom"][table_name] = table_config
+                        elif is_disabled:
                             if whitelist_name not in group_bucket["disabled_whitelist"]:
                                 group_bucket["disabled_whitelist"].append(whitelist_name)
                             group_bucket["disabled_custom"][table_name] = table_config
@@ -1134,11 +1457,18 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                                     "whitelist": [],
                                     "custom": {},
                                     "disabled_whitelist": [],
-                                    "disabled_custom": {}
+                                    "disabled_custom": {},
+                                    "error_whitelist": [],
+                                    "error_custom": {}
                                 }
 
                             group_bucket = schema_groups[group_key]
-                            if is_disabled:
+                            has_schema_error = table_config.pop("_schema_error", None)
+                            if has_schema_error:
+                                if whitelist_name not in group_bucket["error_whitelist"]:
+                                    group_bucket["error_whitelist"].append(whitelist_name)
+                                group_bucket["error_custom"][table_name] = table_config
+                            elif is_disabled:
                                 if whitelist_name not in group_bucket["disabled_whitelist"]:
                                     group_bucket["disabled_whitelist"].append(whitelist_name)
                                 group_bucket["disabled_custom"][table_name] = table_config
@@ -1198,6 +1528,23 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                         for line in disabled_yaml_str.splitlines():
                             disabled_yaml_block += f"# {line}\n"
 
+                    # Create the schema structure for error tables (if any)
+                    error_yaml_block = ""
+                    if group_bucket["error_whitelist"] or group_bucket["error_custom"]:
+                        error_data = {
+                            schema_name: {
+                                "tables": {
+                                    "whitelist": group_bucket["error_whitelist"],
+                                    "custom": group_bucket["error_custom"]
+                                }
+                            }
+                        }
+                        error_yaml_str = yaml.dump(error_data, sort_keys=False, default_flow_style=False, allow_unicode=True)
+                        error_yaml_block = "\n# THE FOLLOWING TABLES HAVE SCHEMA ERRORS (unhandled case)\n"
+                        error_yaml_block += "# They are commented out. Check the conversion report for details.\n#\n"
+                        for line in error_yaml_str.splitlines():
+                            error_yaml_block += f"# {line}\n"
+
                     # Create filename and write YAML
                     if multiple_target_groups:
                         if len(all_conns) == len(group_keys):
@@ -1223,6 +1570,8 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                         f.write(f"# Tables converted: {len(group_bucket['whitelist'])}\n")
                         if group_bucket["disabled_whitelist"]:
                             f.write(f"# Tables disabled (commented out): {len(group_bucket['disabled_whitelist'])}\n")
+                        if group_bucket["error_whitelist"]:
+                            f.write(f"# Tables with schema errors (commented out): {len(group_bucket['error_whitelist'])}\n")
                         f.write("\n")
 
                         yaml_str = yaml.dump(yaml_data, sort_keys=False, default_flow_style=False, allow_unicode=True)
@@ -1237,9 +1586,13 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                         if disabled_yaml_block:
                             f.write(disabled_yaml_block)
 
+                        if error_yaml_block:
+                            f.write(error_yaml_block)
+
                     exported_count += 1
                     conversion_stats['tables_exported'] += len(group_bucket['whitelist'])
-                    print(f"Exported: {filename} ({len(group_bucket['whitelist'])} tables active, {len(group_bucket['disabled_whitelist'])} tables disabled)")
+                    error_count = len(group_bucket['error_whitelist'])
+                    print(f"Exported: {filename} ({len(group_bucket['whitelist'])} tables active, {len(group_bucket['disabled_whitelist'])} tables disabled, {error_count} tables with errors)")
             else:
                 print(f"Skipped: {conn_name}.{schema_name} (no tables with fields)")
 

@@ -1035,25 +1035,34 @@ def main():
         table_config["entityName"] = f"{schema_name}.{table_name}"
         table_config["unlockedSchema"] = True
 
-        # Target-only columns: expression targets that do not exist among the
-        # source columns (the UDF populates them on the target side).
-        existing_targets = {
-            (col.get("name") or "").upper() for col in table_config.get("columns", [])
+        # Computed (expression) target columns must NOT appear in the YAML column
+        # list: the source table has no such column, so listing it makes Gluesync
+        # try to read a non-existent source field. Following the working hand-made
+        # reference config, the `columns` list holds ONLY the real source columns
+        # (including the date-part columns the expression consumes); the UDF emits
+        # the computed target columns at runtime, and `unlockedSchema: true` lets
+        # Gluesync accept them. We therefore:
+        #   1. drop any expression-target column that is not a real source field
+        #      (it was injected by the shared table-builder helper), and
+        #   2. never emit `targetOnlyColumns` for UDF tables.
+        # NOTE: comparison is case-SENSITIVE (exact name). An in-place conversion
+        # reuses the exact source name (e.g. OMRDT -> OMRDT) and must stay; but
+        # AS/400 (uppercase) to SQL Server (mixed case) renames such as
+        # FCTDAT -> FctDat produce a distinct computed target column that the UDF
+        # emits and that must be dropped from `columns` while the source column
+        # FCTDAT is kept.
+        src_field_names = {f["name"] for f in src_table.get("fields", [])}
+        computed_targets = {
+            m["target"]
+            for m in decoded
+            if m["target"] not in src_field_names
         }
-        target_only = []
-        for m in decoded:
-            if m["target"].upper() in existing_targets:
-                continue
-            tgt_meta = target_field_types.get(m["target"].upper())
-            entry: Dict[str, Any] = {"name": m["target"]}
-            if tgt_meta:
-                entry["type"] = tgt_meta["raw_type"] or "TIMESTAMP"
-            else:
-                entry["type"] = "TIMESTAMP"
-            target_only.append(entry)
-            existing_targets.add(m["target"].upper())
-        if target_only:
-            table_config["targetOnlyColumns"] = target_only
+        if computed_targets:
+            table_config["columns"] = [
+                col for col in table_config.get("columns", [])
+                if (col.get("name") or "") not in computed_targets
+            ]
+        table_config.pop("targetOnlyColumns", None)
 
         custom_props = table_config.setdefault("customProperties", {})
         target_props = custom_props.setdefault("target", {})
