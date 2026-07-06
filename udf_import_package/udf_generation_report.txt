@@ -1,0 +1,18 @@
+DbMoto field-mapping-to-function UDF generation report
+======================================================================
+Source XML: efcocrp-meta.xml
+Generated at: 2026-06-19T21:50:14.301495
+
+Entities with UDF: 364
+Expressions decoded: 1156
+Expressions skipped: 0
+UDF Java files: 0
+
+WARNINGS (6) - review before importing:
+----------------------------------------------------------------------
+- KBMEFCOADD.FERRSCOD (repl 304): decimal date field [ESCRTT] has precision 3; assumed format MMDDYY - PLEASE REVIEW
+- KBMEFCOADD.FERRSCOD (repl 304): decimal date field [ESUPDT] has precision 3; assumed format MMDDYY - PLEASE REVIEW
+- KBMEFCOADD.FERRSCOD (repl 908): decimal date field [ESCRTT] has precision 3; assumed format MMDDYY - PLEASE REVIEW
+- KBMEFCOADD.FERRSCOD (repl 908): decimal date field [ESUPDT] has precision 3; assumed format MMDDYY - PLEASE REVIEW
+- KBMEFCOADD.FEFGLSS (repl 1158): decimal date field [GSUPDT] has precision 3; assumed format MMDDYY - PLEASE REVIEW
+- KBMEFCOADD.FEFGLSS (repl 1158): decimal date field [GSCRTT] has precision 3; assumed format MMDDYY - PLEASE REVIEW

@@ -1,0 +1,47 @@
+globalNotifications:
+  smtpServer: smtp.gmail.com
+  portNumber: 587
+  secureConnection: TLS
+  email: service@molo17.com
+  username: service@molo17.com
+  password: '*******'
+  alertEmail: daniele.angeli@molo17.com
+  enabledEvents:
+  - ENTITY_SNAPSHOT_STARTED
+  - ENTITY_SNAPSHOT_COMPLETED
+  - ENTITY_SNAPSHOT_FAILED
+  - ENTITY_CDC_STARTED
+  - ENTITY_CDC_STOPPED
+  - ENTITY_CDC_RELOADED
+  - ENTITY_UPSERTED
+  - ENTITY_DELETED
+  - GROUP_SNAPSHOT_STARTED
+  - GROUP_SNAPSHOT_COMPLETED
+  - GROUP_CDC_STARTED
+  - GROUP_CDC_STOPPED
+  - REPLICATION_LATENCY_THRESHOLD_EXCEEDED
+  - ROW_COUNT_DRIFT_DETECTED
+  - DATA_FLOW_STALL_DETECTED
+  - THROUGHPUT_ANOMALY_DETECTED
+  - LATENCY_ANOMALY_DETECTED
+  - ENTITY_HEARTBEAT_MISSED
+  - AGENT_UNHEALTHY
+  - AGENT_RECOVERED
+  - PIPELINE_ERROR
+  - PIPELINE_ERROR_RESOLVED
+  - TEST
+  severityFilter:
+  - CRITICAL
+  - WARNING
+  - INFO
+  burstPrevention:
+    enabled: true
+    windowMinutes: 5
+    maxEventsPerEmail: 20
+  pipelineFilter:
+  - 8ee6efed
+  - 0f8c9b10
+  - cc00d5f4
+  - e4217bc5
+  groupFilter: []
+  entityFilter: []

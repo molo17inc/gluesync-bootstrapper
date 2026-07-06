@@ -1,0 +1,2839 @@
+# ---------------------------------------------------------------
+# Gluesync Automator - Pipeline Configuration (generated)
+# ---------------------------------------------------------------
+# Generated from DbMoto metadata: efcocrp-meta.xml
+# Pipeline ID     : a2954f81
+# Pipeline name   : s_TESTBOXAS400 to t_SRVMONSQL3EFCOSBOX (UDF entities)
+# Generated at    : 2026-06-19T16:34:23.456598
+# Contains only the entities that require a field-mapping-to-function UDF.
+# ---------------------------------------------------------------
+exportMetadata:
+  pipelineId: a2954f81
+  pipelineName: s_TESTBOXAS400 to t_SRVMONSQL3EFCOSBOX (UDF entities)
+schemas:
+  FBPRODLIB:
+    target: Fbprodlib
+    sourceType: SQL
+    targetType: SQL
+    tables:
+      whitelist:
+      - EEPMARKD
+      - EEPMKACS
+      - FPRFGLS
+      custom:
+        EEPMARKD:
+          name: Eepmarkd
+          columns:
+          - name: ESTPRF
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: ESTYR
+            type: DECIMAL
+            dataLength: 2
+            numericPrecision: 2
+            numericScale: 0
+            isNullable: false
+          - name: ESTNBR
+            type: DECIMAL
+            dataLength: 6
+            numericPrecision: 6
+            numericScale: 0
+            isNullable: false
+          - name: ESTDSH
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: CYEAR
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: CNMBR
+            type: DECIMAL
+            dataLength: 4
+            numericPrecision: 4
+            numericScale: 0
+            isNullable: false
+          - name: CDASH
+            type: CHAR
+            dataLength: 2
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: MARK
+            type: CHAR
+            dataLength: 6
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: MKQTY
+            type: DECIMAL
+            dataLength: 6
+            numericPrecision: 6
+            numericScale: 0
+            isNullable: false
+          - name: WDWIDE
+            type: DECIMAL
+            dataLength: 8
+            numericPrecision: 8
+            numericScale: 5
+            isNullable: false
+          - name: WDHIGH
+            type: DECIMAL
+            dataLength: 8
+            numericPrecision: 8
+            numericScale: 5
+            isNullable: false
+          - name: IMCO
+            type: DECIMAL
+            dataLength: 3
+            numericPrecision: 3
+            numericScale: 0
+            isNullable: false
+          - name: PARENT
+            type: CHAR
+            dataLength: 15
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: MODEL
+            type: CHAR
+            dataLength: 15
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: PDCATE
+            type: CHAR
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: WSYSTM
+            type: CHAR
+            dataLength: 6
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: SERIES
+            type: CHAR
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: THERM
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: HV
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: RIBN
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: JBFIN
+            type: DECIMAL
+            dataLength: 2
+            numericPrecision: 2
+            numericScale: 0
+            isNullable: false
+          - name: JBFINI
+            type: DECIMAL
+            dataLength: 2
+            numericPrecision: 2
+            numericScale: 0
+            isNullable: false
+          - name: HDLEG
+            type: CHAR
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: SLLEG
+            type: CHAR
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: LJLEG
+            type: CHAR
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: RJLEG
+            type: CHAR
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: JBGLS
+            type: DECIMAL
+            dataLength: 2
+            numericPrecision: 2
+            numericScale: 0
+            isNullable: false
+          - name: GLAZE
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: MAXVRT
+            type: DECIMAL
+            dataLength: 2
+            numericPrecision: 2
+            numericScale: 0
+            isNullable: false
+          - name: MAXHRZ
+            type: DECIMAL
+            dataLength: 2
+            numericPrecision: 2
+            numericScale: 0
+            isNullable: false
+          - name: WSHAPE
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: DTSTMP
+            type: DATE
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: TMSTMP
+            type: DECIMAL
+            dataLength: 6
+            numericPrecision: 6
+            numericScale: 0
+            isNullable: false
+          - name: QTYDSC
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: LADAPT
+            type: CHAR
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: RADAPT
+            type: CHAR
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: FDIM
+            type: DECIMAL
+            dataLength: 8
+            numericPrecision: 8
+            numericScale: 5
+            isNullable: false
+          - name: VDIM
+            type: DECIMAL
+            dataLength: 8
+            numericPrecision: 8
+            numericScale: 5
+            isNullable: false
+          - name: CLROPN
+            type: DECIMAL
+            dataLength: 8
+            numericPrecision: 8
+            numericScale: 5
+            isNullable: false
+          - name: DHL1
+            type: DECIMAL
+            dataLength: 8
+            numericPrecision: 8
+            numericScale: 5
+            isNullable: false
+          - name: DHL2
+            type: DECIMAL
+            dataLength: 8
+            numericPrecision: 8
+            numericScale: 5
+            isNullable: false
+          - name: DHL3
+            type: DECIMAL
+            dataLength: 8
+            numericPrecision: 8
+            numericScale: 5
+            isNullable: false
+          - name: DHL4
+            type: DECIMAL
+            dataLength: 8
+            numericPrecision: 8
+            numericScale: 5
+            isNullable: false
+          - name: DHL5
+            type: DECIMAL
+            dataLength: 8
+            numericPrecision: 8
+            numericScale: 5
+            isNullable: false
+          - name: MRCRTD
+            type: DATE
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: MRUPDD
+            type: DATE
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: MRCRTT
+            type: TIME
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: MRUPDT
+            type: TIME
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: MRCRTU
+            type: CHAR
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: MRUPDU
+            type: CHAR
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: MRPGMN
+            type: CHAR
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: REFSER
+            type: CHAR
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: GLSBT
+            type: DECIMAL
+            dataLength: 6
+            numericPrecision: 6
+            numericScale: 5
+            isNullable: false
+          - name: INFO1
+            type: CHAR
+            dataLength: 15
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: INFO2
+            type: CHAR
+            dataLength: 7
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: INFO3
+            type: DECIMAL
+            dataLength: 3
+            numericPrecision: 3
+            numericScale: 0
+            isNullable: false
+          - name: SASHFRM
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: MODELFRM
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: MTGRAIL
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: GLZTYPE
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: EXTFLD1
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: EXTFLD2
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: EXTFLD3
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: EXTFLD4
+            type: CHAR
+            dataLength: 2
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: EXTFLD5
+            type: CHAR
+            dataLength: 2
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: EXTFLD6
+            type: CHAR
+            dataLength: 2
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: EXTFLD7
+            type: CHAR
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: EXTFLD8
+            type: CHAR
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: EXTFLD9
+            type: CHAR
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          keys:
+          - ESTPRF
+          - ESTYR
+          - ESTNBR
+          - ESTDSH
+          - MARK
+          - IMCO
+          chainId: EEP Group III
+          entityName: FBPRODLIB.EEPMARKD
+          unlockedSchema: true
+          customProperties:
+            target:
+              udf:
+              - name: UDF_FBPRODLIB_EEPMARKD
+                type: Java
+        EEPMKACS:
+          name: Eepmkacs
+          columns:
+          - name: IMCO
+            type: DECIMAL
+            dataLength: 3
+            numericPrecision: 3
+            numericScale: 0
+            isNullable: false
+          - name: ESTPRF
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: ESTYR
+            type: DECIMAL
+            dataLength: 2
+            numericPrecision: 2
+            numericScale: 0
+            isNullable: false
+          - name: ESTNBR
+            type: DECIMAL
+            dataLength: 6
+            numericPrecision: 6
+            numericScale: 0
+            isNullable: false
+          - name: ESTDSH
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: CYEAR
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: CNMBR
+            type: DECIMAL
+            dataLength: 4
+            numericPrecision: 4
+            numericScale: 0
+            isNullable: false
+          - name: CDASH
+            type: CHAR
+            dataLength: 2
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: PDCATE
+            type: CHAR
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: WSYSTM
+            type: CHAR
+            dataLength: 6
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: SERIES
+            type: CHAR
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: BAYMRK
+            type: CHAR
+            dataLength: 6
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: REF#
+            type: DECIMAL
+            dataLength: 3
+            numericPrecision: 3
+            numericScale: 0
+            isNullable: false
+          - name: BAYQTY
+            type: DECIMAL
+            dataLength: 4
+            numericPrecision: 4
+            numericScale: 0
+            isNullable: false
+          - name: WDWIDE
+            type: DECIMAL
+            dataLength: 8
+            numericPrecision: 8
+            numericScale: 5
+            isNullable: false
+          - name: WDHIGH
+            type: DECIMAL
+            dataLength: 8
+            numericPrecision: 8
+            numericScale: 5
+            isNullable: false
+          - name: JBFIN
+            type: DECIMAL
+            dataLength: 2
+            numericPrecision: 2
+            numericScale: 0
+            isNullable: false
+          - name: JBFINI
+            type: DECIMAL
+            dataLength: 2
+            numericPrecision: 2
+            numericScale: 0
+            isNullable: false
+          - name: AHEAD
+            type: CHAR
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: AJAMB
+            type: CHAR
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: AMULL
+            type: CHAR
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: ASILL
+            type: CHAR
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: MISC
+            type: CHAR
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: CLIPS
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: WLDKD
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: ENGQTY
+            type: DECIMAL
+            dataLength: 4
+            numericPrecision: 4
+            numericScale: 0
+            isNullable: false
+          - name: ATTL
+            type: CHAR
+            dataLength: 8
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: ATBR
+            type: CHAR
+            dataLength: 8
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: BTTL
+            type: CHAR
+            dataLength: 8
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: BTBR
+            type: CHAR
+            dataLength: 8
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: CTTL
+            type: CHAR
+            dataLength: 8
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: CTBR
+            type: CHAR
+            dataLength: 8
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: RDIM
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: PRINT
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: QTYDSC
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: DTSTMP
+            type: DATE
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: TMSTMP
+            type: DECIMAL
+            dataLength: 6
+            numericPrecision: 6
+            numericScale: 0
+            isNullable: false
+          - name: AFLDB
+            type: CHAR
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: APARTA
+            type: DECIMAL
+            dataLength: 8
+            numericPrecision: 8
+            numericScale: 0
+            isNullable: false
+          - name: APARTB
+            type: DECIMAL
+            dataLength: 8
+            numericPrecision: 8
+            numericScale: 0
+            isNullable: false
+          - name: ASIZEA
+            type: DECIMAL
+            dataLength: 6
+            numericPrecision: 6
+            numericScale: 5
+            isNullable: false
+          - name: ASIZEB
+            type: DECIMAL
+            dataLength: 6
+            numericPrecision: 6
+            numericScale: 5
+            isNullable: false
+          - name: ASNGLA
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: ASNGLB
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: PARENT
+            type: CHAR
+            dataLength: 15
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: MODEL
+            type: CHAR
+            dataLength: 15
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: MSSDES
+            type: CHAR
+            dataLength: 30
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: LBRCD1
+            type: CHAR
+            dataLength: 2
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: LBRCD2
+            type: CHAR
+            dataLength: 2
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: PCQTY
+            type: DECIMAL
+            dataLength: 6
+            numericPrecision: 6
+            numericScale: 0
+            isNullable: false
+          - name: ARCRTD
+            type: DATE
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: ARUPDD
+            type: DATE
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: ARCRTT
+            type: TIME
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: ARUPDT
+            type: TIME
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: ARCRTU
+            type: CHAR
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: ARUPDU
+            type: CHAR
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: ARPGMN
+            type: CHAR
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          keys:
+          - IMCO
+          - ESTPRF
+          - ESTYR
+          - ESTNBR
+          - ESTDSH
+          - PDCATE
+          - BAYMRK
+          - REF#
+          chainId: EEP Group III
+          entityName: FBPRODLIB.EEPMKACS
+          unlockedSchema: true
+          customProperties:
+            target:
+              udf:
+              - name: UDF_FBPRODLIB_EEPMKACS
+                type: Java
+        FPRFGLS:
+          name: Fprfgls
+          columns:
+          - name: IMCO
+            type: DECIMAL
+            dataLength: 3
+            numericPrecision: 3
+            numericScale: 0
+            isNullable: false
+          - name: ESTPRF
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: ESTYR
+            type: DECIMAL
+            dataLength: 2
+            numericPrecision: 2
+            numericScale: 0
+            isNullable: false
+          - name: ESTNBR
+            type: DECIMAL
+            dataLength: 6
+            numericPrecision: 6
+            numericScale: 0
+            isNullable: false
+          - name: ESTDSH
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: CYEAR
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: CNMBR
+            type: DECIMAL
+            dataLength: 4
+            numericPrecision: 4
+            numericScale: 0
+            isNullable: false
+          - name: CDASH
+            type: CHAR
+            dataLength: 2
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: MARK
+            type: CHAR
+            dataLength: 6
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: QUANTITY
+            type: DECIMAL
+            dataLength: 6
+            numericPrecision: 6
+            numericScale: 0
+            isNullable: false
+          - name: WIDTH
+            type: DECIMAL
+            dataLength: 8
+            numericPrecision: 8
+            numericScale: 5
+            isNullable: false
+          - name: HEIGHT
+            type: DECIMAL
+            dataLength: 8
+            numericPrecision: 8
+            numericScale: 5
+            isNullable: false
+          - name: PDCATE
+            type: CHAR
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: WSYSTM
+            type: CHAR
+            dataLength: 6
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: SERIES
+            type: CHAR
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: JBGLS
+            type: DECIMAL
+            dataLength: 2
+            numericPrecision: 2
+            numericScale: 0
+            isNullable: false
+          - name: TYPECD
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: REFPART
+            type: CHAR
+            dataLength: 25
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: PARTDESC
+            type: CHAR
+            dataLength: 50
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: PRTSHP
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: PARTMRK
+            type: CHAR
+            dataLength: 6
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: GLSCOST
+            type: DECIMAL
+            dataLength: 15
+            numericPrecision: 15
+            numericScale: 5
+            isNullable: false
+          - name: GLSPRICE
+            type: DECIMAL
+            dataLength: 15
+            numericPrecision: 15
+            numericScale: 5
+            isNullable: false
+          - name: DISCOUNT
+            type: DECIMAL
+            dataLength: 6
+            numericPrecision: 6
+            numericScale: 4
+            isNullable: false
+          - name: GLSTOTPRIC
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 4
+            isNullable: false
+          - name: GLSSQFT1
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: GLSCOST1
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 4
+            isNullable: false
+          - name: GLSPRIC1
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 4
+            isNullable: false
+          - name: GLSSQFT2
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: GLSCOST2
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 4
+            isNullable: false
+          - name: GLSPRIC2
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 4
+            isNullable: false
+          - name: TOTMHR
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: TOTWGT
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: PREFNUM
+            type: DECIMAL
+            dataLength: 9
+            numericPrecision: 9
+            numericScale: 0
+            isNullable: false
+          - name: PREFVERS
+            type: DECIMAL
+            dataLength: 9
+            numericPrecision: 9
+            numericScale: 0
+            isNullable: false
+          - name: PREFORDER
+            type: DECIMAL
+            dataLength: 4
+            numericPrecision: 4
+            numericScale: 0
+            isNullable: false
+          - name: PREFVERSTP
+            type: CHAR
+            dataLength: 25
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: PREFREF
+            type: CHAR
+            dataLength: 50
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: RDCRTD
+            type: DATE
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: RDUPDD
+            type: DATE
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: RDCRTT
+            type: TIME
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: RDUPDT
+            type: TIME
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: RDCRTU
+            type: CHAR
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: RDUPDU
+            type: CHAR
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: RDPGMN
+            type: CHAR
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: PRFGLSNBR
+            type: DECIMAL
+            dataLength: 9
+            numericPrecision: 9
+            numericScale: 0
+            isNullable: false
+          - name: PRFINTNMTN
+            type: CHAR
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: SCNMESH
+            type: CHAR
+            dataLength: 25
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: SCNWIDTH
+            type: DECIMAL
+            dataLength: 8
+            numericPrecision: 8
+            numericScale: 5
+            isNullable: false
+          - name: SCNHEIGHT
+            type: DECIMAL
+            dataLength: 8
+            numericPrecision: 8
+            numericScale: 5
+            isNullable: false
+          - name: SCNJBFIN
+            type: DECIMAL
+            dataLength: 2
+            numericPrecision: 2
+            numericScale: 0
+            isNullable: false
+          keys:
+          - IMCO
+          - ESTPRF
+          - ESTYR
+          - ESTNBR
+          - ESTDSH
+          - MARK
+          - JBGLS
+          - TYPECD
+          - PRFGLSNBR
+          chainId: EEP Group III
+          entityName: FBPRODLIB.FPRFGLS
+          unlockedSchema: true
+          customProperties:
+            target:
+              udf:
+              - name: UDF_FBPRODLIB_FPRFGLS
+                type: Java
+  KBMEFCOADD:
+    target: kbmefcoadd
+    sourceType: SQL
+    targetType: SQL
+    tables:
+      whitelist:
+      - FPROD
+      custom:
+        FPROD:
+          name: Fprod
+          columns:
+          - name: PARENT
+            type: CHAR
+            dataLength: 15
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: MODEL
+            type: CHAR
+            dataLength: 15
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: PDCATE
+            type: CHAR
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: SERIES
+            type: CHAR
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: WSYSTM
+            type: CHAR
+            dataLength: 6
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: GSTS
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: SERPRD
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: VALEEP
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: UOM
+            type: CHAR
+            dataLength: 2
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: PDESC
+            type: CHAR
+            dataLength: 40
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: WDWTYPE
+            type: CHAR
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: STYPE
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: PTYP
+            type: CHAR
+            dataLength: 5
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: STHRML
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: THRMTYP
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: ASPEC
+            type: CHAR
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: CSPEC
+            type: CHAR
+            dataLength: 2
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: NWTHCK
+            type: DECIMAL
+            dataLength: 5
+            numericPrecision: 5
+            numericScale: 4
+            isNullable: false
+          - name: FRMDPH
+            type: DECIMAL
+            dataLength: 7
+            numericPrecision: 7
+            numericScale: 5
+            isNullable: false
+          - name: ISSL
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: ISFB
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: PDCATSL
+            type: CHAR
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: DISPLAY
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: LADDERPGM
+            type: CHAR
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: MATRIXPGM
+            type: CHAR
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: WARS
+            type: DECIMAL
+            dataLength: 2
+            numericPrecision: 2
+            numericScale: 0
+            isNullable: false
+          - name: WARM
+            type: DECIMAL
+            dataLength: 2
+            numericPrecision: 2
+            numericScale: 0
+            isNullable: false
+          - name: PMAT
+            type: CHAR
+            dataLength: 15
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: GMETH
+            type: CHAR
+            dataLength: 15
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: CMDTY
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: VALGEEP
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: SPTYP
+            type: CHAR
+            dataLength: 18
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: HNGTYP
+            type: CHAR
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: PRCCT
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: CODEA
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: CODEB
+            type: CHAR
+            dataLength: 2
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: HRSADJ
+            type: DECIMAL
+            dataLength: 5
+            numericPrecision: 5
+            numericScale: 2
+            isNullable: false
+          - name: EFCRTD
+            type: DATE
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: EFUPDD
+            type: DATE
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: EFCRTT
+            type: TIME
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: EFUPDT
+            type: TIME
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: EFCRTU
+            type: CHAR
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: EFUPDU
+            type: CHAR
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: EFPGMN
+            type: CHAR
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          keys:
+          - WSYSTM
+          - SERIES
+          - PDCATE
+          - MODEL
+          - PARENT
+          chainId: KBM Group VI
+          entityName: KBMEFCOADD.FPROD
+          unlockedSchema: true
+          customProperties:
+            target:
+              udf:
+              - name: UDF_KBMEFCOADD_FPROD
+                type: Java
+  ESPRODLIB:
+    target: Esprodlib
+    sourceType: SQL
+    targetType: SQL
+    tables:
+      whitelist:
+      - FMINSCMP
+      - E3PGLSDS
+      - FALABOR
+      - FQTYDSC
+      - FTPGSCST
+      - PEEPBAL
+      custom:
+        FMINSCMP:
+          name: Fminscmp
+          columns:
+          - name: CMPSTE
+            type: CHAR
+            dataLength: 15
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: DESC
+            type: CHAR
+            dataLength: 60
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: EXTDIE
+            type: CHAR
+            dataLength: 15
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: INTDIE
+            type: CHAR
+            dataLength: 15
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: INSNUM
+            type: CHAR
+            dataLength: 15
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: QTYINS
+            type: DECIMAL
+            dataLength: 5
+            numericPrecision: 5
+            numericScale: 0
+            isNullable: false
+          - name: CPCONBR
+            type: DECIMAL
+            dataLength: 3
+            numericPrecision: 3
+            numericScale: 0
+            isNullable: false
+          - name: MISCPART
+            type: CHAR
+            dataLength: 15
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: MISCQTY
+            type: DECIMAL
+            dataLength: 5
+            numericPrecision: 5
+            numericScale: 0
+            isNullable: false
+          - name: INSNUM2
+            type: CHAR
+            dataLength: 15
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: QTYINS2
+            type: DECIMAL
+            dataLength: 5
+            numericPrecision: 5
+            numericScale: 0
+            isNullable: false
+          - name: CPDATCRT
+            type: DATE
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: CPDATUPD
+            type: DATE
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: CPTIMCRT
+            type: TIME
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: CPTIMUPD
+            type: TIME
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: CPUSRCRT
+            type: CHAR
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: CPUSRUPD
+            type: CHAR
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: CPPGMNAM
+            type: CHAR
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          keys:
+          - CMPSTE
+          chainId: EEP Group II
+          entityName: ESPRODLIB.FMINSCMP
+          unlockedSchema: true
+          customProperties:
+            target:
+              udf:
+              - name: UDF_ESPRODLIB_FMINSCMP
+                type: Java
+          _disabledInDbMoto: true
+        E3PGLSDS:
+          name: E3pglsds
+          columns:
+          - name: ANPGMN
+            type: CHAR
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: ANUPDU
+            type: CHAR
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: ANCRTU
+            type: CHAR
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: ANUPDT
+            type: TIME
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: ANCRTT
+            type: TIME
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: ANUPDD
+            type: DATE
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: ANCRTD
+            type: DATE
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: PRFGLSREF
+            type: CHAR
+            dataLength: 25
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: ANCO
+            type: DECIMAL
+            dataLength: 3
+            numericPrecision: 3
+            numericScale: 0
+            isNullable: false
+          - name: STKSHTHT
+            type: DECIMAL
+            dataLength: 3
+            numericPrecision: 3
+            numericScale: 0
+            isNullable: false
+          - name: STKSHTWD
+            type: DECIMAL
+            dataLength: 3
+            numericPrecision: 3
+            numericScale: 0
+            isNullable: false
+          - name: MMAXSQFT
+            type: DECIMAL
+            dataLength: 5
+            numericPrecision: 5
+            numericScale: 2
+            isNullable: false
+          - name: MMAXHGT
+            type: DECIMAL
+            dataLength: 3
+            numericPrecision: 3
+            numericScale: 0
+            isNullable: false
+          - name: MMAXWTH
+            type: DECIMAL
+            dataLength: 3
+            numericPrecision: 3
+            numericScale: 0
+            isNullable: false
+          - name: UMAXSQFT
+            type: DECIMAL
+            dataLength: 5
+            numericPrecision: 5
+            numericScale: 2
+            isNullable: false
+          - name: UMAXHGT
+            type: DECIMAL
+            dataLength: 3
+            numericPrecision: 3
+            numericScale: 0
+            isNullable: false
+          - name: UMAXWTH
+            type: DECIMAL
+            dataLength: 3
+            numericPrecision: 3
+            numericScale: 0
+            isNullable: false
+          - name: OPTYN
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: AGLST
+            type: DECIMAL
+            dataLength: 5
+            numericPrecision: 5
+            numericScale: 4
+            isNullable: false
+          - name: SQFTWT
+            type: DECIMAL
+            dataLength: 6
+            numericPrecision: 6
+            numericScale: 4
+            isNullable: false
+          - name: PARTD2
+            type: CHAR
+            dataLength: 31
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: PARTDS
+            type: CHAR
+            dataLength: 31
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: PRTGLS
+            type: CHAR
+            dataLength: 16
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: GTHICK
+            type: DECIMAL
+            dataLength: 5
+            numericPrecision: 5
+            numericScale: 4
+            isNullable: false
+          - name: GTYPE
+            type: CHAR
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: ANUPDDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: ANCRTDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          keys:
+          - GTHICK
+          - GTYPE
+          chainId: Test EEP Group II
+          entityName: ESPRODLIB.E3PGLSDS
+          unlockedSchema: true
+          customProperties:
+            target:
+              udf:
+              - name: UDF_ESPRODLIB_E3PGLSDS
+                type: Java
+        FALABOR:
+          name: Falabor
+          columns:
+          - name: LFPGMN
+            type: CHAR
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: LFUPDU
+            type: CHAR
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: LFCRTU
+            type: CHAR
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: LFUPDT
+            type: TIME
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: LFCRTT
+            type: TIME
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: LFUPDD
+            type: DATE
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: LFCRTD
+            type: DATE
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: ALUSER
+            type: CHAR
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: ALTIME
+            type: DECIMAL
+            dataLength: 6
+            numericPrecision: 6
+            numericScale: 0
+            isNullable: false
+          - name: ALDATE
+            type: DATE
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: ALMHRS
+            type: DECIMAL
+            dataLength: 6
+            numericPrecision: 6
+            numericScale: 3
+            isNullable: false
+          - name: ALDIFF
+            type: DECIMAL
+            dataLength: 6
+            numericPrecision: 6
+            numericScale: 3
+            isNullable: false
+          - name: ALUTCT
+            type: DECIMAL
+            dataLength: 6
+            numericPrecision: 6
+            numericScale: 3
+            isNullable: false
+          - name: ALHTGE
+            type: DECIMAL
+            dataLength: 6
+            numericPrecision: 6
+            numericScale: 3
+            isNullable: false
+          - name: ALWDGE
+            type: DECIMAL
+            dataLength: 6
+            numericPrecision: 6
+            numericScale: 3
+            isNullable: false
+          - name: ALHTLE
+            type: DECIMAL
+            dataLength: 6
+            numericPrecision: 6
+            numericScale: 3
+            isNullable: false
+          - name: ALWDLE
+            type: DECIMAL
+            dataLength: 6
+            numericPrecision: 6
+            numericScale: 3
+            isNullable: false
+          - name: ALMBRK
+            type: DECIMAL
+            dataLength: 8
+            numericPrecision: 8
+            numericScale: 3
+            isNullable: false
+          - name: ALTYPE
+            type: CHAR
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: ALSER
+            type: CHAR
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: ALCAT
+            type: CHAR
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: ALMOD
+            type: CHAR
+            dataLength: 15
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: ALPAR
+            type: CHAR
+            dataLength: 15
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: ALCO
+            type: DECIMAL
+            dataLength: 3
+            numericPrecision: 3
+            numericScale: 0
+            isNullable: false
+          - name: ALCODE
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: LFCRTDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: ALDATET
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: LFUPDDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          keys:
+          - ALHTGE
+          - ALWDGE
+          - ALHTLE
+          - ALWDLE
+          - ALMBRK
+          - ALTYPE
+          - ALSER
+          - ALCAT
+          - ALMOD
+          - ALPAR
+          - ALCO
+          chainId: Test EEP Group II
+          entityName: ESPRODLIB.FALABOR
+          unlockedSchema: true
+          customProperties:
+            target:
+              udf:
+              - name: UDF_ESPRODLIB_FALABOR
+                type: Java
+        FQTYDSC:
+          name: FQtydsc
+          columns:
+          - name: QDPGMN
+            type: CHAR
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: QDUPDU
+            type: CHAR
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: QDCRTU
+            type: CHAR
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: QDUPDT
+            type: TIME
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: QDCRTT
+            type: TIME
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: QDUPDD
+            type: DATE
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: QDSRTD
+            type: DATE
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: QDCODE
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: QDUSER
+            type: CHAR
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: QDTIME
+            type: DECIMAL
+            dataLength: 6
+            numericPrecision: 6
+            numericScale: 0
+            isNullable: false
+          - name: QDDATE
+            type: DATE
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: QDPCT
+            type: DECIMAL
+            dataLength: 3
+            numericPrecision: 3
+            numericScale: 2
+            isNullable: false
+          - name: QDBRK
+            type: DECIMAL
+            dataLength: 5
+            numericPrecision: 5
+            numericScale: 0
+            isNullable: false
+          - name: QDSER
+            type: CHAR
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: QDCAT
+            type: CHAR
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: QDMOD
+            type: CHAR
+            dataLength: 15
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: QDPAR
+            type: CHAR
+            dataLength: 15
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: QDCO
+            type: DECIMAL
+            dataLength: 3
+            numericPrecision: 3
+            numericScale: 0
+            isNullable: false
+          - name: QDSRTDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: QDUPDDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          keys:
+          - QDBRK
+          - QDSER
+          - QDCAT
+          - QDMOD
+          - QDPAR
+          - QDCO
+          chainId: EEP Group I
+          entityName: ESPRODLIB.FQTYDSC
+          unlockedSchema: true
+          customProperties:
+            target:
+              udf:
+              - name: UDF_ESPRODLIB_FQTYDSC
+                type: Java
+        FTPGSCST:
+          name: Ftpgscst
+          columns:
+          - name: CSPGMN
+            type: CHAR
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: CSUPDU
+            type: CHAR
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: CSCRTU
+            type: CHAR
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: CSUPDT
+            type: TIME
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: CSCRTT
+            type: TIME
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: CSUPDD
+            type: DATE
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: CSCRTD
+            type: DATE
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: CSCO
+            type: DECIMAL
+            dataLength: 3
+            numericPrecision: 3
+            numericScale: 0
+            isNullable: false
+          - name: STOCK#
+            type: CHAR
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: PPRTNB
+            type: CHAR
+            dataLength: 15
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: RELDAT
+            type: DATE
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: NEWCST
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: GLSCST
+            type: DECIMAL
+            dataLength: 6
+            numericPrecision: 6
+            numericScale: 4
+            isNullable: false
+          - name: GTHICK
+            type: DECIMAL
+            dataLength: 5
+            numericPrecision: 5
+            numericScale: 4
+            isNullable: false
+          - name: GTYPE
+            type: CHAR
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: CSUPDDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: CSCRTDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: RECORDID
+            type: DECIMAL
+            dataLength: 15
+            numericPrecision: 15
+            numericScale: 0
+            isNullable: false
+            sourceName: _RRN
+          keys:
+          - _RRN
+          chainId: Test RecordID Esprodlib Group
+          entityName: ESPRODLIB.FTPGSCST
+          unlockedSchema: true
+          customProperties:
+            target:
+              udf:
+              - name: UDF_ESPRODLIB_FTPGSCST
+                type: Java
+        PEEPBAL:
+          name: Peepbal
+          columns:
+          - name: BSERIES
+            type: CHAR
+            dataLength: 15
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: QTYSH
+            type: DECIMAL
+            dataLength: 1
+            numericPrecision: 1
+            numericScale: 0
+            isNullable: false
+          - name: BALLNG
+            type: DECIMAL
+            dataLength: 2
+            numericPrecision: 2
+            numericScale: 0
+            isNullable: false
+          - name: VNTWGT
+            type: DECIMAL
+            dataLength: 8
+            numericPrecision: 8
+            numericScale: 5
+            isNullable: false
+          - name: BALNBR
+            type: CHAR
+            dataLength: 15
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: BALLMT
+            type: CHAR
+            dataLength: 2
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: DATSYS
+            type: DATE
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: TIMSYS
+            type: DECIMAL
+            dataLength: 6
+            numericPrecision: 6
+            numericScale: 0
+            isNullable: false
+          - name: NEWCST
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: BALCST
+            type: DECIMAL
+            dataLength: 6
+            numericPrecision: 6
+            numericScale: 4
+            isNullable: false
+          - name: BCCO
+            type: DECIMAL
+            dataLength: 3
+            numericPrecision: 3
+            numericScale: 0
+            isNullable: false
+          - name: BCCRTD
+            type: DATE
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: BCUPDD
+            type: DATE
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: BCCRTT
+            type: TIME
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: BCUPDT
+            type: TIME
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: BCCRTU
+            type: CHAR
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: BCUPDU
+            type: CHAR
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: BCPGMN
+            type: CHAR
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: BCCRTDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: BCUPDDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          keys:
+          - NEWCST
+          - BALNBR
+          - BSERIES
+          chainId: EEP Group I
+          entityName: ESPRODLIB.PEEPBAL
+          unlockedSchema: true
+          customProperties:
+            target:
+              udf:
+              - name: UDF_ESPRODLIB_PEEPBAL
+                type: Java
+  ESPRODQA:
+    target: Esprodlib
+    sourceType: SQL
+    targetType: SQL
+    tables:
+      whitelist:
+      - FPARTATTR
+      custom:
+        FPARTATTR:
+          name: FPartattr
+          columns:
+          - name: RDPGMN
+            type: CHAR
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: RDUPDU
+            type: CHAR
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: RDCRTU
+            type: CHAR
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: RDUPDT
+            type: TIME
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: RDCRTT
+            type: TIME
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: RDUPDD
+            type: DATE
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: RDCRTD
+            type: DATE
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: ORIGIN
+            type: CHAR
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: LABORLIST
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: DIRECTLBR
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: INPLLBRLST
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: GRIDLBRLST
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: SCRNLBRLST
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: GLZGLBRLST
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: GLASLBRLST
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: PRCTLBRLST
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: INPLLBR
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: GRIDLBR
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: SCREENLBR
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: GLAZINGLBR
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: GLASSLBR
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: PRODUCTLBR
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: TOTMHR
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: INPLMHR
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: GRIDMHR
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: SCREENMHR
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: GLAZINGMHR
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: GLASSMHR
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: PRODUCTMHR
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: GLASSRATE
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: GLASSCOST
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: GLASSSQFT
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: GLASSWGT
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: INSPRICE
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: FINPRICEI
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: FINPRICE
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: ALUMPRICEI
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: ALUMPRICE
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: INSSTCHLBR
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: INSCOST
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: ALUMRATEI
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: ALUMCOSTI
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: REVFCTLBSI
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: ALUMLBSI
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: FINRATEI
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: FINCOSTI
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: FINSQFTI
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: ALUMRATE
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: ALUMCOST
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: REVFCTLBS
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: ALUMLBS
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: FINRATE
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: FINCOST
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: FINSQFT
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: PARTPRICE
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: PARTCOST
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 5
+            isNullable: false
+          - name: PARTDESC
+            type: CHAR
+            dataLength: 50
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: FINISHDESC
+            type: CHAR
+            dataLength: 50
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: JBGLS
+            type: DECIMAL
+            dataLength: 2
+            numericPrecision: 2
+            numericScale: 0
+            isNullable: false
+          - name: JBFINI
+            type: DECIMAL
+            dataLength: 2
+            numericPrecision: 2
+            numericScale: 0
+            isNullable: false
+          - name: JBFIN
+            type: DECIMAL
+            dataLength: 2
+            numericPrecision: 2
+            numericScale: 0
+            isNullable: false
+          - name: SERIES
+            type: CHAR
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: WSYSTM
+            type: CHAR
+            dataLength: 6
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: PDCATE
+            type: CHAR
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: GLSTHICK
+            type: DECIMAL
+            dataLength: 6
+            numericPrecision: 6
+            numericScale: 4
+            isNullable: false
+          - name: SPCRLENGTH
+            type: DECIMAL
+            dataLength: 12
+            numericPrecision: 12
+            numericScale: 6
+            isNullable: false
+          - name: VTLENGTH
+            type: DECIMAL
+            dataLength: 8
+            numericPrecision: 8
+            numericScale: 5
+            isNullable: false
+          - name: HZLENGTH
+            type: DECIMAL
+            dataLength: 8
+            numericPrecision: 8
+            numericScale: 5
+            isNullable: false
+          - name: QUANTITY
+            type: DECIMAL
+            dataLength: 6
+            numericPrecision: 6
+            numericScale: 0
+            isNullable: false
+          - name: PARTNUM
+            type: CHAR
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: MRKQTY
+            type: DECIMAL
+            dataLength: 6
+            numericPrecision: 6
+            numericScale: 0
+            isNullable: false
+          - name: MARK
+            type: CHAR
+            dataLength: 6
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: ESTDSH
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: ESTNBR
+            type: DECIMAL
+            dataLength: 6
+            numericPrecision: 6
+            numericScale: 0
+            isNullable: false
+          - name: ESTYR
+            type: DECIMAL
+            dataLength: 2
+            numericPrecision: 2
+            numericScale: 0
+            isNullable: false
+          - name: ESTPRF
+            type: CHAR
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: IMCO
+            type: DECIMAL
+            dataLength: 3
+            numericPrecision: 3
+            numericScale: 0
+            isNullable: false
+          - name: BALPARTNUM
+            type: CHAR
+            dataLength: 15
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+          - name: RDCRTDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: RDUPDDT
+            type: datetime
+            dataLength: 8
+            numericPrecision: 23
+            numericScale: 3
+            isNullable: true
+          - name: RECORDID
+            type: DECIMAL
+            dataLength: 15
+            numericPrecision: 15
+            numericScale: 0
+            isNullable: false
+            sourceName: _RRN
+          keys:
+          - _RRN
+          groupId: Do Not Enable To Be Removed
+          entityName: ESPRODQA.FPARTATTR
+          unlockedSchema: true
+          customProperties:
+            target:
+              udf:
+              - name: UDF_ESPRODQA_FPARTATTR
+                type: Java
+          _disabledInDbMoto: true

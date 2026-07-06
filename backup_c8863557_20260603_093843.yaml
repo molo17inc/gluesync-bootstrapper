@@ -1,0 +1,2421 @@
+# ---------------------------------------------------------------
+# Gluesync Automator – Pipeline Configuration Export
+# ---------------------------------------------------------------
+# CoreHub URL     : https://localhost
+# CoreHub version : 2.2.7 - build 5
+# Pipeline ID     : c8863557
+# Pipeline name   : iDevTst to srvmonsql3\efcotest.cloneiseries
+# Exported at     : 2026-06-03T14:38:43Z (UTC)
+# ---------------------------------------------------------------
+schemas:
+  KBM400MFG:
+    target: kbm400mfg
+    sourceType: SQL
+    targetType: SQL
+    tables:
+      whitelist:
+      - COHEADER
+      - FHCUSMST
+      custom:
+        FHCUSMST:
+          name: Fhcusmst
+          entityName: KBM400MFG.FHCUSMST
+          groupId: KBM400MFG
+          keys:
+          - CMNO
+          - COCO
+          columns:
+          - source: CMLSCA
+            target: CMLSCA
+            type: DECIMAL
+            dataLength: 0
+            numericPrecision: 11
+            numericScale: 2
+            isNullable: true
+            isPK: false
+            id: -8759632493665064109
+            ordinalPosition: 66
+          - source: CMBCCD
+            target: CMBCCD
+            type: CHARACTER
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -8651822503945001440
+            ordinalPosition: 21
+          - source: CMBAD3
+            target: CMBAD3
+            type: CHARACTER
+            dataLength: 30
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -8572493859479380439
+            ordinalPosition: 18
+          - source: CMXCNO
+            target: CMXCNO
+            type: CHARACTER
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -8551496196525549734
+            ordinalPosition: 133
+          - source: CMGLCD
+            target: CMGLCD
+            type: CHARACTER
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -8381895008193043270
+            ordinalPosition: 62
+          - source: CMTOPS
+            target: CMTOPS
+            type: CHARACTER
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -8361934418590419595
+            ordinalPosition: 120
+          - source: CMIADR
+            target: CMIADR
+            type: CHARACTER
+            dataLength: 50
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -8191671403127951853
+            ordinalPosition: 63
+          - source: CMPTIV
+            target: CMPTIV
+            type: CHARACTER
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -8136991872346660893
+            ordinalPosition: 78
+          - source: CMADD4
+            target: CMADD4
+            type: CHARACTER
+            dataLength: 30
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -8027907093590065650
+            ordinalPosition: 8
+          - source: CMAYTD
+            target: CMAYTD
+            type: DECIMAL
+            dataLength: 0
+            numericPrecision: 11
+            numericScale: 2
+            isNullable: true
+            isPK: false
+            id: -7992809129944077859
+            ordinalPosition: 14
+          - source: CM090
+            target: CM090
+            type: DECIMAL
+            dataLength: 0
+            numericPrecision: 11
+            numericScale: 2
+            isNullable: true
+            isPK: false
+            id: -7802264702613525072
+            ordinalPosition: 138
+          - source: CMSPCN
+            target: CMSPCN
+            type: CHARACTER
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -7778233709487731843
+            ordinalPosition: 102
+          - source: CMPHON
+            target: CMPHON
+            type: CHARACTER
+            dataLength: 20
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -7682242718267893885
+            ordinalPosition: 75
+          - source: CMDTLP
+            target: CMDTLP
+            type: DECIMAL
+            dataLength: 0
+            numericPrecision: 6
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -7604959011704314307
+            ordinalPosition: 54
+          - source: CMSAC
+            target: CMSAC
+            type: CHARACTER
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -7499399319385098357
+            ordinalPosition: 82
+          - source: CMID
+            target: CMID
+            type: CHARACTER
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -7411846263798463762
+            ordinalPosition: 64
+          - source: CMUUSR
+            target: CMUUSR
+            type: CHARACTER
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -7381861327360672233
+            ordinalPosition: 131
+          - source: CMUPGM
+            target: CMUPGM
+            type: CHARACTER
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -7244266375100549326
+            ordinalPosition: 128
+          - source: CMCMTD
+            target: CMCMTD
+            type: DECIMAL
+            dataLength: 0
+            numericPrecision: 11
+            numericScale: 2
+            isNullable: true
+            isPK: false
+            id: -6710004482388330112
+            ordinalPosition: 35
+          - source: CMCLAS
+            target: CMCLAS
+            type: CHARACTER
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -6571932957138680276
+            ordinalPosition: 34
+          - source: CMDDCO
+            target: CMDDCO
+            type: DECIMAL
+            dataLength: 0
+            numericPrecision: 3
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -6549242492157244218
+            ordinalPosition: 140
+          - source: CMBAD5
+            target: CMBAD5
+            type: CHARACTER
+            dataLength: 30
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -6400527563988892908
+            ordinalPosition: 20
+          - source: CMCUR
+            target: CMCUR
+            type: DECIMAL
+            dataLength: 0
+            numericPrecision: 11
+            numericScale: 2
+            isNullable: true
+            isPK: false
+            id: -6202217684211831499
+            ordinalPosition: 44
+          - source: CMCRSC
+            target: CMCRSC
+            type: DECIMAL
+            dataLength: 0
+            numericPrecision: 11
+            numericScale: 2
+            isNullable: true
+            isPK: false
+            id: -5982326713924782108
+            ordinalPosition: 38
+          - source: CMCONT
+            target: CMCONT
+            type: CHARACTER
+            dataLength: 30
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -5964220229571196051
+            ordinalPosition: 36
+          - source: CMCRTY
+            target: CMCRTY
+            type: CHARACTER
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -5820907678840681692
+            ordinalPosition: 40
+          - source: CMTOPD
+            target: CMTOPD
+            type: CHARACTER
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -5584608685040431226
+            ordinalPosition: 118
+          - source: CMBCTC
+            target: CMBCTC
+            type: CHARACTER
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -5370997510627759244
+            ordinalPosition: 23
+          - source: CMPRON
+            target: CMPRON
+            type: CHARACTER
+            dataLength: 12
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -5326733709521392074
+            ordinalPosition: 77
+          - source: CMADD2
+            target: CMADD2
+            type: CHARACTER
+            dataLength: 30
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -5214204917953592023
+            ordinalPosition: 6
+          - source: CMSZIP
+            target: CMSZIP
+            type: CHARACTER
+            dataLength: 11
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -5021059853502643641
+            ordinalPosition: 108
+          - source: CMAMLP
+            target: CMAMLP
+            type: DECIMAL
+            dataLength: 0
+            numericPrecision: 11
+            numericScale: 2
+            isNullable: true
+            isPK: false
+            id: -4968351272264840229
+            ordinalPosition: 11
+          - source: CMSLSM
+            target: CMSLSM
+            type: CHARACTER
+            dataLength: 5
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -4665538984273674654
+            ordinalPosition: 98
+          - source: CMTOCD
+            target: CMTOCD
+            type: CHARACTER
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -4551610992203227612
+            ordinalPosition: 115
+          - source: CMTOWD
+            target: CMTOWD
+            type: CHARACTER
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -4488530541838254898
+            ordinalPosition: 123
+          - source: CMUEVT
+            target: CMUEVT
+            type: CHARACTER
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -4449521303211321288
+            ordinalPosition: 127
+          - source: CMBAD4
+            target: CMBAD4
+            type: CHARACTER
+            dataLength: 30
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -4238022763481221511
+            ordinalPosition: 19
+          - source: CM060
+            target: CM060
+            type: DECIMAL
+            dataLength: 0
+            numericPrecision: 11
+            numericScale: 2
+            isNullable: true
+            isPK: false
+            id: -4193300183975100051
+            ordinalPosition: 137
+          - source: CMCTIM
+            target: CMCTIM
+            type: DECIMAL
+            dataLength: 0
+            numericPrecision: 6
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -4139994225348257768
+            ordinalPosition: 42
+          - source: CMSLL2
+            target: CMSLL2
+            type: DECIMAL
+            dataLength: 0
+            numericPrecision: 15
+            numericScale: 2
+            isNullable: true
+            isPK: false
+            id: -4034954793726627139
+            ordinalPosition: 96
+          - source: CMADD3
+            target: CMADD3
+            type: CHARACTER
+            dataLength: 30
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -4006547713207823880
+            ordinalPosition: 7
+          - source: CMSTCC
+            target: CMSTCC
+            type: CHARACTER
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -3760560092853964728
+            ordinalPosition: 106
+          - source: CM030
+            target: CM030
+            type: DECIMAL
+            dataLength: 0
+            numericPrecision: 11
+            numericScale: 2
+            isNullable: true
+            isPK: false
+            id: -3442939568324224387
+            ordinalPosition: 136
+          - source: CMSNAM
+            target: CMSNAM
+            type: CHARACTER
+            dataLength: 30
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -3226380618571641696
+            ordinalPosition: 100
+          - source: CMADD1
+            target: CMADD1
+            type: CHARACTER
+            dataLength: 30
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -3116304760359741167
+            ordinalPosition: 5
+          - source: CMBNAM
+            target: CMBNAM
+            type: CHARACTER
+            dataLength: 30
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -2943967923687286616
+            ordinalPosition: 27
+          - source: CMBAD1
+            target: CMBAD1
+            type: CHARACTER
+            dataLength: 30
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -2781411464066522992
+            ordinalPosition: 16
+          - source: CMSFAX
+            target: CMSFAX
+            type: CHARACTER
+            dataLength: 20
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -2310198328326513207
+            ordinalPosition: 94
+          - source: CMSCPL
+            target: CMSCPL
+            type: DECIMAL
+            dataLength: 0
+            numericPrecision: 11
+            numericScale: 2
+            isNullable: true
+            isPK: false
+            id: -2244548710080628116
+            ordinalPosition: 91
+          - source: CMUTGT
+            target: CMUTGT
+            type: CHARACTER
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -2071962850641887388
+            ordinalPosition: 129
+          - source: CMFOB
+            target: CMFOB
+            type: CHARACTER
+            dataLength: 24
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -1928765705998843753
+            ordinalPosition: 60
+          - source: CMSEML
+            target: CMSEML
+            type: CHARACTER
+            dataLength: 50
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -1802068430765830251
+            ordinalPosition: 93
+          - source: CMDEL
+            target: CMDEL
+            type: CHARACTER
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -1786472086354501771
+            ordinalPosition: 50
+          - source: CMFAX
+            target: CMFAX
+            type: CHARACTER
+            dataLength: 20
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -1736514468646291326
+            ordinalPosition: 57
+          - source: CMREGN
+            target: CMREGN
+            type: CHARACTER
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -1531614926253436571
+            ordinalPosition: 81
+          - source: CMAMTD
+            target: CMAMTD
+            type: DECIMAL
+            dataLength: 0
+            numericPrecision: 11
+            numericScale: 2
+            isNullable: true
+            isPK: false
+            id: -1247652589384663212
+            ordinalPosition: 12
+          - source: CMTOWS
+            target: CMTOWS
+            type: CHARACTER
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -1223515062917563011
+            ordinalPosition: 124
+          - source: COCO
+            target: COCO
+            type: DECIMAL
+            dataLength: 0
+            numericPrecision: 3
+            numericScale: 0
+            isNullable: true
+            isPK: true
+            id: -1039736362840750016
+            ordinalPosition: 139
+          - source: CMPEN
+            target: CMPEN
+            type: CHARACTER
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -979318929838619452
+            ordinalPosition: 74
+          - source: CMARCN
+            target: CMARCN
+            type: CHARACTER
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -783005378589665312
+            ordinalPosition: 13
+          - source: CMDSCD
+            target: CMDSCD
+            type: CHARACTER
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -430231838716277191
+            ordinalPosition: 53
+          - source: CMBEML
+            target: CMBEML
+            type: CHARACTER
+            dataLength: 50
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -268460441967354419
+            ordinalPosition: 24
+          - source: CMTOPF
+            target: CMTOPF
+            type: CHARACTER
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -190109392560478100
+            ordinalPosition: 119
+          - source: CMCUSR
+            target: CMCUSR
+            type: CHARACTER
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -10156104980221994
+            ordinalPosition: 46
+          - source: CMADD5
+            target: CMADD5
+            type: CHARACTER
+            dataLength: 30
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 11257577339619380
+            ordinalPosition: 9
+          - source: CMSCOT
+            target: CMSCOT
+            type: CHARACTER
+            dataLength: 30
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 31997193666698866
+            ordinalPosition: 90
+          - source: CMTSCP
+            target: CMTSCP
+            type: DECIMAL
+            dataLength: 0
+            numericPrecision: 11
+            numericScale: 2
+            isNullable: true
+            isPK: false
+            id: 51338553491645002
+            ordinalPosition: 126
+          - source: CMADTE
+            target: CMADTE
+            type: DECIMAL
+            dataLength: 0
+            numericPrecision: 8
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 93281926428045214
+            ordinalPosition: 10
+          - source: CMBAC
+            target: CMBAC
+            type: CHARACTER
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 122911379014844185
+            ordinalPosition: 15
+          - source: CMTAX4
+            target: CMTAX4
+            type: CHARACTER
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 126796780686448746
+            ordinalPosition: 112
+          - source: CMZIP
+            target: CMZIP
+            type: CHARACTER
+            dataLength: 11
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 523144763540094419
+            ordinalPosition: 134
+          - source: CMEML
+            target: CMEML
+            type: CHARACTER
+            dataLength: 50
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 624696838157097862
+            ordinalPosition: 55
+          - source: CMCVAT
+            target: CMCVAT
+            type: CHARACTER
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 933811372823389432
+            ordinalPosition: 47
+          - source: CMTAX3
+            target: CMTAX3
+            type: CHARACTER
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 1155551838405277010
+            ordinalPosition: 111
+          - source: _RRN
+            target: _RRN
+            type: BIGINT
+            dataLength: 0
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: false
+            isPK: false
+            id: 1704915659655896885
+            ordinalPosition: 1
+          - source: CMBPHO
+            target: CMBPHO
+            type: CHARACTER
+            dataLength: 20
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 2126616409582775709
+            ordinalPosition: 29
+          - source: CMCDTE
+            target: CMCDTE
+            type: DECIMAL
+            dataLength: 0
+            numericPrecision: 8
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 2139921923718218492
+            ordinalPosition: 33
+          - source: CMBFAX
+            target: CMBFAX
+            type: CHARACTER
+            dataLength: 20
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 2502020750818641866
+            ordinalPosition: 25
+          - source: CMACTV
+            target: CMACTV
+            type: CHARACTER
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 2715239254080003682
+            ordinalPosition: 4
+          - source: CMPBAL
+            target: CMPBAL
+            type: DECIMAL
+            dataLength: 0
+            numericPrecision: 11
+            numericScale: 2
+            isNullable: true
+            isPK: false
+            id: 2762672397312405220
+            ordinalPosition: 73
+          - source: CMTOQS
+            target: CMTOQS
+            type: CHARACTER
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 2884159663608398081
+            ordinalPosition: 122
+          - source: CMAC
+            target: CMAC
+            type: CHARACTER
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 3065168613831790507
+            ordinalPosition: 2
+          - source: CMBTYP
+            target: CMBTYP
+            type: CHARACTER
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 3204340295906979080
+            ordinalPosition: 31
+          - source: CMTOFL
+            target: CMTOFL
+            type: CHARACTER
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 3219996108526174502
+            ordinalPosition: 117
+          - source: CMFORC
+            target: CMFORC
+            type: CHARACTER
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 3289573473509078360
+            ordinalPosition: 61
+          - source: CMSLYR
+            target: CMSLYR
+            type: DECIMAL
+            dataLength: 0
+            numericPrecision: 15
+            numericScale: 2
+            isNullable: true
+            isPK: false
+            id: 3359952850145967860
+            ordinalPosition: 99
+          - source: CMFCTC
+            target: CMFCTC
+            type: CHARACTER
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 3387218650055456366
+            ordinalPosition: 59
+          - source: CMEMP
+            target: CMEMP
+            type: CHARACTER
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 3454387495798059584
+            ordinalPosition: 56
+          - source: CMCYTD
+            target: CMCYTD
+            type: DECIMAL
+            dataLength: 0
+            numericPrecision: 11
+            numericScale: 2
+            isNullable: true
+            isPK: false
+            id: 3630161575656662354
+            ordinalPosition: 48
+          - source: CMSLMT
+            target: CMSLMT
+            type: DECIMAL
+            dataLength: 0
+            numericPrecision: 15
+            numericScale: 2
+            isNullable: true
+            isPK: false
+            id: 3741431075903982898
+            ordinalPosition: 97
+          - source: CMDNO
+            target: CMDNO
+            type: CHARACTER
+            dataLength: 11
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 3787120087923816632
+            ordinalPosition: 52
+          - source: CMCURR
+            target: CMCURR
+            type: CHARACTER
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 4098332189928183170
+            ordinalPosition: 45
+          - source: CMTOQD
+            target: CMTOQD
+            type: CHARACTER
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 4187206256461692270
+            ordinalPosition: 121
+          - source: CMCTCD
+            target: CMCTCD
+            type: CHARACTER
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 4370269851926104129
+            ordinalPosition: 41
+          - source: CMSCOD
+            target: CMSCOD
+            type: CHARACTER
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 4378565011564193894
+            ordinalPosition: 89
+          - source: CMPTSP
+            target: CMPTSP
+            type: CHARACTER
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 4395491563865058998
+            ordinalPosition: 79
+          - source: CMTAX2
+            target: CMTAX2
+            type: CHARACTER
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 4634004185534575448
+            ordinalPosition: 110
+          - source: CMSAD2
+            target: CMSAD2
+            type: CHARACTER
+            dataLength: 30
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 4655867968171428902
+            ordinalPosition: 84
+          - source: CMDISC
+            target: CMDISC
+            type: DECIMAL
+            dataLength: 0
+            numericPrecision: 3
+            numericScale: 3
+            isNullable: true
+            isPK: false
+            id: 4990388570258737352
+            ordinalPosition: 51
+          - source: CMBLCL
+            target: CMBLCL
+            type: CHARACTER
+            dataLength: 8
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 5065443709536795604
+            ordinalPosition: 26
+          - source: CMOREX
+            target: CMOREX
+            type: DECIMAL
+            dataLength: 0
+            numericPrecision: 12
+            numericScale: 7
+            isNullable: true
+            isPK: false
+            id: 5452134039627808691
+            ordinalPosition: 72
+          - source: CMBAD2
+            target: CMBAD2
+            type: CHARACTER
+            dataLength: 30
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 5494606814182013732
+            ordinalPosition: 17
+          - source: CMWHAR
+            target: CMWHAR
+            type: CHARACTER
+            dataLength: 2
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 5665163909100344221
+            ordinalPosition: 132
+          - source: CMSLLY
+            target: CMSLLY
+            type: DECIMAL
+            dataLength: 0
+            numericPrecision: 15
+            numericScale: 2
+            isNullable: true
+            isPK: false
+            id: 5780593664722595758
+            ordinalPosition: 95
+          - source: CMSORT
+            target: CMSORT
+            type: CHARACTER
+            dataLength: 20
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 5869552474819951164
+            ordinalPosition: 101
+          - source: CMCOUN
+            target: CMCOUN
+            type: CHARACTER
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 6032087979875128731
+            ordinalPosition: 37
+          - source: CMBOSP
+            target: CMBOSP
+            type: CHARACTER
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 6034287847857861224
+            ordinalPosition: 28
+          - source: CMNO
+            target: CMNO
+            type: CHARACTER
+            dataLength: 8
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: true
+            id: 6251864056780102679
+            ordinalPosition: 71
+          - source: CMBTCC
+            target: CMBTCC
+            type: CHARACTER
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 6279386862728636865
+            ordinalPosition: 30
+          - source: CMSCTC
+            target: CMSCTC
+            type: CHARACTER
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 6318706202059970816
+            ordinalPosition: 92
+          - source: CMSTAT
+            target: CMSTAT
+            type: CHARACTER
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 6323674124910182486
+            ordinalPosition: 105
+          - source: CMMTXP
+            target: CMMTXP
+            type: CHARACTER
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 6363369251428315638
+            ordinalPosition: 69
+          - source: CMMLNG
+            target: CMMLNG
+            type: CHARACTER
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 6644133824629526324
+            ordinalPosition: 68
+          - source: CMSCCD
+            target: CMSCCD
+            type: CHARACTER
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 6762461717314302708
+            ordinalPosition: 88
+          - source: CMCRST
+            target: CMCRST
+            type: CHARACTER
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 6853044291774802262
+            ordinalPosition: 39
+          - source: CMSTNO
+            target: CMSTNO
+            type: CHARACTER
+            dataLength: 25
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 6885713715422370263
+            ordinalPosition: 107
+          - source: CMDATE
+            target: CMDATE
+            type: DECIMAL
+            dataLength: 0
+            numericPrecision: 8
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 7238228259600820650
+            ordinalPosition: 49
+          - source: CMSPMT
+            target: CMSPMT
+            type: CHARACTER
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 7558411235831454136
+            ordinalPosition: 104
+          - source: CMNAME
+            target: CMNAME
+            type: CHARACTER
+            dataLength: 30
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 7664009963801200186
+            ordinalPosition: 70
+          - source: CMBCOT
+            target: CMBCOT
+            type: CHARACTER
+            dataLength: 30
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 7666092629927876339
+            ordinalPosition: 22
+          - source: CMFCCD
+            target: CMFCCD
+            type: CHARACTER
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 7702509657075458412
+            ordinalPosition: 58
+          - source: CMSAD4
+            target: CMSAD4
+            type: CHARACTER
+            dataLength: 30
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 7709004836917567092
+            ordinalPosition: 86
+          - source: CMPTST
+            target: CMPTST
+            type: CHARACTER
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 7814211999410992658
+            ordinalPosition: 80
+          - source: CMCTYP
+            target: CMCTYP
+            type: CHARACTER
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 8085816021696582711
+            ordinalPosition: 43
+          - source: CMACT
+            target: CMACT
+            type: CHARACTER
+            dataLength: 15
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 8115445153932037765
+            ordinalPosition: 3
+          - source: CMLOC
+            target: CMLOC
+            type: CHARACTER
+            dataLength: 15
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 8159677611526976151
+            ordinalPosition: 65
+          - source: CMTRMS
+            target: CMTRMS
+            type: CHARACTER
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 8171115337055830980
+            ordinalPosition: 125
+          - source: CM0120
+            target: CM0120
+            type: DECIMAL
+            dataLength: 0
+            numericPrecision: 15
+            numericScale: 2
+            isNullable: true
+            isPK: false
+            id: 8204317940933185519
+            ordinalPosition: 135
+          - source: CMBZIP
+            target: CMBZIP
+            type: CHARACTER
+            dataLength: 11
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 8241349445376925716
+            ordinalPosition: 32
+          - source: CMTAX1
+            target: CMTAX1
+            type: CHARACTER
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 8285537978870066938
+            ordinalPosition: 109
+          - source: CMSAD3
+            target: CMSAD3
+            type: CHARACTER
+            dataLength: 30
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 8310993238487694764
+            ordinalPosition: 85
+          - source: CMTOCS
+            target: CMTOCS
+            type: CHARACTER
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 8317659878565093885
+            ordinalPosition: 116
+          - source: CMSAD1
+            target: CMSAD1
+            type: CHARACTER
+            dataLength: 30
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 8326664698399814315
+            ordinalPosition: 83
+          - source: CMTDUE
+            target: CMTDUE
+            type: DECIMAL
+            dataLength: 0
+            numericPrecision: 11
+            numericScale: 2
+            isNullable: true
+            isPK: false
+            id: 8698915041738323903
+            ordinalPosition: 113
+          - source: CMLTPL
+            target: CMLTPL
+            type: DECIMAL
+            dataLength: 0
+            numericPrecision: 5
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 8779949261112041400
+            ordinalPosition: 67
+          - source: CMSAD5
+            target: CMSAD5
+            type: CHARACTER
+            dataLength: 30
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 8839023997619950220
+            ordinalPosition: 87
+          - source: CMPQFL
+            target: CMPQFL
+            type: CHARACTER
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 8858606780889338019
+            ordinalPosition: 76
+          - source: CMSPHO
+            target: CMSPHO
+            type: CHARACTER
+            dataLength: 20
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 9001385140995815526
+            ordinalPosition: 103
+          - source: CMTER
+            target: CMTER
+            type: CHARACTER
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 9002312219686286248
+            ordinalPosition: 114
+          - source: CMUTIM
+            target: CMUTIM
+            type: DECIMAL
+            dataLength: 0
+            numericPrecision: 6
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 9059268985500948666
+            ordinalPosition: 130
+          unlockedSchema: true
+          customProperties:
+            source:
+              maxFetchItemsCountPerIteration: 10000
+              maxTransactionMessageKbSize: 1024
+              pollingIntervalMilliseconds: 500
+            target:
+              maxWriteBatchSize: 1000
+              maxDeleteBatchSize: 1000
+              maxWriteBulkSize: 250000
+              preSnapshotCommand: ''
+              postSnapshotCommand: ''
+              udf:
+              - name: UDF_be71f917f68b4c009846d16db4b6d27d
+                type: Java
+              snapshotWritingConcurrency: 2
+              allowedOperations:
+              - INSERT
+              - UPDATE
+              - DELETE
+              - TRUNCATE
+        COHEADER:
+          name: Coheader
+          entityName: KBM400MFG.COHEADER
+          groupId: KBM400MFG
+          keys:
+          - CO
+          columns:
+          - source: COOINS
+            target: COOINS
+            type: decimal
+            dataLength: 0
+            numericPrecision: 9
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -9170011924529132523
+            ordinalPosition: 46
+          - source: COLOWL
+            target: COLOWL
+            type: decimal
+            dataLength: 0
+            numericPrecision: 3
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -8497266106554442230
+            ordinalPosition: 41
+          - source: COSSUB
+            target: COSSUB
+            type: char
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -8385976816466725474
+            ordinalPosition: 64
+          - source: COSMTH
+            target: COSMTH
+            type: char
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -8379681387876865146
+            ordinalPosition: 63
+          - source: COTAX3
+            target: COTAX3
+            type: char
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -7854370071134199337
+            ordinalPosition: 70
+          - source: CODREQ
+            target: CODREQ
+            type: decimal
+            dataLength: 0
+            numericPrecision: 3
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -7741270646831282597
+            ordinalPosition: 28
+          - source: CODD1
+            target: CODD1
+            type: decimal
+            dataLength: 0
+            numericPrecision: 2
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -6919781167050235448
+            ordinalPosition: 22
+          - source: CODFMN
+            target: CODFMN
+            type: decimal
+            dataLength: 0
+            numericPrecision: 7
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -6695044022123401849
+            ordinalPosition: 23
+          - source: COADD2
+            target: COADD2
+            type: char
+            dataLength: 30
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -6168058761297374551
+            ordinalPosition: 4
+          - source: COPRTS
+            target: COPRTS
+            type: char
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -5612305912533005255
+            ordinalPosition: 53
+          - source: COTDIS
+            target: COTDIS
+            type: char
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -5534985931208021816
+            ordinalPosition: 72
+          - source: COIBOS
+            target: COIBOS
+            type: char
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -4766745870304082303
+            ordinalPosition: 38
+          - source: COLAST
+            target: COLAST
+            type: decimal
+            dataLength: 0
+            numericPrecision: 10
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -4539678360046666237
+            ordinalPosition: 40
+          - source: COCSCO
+            target: COCSCO
+            type: decimal
+            dataLength: 0
+            numericPrecision: 3
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -4431087937392988467
+            ordinalPosition: 81
+          - source: COGSTR
+            target: COGSTR
+            type: char
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -4348382596506671628
+            ordinalPosition: 37
+          - source: COEUPR
+            target: COEUPR
+            type: char
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -4031518690625620628
+            ordinalPosition: 31
+          - source: CONAME
+            target: CONAME
+            type: char
+            dataLength: 30
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -3662014734992300071
+            ordinalPosition: 45
+          - source: COSLNO
+            target: COSLNO
+            type: char
+            dataLength: 7
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -3444975991577534810
+            ordinalPosition: 62
+          - source: COZIP
+            target: COZIP
+            type: char
+            dataLength: 11
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -3436058473314640049
+            ordinalPosition: 80
+          - source: COQTNO
+            target: COQTNO
+            type: decimal
+            dataLength: 0
+            numericPrecision: 7
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -3017810256589889204
+            ordinalPosition: 55
+          - source: COFOB
+            target: COFOB
+            type: char
+            dataLength: 24
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -2562159092504860875
+            ordinalPosition: 35
+          - source: COBORS
+            target: COBORS
+            type: char
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -2287511201441193996
+            ordinalPosition: 11
+          - source: COCST1
+            target: COCST1
+            type: char
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -2182376258740165393
+            ordinalPosition: 16
+          - source: CODONO
+            target: CODONO
+            type: char
+            dataLength: 7
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -2154416709954872890
+            ordinalPosition: 25
+          - source: COSESN
+            target: COSESN
+            type: decimal
+            dataLength: 0
+            numericPrecision: 5
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -2069400862549280134
+            ordinalPosition: 61
+          - source: COCVAT
+            target: COCVAT
+            type: char
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -1652565269839660526
+            ordinalPosition: 20
+          - source: COFLG1
+            target: COFLG1
+            type: char
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -1602112854568643552
+            ordinalPosition: 34
+          - source: COBCIN
+            target: COBCIN
+            type: char
+            dataLength: 50
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -1429975111491789512
+            ordinalPosition: 9
+          - source: COSERC
+            target: COSERC
+            type: char
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -1377281619114600641
+            ordinalPosition: 60
+          - source: COOUTQ
+            target: COOUTQ
+            type: char
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -1183480654117608915
+            ordinalPosition: 47
+          - source: COFPO
+            target: COFPO
+            type: char
+            dataLength: 7
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -1041682826049307565
+            ordinalPosition: 36
+          - source: COCUNO
+            target: COCUNO
+            type: char
+            dataLength: 7
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -733187176242560180
+            ordinalPosition: 18
+          - source: COMEMO
+            target: COMEMO
+            type: decimal
+            dataLength: 0
+            numericPrecision: 10
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -656370761644342954
+            ordinalPosition: 43
+          - source: CORPCT
+            target: CORPCT
+            type: decimal
+            dataLength: 0
+            numericPrecision: 3
+            numericScale: 2
+            isNullable: true
+            isPK: false
+            id: -632106793616371179
+            ordinalPosition: 57
+          - source: CODPEG
+            target: CODPEG
+            type: char
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -507670387540235041
+            ordinalPosition: 26
+          - source: COTAX1
+            target: COTAX1
+            type: char
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: -345215581138238841
+            ordinalPosition: 68
+          - source: CO
+            target: CO
+            type: decimal
+            dataLength: 0
+            numericPrecision: 3
+            numericScale: 0
+            isNullable: true
+            isPK: true
+            id: -249876360043358970
+            ordinalPosition: 1
+          - source: COPKNO
+            target: COPKNO
+            type: decimal
+            dataLength: 0
+            numericPrecision: 5
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 520193951876411270
+            ordinalPosition: 49
+          - source: COPKOD
+            target: COPKOD
+            type: decimal
+            dataLength: 0
+            numericPrecision: 3
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 600843090051649917
+            ordinalPosition: 50
+          - source: COPART
+            target: COPART
+            type: char
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 654687869050783504
+            ordinalPosition: 48
+          - source: COARLC
+            target: COARLC
+            type: char
+            dataLength: 15
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 912645051572553455
+            ordinalPosition: 6
+          - source: COBACK
+            target: COBACK
+            type: char
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 1025477464588547612
+            ordinalPosition: 8
+          - source: CODDAY
+            target: CODDAY
+            type: char
+            dataLength: 312
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 1303617727750313508
+            ordinalPosition: 21
+          - source: CODSPT
+            target: CODSPT
+            type: char
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 1408912494491169683
+            ordinalPosition: 29
+          - source: COARTP
+            target: COARTP
+            type: char
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 1490327399295525238
+            ordinalPosition: 7
+          - source: COCDIS
+            target: COCDIS
+            type: char
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 1680418878064750864
+            ordinalPosition: 14
+          - source: COTAX4
+            target: COTAX4
+            type: char
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 1748243852192818153
+            ordinalPosition: 71
+          - source: COSTAT
+            target: COSTAT
+            type: char
+            dataLength: 2
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 1827036572034782216
+            ordinalPosition: 65
+          - source: CORDAS
+            target: CORDAS
+            type: decimal
+            dataLength: 0
+            numericPrecision: 3
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 1944470717050885447
+            ordinalPosition: 56
+          - source: COCC1
+            target: COCC1
+            type: decimal
+            dataLength: 0
+            numericPrecision: 1
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 2015637929356756268
+            ordinalPosition: 13
+          - source: COICRT
+            target: COICRT
+            type: char
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 2091964974876530698
+            ordinalPosition: 39
+          - source: COSTMT
+            target: COSTMT
+            type: char
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 2213692034860467575
+            ordinalPosition: 67
+          - source: CODTFM
+            target: CODTFM
+            type: char
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 2244188697765065432
+            ordinalPosition: 30
+          - source: CORQNO
+            target: CORQNO
+            type: char
+            dataLength: 7
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 2887463207999410284
+            ordinalPosition: 58
+          - source: COBCOT
+            target: COBCOT
+            type: char
+            dataLength: 50
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 3019064834048600137
+            ordinalPosition: 10
+          - source: COYY1
+            target: COYY1
+            type: decimal
+            dataLength: 0
+            numericPrecision: 2
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 3296476233640929481
+            ordinalPosition: 79
+          - source: COVNSP
+            target: COVNSP
+            type: char
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 3413219279712550544
+            ordinalPosition: 77
+          - source: CODPLN
+            target: CODPLN
+            type: decimal
+            dataLength: 0
+            numericPrecision: 3
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 3517041394332255564
+            ordinalPosition: 27
+          - source: COTERM
+            target: COTERM
+            type: char
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 3556268077130098770
+            ordinalPosition: 73
+          - source: COWONO
+            target: COWONO
+            type: char
+            dataLength: 7
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 3816512372146556015
+            ordinalPosition: 78
+          - source: COARAC
+            target: COARAC
+            type: char
+            dataLength: 15
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 3957529017026064818
+            ordinalPosition: 5
+          - source: COFINC
+            target: COFINC
+            type: char
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 4026480795676545224
+            ordinalPosition: 33
+          - source: COACO
+            target: COACO
+            type: decimal
+            dataLength: 0
+            numericPrecision: 3
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 4127418737627963850
+            ordinalPosition: 2
+          - source: COTTYP
+            target: COTTYP
+            type: char
+            dataLength: 4
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 4182509457150769200
+            ordinalPosition: 74
+          - source: COCUST
+            target: COCUST
+            type: char
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 4542664462444469314
+            ordinalPosition: 19
+          - source: CODLLC
+            target: CODLLC
+            type: decimal
+            dataLength: 0
+            numericPrecision: 3
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 4872938670314554536
+            ordinalPosition: 24
+          - source: COTAX2
+            target: COTAX2
+            type: char
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 5048114677629171460
+            ordinalPosition: 69
+          - source: COCLIM
+            target: COCLIM
+            type: decimal
+            dataLength: 0
+            numericPrecision: 9
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 5052625476801694661
+            ordinalPosition: 15
+          - source: COSCON
+            target: COSCON
+            type: char
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 5558748854168732005
+            ordinalPosition: 59
+          - source: COADD1
+            target: COADD1
+            type: char
+            dataLength: 30
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 6188650147356527172
+            ordinalPosition: 3
+          - source: COMDRT
+            target: COMDRT
+            type: char
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 6431658361477237687
+            ordinalPosition: 42
+          - source: COPONO
+            target: COPONO
+            type: char
+            dataLength: 7
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 6503518360907305603
+            ordinalPosition: 51
+          - source: COCCUP
+            target: COCCUP
+            type: char
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 6548718833139750005
+            ordinalPosition: 12
+          - source: COSTMF
+            target: COSTMF
+            type: char
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 7122685731170805086
+            ordinalPosition: 66
+          - source: COVITM
+            target: COVITM
+            type: char
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 7320469198526730519
+            ordinalPosition: 76
+          - source: COFCUR
+            target: COFCUR
+            type: char
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 7528712134709917181
+            ordinalPosition: 32
+          - source: COPRTI
+            target: COPRTI
+            type: char
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 8064359997244445628
+            ordinalPosition: 52
+          - source: COCST2
+            target: COCST2
+            type: char
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 8338584766191818566
+            ordinalPosition: 17
+          - source: COPSTM
+            target: COPSTM
+            type: char
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 8859648754659473497
+            ordinalPosition: 54
+          - source: COMM1
+            target: COMM1
+            type: decimal
+            dataLength: 0
+            numericPrecision: 2
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 9021073292085342203
+            ordinalPosition: 44
+          - source: COVDFT
+            target: COVDFT
+            type: char
+            dataLength: 3
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: false
+            id: 9121327938230468780
+            ordinalPosition: 75
+          customProperties:
+            source:
+              maxFetchItemsCountPerIteration: 10000
+              maxTransactionMessageKbSize: 1024
+              pollingIntervalMilliseconds: 500
+            target:
+              maxWriteBatchSize: 1000
+              maxDeleteBatchSize: 1000
+              maxWriteBulkSize: 250000
+              preSnapshotCommand: ''
+              postSnapshotCommand: ''
+              snapshotWritingConcurrency: 2
+              allowedOperations:
+              - INSERT
+              - UPDATE
+              - DELETE
+              - TRUNCATE
+  ACPRODLIB:
+    target: Acprodlib
+    sourceType: SQL
+    targetType: SQL
+    tables:
+      whitelist:
+      - ACPAGCAT
+      custom:
+        ACPAGCAT:
+          name: Acpagcat
+          entityName: ACPRODLIB.ACPAGCAT
+          groupId: ACPRODLIB
+          keys:
+          - CUSNBR
+          - ACTTYP
+          - CNCONBR
+          - CNDATCRT
+          - CNDATUPD
+          - CNTIMCRT
+          - CNTIMUPD
+          - CNUSRCRT
+          - CNUSRUPD
+          - CNPGMNAM
+          columns:
+          - source: CNDATCRT
+            target: CNDATCRT
+            type: date
+            dataLength: 0
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: true
+            id: -7075264432220952472
+            ordinalPosition: 4
+          - source: CUSNBR
+            target: CUSNBR
+            type: char
+            dataLength: 8
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: true
+            id: -5093679322327206425
+            ordinalPosition: 1
+          - source: CNUSRUPD
+            target: CNUSRUPD
+            type: char
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: true
+            id: -5060318991311647750
+            ordinalPosition: 9
+          - source: CNCONBR
+            target: CNCONBR
+            type: decimal
+            dataLength: 0
+            numericPrecision: 3
+            numericScale: 0
+            isNullable: true
+            isPK: true
+            id: -2380097308241414705
+            ordinalPosition: 3
+          - source: CNUSRCRT
+            target: CNUSRCRT
+            type: char
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: true
+            id: -520086239925695813
+            ordinalPosition: 8
+          - source: CNPGMNAM
+            target: CNPGMNAM
+            type: char
+            dataLength: 10
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: true
+            id: 439504608733572631
+            ordinalPosition: 10
+          - source: CNDATUPD
+            target: CNDATUPD
+            type: date
+            dataLength: 0
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: true
+            id: 5085059544219790960
+            ordinalPosition: 5
+          - source: CNTIMUPD
+            target: CNTIMUPD
+            type: time
+            dataLength: 0
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: true
+            id: 7451241229759271753
+            ordinalPosition: 7
+          - source: ACTTYP
+            target: ACTTYP
+            type: char
+            dataLength: 1
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: true
+            id: 7921616399512405087
+            ordinalPosition: 2
+          - source: CNTIMCRT
+            target: CNTIMCRT
+            type: time
+            dataLength: 0
+            numericPrecision: 0
+            numericScale: 0
+            isNullable: true
+            isPK: true
+            id: 8258861635459279075
+            ordinalPosition: 6
+          customProperties:
+            source:
+              maxFetchItemsCountPerIteration: 10000
+              maxTransactionMessageKbSize: 1024
+              pollingIntervalMilliseconds: 500
+groups:
+  default:
+    id: _default
+    color: '#00000000'
+  KBM400MFG:
+    id: 833fb9c5
+    color: '#ff1792cd'
+  ACPRODLIB:
+    id: 60f0237c
+    color: '#ffabc058'

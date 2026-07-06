@@ -30,6 +30,7 @@ import os
 import shutil
 import sys
 import tempfile
+import uuid
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -62,6 +63,75 @@ GLOBAL_CONFIG_NAMES = {
     "global-config", "global-configs", "smtp", "webhooks",
     "thresholds", "schedules", "users", "oidc",
 }
+
+
+def get_workspace_root() -> Path:
+    """Return the stable, app-owned working directory for uploads/imports.
+
+    Files extracted from uploaded YAML/ZIP backups (YAML configs + UDF source
+    files) must survive between the upload request and the later entity-creation
+    run. The OS temp directory (tempfile.gettempdir() -> %TEMP% on Windows) is a
+    poor choice for this because:
+      * Windows Disk Cleanup / Storage Sense / 'delete temp files older than N
+        days' policies wipe it, so a UDF file extracted earlier can vanish
+        before the entity is recreated;
+      * %TEMP% is per-Windows-user, so the path shown to a user may not be the
+        one the running process (possibly a service account) reads from.
+
+    Instead we use a dedicated, persistent application directory:
+      * Windows: %LOCALAPPDATA%\\Gluesync\\Automator\\work
+      * macOS:   ~/Library/Application Support/Gluesync/Automator/work
+      * Linux:   $XDG_DATA_HOME/gluesync/automator/work
+                 (or ~/.local/share/gluesync/automator/work)
+
+    Override with the GLUESYNC_AUTOMATOR_WORKDIR environment variable.
+    """
+    override = os.environ.get("GLUESYNC_AUTOMATOR_WORKDIR")
+    if override:
+        base = Path(override)
+    elif sys.platform == "win32":
+        local_appdata = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+        base = (Path(local_appdata) if local_appdata else Path.home() / "AppData" / "Local") \
+            / "Gluesync" / "Automator" / "work"
+    elif sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support" / "Gluesync" / "Automator" / "work"
+    else:
+        xdg = os.environ.get("XDG_DATA_HOME")
+        base = (Path(xdg) if xdg else Path.home() / ".local" / "share") \
+            / "gluesync" / "automator" / "work"
+    base.mkdir(parents=True, exist_ok=True)
+    return base
+
+
+def new_session_dir(kind: str) -> Path:
+    """Create and return a fresh, self-contained session directory.
+
+    Each upload/import gets a single root that holds BOTH the YAML and its UDF
+    source files together, so UDF lookups never have to span sibling folders.
+    """
+    session_dir = get_workspace_root() / f"{kind}_{uuid.uuid4().hex[:8]}"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    return session_dir
+
+
+def prune_workspace_sessions(max_age_hours: int = 48) -> None:
+    """Best-effort cleanup of stale session directories under the workspace root.
+
+    The app owns this directory, so cleanup is explicit and predictable
+    (unlike relying on the OS to wipe %TEMP% at an unknown time).
+    """
+    try:
+        root = get_workspace_root()
+        cutoff = datetime.now().timestamp() - max_age_hours * 3600
+        for child in root.iterdir():
+            try:
+                if child.is_dir() and child.stat().st_mtime < cutoff:
+                    shutil.rmtree(child, ignore_errors=True)
+            except OSError:
+                continue
+    except Exception:  # pylint: disable=broad-except
+        # Cleanup must never break an upload/import.
+        pass
 
 
 def _extract_pipeline_id_from_backup_stem(stem_no_ext: str) -> Optional[str]:
@@ -505,16 +575,66 @@ def create_app() -> FastAPI:
 
     @app.post("/api/upload", response_model=UploadResponse)
     async def upload_yaml(file: UploadFile = File(...)) -> UploadResponse:
-        if not file.filename.lower().endswith(('.yaml', '.yml')):
-            raise HTTPException(status_code=400, detail="Only YAML files are supported")
+        if not file.filename.lower().endswith(('.yaml', '.yml', '.zip')):
+            raise HTTPException(status_code=400, detail="Only YAML or ZIP files are supported")
 
-        temp_dir = Path(tempfile.gettempdir()) / "gluesync_automator"
-        temp_dir.mkdir(parents=True, exist_ok=True)
-        suffix = Path(file.filename).suffix or ".yaml"
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, dir=temp_dir) as tmp:
-            contents = await file.read()
-            tmp.write(contents)
-            temp_path = Path(tmp.name)
+        # Best-effort prune of stale sessions before creating a new one.
+        prune_workspace_sessions()
+
+        contents = await file.read()
+        if not contents:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+        if file.filename.lower().endswith('.zip'):
+            # Extract YAML and UDF source files from the ZIP into a single
+            # self-contained, app-owned session directory (NOT the OS temp dir)
+            # so that both the YAML and its UDF source files live together and
+            # survive until the entity-creation run reads them.
+            extract_dir = new_session_dir("upload")
+            yaml_path: Optional[Path] = None
+            try:
+                with zipfile.ZipFile(io.BytesIO(contents)) as zf:
+                    for member in zf.namelist():
+                        if member.startswith("__MACOSX/") or member.rsplit("/", 1)[-1].startswith("._"):
+                            continue
+                        lower = member.lower()
+                        # Extract YAML files (skip agents-config and global-config
+                        # which are not entity-creation YAMLs)
+                        if lower.endswith((".yaml", ".yml")) and "agents-config" not in lower and "global-config" not in lower:
+                            dest = extract_dir / Path(member).name
+                            with zf.open(member) as src, open(dest, "wb") as dst:
+                                shutil.copyfileobj(src, dst)
+                            # Prefer backup_*.yaml as the primary YAML
+                            if yaml_path is None or dest.name.startswith("backup_"):
+                                yaml_path = dest
+                        # Extract UDF source files (under udf-* paths)
+                        elif ("udf-" in member or member.lstrip("/").startswith("udf-")) and (
+                            lower.endswith(".java") or lower.endswith(".kt")
+                            or lower.endswith(".js") or lower.endswith(".py") or lower.endswith(".rb")
+                        ):
+                            dest = extract_dir / member
+                            dest.parent.mkdir(parents=True, exist_ok=True)
+                            with zf.open(member) as src, open(dest, "wb") as dst:
+                                shutil.copyfileobj(src, dst)
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail=f"Failed to extract ZIP: {exc}") from exc
+
+            if yaml_path is None:
+                raise HTTPException(status_code=400, detail="ZIP does not contain a YAML configuration file")
+            temp_path = yaml_path
+            # Set UDF_PATH so create_all_entities.main can find UDF source files
+            create_user_defined_functions.UDF_PATH = str(extract_dir)
+        else:
+            # Plain YAML upload: write it into its own session directory so any
+            # UDF files the user drops alongside it are found by the same lookup.
+            session_dir = new_session_dir("upload")
+            suffix = Path(file.filename).suffix or ".yaml"
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, dir=session_dir) as tmp:
+                tmp.write(contents)
+                temp_path = Path(tmp.name)
+            # Point UDF lookups at this session directory too, so a YAML-only
+            # upload still resolves UDF files placed next to the YAML.
+            create_user_defined_functions.UDF_PATH = str(session_dir)
 
         file_id = state.register_upload(temp_path, file.filename)
         return UploadResponse(fileId=file_id, filename=file.filename)
@@ -1048,17 +1168,15 @@ def create_app() -> FastAPI:
         if not contents:
             raise HTTPException(status_code=400, detail="Uploaded file is empty")
 
-        # Extract UDF source files (if present) into a temporary directory so they
-        # can be compiled automatically during import. Both Export All and
-        # single-pipeline Full backup ZIPs place UDFs under folders named
-        # 'udf-<agentId>' (optionally nested under pipeline_<id>/ for single
-        # pipeline backups).
+        # Extract UDF source files (if present) into an app-owned session
+        # directory so they can be compiled automatically during import. Both
+        # Export All and single-pipeline Full backup ZIPs place UDFs under
+        # folders named 'udf-<agentId>' (optionally nested under pipeline_<id>/
+        # for single pipeline backups).
+        prune_workspace_sessions()
         udf_root: Optional[Path] = None
         try:
-            udf_root = Path(tempfile.gettempdir()) / "gluesync_automator_udfs"
-            if udf_root.exists():
-                shutil.rmtree(udf_root)
-            udf_root.mkdir(parents=True, exist_ok=True)
+            udf_root = new_session_dir("import")
 
             with zipfile.ZipFile(io.BytesIO(contents)) as zf_udf:
                 for member in zf_udf.namelist():
@@ -1092,7 +1210,11 @@ def create_app() -> FastAPI:
                 "Failed to extract UDF source files from backup; UDF compilation will be skipped: %s",
                 exc,
             )
-            udf_root = None
+            # Still set UDF_PATH to the (possibly empty) directory so that
+            # create_all_entities.main doesn't fall back to the YAML temp dir
+            # (where UDF files are never present) and produce confusing errors.
+            if udf_root is not None and udf_root.is_dir():
+                create_user_defined_functions.UDF_PATH = str(udf_root)
 
         # First pass: find and parse agents-config.yaml for shared agents + metadata
         try:
@@ -1490,11 +1612,14 @@ def create_app() -> FastAPI:
                                     f"{name}: Failed to upload certificate for agent {agent_id}: {cert_exc}"
                                 )
 
-                    # Write YAML to a temporary file for schema extraction and entity creation
+                    # Write YAML for schema extraction and entity creation into
+                    # the SAME session directory where this import's UDF files
+                    # were extracted (udf_root), so YAML and UDFs share one root
+                    # and UDF lookups resolve without spanning sibling folders.
                     try:
-                        temp_dir = Path(tempfile.gettempdir()) / "gluesync_automator_restore"
-                        temp_dir.mkdir(parents=True, exist_ok=True)
-                        with tempfile.NamedTemporaryFile(delete=False, suffix=".yaml", dir=temp_dir) as tmp:
+                        restore_dir = udf_root if udf_root is not None else new_session_dir("import")
+                        restore_dir.mkdir(parents=True, exist_ok=True)
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".yaml", dir=restore_dir) as tmp:
                             tmp.write(yaml_text.encode("utf-8"))
                             yaml_path = Path(tmp.name)
                     except Exception as exc:  # pylint: disable=broad-except
@@ -1749,7 +1874,7 @@ def create_app() -> FastAPI:
                         continue
 
                     try:
-                        temp_dir = Path(tempfile.gettempdir()) / "gluesync_automator_validate"
+                        temp_dir = get_workspace_root() / "validate"
                         temp_dir.mkdir(parents=True, exist_ok=True)
                         with tempfile.NamedTemporaryFile(delete=False, suffix=".yaml", dir=temp_dir) as tmp:
                             tmp.write(yaml_text.encode("utf-8"))

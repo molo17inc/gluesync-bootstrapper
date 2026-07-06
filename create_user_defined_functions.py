@@ -20,6 +20,7 @@
 
 import base64
 import os
+import sys
 import json
 from enum import Enum
 
@@ -93,11 +94,58 @@ class UdfFunctionCompileRequest(BaseModel):
 def get_udf_function_for_table(table_name: str, udf: list[dict]) -> dict:
     return next((item for item in udf if item.get("name") == table_name), {})
 
+def get_automator_workspace_root() -> Path:
+    """Return the app-owned Automator working directory, if it exists.
+
+    Mirrors automator_app.app.get_workspace_root() so the bootstrapper scripts
+    can locate UDF files extracted by the Automator UI without importing the web
+    app (these scripts also run standalone). Kept in sync intentionally.
+    """
+    override = os.environ.get("GLUESYNC_AUTOMATOR_WORKDIR")
+    if override:
+        return Path(override)
+    if sys.platform == "win32":
+        local_appdata = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+        base = Path(local_appdata) if local_appdata else Path.home() / "AppData" / "Local"
+        return base / "Gluesync" / "Automator" / "work"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "Gluesync" / "Automator" / "work"
+    xdg = os.environ.get("XDG_DATA_HOME")
+    base = Path(xdg) if xdg else Path.home() / ".local" / "share"
+    return base / "gluesync" / "automator" / "work"
+
+
 def find_udf_definition_in_path(udf_name: str, udf_type: UdfFunctionType) -> PosixPath:
+    """Search for a UDF source file by name + type extension.
+
+    Search order:
+    1. ``UDF_PATH`` (the explicitly configured or fallback path).
+    2. The app-owned Automator workspace root and all its session
+       sub-directories — covers uploads/imports performed through the
+       Automator UI, whose YAML + UDF files share a single session folder
+       under %LOCALAPPDATA%\\Gluesync\\Automator\\work (or the platform
+       equivalent), instead of the volatile OS temp directory.
+    """
     filename = f"{udf_name}{udf_type.extension()}"
-    path_location = Path(UDF_PATH)
-    file_path = next((p for p in path_location.rglob(filename)), None)
-    return file_path
+
+    search_roots: list[Path] = []
+    if UDF_PATH:
+        search_roots.append(Path(UDF_PATH))
+
+    # Always include the app-owned workspace root so UDFs extracted by the
+    # Automator UI are found even if UDF_PATH was not (or could not be) set.
+    workspace_root = get_automator_workspace_root()
+    if workspace_root.is_dir() and workspace_root not in search_roots:
+        search_roots.append(workspace_root)
+
+    for root in search_roots:
+        if not root.is_dir():
+            continue
+        found = next((p for p in root.rglob(filename)), None)
+        if found:
+            return found
+
+    return None
 
 def read_file(filepath):
     try:
@@ -226,7 +274,20 @@ def check_and_compile_udf_function(table_name: str, udf_definition: dict, pipeli
             raise
     else:
         expected_filename = f"{udf_name}{udf_type.extension()}"
-        error_msg = f"Missing UDF file for '{udf_name}' (table: {table_name}, type: {udf_type}). Expected filename: {expected_filename} in directory: {UDF_PATH or 'current directory'}"
+        search_dirs = [UDF_PATH] if UDF_PATH else []
+        workspace_dir = str(get_automator_workspace_root())
+        if workspace_dir not in search_dirs:
+            search_dirs.append(workspace_dir)
+        search_dirs_str = ", ".join(search_dirs) if search_dirs else "(none configured)"
+        error_msg = (
+            f"Missing UDF file for '{udf_name}' (table: {table_name}, type: {udf_type}). "
+            f"Expected filename: {expected_filename}. "
+            f"Searched in: {search_dirs_str}. "
+            f"To fix this: if you are importing a pipeline backup that includes UDFs, "
+            f"upload the full backup ZIP file (not just the YAML) through the Automator "
+            f"upload interface — the ZIP bundles the UDF source files automatically. "
+            f"Alternatively, place {expected_filename!r} manually in: {UDF_PATH or workspace_dir}"
+        )
         logger.error(error_msg)
         raise FileNotFoundError(error_msg)
 

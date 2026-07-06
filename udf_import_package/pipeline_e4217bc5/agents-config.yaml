@@ -1,0 +1,53 @@
+agents:
+- agentType: SOURCE
+  agentTag: postgresql-cdc
+  hostCredentials:
+    connectionName: ''
+    host: 10.17.3.252
+    port: 5432
+    databaseName: n8n
+    username: gluesync
+    password: '*******'  # original password omitted
+    disableAuth: false
+    enableTls: false
+    trustServerCertificate: true
+    useUploadedTrustStore: false
+    useUploadedKeyStore: false
+    useUploadedCertificate: false
+    additionalHosts: []
+    minConnectionsCount: 5
+    maxConnectionsCount: 10
+  customHostCredentials: {}
+  specificConfiguration: {}
+  agentId: 8b5da020
+- agentType: TARGET
+  agentTag: mssql-ct
+  hostCredentials:
+    connectionName: ''
+    host: 10.17.3.169
+    port: 1433
+    databaseName: LicenseManager
+    username: gluesync
+    password: '*******'  # original password omitted
+    disableAuth: false
+    enableTls: true
+    trustServerCertificate: true
+    useUploadedTrustStore: false
+    useUploadedKeyStore: false
+    useUploadedCertificate: false
+    additionalHosts: []
+    minConnectionsCount: 5
+    maxConnectionsCount: 5
+  customHostCredentials: {}
+  specificConfiguration: {}
+  agentId: 064598ae
+pipelines:
+- pipelineId: e4217bc5
+  pipelineName: n8n to LicenseManager
+  agents:
+  - agentType: SOURCE
+    agentTag: postgresql-cdc
+    agentId: 8b5da020
+  - agentType: TARGET
+    agentTag: mssql-ct
+    agentId: 064598ae

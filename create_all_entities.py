@@ -29,6 +29,7 @@ from commons import get_node_info, get_table_columns, fetch_core_hub, get_pipeli
     process_filter_clauses, create_group, assign_entities_to_group, get_table_id, extract_target_column_types
 from create_all_tables import handle_table_creation
 from create_user_defined_functions import handle_udf_function_definition
+import create_user_defined_functions as udf_module
 from utils.log import get_logger, create_log_file, log_success, log_failure, lockfile_failure, lockfile_complete, exit_on_fail
 from utils.core_hub_client import CoreHubClient
 
@@ -3426,6 +3427,20 @@ def main(pipeline_id, source_schema, target_schema, source_type, target_type, ya
     logger.info(f"Starting entity creation for pipeline {pipeline_id}")
     try:
         yaml_config = load_yaml_config(yaml_file) if yaml_file else None
+
+        # Resolve UDF_PATH when it is not already set.
+        # With the app-owned workspace design, the Automator UI extracts each
+        # upload/import's YAML + UDF files into a single session directory under
+        # the workspace root, and sets UDF_PATH to it. When running standalone
+        # (no UDF_PATH), fall back to the YAML's own directory — which, for
+        # Automator-driven runs, IS that session directory and therefore already
+        # contains the UDF files. find_udf_definition_in_path additionally scans
+        # the whole workspace root, so UDFs are found even without this hint.
+        if yaml_file and not udf_module.UDF_PATH:
+            yaml_dir = os.path.dirname(os.path.abspath(yaml_file))
+            if yaml_dir and os.path.isdir(yaml_dir):
+                udf_module.UDF_PATH = yaml_dir
+                logger.info(f"UDF_PATH not set; falling back to YAML directory: {yaml_dir}")
 
         # Get pipeline configuration
         pipeline_config = get_pipeline_config(token, pipeline_id)
