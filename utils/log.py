@@ -35,7 +35,7 @@ try:
     LOG_LEVEL = getattr(logging, os.environ.get('LOG_LEVEL', 'DEBUG').upper())
 except (AttributeError, ValueError):
     LOG_LEVEL = logging.INFO
-    print(f"Invalid log level specified, falling back to INFO")
+    print(f"Invalid log level specified, falling back to INFO", file=sys.stderr)
 
 
 def get_logger(log_file=None):
@@ -72,7 +72,7 @@ def add_handlers(logger: logging.Logger, log_file=None):
         log_file (str, optional): Path to the log file. If None, only console logging is enabled.
     """
     # Console handler
-    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler = logging.StreamHandler(sys.stderr)
     console_handler.setLevel(logging.DEBUG)
     console_formatter = logging.Formatter(
         "%(asctime)s - %(levelname)s - %(message)s"

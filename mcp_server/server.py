@@ -52,35 +52,121 @@ logger = logging.getLogger(__name__)
 
 # Global token provider for SSE transport (set by Automator)
 _token_provider: Optional[callable] = None
+# Global refresh callback for SSE transport (set by Automator)
+_refresh_callback: Optional[callable] = None
 
 def set_token_provider(provider: callable) -> None:
     """Set a callable that returns the CoreHub token (for SSE transport)."""
     global _token_provider
     _token_provider = provider
 
+def set_refresh_callback(callback: callable) -> None:
+    """Set a callable that re-authenticates and returns a fresh token (for SSE transport)."""
+    global _refresh_callback
+    _refresh_callback = callback
+
+def _find_token_file() -> Optional[Path]:
+    """Locate .gluesync_mcp_token using multiple strategies.
+
+    Claude Desktop and other MCP clients may set CWD to / or ignore the
+    configured cwd, so Path(__file__) alone is not reliable.  We try:
+      1. MCP_TOKEN_FILE env var (explicit override)
+      2. <project_root>/.gluesync_mcp_token  (relative to this file)
+      3. <cwd>/.gluesync_mcp_token           (current working directory)
+      4. ~/.gluesync_mcp_token               (home directory)
+    """
+    candidates: list = []
+
+    # 1. Explicit override
+    env_path = os.environ.get("MCP_TOKEN_FILE")
+    if env_path:
+        candidates.append(Path(env_path))
+
+    # 2. Relative to this file (works when __file__ is the full path)
+    try:
+        here = Path(__file__).resolve().parent.parent / ".gluesync_mcp_token"
+        if here != Path("/.gluesync_mcp_token"):
+            candidates.append(here)
+    except Exception:
+        pass
+
+    # 3. CWD (works when the client sets the correct working directory)
+    candidates.append(Path.cwd() / ".gluesync_mcp_token")
+
+    # 4. Home directory (last resort)
+    candidates.append(Path.home() / ".gluesync_mcp_token")
+
+    for p in candidates:
+        try:
+            if p.exists():
+                logger.info("Found token file at: %s", p)
+                return p
+        except Exception:
+            pass
+
+    logger.info(
+        "Token file not found. Searched: %s",
+        ", ".join(str(c) for c in candidates),
+    )
+    return None
+
+
 def _read_token_from_file() -> Optional[str]:
     """Read token from .gluesync_mcp_token in the project root (written by Automator)."""
     try:
-        # Resolve relative to this file's location: <project_root>/mcp_server/server.py
-        # (Claude Desktop ignores the cwd config option and runs the process from /)
-        token_file = Path(__file__).resolve().parent.parent / ".gluesync_mcp_token"
-        logger.info("Looking for token file at: %s (exists=%s)", token_file, token_file.exists())
-        if token_file.exists():
-            with open(token_file, "r") as f:
-                lines = f.readlines()
-                logger.info("Token file has %d lines", len(lines))
-                if lines:
-                    token = lines[0].strip()
-                    logger.info("Token read successfully (length=%d)", len(token))
-                    if len(lines) > 1:
-                        # Also set CORE_HUB_URL from file
-                        base_url = lines[1].strip()
-                        os.environ["CORE_HUB_URL"] = base_url
-                        logger.info("Set CORE_HUB_URL=%s", base_url)
-                    return token
+        token_file = _find_token_file()
+        if token_file is None:
+            return None
+        with open(token_file, "r") as f:
+            lines = f.readlines()
+            logger.info("Token file has %d lines", len(lines))
+            if lines:
+                token = lines[0].strip()
+                logger.info("Token read successfully (length=%d)", len(token))
+                if len(lines) > 1:
+                    base_url = lines[1].strip()
+                    os.environ["CORE_HUB_URL"] = base_url
+                    logger.info("Set CORE_HUB_URL=%s", base_url)
+                return token
     except Exception as exc:
         logger.warning("Failed to read token file: %s", exc)
     return None
+
+
+def _read_credentials_from_file() -> tuple:
+    """Read (username, password, base_url, use_ssl, skip_verify) from the token file.
+
+    Returns a tuple of (username, password, base_url, use_ssl, skip_verify).
+    Any field that is not present in the file is returned as None.
+    """
+    try:
+        token_file = _find_token_file()
+        if token_file is None:
+            return (None, None, None, None, None)
+        with open(token_file, "r") as f:
+            lines = f.readlines()
+        username = None
+        password = None
+        base_url = None
+        use_ssl = None
+        skip_verify = None
+        for line in lines[1:]:  # skip token line
+            line = line.strip()
+            if line.startswith("USERNAME="):
+                username = line[len("USERNAME="):]
+            elif line.startswith("PASSWORD="):
+                password = line[len("PASSWORD="):]
+            elif line.startswith("SSL_ENABLED="):
+                use_ssl = line[len("SSL_ENABLED="):].lower() == "true"
+            elif line.startswith("SSL_SKIP_VERIFY="):
+                skip_verify = line[len("SSL_SKIP_VERIFY="):].lower() == "true"
+            elif not line.startswith("SSL_") and not any(line.startswith(p) for p in ("USERNAME=", "PASSWORD=")):
+                if base_url is None:
+                    base_url = line
+        return (username, password, base_url, use_ssl, skip_verify)
+    except Exception as exc:
+        logger.warning("Failed to read credentials from token file: %s", exc)
+        return (None, None, None, None, None)
 
 def _token(arguments: Dict[str, Any]) -> str:
     # Priority: tool argument > token provider (SSE) > token file > environment variable
@@ -99,9 +185,74 @@ def _token(arguments: Dict[str, Any]) -> str:
     return tok
 
 
+def _refresh_token() -> Optional[str]:
+    """Attempt to refresh the CoreHub auth token.
+
+    Tries the SSE refresh callback first (set by Automator), then falls back
+    to re-authenticating using credentials from the token file (for stdio).
+    Returns the new token on success, or None on failure.
+    """
+    # SSE transport: use the refresh callback set by Automator
+    if _refresh_callback:
+        try:
+            new_token = _refresh_callback()
+            if new_token:
+                logger.info("Token refreshed via SSE callback")
+                return new_token
+        except Exception as exc:
+            logger.warning("SSE token refresh callback failed: %s", exc)
+
+    # stdio transport: re-authenticate using credentials from file
+    username, password, base_url, use_ssl, skip_verify = _read_credentials_from_file()
+    if username and password and base_url:
+        try:
+            from automator_app.corehub import authenticate
+            new_token = authenticate(
+                base_url=base_url,
+                username=username,
+                password=password,
+                use_ssl=use_ssl,
+                skip_verify=skip_verify,
+            )
+            if new_token:
+                logger.info("Token refreshed via file credentials re-authentication")
+                # Update the token file with the new token
+                token_file = _find_token_file()
+                if token_file is None:
+                    token_file = Path.cwd() / ".gluesync_mcp_token"
+                try:
+                    with open(token_file, "r") as f:
+                        old_lines = f.readlines()
+                    with open(token_file, "w") as f:
+                        f.write(f"{new_token}\n")
+                        for line in old_lines[1:]:
+                            f.write(line)
+                except Exception:
+                    pass
+                return new_token
+        except Exception as exc:
+            logger.warning("File-based token refresh failed: %s", exc)
+
+    return None
+
+
 def _call(path: str, token: str, method: str = "GET", body: Optional[Dict] = None) -> Any:
     from commons import fetch_core_hub
-    return fetch_core_hub(path, method=method, token=token, body=body)
+    try:
+        return fetch_core_hub(path, method=method, token=token, body=body)
+    except Exception as exc:
+        # Check for 401 Unauthorized - attempt token refresh and retry once
+        is_401 = False
+        if hasattr(exc, 'response') and exc.response is not None:
+            is_401 = exc.response.status_code == 401
+        if not is_401:
+            raise
+        logger.info("Received 401 from CoreHub, attempting token refresh...")
+        new_token = _refresh_token()
+        if not new_token:
+            raise
+        logger.info("Token refreshed, retrying request...")
+        return fetch_core_hub(path, method=method, token=new_token, body=body)
 
 
 def _fmt(data: Any) -> str:
@@ -1287,9 +1438,10 @@ async def list_resources() -> List[types.Resource]:
 
 @server.read_resource()
 async def read_resource(uri: str) -> str:
-    token = os.environ.get("COREHUB_TOKEN", "")
-    if not token:
-        return json.dumps({"error": "Set COREHUB_TOKEN environment variable to enable resources"})
+    try:
+        token = _token({})
+    except ValueError as exc:
+        return json.dumps({"error": str(exc)})
     try:
         if uri == "gluesync://pipelines":
             return _fmt(_call("/pipelines", token))
@@ -1302,19 +1454,18 @@ async def read_resource(uri: str) -> str:
 
 # ── ENTRY POINT (stdio transport) ───────────────────────────────────────────
 
-async def _run_stdio() -> None:
+async def _run_stdio(real_stdout) -> None:
     from io import TextIOWrapper
     import anyio
     from mcp.server.stdio import stdio_server
     from mcp.server.models import ServerCapabilities
 
-    # Reserve the real stdout exclusively for the JSON-RPC protocol and
-    # redirect sys.stdout to stderr so stray print() calls in imported
-    # modules (e.g. commons.py) cannot corrupt the protocol stream.
+    # Use the real stdout (captured before redirect) exclusively for the
+    # JSON-RPC protocol.  sys.stdout is already redirected to sys.stderr
+    # by run_stdio() so stray print() calls cannot corrupt the protocol.
     protocol_stdout = anyio.wrap_file(
-        TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+        TextIOWrapper(real_stdout.buffer, encoding="utf-8")
     )
-    sys.stdout = sys.stderr
 
     async with stdio_server(stdout=protocol_stdout) as (read_stream, write_stream):
         await server.run(
@@ -1333,13 +1484,20 @@ async def _run_stdio() -> None:
 def run_stdio() -> None:
     """Entry point for stdio transport (Claude Desktop, OpenClaw, etc.)."""
     import asyncio
+
+    # Redirect sys.stdout → sys.stderr BEFORE any other imports so that
+    # modules loaded lazily during tool calls (e.g. commons.py, utils/log.py)
+    # capture the redirected stream and cannot corrupt the JSON-RPC protocol.
+    _real_stdout = sys.stdout
+    sys.stdout = sys.stderr
+
     # Configure logging to stderr for debugging
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         handlers=[logging.StreamHandler(sys.stderr)]
     )
-    asyncio.run(_run_stdio())
+    asyncio.run(_run_stdio(_real_stdout))
 
 
 if __name__ == "__main__":

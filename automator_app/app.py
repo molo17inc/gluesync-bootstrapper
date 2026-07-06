@@ -491,6 +491,8 @@ def create_app() -> FastAPI:
             payload.base_url,
             use_ssl=payload.use_ssl,
             skip_verify=payload.skip_verify,
+            username=payload.username,
+            password=payload.password,
         )
         state.set_preferences(
             enable_scheduling=payload.enable_scheduling,
@@ -2387,12 +2389,15 @@ def create_app() -> FastAPI:
     # work normally and only the /mcp endpoint is unavailable.
     try:
         from mcp.server.sse import SseServerTransport
+        from mcp.server.models import ServerCapabilities
         from starlette.routing import Mount, Route
         from starlette.applications import Starlette
-        from mcp_server.server import server as _mcp_server, InitializationOptions, set_token_provider
+        from mcp_server.server import server as _mcp_server, InitializationOptions, set_token_provider, set_refresh_callback
 
         # Set token provider to use Automator's stored token
         set_token_provider(lambda: state.token or "")
+        # Set refresh callback so MCP server can re-authenticate on 401
+        set_refresh_callback(lambda: state.refresh_auth() or "")
 
         _sse_transport = SseServerTransport("/mcp/messages/")
 
@@ -2406,8 +2411,7 @@ def create_app() -> FastAPI:
                     InitializationOptions(
                         server_name="gluesync-automator",
                         server_version="1.0.0",
-                        capabilities=_mcp_server.get_capabilities(
-                            notification_options=None,
+                        capabilities=ServerCapabilities(
                             experimental_capabilities={},
                         ),
                     ),

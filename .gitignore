@@ -48,3 +48,6 @@ automator_app/static/app.*.js
 !automator_app/static/app.js
 automator_app/static/styles.*.css
 !automator_app/static/styles.css
+
+# MCP token file (contains credentials for stdio transport)
+.gluesync_mcp_token

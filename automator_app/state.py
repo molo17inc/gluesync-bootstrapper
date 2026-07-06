@@ -27,7 +27,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Callable
 
 
 @dataclass
@@ -54,6 +54,8 @@ class AutomatorState:
         self._base_url: Optional[str] = os.getenv("CORE_HUB_URL", "https://localhost")
         self._use_ssl: Optional[bool] = True
         self._skip_verify: Optional[bool] = True
+        self._username: Optional[str] = None
+        self._password: Optional[str] = None
         self._enable_scheduling: bool = True
         self._create_tables: bool = True
         self.uploads: Dict[str, UploadedFile] = {}
@@ -69,12 +71,16 @@ class AutomatorState:
         base_url: str,
         use_ssl: Optional[bool],
         skip_verify: Optional[bool],
+        username: Optional[str] = None,
+        password: Optional[str] = None,
     ) -> None:
-        """Write authentication credentials to a file for MCP server (stdio transport)."""
+        """Write authentication credentials to a file for MCP server (stdio transport).
+
+        The file stores the token on line 1, base_url on line 2, SSL settings on
+        subsequent lines, and optionally username/password so the stdio MCP
+        process can re-authenticate when the token expires.
+        """
         try:
-            # Write to project directory so stdio transport can find it without
-            # relying on the HOME env var (which Claude Desktop doesn't pass).
-            import os
             cwd = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             token_file = Path(cwd) / ".gluesync_mcp_token"
             with open(token_file, "w") as f:
@@ -84,8 +90,14 @@ class AutomatorState:
                     f.write(f"SSL_ENABLED={use_ssl}\n")
                 if skip_verify is not None:
                     f.write(f"SSL_SKIP_VERIFY={skip_verify}\n")
+                if username:
+                    f.write(f"USERNAME={username}\n")
+                if password:
+                    f.write(f"PASSWORD={password}\n")
+            # Restrict file permissions so credentials are only readable by owner
+            import stat
+            os.chmod(token_file, stat.S_IRUSR | stat.S_IWUSR)
         except Exception:
-            # Silently fail - this is optional
             pass
 
     def _remove_token_file(self) -> None:
@@ -107,18 +119,29 @@ class AutomatorState:
         *,
         use_ssl: Optional[bool] = None,
         skip_verify: Optional[bool] = None,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
     ) -> None:
         with self._lock:
             self._token = token
             self._base_url = base_url
             self._use_ssl = use_ssl
             self._skip_verify = skip_verify
+            if username is not None:
+                self._username = username
+            if password is not None:
+                self._password = password
             # Write token to file for MCP server (stdio transport)
-            self._write_token_file(token, base_url, use_ssl, skip_verify)
+            self._write_token_file(
+                token, base_url, use_ssl, skip_verify,
+                username=self._username, password=self._password,
+            )
 
     def clear_auth(self) -> None:
         with self._lock:
             self._token = None
+            self._username = None
+            self._password = None
             self._corehub_overview = None
             # Remove token file
             self._remove_token_file()
@@ -235,11 +258,53 @@ class AutomatorState:
                 "cancelRequested": self._duplicate_cancel_requested,
             }
 
+    # Token refresh -----------------------------------------------------
+    def refresh_auth(self) -> Optional[str]:
+        """Re-authenticate with CoreHub using stored credentials and return the new token.
+
+        Returns the new token on success, or None if credentials are not available
+        or re-authentication fails.
+        """
+        with self._lock:
+            username = self._username
+            password = self._password
+            base_url = self._base_url
+            use_ssl = self._use_ssl
+            skip_verify = self._skip_verify
+
+        if not username or not password or not base_url:
+            return None
+
+        try:
+            from automator_app.corehub import authenticate
+            new_token = authenticate(
+                base_url=base_url,
+                username=username,
+                password=password,
+                use_ssl=use_ssl,
+                skip_verify=skip_verify,
+            )
+            with self._lock:
+                self._token = new_token
+            # Write updated token to file (without re-writing credentials)
+            self._write_token_file(
+                new_token, base_url or "", use_ssl, skip_verify,
+                username=username, password=password,
+            )
+            return new_token
+        except Exception:
+            return None
+
     # Accessors ----------------------------------------------------------
     @property
     def token(self) -> Optional[str]:
         with self._lock:
             return self._token
+
+    @property
+    def credentials_available(self) -> bool:
+        with self._lock:
+            return bool(self._username and self._password)
 
     @property
     def base_url(self) -> Optional[str]:
