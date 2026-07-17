@@ -215,9 +215,9 @@ def fetch_groups_map(token: str, pipeline_id: str) -> Tuple[Dict[str, str], Dict
     return id_to_name, name_to_id, groups_by_name
 
 
-def fetch_pipeline_jobs(pipeline_id: str) -> List[Dict[str, Any]]:
+def fetch_pipeline_jobs(pipeline_id: str, token: Optional[str] = None) -> List[Dict[str, Any]]:
     """Fetch all Chronos jobs for the given pipeline."""
-    chronos_client = ChronosClient(corehub_url=os.getenv("CORE_HUB_URL"))
+    chronos_client = ChronosClient(corehub_url=os.getenv("CORE_HUB_URL"), token=token)
     try:
         jobs_response = chronos_client._request(  # type: ignore[attr-defined]
             "api/jobs/", params={"pipeline_id": pipeline_id, "limit": 1000}
@@ -1278,7 +1278,7 @@ def main() -> None:
                 schema_cfg["sourceType"] = src_type
                 schema_cfg["targetType"] = tgt_type
 
-        jobs = fetch_pipeline_jobs(pipeline_id)
+        jobs = fetch_pipeline_jobs(pipeline_id, token=token)
         attach_schedules_from_jobs(jobs, entities_by_id, schemas, group_id_to_name)
 
         # Backfill null column types via live discovery (legacy entity serialisation bug)

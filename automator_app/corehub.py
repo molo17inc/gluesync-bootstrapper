@@ -185,6 +185,7 @@ def _fetch_chronos_stats(
     base_url: Optional[str],
     *,
     skip_verify: Optional[bool],
+    token: Optional[str] = None,
 ) -> Dict[str, Any]:
     stats = {
         "available": False,
@@ -197,8 +198,12 @@ def _fetch_chronos_stats(
 
     api_url = f"{chronos_url.rstrip('/')}/api/jobs/"
     verify = _should_verify(chronos_url, skip_verify)
+    headers: Dict[str, str] = {}
+    if token:
+        headers['Authorization'] = f'Bearer {token}'
+        headers['Cookie'] = f'gs-auth={token}'
     try:
-        response = requests.get(api_url, timeout=5, verify=verify)
+        response = requests.get(api_url, timeout=5, verify=verify, headers=headers)
         response.raise_for_status()
         payload = response.json()
 
@@ -929,7 +934,7 @@ def get_environment_summary(
 
         pipeline_details.append(summary)
 
-    chronos_stats = _fetch_chronos_stats(base_url, skip_verify=skip_verify)
+    chronos_stats = _fetch_chronos_stats(base_url, skip_verify=skip_verify, token=token)
     totals["schedules"] = chronos_stats.get("enabledJobs", 0)
 
     return {
@@ -1025,7 +1030,7 @@ def export_pipeline_yaml(
         schema_cfg["targetType"] = target_type
 
     if not skip_schedules:
-        jobs = fetch_pipeline_jobs(pipeline_id)
+        jobs = fetch_pipeline_jobs(pipeline_id, token=token)
         attach_schedules_from_jobs(jobs, entities_by_id, schemas, group_id_to_name)
 
     # Backfill null column types that are caused by legacy entities whose

@@ -31,7 +31,7 @@ logger = get_logger()
 class ChronosClient:
     """Client for interacting with the Chronos scheduling service."""
     
-    def __init__(self, base_url=None, corehub_url=None):
+    def __init__(self, base_url=None, corehub_url=None, token=None):
         if corehub_url and not base_url:
             # Build chronos URL from corehub URL: same host/protocol/port + /chronos path
             try:
@@ -49,6 +49,9 @@ class ChronosClient:
         if not self.base_url.endswith('/'):
             self.base_url += '/'
             
+        # Authentication token (JWT) for Chronos authenticated endpoints
+        self.token = token
+            
         # Check SSL configuration
         self.use_ssl = os.getenv('SSL_ENABLED', 'False').lower() == 'true'
         self.verify_ssl = not (os.getenv('SSL_SKIP_VERIFY', 'False').lower() == 'true')
@@ -62,7 +65,7 @@ class ChronosClient:
                 logger.info(f"SSL enabled: Changed Chronos URL from {self.base_url} to {updated_url}")
                 self.base_url = updated_url
         
-        logger.info(f"Initializing Chronos client with base URL: {self.base_url}, SSL={self.use_ssl}, verify={self.verify_ssl}")
+        logger.info(f"Initializing Chronos client with base URL: {self.base_url}, SSL={self.use_ssl}, verify={self.verify_ssl}, token={'present' if self.token else 'absent'}")
     
     def wait_for_chronos(self, max_retries=30, retry_delay=2):
         """
@@ -84,7 +87,11 @@ class ChronosClient:
         
         for attempt in range(1, max_retries + 1):
             try:
-                response = requests.get(url, verify=verify, timeout=5, params={'limit': 1})
+                headers = {}
+                if self.token:
+                    headers['Authorization'] = f'Bearer {self.token}'
+                    headers['Cookie'] = f'gs-auth={self.token}'
+                response = requests.get(url, verify=verify, timeout=5, params={'limit': 1}, headers=headers)
                 # Accept 200 (success) as a sign that Chronos is available
                 if response.status_code == 200:
                     logger.info(f"Chronos is available (attempt {attempt}/{max_retries})")
@@ -109,6 +116,11 @@ class ChronosClient:
         """Make a request to the Chronos API."""
         url = urljoin(self.base_url, endpoint)
         headers = {'Content-Type': 'application/json'}
+        
+        # Add authentication headers if token is available
+        if self.token:
+            headers['Authorization'] = f'Bearer {self.token}'
+            headers['Cookie'] = f'gs-auth={self.token}'
         
         try:
             logger.debug(f"Making {method} request to {url}")

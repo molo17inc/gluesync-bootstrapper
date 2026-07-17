@@ -141,6 +141,7 @@ if [[ -n "${SIGN_IDENTITY}" && "${PYINSTALLER_OUTPUT_KIND}" == "dir" ]]; then
   if [[ "${#_pyinst_files_to_sign[@]}" -gt 0 ]]; then
     prebundle_codesign_args=(--force --options runtime --sign "${SIGN_IDENTITY}")
     for file in "${_pyinst_files_to_sign[@]}"; do
+      codesign --remove-signature "${file}" 2>/dev/null || true
       codesign "${prebundle_codesign_args[@]}" "${file}"
     done
   else

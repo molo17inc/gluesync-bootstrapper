@@ -289,7 +289,7 @@ def create_entity_schedules(token, pipeline_id, entity_id, entity_name, schedule
 
     logger.info(f"Creating schedules for entity {entity_name} (ID: {entity_id})")
 
-    chronos_client = ChronosClient(base_url=CHRONOS_URL, corehub_url=CORE_HUB_URL)
+    chronos_client = ChronosClient(base_url=CHRONOS_URL, corehub_url=CORE_HUB_URL, token=token)
     
     # Wait for Chronos to be available before attempting to create schedules
     if not chronos_client.wait_for_chronos():
@@ -355,7 +355,7 @@ def create_group_schedules(token, pipeline_id, group_schedules):
 
     logger.info(f"Creating group-level schedules for pipeline {pipeline_id}")
 
-    chronos_client = ChronosClient(base_url=CHRONOS_URL, corehub_url=CORE_HUB_URL)
+    chronos_client = ChronosClient(base_url=CHRONOS_URL, corehub_url=CORE_HUB_URL, token=token)
     
     # Wait for Chronos to be available before attempting to create schedules
     if not chronos_client.wait_for_chronos():
@@ -461,7 +461,7 @@ def create_pipeline_schedules(token, pipeline_id, pipeline_schedules):
 
     logger.info(f"Creating pipeline-level schedules for pipeline {pipeline_id}")
 
-    chronos_client = ChronosClient(base_url=CHRONOS_URL, corehub_url=CORE_HUB_URL)
+    chronos_client = ChronosClient(base_url=CHRONOS_URL, corehub_url=CORE_HUB_URL, token=token)
     
     # Wait for Chronos to be available before attempting to create schedules
     if not chronos_client.wait_for_chronos():
