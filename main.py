@@ -1027,6 +1027,26 @@ def main():
             # Save the initial token if no password change was required
             save_token(token)
 
+    # Obtain a user token for Chronos authentication.
+    # The SDK token has role EXTERNAL_MODULE which Chronos cannot introspect
+    # against CoreHub's /authentication/me. Chronos needs a real user token
+    # (from /authentication/login) so that CoreHub recognizes the subject.
+    chronos_token = token
+    try:
+        chronos_auth = fetch_core_hub(
+            '/authentication/login',
+            method='POST',
+            body={'username': default_user, 'password': new_password}
+        )
+        chronos_user_token = chronos_auth.get('apiToken')
+        if chronos_user_token:
+            chronos_token = chronos_user_token
+            logger.info("Obtained user token for Chronos authentication")
+        else:
+            logger.warning("Could not obtain user token for Chronos, falling back to main token")
+    except Exception as e:
+        logger.warning(f"Failed to obtain user token for Chronos: {e}. Falling back to main token.")
+
     # Use provided pipeline name or generate/derive one
     if args.pipeline_name:
         pipeline_name = args.pipeline_name
@@ -1201,6 +1221,7 @@ def main():
                     '--source-type', effective_source_type,
                     '--target-type', effective_target_type,
                     '--token', token,
+                    '--chronos-token', chronos_token,
                     '--target-schema', target_schema or source_schema
                 ]
 

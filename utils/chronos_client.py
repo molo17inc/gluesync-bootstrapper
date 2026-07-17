@@ -41,9 +41,9 @@ class ChronosClient:
                 base_url = chronos_url
             except Exception as exc:
                 logger.warning(f"Failed to derive chronos URL from corehub: {exc}")
-                base_url = os.getenv('CHRONOS_URL', 'http://gluesync-chronos:8000')
+                base_url = os.getenv('CHRONOS_URL', 'http://gluesync-chronos:1717')
         elif not base_url:
-            base_url = os.getenv('CHRONOS_URL', 'http://gluesync-chronos:8000')
+            base_url = os.getenv('CHRONOS_URL', 'http://gluesync-chronos:1717')
             
         self.base_url = base_url
         if not self.base_url.endswith('/'):

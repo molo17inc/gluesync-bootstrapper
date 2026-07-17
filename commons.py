@@ -37,7 +37,7 @@ from utils.core_hub_client import CoreHubClient
 
 CORE_HUB_URL = os.getenv('CORE_HUB_URL', 'https://localhost:1717')
 ENABLE_SCHEDULING = os.getenv('ENABLE_SCHEDULING', 'true').lower() == 'true'
-CHRONOS_URL = os.getenv('CHRONOS_URL', 'http://gluesync-chronos:8000')
+CHRONOS_URL = os.getenv('CHRONOS_URL', 'http://gluesync-chronos:1717')
 
 # Initialize the CoreHub client
 core_hub_client = CoreHubClient(CORE_HUB_URL)
@@ -282,14 +282,14 @@ def get_node_info(token, pipeline_id, agent_id):
     return fetch_core_hub(f"/pipelines/{pipeline_id}/agents/{agent_id}/discovery/node-info", token=token)
 
 
-def create_entity_schedules(token, pipeline_id, entity_id, entity_name, schedules_config):
+def create_entity_schedules(token, pipeline_id, entity_id, entity_name, schedules_config, chronos_token=None):
     """Create schedules for an entity based on the YAML configuration."""
     if not schedules_config or not ENABLE_SCHEDULING:
         return
 
     logger.info(f"Creating schedules for entity {entity_name} (ID: {entity_id})")
 
-    chronos_client = ChronosClient(base_url=CHRONOS_URL, corehub_url=CORE_HUB_URL, token=token)
+    chronos_client = ChronosClient(base_url=CHRONOS_URL, corehub_url=CORE_HUB_URL, token=chronos_token or token)
     
     # Wait for Chronos to be available before attempting to create schedules
     if not chronos_client.wait_for_chronos():
@@ -340,7 +340,7 @@ def create_entity_schedules(token, pipeline_id, entity_id, entity_name, schedule
             # Continue creating other schedules even if one fails
 
 
-def create_group_schedules(token, pipeline_id, group_schedules):
+def create_group_schedules(token, pipeline_id, group_schedules, chronos_token=None):
     """
     Create schedules for groups based on the YAML configuration.
     
@@ -355,7 +355,7 @@ def create_group_schedules(token, pipeline_id, group_schedules):
 
     logger.info(f"Creating group-level schedules for pipeline {pipeline_id}")
 
-    chronos_client = ChronosClient(base_url=CHRONOS_URL, corehub_url=CORE_HUB_URL, token=token)
+    chronos_client = ChronosClient(base_url=CHRONOS_URL, corehub_url=CORE_HUB_URL, token=chronos_token or token)
     
     # Wait for Chronos to be available before attempting to create schedules
     if not chronos_client.wait_for_chronos():
@@ -454,14 +454,14 @@ def _process_group_schedule(chronos_client, pipeline_id, group_ids, schedule_con
         # Continue creating other schedules even if one fails
 
 
-def create_pipeline_schedules(token, pipeline_id, pipeline_schedules):
+def create_pipeline_schedules(token, pipeline_id, pipeline_schedules, chronos_token=None):
     """Create schedules for the entire pipeline based on the YAML configuration."""
     if not pipeline_schedules or not ENABLE_SCHEDULING:
         return
 
     logger.info(f"Creating pipeline-level schedules for pipeline {pipeline_id}")
 
-    chronos_client = ChronosClient(base_url=CHRONOS_URL, corehub_url=CORE_HUB_URL, token=token)
+    chronos_client = ChronosClient(base_url=CHRONOS_URL, corehub_url=CORE_HUB_URL, token=chronos_token or token)
     
     # Wait for Chronos to be available before attempting to create schedules
     if not chronos_client.wait_for_chronos():

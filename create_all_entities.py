@@ -293,7 +293,7 @@ def get_allowed_operations(target_custom_properties):
     logger.info(f"Using default allowedOperations: {default_ops}")
     return default_ops
 
-def create_entities(token, pipeline_id, source_schema, target_schema, tables, source_agent_id, target_agent_id, source_type, target_type, yaml_config, skip_errors=True, chunk_size=50, source_agent_tag=None, target_agent_tag=None):
+def create_entities(token, pipeline_id, source_schema, target_schema, tables, source_agent_id, target_agent_id, source_type, target_type, yaml_config, skip_errors=True, chunk_size=50, source_agent_tag=None, target_agent_tag=None, chronos_token=None):
     # Debug logging to see what source_type and target_type values are received
     logger.debug(f"create_entities called with: source_type='{source_type}', target_type='{target_type}'")
     logger.debug(f"source_type type: {type(source_type)}, target_type type: {type(target_type)}")
@@ -3320,7 +3320,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             entity_id = entities_map[table_name]
                             logger.info(f"Creating schedules for table {table_name} (Entity ID: {entity_id})")
                             create_entity_schedules(token, pipeline_id, entity_id, table_name,
-                                                    table_data['schedules'])
+                                                    table_data['schedules'], chronos_token=chronos_token)
                         else:
                             logger.warning(
                                 f"Unable to create schedules for {table_name}. Entity not found or no schedules defined.")
@@ -3400,7 +3400,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             prepared_schedules.append(schedule_copy)
 
                         if prepared_schedules:
-                            create_group_schedules(token, pipeline_id, prepared_schedules)
+                            create_group_schedules(token, pipeline_id, prepared_schedules, chronos_token=chronos_token)
                         else:
                             logger.debug("No valid group schedules to create after resolving targets")
                     except Exception as e:
@@ -3410,7 +3410,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             if yaml_config and isinstance(current_schema_config, dict):
                 if 'schedules' in current_schema_config:
                     logger.info(f"Creating pipeline-level schedules for schema {source_schema}")
-                    create_pipeline_schedules(token, pipeline_id, current_schema_config['schedules'])
+                    create_pipeline_schedules(token, pipeline_id, current_schema_config['schedules'], chronos_token=chronos_token)
 
         except Exception as e:
             logger.error(f"Error creating schedules: {str(e)}")
@@ -3420,7 +3420,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
 
 def main(pipeline_id, source_schema, target_schema, source_type, target_type, yaml_file, token, skip_errors=True,
-         chunk_size=50):
+         chunk_size=50, chronos_token=None):
     """
     Main function to create entities for a pipeline
     """
@@ -3494,7 +3494,8 @@ def main(pipeline_id, source_schema, target_schema, source_type, target_type, ya
             tables, source_agent_id, target_agent_id,
             source_type, target_type, yaml_config, skip_errors, chunk_size,
             source_agent_tag=source_agent.get('agentTag'),
-            target_agent_tag=target_agent.get('agentTag')
+            target_agent_tag=target_agent.get('agentTag'),
+            chronos_token=chronos_token
         )
         
         if result.get('skipped_discovery', False):
@@ -3525,6 +3526,7 @@ if __name__ == "__main__":
     parser.add_argument('--target-type', required=True, help="Target agent type")
     parser.add_argument('--yaml-file', help="YAML configuration file path")
     parser.add_argument('--token', required=True, help="Authentication token")
+    parser.add_argument('--chronos-token', default=None, help="User token for Chronos authentication (falls back to --token if omitted)")
 
     args = parser.parse_args()
 
@@ -3537,5 +3539,6 @@ if __name__ == "__main__":
         args.yaml_file,
         args.token,
         args.skip_errors,
-        args.chunk_size
+        args.chunk_size,
+        chronos_token=args.chronos_token
     )
