@@ -273,6 +273,7 @@ def run_create_entities(
     use_ssl: Optional[bool],
     skip_verify: Optional[bool],
     log_callback: Optional[Callable[[str], None]] = None,
+    chronos_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Invoke create_all_entities.main and capture output."""
 
@@ -334,6 +335,7 @@ def run_create_entities(
                 token,
                 skip_errors,
                 chunk_size,
+                chronos_token=chronos_token,
             )
     except Exception as exc:  # pylint: disable=broad-except
         logger.exception("create_all_entities execution failed")
@@ -393,6 +395,7 @@ def run_create_entities_for_tables(
     create_tables: bool,
     use_ssl: Optional[bool],
     skip_verify: Optional[bool],
+    chronos_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Create entities only for the specified source tables.
 
@@ -511,6 +514,7 @@ def run_create_entities_for_tables(
                 yaml_config=None,
                 skip_errors=skip_errors,
                 chunk_size=chunk_size,
+                chronos_token=chronos_token,
             )
 
         logs = buffer.getvalue().splitlines()
@@ -862,6 +866,7 @@ def get_environment_summary(
     base_url: str,
     use_ssl: Optional[bool],
     skip_verify: Optional[bool],
+    chronos_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Return aggregated CoreHub information for the overview tab."""
 
@@ -934,7 +939,7 @@ def get_environment_summary(
 
         pipeline_details.append(summary)
 
-    chronos_stats = _fetch_chronos_stats(base_url, skip_verify=skip_verify, token=token)
+    chronos_stats = _fetch_chronos_stats(base_url, skip_verify=skip_verify, token=chronos_token or token)
     totals["schedules"] = chronos_stats.get("enabledJobs", 0)
 
     return {
@@ -995,6 +1000,7 @@ def export_pipeline_yaml(
     skip_schedules: bool = False,
     include_secrets: bool = False,
     include_global_config: bool = True,
+    chronos_token: Optional[str] = None,
 ) -> str:
     """Export a single pipeline configuration to YAML text for download.
 
@@ -1030,7 +1036,7 @@ def export_pipeline_yaml(
         schema_cfg["targetType"] = target_type
 
     if not skip_schedules:
-        jobs = fetch_pipeline_jobs(pipeline_id, token=token)
+        jobs = fetch_pipeline_jobs(pipeline_id, token=chronos_token or token)
         attach_schedules_from_jobs(jobs, entities_by_id, schemas, group_id_to_name)
 
     # Backfill null column types that are caused by legacy entities whose
@@ -1126,6 +1132,7 @@ def export_pipeline_full_backup(
     use_ssl: Optional[bool],
     skip_verify: Optional[bool],
     include_secrets: bool = False,
+    chronos_token: Optional[str] = None,
 ) -> bytes:
     """Export a full backup (YAML + agents-config + UDFs) for a single pipeline."""
 
@@ -1168,6 +1175,7 @@ def export_pipeline_full_backup(
             skip_verify=skip_verify,
             include_secrets=include_secrets,
             include_global_config=False,
+            chronos_token=chronos_token,
         )
 
         safe_name = "".join(c for c in pipeline_name if c.isalnum() or c in (" ", "-", "_")).rstrip()
@@ -1426,6 +1434,7 @@ def export_all_pipelines_yaml(
     skip_verify: Optional[bool],
     skip_schedules: bool = False,
     include_secrets: bool = False,
+    chronos_token: Optional[str] = None,
 ) -> bytes:
     """Export all pipelines to a ZIP file containing individual YAML files.
 
@@ -1479,6 +1488,7 @@ def export_all_pipelines_yaml(
                     skip_schedules=skip_schedules,
                     include_secrets=include_secrets,
                     include_global_config=False,
+                    chronos_token=chronos_token,
                 )
 
                 # Create filename with pipeline name if available
@@ -1866,13 +1876,14 @@ def export_schedules(
     base_url: str,
     use_ssl: Optional[bool],
     skip_verify: Optional[bool],
+    chronos_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Export Chronos scheduler jobs and settings from CoreHub."""
     configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
 
     configs: Dict[str, Any] = {}
     try:
-        jobs_response = fetch_core_hub("/chronos/api/jobs", token=token)
+        jobs_response = fetch_core_hub("/chronos/api/jobs", token=chronos_token or token)
         # Normalize paginated responses {"items": [...], "total": N} to a plain list
         if isinstance(jobs_response, dict):
             items = jobs_response.get("items")
@@ -1889,7 +1900,7 @@ def export_schedules(
         configs["jobs"] = {"error": str(exc)}
 
     try:
-        settings_response = fetch_core_hub("/chronos/api/settings", token=token)
+        settings_response = fetch_core_hub("/chronos/api/settings", token=chronos_token or token)
         # Normalize paginated settings responses too
         if isinstance(settings_response, dict):
             items = settings_response.get("items")
@@ -1979,6 +1990,7 @@ def export_full_corehub_backup(
     use_ssl: Optional[bool],
     skip_verify: Optional[bool],
     include_secrets: bool = False,
+    chronos_token: Optional[str] = None,
 ) -> bytes:
     """Export a complete CoreHub backup including pipelines, global configs, SMTP, webhooks, thresholds, and schedules.
 
@@ -2038,7 +2050,8 @@ def export_full_corehub_backup(
         # Schedules config
         try:
             schedules = export_schedules(
-                token=token, base_url=base_url, use_ssl=use_ssl, skip_verify=skip_verify
+                token=token, base_url=base_url, use_ssl=use_ssl, skip_verify=skip_verify,
+                chronos_token=chronos_token,
             )
             zip_file.writestr("schedules.yaml", _dump_to_yaml(schedules).encode("utf-8"))
         except Exception as exc:  # pylint: disable=broad-except
@@ -2087,6 +2100,7 @@ def export_full_corehub_backup(
                 skip_verify=skip_verify,
                 skip_schedules=True,
                 include_secrets=include_secrets,
+                chronos_token=chronos_token,
             )
             with io.BytesIO(pipelines_zip_bytes) as inner_buf:
                 with zipfile.ZipFile(inner_buf, "r") as inner_zip:
@@ -2301,6 +2315,7 @@ def import_schedules(
     use_ssl: Optional[bool],
     skip_verify: Optional[bool],
     schedules_data: Dict[str, Any],
+    chronos_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Restore Chronos scheduler jobs and settings from a previously exported dict."""
     configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
@@ -2312,7 +2327,7 @@ def import_schedules(
     if settings is not None and not (isinstance(settings, dict) and "error" in settings):
         payload = _unwrap_value_if_needed(settings)
         try:
-            fetch_core_hub("/chronos/api/settings", method="PUT", token=token, body=payload)
+            fetch_core_hub("/chronos/api/settings", method="PUT", token=chronos_token or token, body=payload)
             results["settings"] = {"status": "restored"}
         except Exception as exc:  # pylint: disable=broad-except
             logger.warning("Failed to restore scheduler settings: %s", exc)
@@ -2329,7 +2344,7 @@ def import_schedules(
             if not isinstance(job, dict):
                 continue
             try:
-                fetch_core_hub("/chronos/api/jobs", method="POST", token=token, body=job)
+                fetch_core_hub("/chronos/api/jobs", method="POST", token=chronos_token or token, body=job)
                 restored += 1
             except Exception as exc:  # pylint: disable=broad-except
                 logger.warning("Failed to restore scheduler job %s: %s", job.get("id", "?"), exc)
@@ -2560,6 +2575,7 @@ def import_full_corehub_backup(
     use_ssl: Optional[bool],
     skip_verify: Optional[bool],
     zip_bytes: bytes,
+    chronos_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Restore a complete CoreHub backup from a ZIP archive.
 
@@ -2632,7 +2648,7 @@ def import_full_corehub_backup(
         if schedules is not None:
             results["schedules"] = import_schedules(
                 token=token, base_url=base_url, use_ssl=use_ssl, skip_verify=skip_verify,
-                schedules_data=schedules,
+                schedules_data=schedules, chronos_token=chronos_token,
             )
         else:
             results["schedules"] = {"status": "skipped", "reason": "schedules.yaml not found"}
@@ -2952,6 +2968,7 @@ def duplicate_pipeline(
     override_source_schema: Optional[str] = None,
     override_target_schema: Optional[str] = None,
     cancel_checker: Optional[Callable[[], bool]] = None,
+    chronos_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Duplicate a pipeline with new source and target agent tags (keeping same agent types).
 
@@ -3037,6 +3054,7 @@ def duplicate_pipeline(
             pipeline_id=pipeline_id,
             use_ssl=use_ssl,
             skip_verify=skip_verify,
+            chronos_token=chronos_token,
         )
     except Exception as exc:
         logger.exception("Failed to export pipeline %s configuration: %s", pipeline_id, exc)
@@ -3197,6 +3215,7 @@ def duplicate_pipeline(
                         create_tables=False,
                         use_ssl=use_ssl,
                         skip_verify=skip_verify,
+                        chronos_token=chronos_token,
                     )
                     if not result.get("success"):
                         entity_clone_status = "failed"

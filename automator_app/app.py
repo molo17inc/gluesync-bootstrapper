@@ -779,6 +779,7 @@ def create_app() -> FastAPI:
                 create_tables=effective_create_tables,
                 use_ssl=state.use_ssl,
                 skip_verify=state.skip_verify,
+                chronos_token=state.chronos_token,
             )
         except Exception as exc:  # pylint: disable=broad-except
             logger.exception("Bulk create entities failed")
@@ -944,6 +945,7 @@ def create_app() -> FastAPI:
                 use_ssl=state.use_ssl,
                 skip_verify=state.skip_verify,
                 include_secrets=include_secrets,
+                chronos_token=state.chronos_token,
             )
         except Exception as exc:  # pylint: disable=broad-except
             logger.exception("Failed to export pipeline %s", pipeline_id)
@@ -974,6 +976,7 @@ def create_app() -> FastAPI:
                 use_ssl=state.use_ssl,
                 skip_verify=state.skip_verify,
                 include_secrets=include_secrets,
+                chronos_token=state.chronos_token,
             )
         except Exception as exc:  # pylint: disable=broad-except
             logger.exception("Failed to export full backup for pipeline %s", pipeline_id)
@@ -1061,6 +1064,7 @@ def create_app() -> FastAPI:
                 override_source_schema=request.override_source_schema,
                 override_target_schema=request.override_target_schema,
                 cancel_checker=state.is_duplicate_cancelled,
+                chronos_token=state.chronos_token,
             )
         except corehub.DuplicateCancelledError as exc:
             logger.info("Duplicate pipeline %s cancelled by user", pipeline_id)
@@ -1097,6 +1101,7 @@ def create_app() -> FastAPI:
                 base_url=state.base_url,
                 use_ssl=state.use_ssl,
                 skip_verify=state.skip_verify,
+                chronos_token=state.chronos_token,
             )
         except Exception as exc:  # pylint: disable=broad-except
             logger.exception("Failed to gather CoreHub overview")
@@ -1660,6 +1665,7 @@ def create_app() -> FastAPI:
                                 use_ssl=state.use_ssl,
                                 skip_verify=state.skip_verify,
                                 log_callback=None,
+                                chronos_token=state.chronos_token,
                             )
                             if not result_run.get("success"):
                                 overall_success = False
@@ -1962,6 +1968,7 @@ def create_app() -> FastAPI:
                 use_ssl=state.use_ssl,
                 skip_verify=state.skip_verify,
                 zip_bytes=contents,
+                chronos_token=state.chronos_token,
             )
         except Exception as exc:  # pylint: disable=broad-except
             logger.exception("Failed to import full CoreHub backup")
@@ -2059,6 +2066,7 @@ def create_app() -> FastAPI:
                 use_ssl=state.use_ssl,
                 skip_verify=state.skip_verify,
                 include_secrets=include_secrets,
+                chronos_token=state.chronos_token,
             )
         except Exception as exc:  # pylint: disable=broad-except
             logger.exception("Failed to export all pipelines")
@@ -2162,6 +2170,7 @@ def create_app() -> FastAPI:
                 base_url=state.base_url,
                 use_ssl=state.use_ssl,
                 skip_verify=state.skip_verify,
+                chronos_token=state.chronos_token,
             )
         except Exception as exc:  # pylint: disable=broad-except
             logger.exception("Failed to export schedules")
@@ -2220,6 +2229,7 @@ def create_app() -> FastAPI:
                 use_ssl=state.use_ssl,
                 skip_verify=state.skip_verify,
                 include_secrets=include_secrets,
+                chronos_token=state.chronos_token,
             )
         except Exception as exc:  # pylint: disable=broad-except
             logger.exception("Failed to export full CoreHub backup")
@@ -2313,6 +2323,7 @@ def create_app() -> FastAPI:
                         use_ssl=use_ssl,
                         skip_verify=skip_verify,
                         log_callback=_log_callback,
+                        chronos_token=state.chronos_token,
                     )
 
                     if not result.get("success"):
@@ -2343,6 +2354,7 @@ def create_app() -> FastAPI:
                 use_ssl=use_ssl,
                 skip_verify=skip_verify,
                 log_callback=_log_callback,
+                chronos_token=state.chronos_token,
             )
 
         result = await loop.run_in_executor(None, _run_sync)

@@ -51,6 +51,7 @@ class AutomatorState:
     def __init__(self) -> None:
         self._lock = Lock()
         self._token: Optional[str] = None
+        self._chronos_token: Optional[str] = None
         self._base_url: Optional[str] = os.getenv("CORE_HUB_URL", "https://localhost")
         self._use_ssl: Optional[bool] = True
         self._skip_verify: Optional[bool] = True
@@ -61,6 +62,40 @@ class AutomatorState:
         self._duplicate_in_progress: bool = False
         self._duplicate_cancel_requested: bool = False
         self._corehub_overview: Optional[Dict[str, Any]] = None
+
+    def _try_get_sdk_token(
+        self,
+        base_url: str,
+        use_ssl: Optional[bool],
+        skip_verify: Optional[bool],
+    ) -> Optional[str]:
+        """Try to obtain an SDK token with subject gluesync-bootstrapper for Chronos.
+
+        Returns the SDK token on success, None on failure (falls back to user token).
+        """
+        try:
+            import os as _os
+            license_file = _os.getenv("GLUESYNC_LICENSE_FILE")
+            if not license_file or not _os.path.exists(license_file):
+                return None
+
+            from utils.gluesync_sdk_client import get_token, initialize_gluesync_sdk
+
+            # Set env vars for SDK initialization
+            _os.environ["CORE_HUB_URL"] = base_url
+            if use_ssl is not None:
+                _os.environ["SSL_ENABLED"] = str(use_ssl)
+            if skip_verify is not None:
+                _os.environ["SSL_SKIP_VERIFY"] = str(skip_verify)
+            _os.environ["GLUESYNC_MODULE_TAG"] = "gluesync-bootstrapper"
+
+            initialize_gluesync_sdk()
+            sdk_token = get_token()
+            if sdk_token:
+                return sdk_token
+        except Exception:
+            pass
+        return None
 
     # Authentication -----------------------------------------------------
     def _write_token_file(
@@ -113,12 +148,16 @@ class AutomatorState:
             self._base_url = base_url
             self._use_ssl = use_ssl
             self._skip_verify = skip_verify
+            # Try to obtain an SDK token with subject _bootstrapper for Chronos calls.
+            # Falls back to the user token if SDK is unavailable or no license file.
+            self._chronos_token = self._try_get_sdk_token(base_url, use_ssl, skip_verify)
             # Write token to file for MCP server (stdio transport)
             self._write_token_file(token, base_url, use_ssl, skip_verify)
 
     def clear_auth(self) -> None:
         with self._lock:
             self._token = None
+            self._chronos_token = None
             self._corehub_overview = None
             # Remove token file
             self._remove_token_file()
@@ -240,6 +279,11 @@ class AutomatorState:
     def token(self) -> Optional[str]:
         with self._lock:
             return self._token
+
+    @property
+    def chronos_token(self) -> Optional[str]:
+        with self._lock:
+            return self._chronos_token or self._token
 
     @property
     def base_url(self) -> Optional[str]:
