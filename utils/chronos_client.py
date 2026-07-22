@@ -156,10 +156,16 @@ class ChronosClient:
             raise Exception(error_msg)
     
     def create_job(self, job_data):
-        """Create a new scheduled job."""
+        """Create a new scheduled job.
+
+        ``job_data`` may include a ``chained_events`` list — each entry is a dict
+        with: task_type, pipeline_id, entity_ids (optional), group_ids (optional),
+        with_snapshot, snapshot_write_method, execution_mode ("async"|"sync"),
+        webhook_timeout_seconds.
+        """
         logger.info(f"Creating new job: {job_data.get('name')}")
         return self._request('api/jobs/', method='POST', data=job_data)
-    
+
     def get_jobs(self, task_type=None, enabled=None, limit=100):
         """Get a list of scheduled jobs with optional filtering."""
         params = {'limit': limit}
@@ -419,3 +425,44 @@ class ChronosClient:
             raise ValueError("Either cron_expression or schedule must be provided in schedule_config")
             
         return self.create_job(job_data)
+
+    # ------------------------------------------------------------------
+    # Trigger flow (platform event) methods
+    # ------------------------------------------------------------------
+
+    def create_trigger_flow(self, flow_data):
+        """Create a new trigger flow.
+
+        ``flow_data`` is a dict with:
+        - name (str, required)
+        - description (str, optional)
+        - enabled (bool, default True)
+        - platform_event (str, optional — e.g. "ENTITY_CDC_STARTED")
+        - events (list, required): ordered list of event dicts, each with:
+            task_type, pipeline_id, entity_ids (optional), group_ids (optional),
+            with_snapshot, snapshot_write_method, execution_mode ("async"|"sync")
+
+        Returns the created flow including the secret_token (only time it's visible).
+        """
+        logger.info(f"Creating trigger flow: {flow_data.get('name')}")
+        return self._request('api/triggers/', method='POST', data=flow_data)
+
+    def get_trigger_flows(self, limit=100):
+        """Get a list of all trigger flows."""
+        logger.info("Getting trigger flows")
+        return self._request('api/triggers/', params={'limit': limit})
+
+    def get_trigger_flow(self, flow_id):
+        """Get a specific trigger flow by ID."""
+        logger.info(f"Getting trigger flow with ID: {flow_id}")
+        return self._request(f'api/triggers/{flow_id}')
+
+    def update_trigger_flow(self, flow_id, flow_data):
+        """Update an existing trigger flow."""
+        logger.info(f"Updating trigger flow with ID: {flow_id}")
+        return self._request(f'api/triggers/{flow_id}', method='PUT', data=flow_data)
+
+    def delete_trigger_flow(self, flow_id):
+        """Delete a trigger flow by ID."""
+        logger.info(f"Deleting trigger flow with ID: {flow_id}")
+        return self._request(f'api/triggers/{flow_id}', method='DELETE')

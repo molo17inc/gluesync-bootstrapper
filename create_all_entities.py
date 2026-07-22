@@ -26,7 +26,8 @@ import copy
 import itertools
 from commons import get_node_info, get_table_columns, fetch_core_hub, get_pipeline_config, get_pipeline_agents, \
     get_agent_tables, create_entity_schedules, map_data_type, create_pipeline_schedules, create_group_schedules, load_yaml_config, \
-    process_filter_clauses, create_group, assign_entities_to_group, get_table_id, extract_target_column_types
+    process_filter_clauses, create_group, assign_entities_to_group, get_table_id, extract_target_column_types, \
+    create_trigger_flows_from_yaml
 from create_all_tables import handle_table_creation
 from create_user_defined_functions import handle_udf_function_definition
 import create_user_defined_functions as udf_module
@@ -3411,6 +3412,11 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 if 'schedules' in current_schema_config:
                     logger.info(f"Creating pipeline-level schedules for schema {source_schema}")
                     create_pipeline_schedules(token, pipeline_id, current_schema_config['schedules'], chronos_token=chronos_token)
+
+                # Create trigger flows if defined
+                if 'trigger_flows' in current_schema_config:
+                    logger.info(f"Creating trigger flows for schema {source_schema}")
+                    create_trigger_flows_from_yaml(token, pipeline_id, current_schema_config['trigger_flows'], chronos_token=chronos_token)
 
         except Exception as e:
             logger.error(f"Error creating schedules: {str(e)}")

@@ -250,6 +250,96 @@ def fetch_pipeline_jobs(pipeline_id: str, token: Optional[str] = None) -> List[D
     return jobs
 
 
+def fetch_trigger_flows(token: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Fetch all Chronos trigger flows.
+
+    Trigger flows are not pipeline-scoped (they can reference any pipeline in
+    their events), so we fetch all of them and filter client-side.
+    """
+    chronos_client = ChronosClient(corehub_url=os.getenv("CORE_HUB_URL"), token=token)
+    try:
+        response = chronos_client.get_trigger_flows(limit=1000)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning(f"Failed to fetch Chronos trigger flows: {exc}")
+        return []
+
+    flows: List[Dict[str, Any]]
+    if isinstance(response, list):
+        flows = [f for f in response if isinstance(f, dict)]
+    elif isinstance(response, dict) and "items" in response:
+        items = response["items"]
+        if isinstance(items, list):
+            flows = [f for f in items if isinstance(f, dict)]
+        else:
+            logger.warning("Unexpected trigger flows response format: missing 'items' list")
+            return []
+    else:
+        logger.warning(f"Unexpected trigger flows response format: {str(response)[:500]}")
+        return []
+
+    logger.info(f"Fetched {len(flows)} trigger flows from Chronos")
+    return flows
+
+
+def filter_trigger_flows_by_pipeline(
+    flows: List[Dict[str, Any]], pipeline_id: str
+) -> List[Dict[str, Any]]:
+    """Return only trigger flows whose events reference the given pipeline_id."""
+    matching: List[Dict[str, Any]] = []
+    for flow in flows:
+        events = flow.get("events") or []
+        if not isinstance(events, list):
+            continue
+        for ev in events:
+            if isinstance(ev, dict) and ev.get("pipeline_id") == pipeline_id:
+                matching.append(flow)
+                break
+    return matching
+
+
+def export_trigger_flows_to_yaml(
+    flows: List[Dict[str, Any]], pipeline_id: str
+) -> List[Dict[str, Any]]:
+    """Convert trigger flow API responses to the YAML-importable format."""
+    exported: List[Dict[str, Any]] = []
+    for flow in flows:
+        if not isinstance(flow, dict):
+            continue
+        flow_out: Dict[str, Any] = {
+            "name": flow.get("name"),
+            "description": flow.get("description"),
+            "enabled": flow.get("enabled", True),
+        }
+        if flow.get("platform_event"):
+            flow_out["platform_event"] = flow["platform_event"]
+
+        events_out: List[Dict[str, Any]] = []
+        for ev in flow.get("events") or []:
+            if not isinstance(ev, dict):
+                continue
+            ev_out: Dict[str, Any] = {
+                "task_type": ev.get("task_type"),
+                "execution_mode": ev.get("execution_mode", "async"),
+            }
+            if ev.get("pipeline_id"):
+                ev_out["pipeline_id"] = ev["pipeline_id"]
+            if ev.get("entity_ids"):
+                ev_out["entity_ids"] = ev["entity_ids"]
+            if ev.get("group_ids"):
+                ev_out["group_ids"] = ev["group_ids"]
+            if ev.get("with_snapshot"):
+                ev_out["with_snapshot"] = ev["with_snapshot"]
+            if ev.get("snapshot_write_method"):
+                ev_out["snapshot_write_method"] = ev["snapshot_write_method"]
+            events_out.append(ev_out)
+
+        if events_out:
+            flow_out["events"] = events_out
+            exported.append(flow_out)
+
+    return exported
+
+
 def invert_filter(filter_obj: Dict[str, Any]) -> Dict[str, Any]:
     """Convert CoreHub filter object back to YAML-style filter configuration."""
     if not filter_obj or "clauses" not in filter_obj:
@@ -942,6 +1032,33 @@ def attach_schedules_from_jobs(
         elif "schedule" in job:
             sched["schedule"] = job.get("schedule")
 
+        # Export chained events if present
+        chained_events = job.get("chained_events")
+        if chained_events and isinstance(chained_events, list):
+            exported_ce: List[Dict[str, Any]] = []
+            for ce in chained_events:
+                if not isinstance(ce, dict):
+                    continue
+                ce_out: Dict[str, Any] = {
+                    "task_type": ce.get("task_type"),
+                    "execution_mode": ce.get("execution_mode", "async"),
+                }
+                if ce.get("pipeline_id"):
+                    ce_out["pipeline_id"] = ce["pipeline_id"]
+                if ce.get("entity_ids"):
+                    ce_out["entity_ids"] = ce["entity_ids"]
+                if ce.get("group_ids"):
+                    ce_out["group_ids"] = ce["group_ids"]
+                if ce.get("with_snapshot"):
+                    ce_out["with_snapshot"] = ce["with_snapshot"]
+                if ce.get("snapshot_write_method"):
+                    ce_out["snapshot_write_method"] = ce["snapshot_write_method"]
+                if ce.get("webhook_timeout_seconds"):
+                    ce_out["webhook_timeout_seconds"] = ce["webhook_timeout_seconds"]
+                exported_ce.append(ce_out)
+            if exported_ce:
+                sched["chained_events"] = exported_ce
+
         # Entity-level schedules
         if task_type.startswith("entity_"):
             entity_ids = job.get("entity_ids") or []
@@ -1015,6 +1132,7 @@ def attach_schedules_from_jobs(
 def build_yaml_structure(
     schemas: Dict[str, Dict[str, Any]],
     groups_by_name: Optional[Dict[str, Dict[str, Any]]] = None,
+    trigger_flows: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Convert internal schema representation and group metadata to final YAML structure."""
     if not schemas:
@@ -1051,6 +1169,9 @@ def build_yaml_structure(
 
         if cfg.get("group_schedules"):
             schema_out["group_schedules"] = cfg["group_schedules"]
+
+        if cfg.get("trigger_flows"):
+            schema_out["trigger_flows"] = cfg["trigger_flows"]
 
         schema_out["tables"] = {
             "whitelist": whitelist,
@@ -1280,6 +1401,16 @@ def main() -> None:
 
         jobs = fetch_pipeline_jobs(pipeline_id, token=token)
         attach_schedules_from_jobs(jobs, entities_by_id, schemas, group_id_to_name)
+
+        # Fetch and attach trigger flows referencing this pipeline
+        all_flows = fetch_trigger_flows(token=token)
+        pipeline_flows = filter_trigger_flows_by_pipeline(all_flows, pipeline_id)
+        if pipeline_flows:
+            exported_flows = export_trigger_flows_to_yaml(pipeline_flows, pipeline_id)
+            if exported_flows:
+                primary_schema = sorted(schemas.keys())[0]
+                schemas[primary_schema]["trigger_flows"] = exported_flows
+                logger.info(f"Attached {len(exported_flows)} trigger flow(s) to export")
 
         # Backfill null column types via live discovery (legacy entity serialisation bug)
         enriched = enrich_null_column_types_from_discovery(schemas, entities, token, pipeline_id)

@@ -76,6 +76,22 @@ dbo:
       with_snapshot: true
       snapshot_write_method: "UPSERT"
       enabled: true
+      # Chained events are executed sequentially after the main job completes.
+      # Each event can be ASYNC (fire-and-forget) or SYNC (wait for CoreHub webhook callback before proceeding).
+      # In SYNC mode, Chronos registers a webhook in CoreHub to listen for the completion event
+      # of the preceding step, then waits for it (up to webhook_timeout_seconds) before proceeding.
+      chained_events:
+        - task_type: "pipeline_stop"
+          execution_mode: "sync"
+          # pipeline_id defaults to the parent job's pipeline_id if omitted
+          webhook_timeout_seconds: 3600
+        - task_type: "pipeline_snapshot"
+          with_snapshot: true
+          snapshot_write_method: "UPSERT"
+          execution_mode: "sync"
+          webhook_timeout_seconds: 3600
+        - task_type: "pipeline_start"
+          execution_mode: "async"
     # Maintenance mode schedules
     - name: "Weekend maintenance mode - enter"
       description: "Enter maintenance mode every Saturday at midnight"
@@ -159,6 +175,28 @@ dbo:
         hour: 18
         minute: 0
       enabled: false # Disabled by default
+  # Optional trigger flow configurations (platform events)
+  # Trigger flows define a sequence of actions that can be fired by an external HTTP call
+  # or automatically by a CoreHub platform event (when platform_event is set).
+  # When platform_event is set, Chronos registers a webhook in CoreHub to listen for that event.
+  trigger_flows:
+    - name: "post-deploy-resync"
+      description: "Stop, snapshot, and restart the pipeline after each production deploy"
+      enabled: true
+      # When platform_event is set, a webhook is registered in CoreHub to listen for this event.
+      # Omit platform_event to create an HTTP-triggered flow only (use the trigger_url returned on creation).
+      platform_event: "PIPELINE_CDC_STARTED"
+      events:
+        - task_type: "pipeline_stop"
+          execution_mode: "sync"
+          webhook_timeout_seconds: 3600
+        - task_type: "pipeline_snapshot"
+          with_snapshot: true
+          snapshot_write_method: "UPSERT"
+          execution_mode: "sync"
+          webhook_timeout_seconds: 3600
+        - task_type: "pipeline_start"
+          execution_mode: "async"
   tables:
     whitelist:
       - DRIVERS
@@ -212,6 +250,10 @@ dbo:
             with_snapshot: true
             snapshot_write_method: "UPSERT"
             enabled: true
+            # Chained events can also be attached to entity-level schedules
+            chained_events:
+              - task_type: "entity_start"
+                execution_mode: "async"
         # New filter configuration
         filter:
           clauses:

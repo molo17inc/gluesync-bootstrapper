@@ -34,6 +34,9 @@ from export_template_from_corehub import (
     attach_schedules_from_jobs,
     build_yaml_structure,
     infer_pipeline_schema_types_from_agents,
+    fetch_trigger_flows,
+    filter_trigger_flows_by_pipeline,
+    export_trigger_flows_to_yaml,
     logger,
 )
 from utils.log import create_log_file, log_failure, log_success
@@ -97,6 +100,16 @@ def export_single_pipeline(token: str, pipeline_id: str, output_dir: Optional[st
 
         jobs = fetch_pipeline_jobs(pipeline_id)
         attach_schedules_from_jobs(jobs, entities_by_id, schemas, group_id_to_name)
+
+        # Fetch and attach trigger flows referencing this pipeline
+        all_flows = fetch_trigger_flows()
+        pipeline_flows = filter_trigger_flows_by_pipeline(all_flows, pipeline_id)
+        if pipeline_flows:
+            exported_flows = export_trigger_flows_to_yaml(pipeline_flows, pipeline_id)
+            if exported_flows:
+                primary_schema = sorted(schemas.keys())[0]
+                schemas[primary_schema]["trigger_flows"] = exported_flows
+                logger.info(f"Attached {len(exported_flows)} trigger flow(s) to export")
 
         yaml_data = build_yaml_structure(schemas, groups_by_name)
 

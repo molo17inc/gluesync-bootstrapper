@@ -330,6 +330,13 @@ def create_entity_schedules(token, pipeline_id, entity_id, entity_name, schedule
                 snapshot_write_method=snapshot_write_method
             )
 
+            # Create chained events if defined for this schedule
+            chained_events = schedule_config.get('chained_events')
+            if chained_events:
+                _create_chained_events_for_job(
+                    chronos_client, pipeline_id, result, chained_events
+                )
+
             log_success(logger, f"Created {task_type} schedule for entity {entity_name}: {name}")
             logger.debug(f"Schedule details: {json.dumps(result)}")
 
@@ -439,6 +446,13 @@ def _process_group_schedule(chronos_client, pipeline_id, group_ids, schedule_con
             snapshot_write_method=snapshot_write_method
         )
 
+        # Create chained events if defined for this schedule
+        chained_events = schedule_config.get('chained_events')
+        if chained_events:
+            _create_chained_events_for_job(
+                chronos_client, pipeline_id, result, chained_events
+            )
+
         group_names = ", ".join(group_ids[:3])
         if len(group_ids) > 3:
             group_names += f" and {len(group_ids) - 3} more"
@@ -500,6 +514,13 @@ def create_pipeline_schedules(token, pipeline_id, pipeline_schedules, chronos_to
                 snapshot_write_method=snapshot_write_method
             )
 
+            # Create chained events if defined for this schedule
+            chained_events = schedule_config.get('chained_events')
+            if chained_events:
+                _create_chained_events_for_job(
+                    chronos_client, pipeline_id, result, chained_events
+                )
+
             log_success(logger, f"Created {task_type} schedule for pipeline {pipeline_id}: {name}")
             logger.debug(f"Schedule details: {json.dumps(result)}")
 
@@ -508,6 +529,140 @@ def create_pipeline_schedules(token, pipeline_id, pipeline_schedules, chronos_to
             log_failure(logger, error_msg)
             logger.error(traceback.format_exc())
             # Continue creating other schedules even if one fails
+
+
+def _create_chained_events_for_job(chronos_client, pipeline_id, job_result, chained_events):
+    """Attach chained events to an already-created job by updating it.
+
+    The Chronos API accepts ``chained_events`` as part of the job creation
+    payload.  When the schedule was created without chained events (e.g. via
+    ``create_entity_schedule`` which doesn't expose the parameter), we can
+    add them by PUT-ing an update to the job endpoint.
+
+    Each chained event dict should contain:
+    - task_type (str, required)
+    - pipeline_id (str, required — defaults to the parent job's pipeline_id)
+    - entity_ids (list, optional)
+    - group_ids (list, optional)
+    - with_snapshot (bool, default False)
+    - snapshot_write_method (str, default "UPSERT")
+    - execution_mode (str, "async"|"sync", default "async")
+    - webhook_timeout_seconds (int, default 3600)
+    """
+    if not chained_events or not isinstance(chained_events, list):
+        return
+
+    job_id = None
+    if isinstance(job_result, dict):
+        job_id = job_result.get('id')
+
+    if not job_id:
+        logger.warning("Cannot attach chained events — job result has no ID")
+        return
+
+    normalized_events = []
+    for ce in chained_events:
+        if not isinstance(ce, dict):
+            continue
+        event = {
+            'task_type': ce.get('task_type'),
+            'pipeline_id': ce.get('pipeline_id', pipeline_id),
+            'with_snapshot': ce.get('with_snapshot', False),
+            'snapshot_write_method': ce.get('snapshot_write_method', 'UPSERT'),
+            'execution_mode': ce.get('execution_mode', 'async'),
+        }
+        if ce.get('entity_ids'):
+            event['entity_ids'] = ce['entity_ids']
+        if ce.get('group_ids'):
+            event['group_ids'] = ce['group_ids']
+        if ce.get('webhook_timeout_seconds'):
+            event['webhook_timeout_seconds'] = ce['webhook_timeout_seconds']
+        normalized_events.append(event)
+
+    if not normalized_events:
+        return
+
+    try:
+        update_payload = {'chained_events': normalized_events}
+        chronos_client.update_job(job_id, update_payload)
+        logger.info(
+            f"Attached {len(normalized_events)} chained event(s) to job {job_id}"
+        )
+    except Exception as exc:
+        logger.error(f"Failed to attach chained events to job {job_id}: {exc}")
+
+
+def create_trigger_flows_from_yaml(token, pipeline_id, trigger_flows_config, chronos_token=None):
+    """Create trigger flows (platform event flows) from YAML configuration.
+
+    Each entry in ``trigger_flows_config`` is a dict with:
+    - name (str, required)
+    - description (str, optional)
+    - enabled (bool, default True)
+    - platform_event (str, optional — e.g. "ENTITY_CDC_STARTED")
+    - events (list, required): ordered list of event dicts with:
+        task_type, pipeline_id (defaults to parent), entity_ids, group_ids,
+        with_snapshot, snapshot_write_method, execution_mode
+    """
+    if not trigger_flows_config or not ENABLE_SCHEDULING:
+        return
+
+    if not isinstance(trigger_flows_config, list):
+        logger.warning("trigger_flows must be a list. Skipping.")
+        return
+
+    logger.info(f"Creating {len(trigger_flows_config)} trigger flow(s) for pipeline {pipeline_id}")
+
+    chronos_client = ChronosClient(base_url=CHRONOS_URL, corehub_url=CORE_HUB_URL, token=chronos_token or token)
+
+    if not chronos_client.wait_for_chronos():
+        logger.error("Chronos is not available. Skipping trigger flow creation.")
+        return
+
+    for flow_config in trigger_flows_config:
+        try:
+            if not isinstance(flow_config, dict):
+                continue
+
+            events = flow_config.get('events', [])
+            if not events:
+                logger.warning(f"Trigger flow '{flow_config.get('name')}' has no events. Skipping.")
+                continue
+
+            normalized_events = []
+            for ev in events:
+                if not isinstance(ev, dict):
+                    continue
+                event = {
+                    'task_type': ev.get('task_type'),
+                    'pipeline_id': ev.get('pipeline_id', pipeline_id),
+                    'with_snapshot': ev.get('with_snapshot', False),
+                    'snapshot_write_method': ev.get('snapshot_write_method', 'UPSERT'),
+                    'execution_mode': ev.get('execution_mode', 'async'),
+                }
+                if ev.get('entity_ids'):
+                    event['entity_ids'] = ev['entity_ids']
+                if ev.get('group_ids'):
+                    event['group_ids'] = ev['group_ids']
+                normalized_events.append(event)
+
+            flow_data = {
+                'name': flow_config.get('name'),
+                'description': flow_config.get('description'),
+                'enabled': flow_config.get('enabled', True),
+                'events': normalized_events,
+            }
+            if flow_config.get('platform_event'):
+                flow_data['platform_event'] = flow_config['platform_event']
+
+            result = chronos_client.create_trigger_flow(flow_data)
+            log_success(logger, f"Created trigger flow: {flow_config.get('name')}")
+            logger.debug(f"Trigger flow details: {json.dumps(result)}")
+
+        except Exception as exc:
+            error_msg = f"Failed to create trigger flow '{flow_config.get('name')}': {exc}"
+            log_failure(logger, error_msg)
+            logger.error(traceback.format_exc())
 
 
 def extract_target_column_types(discovered_target_columns):

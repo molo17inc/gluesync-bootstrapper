@@ -63,6 +63,9 @@ from export_template_from_corehub import (
     build_yaml_structure,
     build_export_header,
     enrich_null_column_types_from_discovery,
+    fetch_trigger_flows,
+    filter_trigger_flows_by_pipeline,
+    export_trigger_flows_to_yaml,
 )
 import time
 import yaml
@@ -1038,6 +1041,20 @@ def export_pipeline_yaml(
     if not skip_schedules:
         jobs = fetch_pipeline_jobs(pipeline_id, token=chronos_token or token)
         attach_schedules_from_jobs(jobs, entities_by_id, schemas, group_id_to_name)
+
+        # Fetch and attach trigger flows referencing this pipeline
+        all_flows = fetch_trigger_flows(token=chronos_token or token)
+        pipeline_flows = filter_trigger_flows_by_pipeline(all_flows, pipeline_id)
+        if pipeline_flows:
+            exported_flows = export_trigger_flows_to_yaml(pipeline_flows, pipeline_id)
+            if exported_flows:
+                primary_schema = sorted(schemas.keys())[0]
+                schemas[primary_schema]["trigger_flows"] = exported_flows
+                logger.info(
+                    "export_pipeline_yaml: attached %d trigger flow(s) for pipeline %s",
+                    len(exported_flows),
+                    pipeline_id,
+                )
 
     # Backfill null column types that are caused by legacy entities whose
     # DataTypeInterface was not registered for serialisation and therefore
