@@ -147,7 +147,7 @@ class ExtractExportMetadataFromYamlTextTests(unittest.TestCase):
     def test_metadata_with_comment_header(self):
         text = (
             "# ---------------------------------------------------------------\n"
-            "# Gluesync Automator – Pipeline Configuration Export\n"
+            "# Gluesync Automator - Pipeline Configuration Export\n"
             "# Pipeline ID     : 58f2fe4b\n"
             "# ---------------------------------------------------------------\n"
             "exportMetadata:\n"

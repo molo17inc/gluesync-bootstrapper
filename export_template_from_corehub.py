@@ -1107,7 +1107,7 @@ def build_export_header(
 
     corehub_version = "unknown"
     pipeline_name = pipeline_id
-    corehub_url = base_url or CORE_HUB_URL
+    corehub_url = base_url or os.getenv("CORE_HUB_URL", "https://localhost:1717")
 
     try:
         version_resp = fetch_core_hub("/version", token=token)
@@ -1133,7 +1133,7 @@ def build_export_header(
 
     lines = [
         "# ---------------------------------------------------------------",
-        "# Gluesync Automator – Pipeline Configuration Export",
+        "# Gluesync Automator - Pipeline Configuration Export",
         "# ---------------------------------------------------------------",
         f"# CoreHub URL     : {corehub_url}",
         f"# CoreHub version : {corehub_version}",

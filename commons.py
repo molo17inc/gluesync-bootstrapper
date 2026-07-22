@@ -657,13 +657,23 @@ def map_data_type(source_type, source_node_info, target_node_info,
 
 
 def load_yaml_config(file_path):
+    """Load a YAML config file as UTF-8.
+
+    Always uses UTF-8 so exports containing non-ASCII characters (or legacy
+    files with Unicode punctuation in comment headers) load correctly on
+    Windows locales such as Japanese CP932, where the system default encoding
+    would otherwise raise UnicodeDecodeError.
+    """
     try:
-        with open(file_path, 'r') as file:
+        with open(file_path, 'r', encoding='utf-8') as file:
             config = yaml.safe_load(file)
             print(f"Loaded YAML config: {json.dumps(config, indent=2)}")
             return config
     except FileNotFoundError:
         print(f"YAML file not found at {file_path}. Proceeding without it.")
+        return {}
+    except UnicodeDecodeError as e:
+        print(f"Error decoding YAML file as UTF-8: {e}. Proceeding without it.")
         return {}
     except yaml.YAMLError as e:
         print(f"Error parsing YAML file: {e}. Proceeding without it.")
