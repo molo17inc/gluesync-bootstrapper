@@ -740,6 +740,15 @@ def _build_table_entry_helper(table, table_lookup, replications, field_mappings,
     # Get field mappings for this replication
     table_field_mappings = field_mappings.get(repl_id_for_table, {}) if repl_id_for_table else {}
 
+    # Build a case-insensitive lookup of target table fields so we can
+    # resolve column names even when source and target differ only in
+    # casing (e.g. MySQL on Linux where table/column names are
+    # case-sensitive).
+    target_fields_by_lower = {}
+    if target_info and not target_info["is_source"]:
+        for tf in target_info["table"].get("fields", []):
+            target_fields_by_lower.setdefault(tf["name"].lower(), tf)
+
     for field in table["fields"]:
         # Determine target field name using field mappings
         target_field_name = field["name"]
@@ -760,6 +769,14 @@ def _build_table_entry_helper(table, table_lookup, replications, field_mappings,
                 target_field_name = field_id_to_name.get((target_table_id, mapped_target_field_id), field["name"])
                 if target_field_name != field["name"]:
                     print(f"        Mapped field: {field['name']} -> {target_field_name}")
+        elif target_fields_by_lower:
+            # No explicit field mapping — try case-insensitive match against
+            # the target table's own field list so we use the target's actual
+            # column name (e.g. source "Name" -> target "NAME").
+            matched = target_fields_by_lower.get(field["name"].lower())
+            if matched and matched["name"] != field["name"]:
+                target_field_name = matched["name"]
+                print(f"        Case-insensitive match: {field['name']} -> {target_field_name}")
 
         col_def = {
             "name": target_field_name,
