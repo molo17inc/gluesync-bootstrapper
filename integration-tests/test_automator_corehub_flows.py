@@ -98,7 +98,7 @@ class RunCreateEntitiesForTablesTests(unittest.TestCase):
 
         def fake_create_entities(token, pipeline_id, source_schema, target_schema, tables,
                                  source_agent_id, target_agent_id, source_type, target_type,
-                                 yaml_config, skip_errors, chunk_size):
+                                 yaml_config, skip_errors, chunk_size, chronos_token=None):
             captured_create_entities.append({
                 "tables": tables,
                 "source_type": source_type,
