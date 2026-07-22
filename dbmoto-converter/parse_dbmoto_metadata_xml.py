@@ -374,12 +374,22 @@ def parse_xml():
     
     print(f"Found {len(connections)} database connections ({len(source_connections)} source, {len(target_connections)} target)")
     
+    # Extract catalogs (database names) from DBMMCatalogs
+    catalogs = {}
+    for catalog_elem in root.findall("./tables/DBMMCatalogs"):
+        catalog_id = catalog_elem.findtext("CatalogID")
+        catalog_name = catalog_elem.findtext("Name") or catalog_elem.findtext("n") or catalog_elem.findtext("name")
+        if catalog_id and catalog_name:
+            catalogs[catalog_id] = catalog_name
+            print(f"  Found catalog: {catalog_name} (ID: {catalog_id})")
+
     # Extract schemas
     print("Extracting schemas...")
     schemas = {}
     for schema_elem in root.findall("./tables/DBMMSchemas"):
         schema_id = schema_elem.findtext("SchemaID")
         conn_id = schema_elem.findtext("ConnectionID")
+        catalog_id = schema_elem.findtext("CatalogID")
         
         # Try to get schema name from several possible tags
         schema_name = None
@@ -391,18 +401,23 @@ def parse_xml():
         # If no name found, use a default name with the ID
         if not schema_name:
             schema_name = f"Schema_{schema_id}"
+
+        # Resolve catalog (database) name if available
+        catalog_name = catalogs.get(catalog_id) if catalog_id else None
         
         if schema_id and conn_id in connections:
             schema = {
                 "id": schema_id,
                 "name": schema_name,
                 "connection_id": conn_id,
+                "catalog_name": catalog_name,
                 "tables": {}
             }
             schemas[schema_id] = schema
             # Link schema to connection
             connections[conn_id]["schemas"][schema_id] = schema
-            print(f"  Found schema: {schema_name} (ID: {schema_id})")
+            db_label = f" (database: {catalog_name})" if catalog_name else ""
+            print(f"  Found schema: {schema_name} (ID: {schema_id}){db_label}")
     
     print(f"Found {len(schemas)} schemas linked to connections")
     
@@ -1033,6 +1048,7 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
         conn_name = conn["name"]
         for schema in conn["schemas"].values():
             schema_name = schema["name"]
+            catalog_name = schema.get("catalog_name")
 
             # Process tables with fields
             tables_with_fields = {}
@@ -1199,6 +1215,11 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                             disabled_yaml_block += f"# {line}\n"
 
                     # Create filename and write YAML
+                    # When a catalog (database) name is available, use
+                    # source_db_target_db.yaml to prevent collisions when
+                    # multiple schemas share the same name (e.g. multiple
+                    # "dbo" schemas in different SQL Server databases).
+                    # Without a catalog name, fall back to the legacy format.
                     if multiple_target_groups:
                         if len(all_conns) == len(group_keys):
                             # All connections are unique - use connection name
@@ -1209,6 +1230,13 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                         else:
                             # Need both connection and schema to differentiate
                             filename = f"{conn_name}__{schema_name}__{target_conn_name}__{target_schema_name}.yaml".replace("/", "_")
+                    elif catalog_name:
+                        # Catalog name available: use source_db_target_db format
+                        target_db_name = target_schema_name or target_conn_name
+                        if target_db_name and target_db_name != "default":
+                            filename = f"{catalog_name}_{target_db_name}.yaml".replace("/", "_")
+                        else:
+                            filename = f"{conn_name}__{schema_name}.yaml".replace("/", "_")
                     else:
                         filename = f"{conn_name}__{schema_name}.yaml".replace("/", "_")
                     filepath = os.path.join(output_dir, filename)
@@ -1219,6 +1247,8 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                         f.write(f"# Generated from DbMoto metadata XML\n")
                         f.write(f"# Conversion timestamp: {timestamp}\n")
                         f.write(f"# Source database connection: {conn_name}\n")
+                        if catalog_name:
+                            f.write(f"# Source database: {catalog_name}\n")
                         f.write(f"# Schema: {schema_name}\n")
                         f.write(f"# Tables converted: {len(group_bucket['whitelist'])}\n")
                         if group_bucket["disabled_whitelist"]:
