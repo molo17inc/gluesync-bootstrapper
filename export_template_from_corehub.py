@@ -608,7 +608,13 @@ def _process_single_entity(
                 "isNullable": scol.get("isNullable", False),
                 "isPK": bool(scol.get("isPK") or scol.get("isPrimaryKey")),
                 "id": source_id,
-                "ordinalPosition": col_index  # Use 1-based index from sorted array
+                "ordinalPosition": col_index,  # Use 1-based index from sorted array
+                # The character set the column is read with, which the user may have
+                # overridden (an AS400 per-column CCSID, for one). Always written, null
+                # included: on import an absent key keeps whatever discovery publishes,
+                # so leaving it out would silently restore a column the source's way
+                # instead of the way it was backed up.
+                "charSet": scol.get("charSet"),
             }
             column_mappings.append(col_mapping)
         
@@ -870,6 +876,9 @@ def _process_multitable_entity(
                     "isPK": bool(col.get("isPK") or col.get("isPrimaryKey")),
                     "id": col_id,
                     "ordinalPosition": ordinal,
+                    # See the single table export above: written even when null so the
+                    # restore puts the column back exactly as it was backed up
+                    "charSet": col.get("charSet"),
                 }
                 column_metadata.append(col_meta)
             

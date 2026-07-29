@@ -305,5 +305,142 @@ class CharSetOverrideTests(unittest.TestCase):
         self.assertEqual(columns_by_header["CCSIDVAR"]["VAL"]["charSet"], "37")
 
 
+def _backup_entity(char_set="280"):
+    """Entity as fetch_pipeline_entities returns it, with one column carrying a charSet."""
+    source_columns = [
+        {"id": 1, "name": "ID", "dataType": "int", "isPK": True, "position": 1},
+        {"id": 2, "name": "VAL", "dataType": "char", "isPK": False, "position": 2,
+         "charSet": char_set},
+        {"id": 3, "name": "QTY", "dataType": "int", "isPK": False, "position": 3},
+    ]
+    target_columns = [
+        {"id": 1, "name": "ID", "dataType": "int", "isPK": True, "position": 1},
+        {"id": 2, "name": "VAL", "dataType": "varchar", "isPK": False, "position": 2},
+        {"id": 3, "name": "QTY", "dataType": "int", "isPK": False, "position": 3},
+    ]
+    return {
+        "entityId": "ent-CCSIDCHR",
+        "entityName": "INTTEST.CCSIDCHR",
+        "groupId": "",
+        "agentEntities": [
+            {
+                "type": "SingleTable",
+                "agentId": "src-agent",
+                "entityType": {"type": "Source"},
+                "entityObject": {"id": "101", "schema": "INTTEST", "collection": "CCSIDCHR"},
+                "table": {"id": "101", "name": "CCSIDCHR", "schema": "INTTEST"},
+                "columns": source_columns,
+            },
+            {
+                "type": "SingleTable",
+                "agentId": "tgt-agent",
+                "entityType": {"type": "Target", "allowedOperations": ["INSERT"]},
+                "entityObject": {"id": "201", "schema": "target_schema", "collection": "CCSIDCHR"},
+                "table": {"id": "201", "name": "CCSIDCHR", "schema": "target_schema"},
+                "columns": target_columns,
+            },
+        ],
+    }
+
+
+def _multitable_backup_entity(char_set="280"):
+    """MultiTable entity, whose columns travel as [table header, [columns], ...]."""
+    return {
+        "entityId": "ent-chain",
+        "entityName": "INTTEST.CCSIDCHR",
+        "groupId": "",
+        "agentEntities": [
+            {
+                "type": "MultiTable",
+                "agentId": "src-agent",
+                "entityType": {"type": "Source"},
+                "tables": [{"id": 101, "name": "CCSIDCHR", "schema": "INTTEST"}],
+                "columns": [
+                    {"id": 101, "name": "CCSIDCHR", "schema": "INTTEST"},
+                    [
+                        {"id": 1, "name": "ID", "dataType": "int", "isPK": True},
+                        {"id": 2, "name": "VAL", "dataType": "char", "charSet": char_set},
+                    ],
+                ],
+            },
+            {
+                "type": "MultiTable",
+                "agentId": "tgt-agent",
+                "entityType": {"type": "Target"},
+                "tables": [{"id": 201, "name": "CCSIDCHR", "schema": "target_schema"}],
+                "columns": [
+                    {"id": 201, "name": "CCSIDCHR", "schema": "target_schema"},
+                    [
+                        {"id": 1, "name": "ID", "dataType": "int", "isPK": True},
+                        {"id": 2, "name": "VAL", "dataType": "varchar"},
+                    ],
+                ],
+            },
+        ],
+    }
+
+
+def _export_backup_yaml(entity):
+    """Run the export the way a backup does, down to the YAML text and back."""
+    from export_template_from_corehub import build_schemas_from_entities, build_yaml_structure
+
+    structure = build_yaml_structure(build_schemas_from_entities([entity], {}), {})
+    return yaml.safe_load(yaml.safe_dump(structure, allow_unicode=True, sort_keys=False))
+
+
+class CharSetBackupTests(unittest.TestCase):
+    """Verify a backup carries charSet out and puts it back on restore.
+
+    Without it a pipeline whose columns are read with a chosen character set would come
+    back from its own backup reading them the way the source declares them instead.
+    """
+
+    def test_backup_export_carries_char_set(self):
+        exported = _export_backup_yaml(_backup_entity())
+        columns = exported["INTTEST"]["tables"]["custom"]["CCSIDCHR"]["columns"]
+        by_source = {c["source"]: c for c in columns}
+
+        self.assertEqual(by_source["VAL"]["charSet"], "280")
+        # Written even when there is none, so the restore does not fall back to the
+        # character set discovery publishes for the column.
+        self.assertIn("charSet", by_source["QTY"])
+        self.assertIsNone(by_source["QTY"]["charSet"])
+
+    def test_multitable_backup_export_carries_char_set(self):
+        exported = _export_backup_yaml(_multitable_backup_entity())
+        columns = exported["INTTEST"]["tables"]["custom"]["CCSIDCHR"]["columns"]
+        by_name = {c["name"]: c for c in columns}
+
+        self.assertEqual(by_name["VAL"]["charSet"], "280")
+
+    def test_backup_round_trip_restores_char_set(self):
+        """The exported YAML, fed back to entity creation, must win over discovery."""
+        yaml_config = _export_backup_yaml(_backup_entity())
+        # The restore runs against a source that declares CCSID 37 on the column: the
+        # backed up 280 has to survive, otherwise the pipeline comes back reading its
+        # data the way it was before the character set was chosen.
+        discovered = {
+            "columns": [
+                _source_col("ID", 1, "int", is_pk=True),
+                _source_col("VAL", 2, "char", char_set="37"),
+                _source_col("QTY", 3, "int"),
+            ]
+        }
+        captured_puts = []
+
+        _run_create_entities(
+            yaml_config,
+            captured_puts,
+            lambda *a, **k: copy.deepcopy(discovered),
+            [{"name": "CCSIDCHR", "schema": "INTTEST", "id": 101}],
+        )
+
+        source_ae = captured_puts[0]["entities"][0]["agentEntities"][0]
+        by_name = {c["name"]: c for c in source_ae["columns"]}
+
+        self.assertEqual(by_name["VAL"]["charSet"], "280")
+        self.assertNotIn("charSet", by_name["QTY"])
+
+
 if __name__ == "__main__":
     unittest.main()

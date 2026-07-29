@@ -732,7 +732,8 @@ def discover_column_metadata_for_table(
 
     The shape of each entry matches what create_all_tables.py expects when
     using metadata-based column definitions: name, type, dataLength,
-    numericPrecision, numericScale, isNullable, id and ordinalPosition.
+    numericPrecision, numericScale, isNullable, id and ordinalPosition, plus
+    charSet when the source publishes one.
     """
 
     configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
@@ -798,6 +799,13 @@ def discover_column_metadata_for_table(
             "id": col_id,
             "ordinalPosition": ordinal,
         }
+        # The character set the source publishes for the column — its CCSID on AS400.
+        # Carried into the template so it can be edited there to have the column read
+        # with another one. Unlike the backup, only written when discovery has one:
+        # here an absent key and a null one would restore the same value anyway.
+        char_set = col.get("charSet")
+        if char_set is not None:
+            meta["charSet"] = char_set
         metadata.append(meta)
 
     return metadata
