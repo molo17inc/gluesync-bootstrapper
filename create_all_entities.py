@@ -37,7 +37,12 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Metadata-only fields used in the export format {source: ..., target: ..., type: ..., ...}
 # These are never column names in the explicit export format.
-_EXPORT_METADATA_FIELDS = {"source", "target", "type", "dataLength", "numericPrecision", "numericScale", "isNullable", "id", "ordinalPosition", "targetDataType"}
+_EXPORT_METADATA_FIELDS = {"source", "target", "type", "dataLength", "numericPrecision", "numericScale", "isNullable", "id", "ordinalPosition", "targetDataType", "charSet"}
+
+# Tells "the YAML declared charSet: null" apart from "the YAML said nothing about charSet".
+# The first must clear the character set discovered on the column, the second must leave it
+# untouched, and None cannot express both.
+_CHAR_SET_CLEARED = object()
 
 
 def _build_target_data_type_overrides(yaml_columns):
@@ -85,6 +90,73 @@ def _build_target_data_type_overrides(yaml_columns):
     return overrides
 
 
+def _build_char_set_overrides(yaml_columns):
+    """Build a lookup of user-declared ``charSet`` values keyed by source column name.
+
+    The source agent publishes on every column the character set the column declares —
+    a charset name on most databases, the CCSID as a decimal string on AS400 (Db2 for i) —
+    and the user can ask for the data to be read with a different one by editing that value.
+    Declaring it here is the YAML equivalent of that edit, so a pipeline created from a
+    template reads the column exactly like one configured from the UI.
+
+    Supported YAML shapes (same as ``targetDataType``):
+
+    1. Export/explicit mapping:
+       ``{source: COL, target: tgt, charSet: "280"}``
+    2. Whitelist format:
+       ``{name: tgt, sourceName: COL, type: ..., charSet: "280"}``
+
+    An explicit ``charSet: null`` clears the value discovered on the column, which is not
+    the same as omitting the key: omitting it keeps whatever the source published. The
+    legacy shorthand mapping ``{COL: "tgt"}`` has no room for extra keys — any key it
+    carries is read as another column mapping — so switch to the explicit form to use it.
+
+    Returns:
+        dict: { source_column_name_lowercased: charSet_string | _CHAR_SET_CLEARED }
+    """
+    overrides = {}
+    if not isinstance(yaml_columns, list):
+        return overrides
+    for entry in yaml_columns:
+        if not isinstance(entry, dict) or 'charSet' not in entry:
+            continue
+        # Export/explicit mapping shape, then whitelist shape
+        if 'source' in entry:
+            src = entry.get('source')
+        elif 'name' in entry:
+            src = entry.get('sourceName') or entry.get('name')
+        else:
+            continue
+        if not src:
+            continue
+        value = entry.get('charSet')
+        overrides[str(src).lower()] = _CHAR_SET_CLEARED if value is None else str(value)
+    return overrides
+
+
+def _apply_char_set_overrides(columns, overrides, table_name=None):
+    """Apply ``charSet`` overrides from :func:`_build_char_set_overrides` in place.
+
+    Runs on the *source* columns after they have been built from discovery, so the
+    user-declared value wins over the one the source published. Columns the YAML says
+    nothing about are left exactly as discovered.
+    """
+    if not overrides or not columns:
+        return
+    for col in columns:
+        if not isinstance(col, dict):
+            continue
+        override = overrides.get(str(col.get('name', '')).lower())
+        if override is None:
+            continue
+        if override is _CHAR_SET_CLEARED:
+            # Omitted rather than sent as null: that is how a column with no character set
+            # is represented in the entity payload.
+            col.pop('charSet', None)
+            logger.info(f"Column '{col.get('name')}'{f' of table {table_name}' if table_name else ''}: charSet cleared by YAML")
+        else:
+            col['charSet'] = override
+            logger.info(f"Column '{col.get('name')}'{f' of table {table_name}' if table_name else ''}: charSet overridden to '{override}' by YAML")
 
 
 def _is_target_known_type(data_type, target_node_info):
@@ -1162,6 +1234,14 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     }, col))
             logger.debug(f"Using primary keys for {table_name}: {keys}")
 
+        # Apply the charSet declared in the YAML on the source columns. Done here, on the
+        # already built list, so it covers every shape it can be built from: explicit
+        # mappings, whitelist or plain discovery. Only the source entity's columns are
+        # patched: `keys` feeds the target table creation below, where a source-side
+        # character set has no business.
+        char_set_overrides = _build_char_set_overrides((custom_config or {}).get('columns', []))
+        _apply_char_set_overrides(columns_def, char_set_overrides, table_name)
+
         if not keys:
             logger.warning(f"Warning: No keys specified for {table_name}. Table will have no keys.")
 
@@ -2165,6 +2245,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         "dataType": col.get("dataType")
                     }, col))
 
+        char_set_overrides = _build_char_set_overrides((custom_config or {}).get('columns', []))
+        _apply_char_set_overrides(columns_def, char_set_overrides, yaml_table_key)
+
         if not keys:
             logger.warning(f"No keys specified for duplicate table {yaml_table_key}")
 
@@ -2618,6 +2701,15 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             },
                             "type": col.get("dataType")
                         }, col))
+
+            # Apply the charSet declared in the YAML on this component's source columns.
+            # table_columns is already referenced by multi_columns, so patching it in place
+            # is enough.
+            _apply_char_set_overrides(
+                table_columns,
+                _build_char_set_overrides((custom_config or {}).get('columns', [])),
+                table_key
+            )
 
             # Add keys for this table
             multi_keys.append(_enrich_column({

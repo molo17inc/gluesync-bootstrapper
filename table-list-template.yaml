@@ -297,11 +297,19 @@ dbo:
         #   2. Explicit form:      - source: SOURCE_NAME
         #                            target: target_name
         #                            targetDataType: <native target type>   # OPTIONAL OVERRIDE
+        #                            charSet: <source character set>        # OPTIONAL OVERRIDE
         # The optional `targetDataType` key forces a specific target-side native data type,
         # bypassing the automatic mapping derived from the source/target dataTypesMatrix.
         # Use it when the target agent does not advertise a mapping for the source's
         # gluesyncDataType (e.g. Kafka rejecting `timestamp with time zone`, or Vertica
         # rejecting `double precision`) and you want to declare a valid alternative.
+        # The optional `charSet` key sets the character set of the SOURCE column, i.e. the
+        # one the data is read with. Source agents publish there the character set the
+        # column declares — its CCSID as a decimal string on AS400 (Db2 for i) — and
+        # declaring a different value here is the YAML equivalent of editing it from the UI:
+        # the column is then read with the declared character set instead. An explicit
+        # `charSet: null` clears the discovered value, which is not the same as omitting the
+        # key (omitting it keeps whatever the source published).
         # Note: the shorthand format cannot carry overrides — switch to the explicit form.
         columns:
           - VEHICLE_ID: "id"
@@ -310,6 +318,9 @@ dbo:
           - source: REGISTRATION_DATE
             target: registrationDate
             targetDataType: varchar(50)   # force target column to be VARCHAR(50)
+          - source: PLATE
+            target: plate
+            charSet: "280"                # read the source column with CCSID 280
         # Entity-level schedule configurations
         schedules:
           - name: "Weekly vehicles snapshot"
