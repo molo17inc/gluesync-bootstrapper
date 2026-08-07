@@ -50,6 +50,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from commons import extract_all_schemas_from_yaml, extract_schema_types_from_yaml
 from . import corehub
+from .corehub import PipelineInMaintenanceError
 from .state import state
 from .version import get_version
 
@@ -947,6 +948,9 @@ def create_app() -> FastAPI:
                 include_secrets=include_secrets,
                 chronos_token=state.chronos_token,
             )
+        except PipelineInMaintenanceError as exc:
+            logger.info("Pipeline %s skipped from backup: %s", pipeline_id, exc)
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except Exception as exc:  # pylint: disable=broad-except
             logger.exception("Failed to export pipeline %s", pipeline_id)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -978,6 +982,9 @@ def create_app() -> FastAPI:
                 include_secrets=include_secrets,
                 chronos_token=state.chronos_token,
             )
+        except PipelineInMaintenanceError as exc:
+            logger.info("Pipeline %s skipped from full backup: %s", pipeline_id, exc)
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except Exception as exc:  # pylint: disable=broad-except
             logger.exception("Failed to export full backup for pipeline %s", pipeline_id)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
