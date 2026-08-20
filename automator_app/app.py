@@ -1587,26 +1587,6 @@ def create_app() -> FastAPI:
                                         f"Successfully uploaded {cert_type} certificate ({len(cert_data)} bytes) "
                                         f"for agent {agent_id} in pipeline {new_pipeline_id}"
                                     )
-                                    
-                                    # Now send credentials AFTER certificate upload
-                                    host_creds = agent_cfg.get("_host_credentials")
-                                    custom_host_creds = agent_cfg.get("_custom_host_credentials")
-                                    if host_creds is not None or custom_host_creds is not None:
-                                        logger.info(
-                                            f"Sending credentials for agent {agent_id} after certificate upload"
-                                        )
-                                        corehub.fetch_core_hub(
-                                            f"/pipelines/{new_pipeline_id}/agents/{agent_id}/config/credentials",
-                                            method="PUT",
-                                            token=state.token,
-                                            body={
-                                                "hostCredentials": host_creds or {},
-                                                "customHostCredentials": custom_host_creds or {},
-                                            },
-                                        )
-                                        logger.info(
-                                            f"Successfully sent credentials for agent {agent_id}"
-                                        )
                             except Exception as cert_exc:  # pylint: disable=broad-except
                                 logger.exception(
                                     "Failed to upload certificate for agent %s in pipeline %s",
