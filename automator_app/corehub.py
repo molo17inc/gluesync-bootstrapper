@@ -2916,30 +2916,25 @@ def import_pipeline_config_only(
         certificate_path = host_credentials.pop("certificatePath", None)
         certificate_type = host_credentials.pop("certificateType", None)
         
-        # Store certificate info and credentials for later processing
-        # IMPORTANT: If certificate is present, credentials MUST be sent AFTER certificate upload
-        # Order: 1. Add agent, 2. Upload certificate, 3. Send credentials
+        # CoreHub 2.2.11.1+ requires a connection before certificate upload.
+        # Always PUT credentials first; stash cert metadata for the ZIP extract step.
+        fetch_core_hub(
+            f"/pipelines/{pipeline_id}/agents/{agent_id}/config/credentials",
+            method="PUT",
+            token=token,
+            body={
+                "hostCredentials": host_credentials,
+                "customHostCredentials": custom_host_credentials,
+            },
+        )
+
         if certificate_path and certificate_type:
             logger.info(
-                f"Agent {agent_id} has certificate - deferring credential upload until after certificate"
+                f"Agent {agent_id} has certificate - credentials uploaded first; cert-store follows"
             )
             conf_agent["_certificate_path"] = certificate_path
             conf_agent["_certificate_type"] = certificate_type
             conf_agent["_agent_id"] = agent_id
-            # Store credentials to send later (after certificate upload)
-            conf_agent["_host_credentials"] = host_credentials
-            conf_agent["_custom_host_credentials"] = custom_host_credentials
-        else:
-            # No certificate - send credentials immediately
-            fetch_core_hub(
-                f"/pipelines/{pipeline_id}/agents/{agent_id}/config/credentials",
-                method="PUT",
-                token=token,
-                body={
-                    "hostCredentials": host_credentials,
-                    "customHostCredentials": custom_host_credentials,
-                },
-            )
 
         # Apply specific configuration if present
         specific_conf = conf_agent.get("specificConfiguration") or {}

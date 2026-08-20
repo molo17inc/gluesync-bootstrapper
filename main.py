@@ -42,7 +42,7 @@ from utils.log import get_logger, create_log_file, log_success, log_failure, loc
 from utils.gluesync_sdk_client import initialize_gluesync_sdk, get_token, get_gluesync_client
 from utils.core_hub_client import CoreHubClient
 from utils.transactions_audit_client import TransactionsAuditClient
-from commons import extract_schemas_from_yaml, extract_all_schemas_from_yaml, extract_schema_types_from_yaml, configure_core_hub
+from commons import extract_schemas_from_yaml, extract_all_schemas_from_yaml, extract_schema_types_from_yaml, configure_core_hub, apply_agent_host_credentials_and_certificate
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -1113,43 +1113,13 @@ def main():
     logger.info(f"Prepared {len(agents_to_conf)} agents for configuration")
     logger.debug(f"Filtered agents: {json.dumps(agents_to_conf, indent=2)}")
 
-    # Apply agent host credentials
+    # Apply agent host credentials, then certificate (Hub requires a connection first)
     for agent in agents_to_conf:
-        if 'agentId' not in agent:
-            logger.warning(f"Agent missing 'agentId' field: {agent}")
-            continue
-
-        host_credentials = dict(agent['hostCredentials']) if agent['hostCredentials'] else {}
-        custom_host_credentials = agent['customHostCredentials']
-        certificate_path = host_credentials.pop('certificatePath', None)
-        certificate_type = host_credentials.pop('certificateType', None)
-
-        # Upload certificate first (if present)
-        if certificate_path and certificate_type:
-            try:
-                upload_agent_certificate(
-                    token=token,
-                    pipeline_id=pipeline_id,
-                    agent_id=agent['agentId'],
-                    certificate_type=certificate_type,
-                    certificate_path=certificate_path,
-                )
-            except Exception as cert_error:
-                log_failure(
-                    logger,
-                    f"Failed to upload certificate for agent {agent['agentId']}: {cert_error}"
-                )
-                raise
-
-        # Then upload credentials
-        fetch_core_hub(
-            f"/pipelines/{pipeline_id}/agents/{agent['agentId']}/config/credentials",
-            method='PUT',
+        apply_agent_host_credentials_and_certificate(
             token=token,
-            body={
-                'hostCredentials': host_credentials,
-                'customHostCredentials': custom_host_credentials
-            }
+            pipeline_id=pipeline_id,
+            agent=agent,
+            upload_certificate_fn=upload_agent_certificate,
         )
 
     # Apply agent specific configuration
