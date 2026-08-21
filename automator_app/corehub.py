@@ -73,6 +73,15 @@ logger = logging.getLogger(__name__)
 class DuplicateCancelledError(RuntimeError):
     """Raised when a duplicate pipeline request is cancelled by the user."""
 
+
+class PipelineInMaintenanceError(RuntimeError):
+    """Raised when a backup is requested for a pipeline that is in maintenance mode.
+
+    A pipeline in maintenance mode has its agents suspended and its entities
+    stopped, so its configuration cannot be reliably exported. The pipeline
+    must be skipped from any backup operation until maintenance is exited.
+    """
+
 _AGENT_TYPE_BY_NAME: Optional[Dict[str, str]] = None
 
 def _get_agents_file_path() -> str:
@@ -857,15 +866,51 @@ def list_pipelines(
             pid = str(raw_id)
             name = item.get("name")
             description = item.get("description")
+            # CoreHub exposes the maintenance state as isInMaintenanceMode on the
+            # pipeline response. Older CoreHub builds may omit the field; treat
+            # absence as "not in maintenance" so we never skip a healthy pipeline.
+            in_maintenance = bool(item.get("isInMaintenanceMode", False))
             pipelines.append(
                 {
                     "id": pid,
                     "name": str(name) if name is not None else None,
                     "description": str(description) if description is not None else None,
+                    "isInMaintenanceMode": in_maintenance,
                 }
             )
 
     return pipelines
+
+
+def get_pipeline_maintenance_state(
+    *,
+    token: str,
+    base_url: str,
+    pipeline_id: str,
+    use_ssl: Optional[bool],
+    skip_verify: Optional[bool],
+) -> bool:
+    """Return True when the given pipeline is currently in maintenance mode.
+
+    Falls back to False when the field is missing (older CoreHub builds) or the
+    pipeline metadata cannot be fetched, so a transient lookup failure never
+    blocks a backup that would otherwise succeed.
+    """
+
+    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+    try:
+        response = fetch_core_hub(f"/pipelines/{pipeline_id}", token=token)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning(
+            "Could not determine maintenance state for pipeline %s (assuming "
+            "not in maintenance): %s",
+            pipeline_id,
+            exc,
+        )
+        return False
+    if isinstance(response, dict):
+        return bool(response.get("isInMaintenanceMode", False))
+    return False
 
 
 def get_environment_summary(
@@ -1026,6 +1071,25 @@ def export_pipeline_yaml(
 
     configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
 
+    # Refuse to export a pipeline that is in maintenance mode: its agents are
+    # suspended and entities stopped, so the exported configuration would be
+    # incomplete/unreliable. The caller is expected to surface a clear message.
+    if get_pipeline_maintenance_state(
+        token=token,
+        base_url=base_url,
+        pipeline_id=pipeline_id,
+        use_ssl=use_ssl,
+        skip_verify=skip_verify,
+    ):
+        logger.info(
+            "Refusing to export pipeline %s: it is currently in maintenance mode.",
+            pipeline_id,
+        )
+        raise PipelineInMaintenanceError(
+            f"Pipeline {pipeline_id} is currently in maintenance mode and cannot "
+            "be backed up. Exit maintenance mode on CoreHub and try again."
+        )
+
     entities = fetch_pipeline_entities(token, pipeline_id)
     entities_by_id = build_entities_maps(entities)
     group_id_to_name, _, groups_by_name = fetch_groups_map(token, pipeline_id)
@@ -1156,6 +1220,22 @@ def export_pipeline_full_backup(
         name = response.get("name")
         if isinstance(name, str) and name:
             pipeline_name = name
+        # A pipeline in maintenance mode has suspended agents and stopped
+        # entities, so its configuration cannot be exported reliably. Refuse
+        # the backup with a clear message instead of producing an incomplete
+        # archive.
+        if bool(response.get("isInMaintenanceMode", False)):
+            logger.info(
+                "Refusing to export full backup for pipeline %s (%s): it is "
+                "currently in maintenance mode.",
+                pipeline_name,
+                pipeline_id,
+            )
+            raise PipelineInMaintenanceError(
+                f"Pipeline {pipeline_name} ({pipeline_id}) is currently in "
+                "maintenance mode and cannot be backed up. Exit maintenance "
+                "mode on CoreHub and try again."
+            )
 
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
@@ -1475,9 +1555,27 @@ def export_all_pipelines_yaml(
         # Key: (pipeline_id, udf_name) -> {"name": str, "type": Optional[Any]}
         udfs_to_export: Dict[tuple[str, str], Dict[str, Any]] = {}
 
+        skipped_maintenance: list[str] = []
+
         for pipeline in pipelines:
             pipeline_id = pipeline['id']
             pipeline_name = pipeline.get('name', pipeline_id)
+
+            # Pipelines in maintenance mode have their agents suspended and
+            # entities stopped, so their configuration cannot be exported
+            # reliably. Skip them from the backup and leave a clear trace in
+            # the logs so operators know why a pipeline is missing.
+            if pipeline.get("isInMaintenanceMode"):
+                logger.info(
+                    "Skipping pipeline %s (%s): it is currently in maintenance "
+                    "mode and has been excluded from the backup.",
+                    pipeline_name,
+                    pipeline_id,
+                )
+                skipped_maintenance.append(
+                    f"{pipeline_name} ({pipeline_id})"
+                )
+                continue
 
             pipeline_meta: Dict[str, Any] = {
                 "pipelineId": pipeline_id,
@@ -1754,6 +1852,35 @@ def export_all_pipelines_yaml(
 
             # Store source code as UTF-8 text inside the ZIP
             zip_file.writestr(udf_filename, code.encode("utf-8"))
+
+        # Leave a clear, human-readable trace of any pipeline that was excluded
+        # from the backup because it was in maintenance mode. This makes the
+        # skip visible to operators who inspect the backup archive without
+        # having to dig through server logs.
+        if skipped_maintenance:
+            skipped_lines = [
+                "# The following pipelines were in maintenance mode at backup "
+                "# time and have been excluded from this archive.",
+                "# Exit maintenance mode on CoreHub and run the backup again to "
+                "# include them.",
+                "",
+            ]
+            skipped_lines.extend(f"- {name}" for name in skipped_maintenance)
+            zip_file.writestr(
+                "skipped-maintenance-pipelines.txt",
+                ("\n".join(skipped_lines) + "\n").encode("utf-8"),
+            )
+            logger.warning(
+                "Backup completed but %d pipeline(s) were skipped because they "
+                "are in maintenance mode: %s",
+                len(skipped_maintenance),
+                ", ".join(skipped_maintenance),
+            )
+        else:
+            logger.info(
+                "Backup completed: %d pipeline(s) exported, none in maintenance mode.",
+                len(pipelines_meta),
+            )
 
     zip_buffer.seek(0)
     return zip_buffer.read()

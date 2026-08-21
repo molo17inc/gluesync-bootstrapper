@@ -335,6 +335,110 @@ class ExportAllPipelinesYamlTests(unittest.TestCase):
         self.assertTrue(has_agents, f"Expected agents-config.yaml in ZIP, got: {namelist}")
 
 
+class MaintenanceModeSkipTests(unittest.TestCase):
+    """Pipelines in maintenance mode must be skipped/excluded from backups."""
+
+    def _bulk_mocks(self, pipelines_payload, entities_by_pid):
+        import automator_app.corehub as corehub
+
+        def fake_fetch(path, **kwargs):
+            routes = {"/pipelines": pipelines_payload}
+            # per-pipeline detail endpoint
+            for p in pipelines_payload:
+                pid = p.get("pipelineId") or p.get("id") or p.get("pipeline_id")
+                routes[f"/pipelines/{pid}"] = p
+            return routes.get(path, {})
+
+        def fetch_entities(token, pipeline_id):
+            return entities_by_pid.get(pipeline_id, [])
+
+        def get_agents(token, pipeline_id):
+            return []
+
+        return (
+            mock.patch.object(corehub, "fetch_pipeline_entities", side_effect=fetch_entities),
+            mock.patch.object(corehub, "build_entities_maps", side_effect=lambda ent: {e["entityId"]: e for e in ent}),
+            mock.patch.object(corehub, "fetch_groups_map", return_value=({}, {}, {})),
+            mock.patch.object(corehub, "fetch_pipeline_jobs", return_value=[]),
+            mock.patch.object(corehub, "infer_agent_schema_types", return_value=("SQL", "SQL")),
+            mock.patch.object(corehub, "enrich_null_column_types_from_discovery", return_value=0),
+            mock.patch.object(corehub, "get_pipeline_agents", side_effect=get_agents),
+            mock.patch.object(corehub, "fetch_core_hub", side_effect=fake_fetch),
+        )
+
+    def test_bulk_export_skips_maintenance_pipelines(self):
+        import automator_app.corehub as corehub
+
+        pipelines_payload = [
+            {"pipelineId": "p1", "name": "PipeOne"},
+            {"pipelineId": "p2", "name": "PipeTwo", "isInMaintenanceMode": True},
+        ]
+        entities_by_pid = {"p1": [_simple_entity("A", "s1")], "p2": [_simple_entity("B", "s2")]}
+
+        mocks = self._bulk_mocks(pipelines_payload, entities_by_pid)
+        with mocks[0], mocks[1], mocks[2], mocks[3], mocks[4], mocks[5], mocks[6], mocks[7]:
+            zip_bytes = corehub.export_all_pipelines_yaml(
+                token="tok", base_url="http://test",
+                use_ssl=False, skip_verify=False,
+            )
+
+        with io.BytesIO(zip_bytes) as buf:
+            with zipfile.ZipFile(buf, "r") as zf:
+                namelist = zf.namelist()
+
+        # p1 (healthy) is exported, p2 (maintenance) is excluded.
+        self.assertTrue(any("_p1_" in n for n in namelist), f"p1 should be exported: {namelist}")
+        self.assertFalse(any("_p2_" in n for n in namelist), f"p2 should be skipped: {namelist}")
+        # A manifest of skipped pipelines is included for traceability.
+        self.assertIn("skipped-maintenance-pipelines.txt", namelist)
+        with io.BytesIO(zip_bytes) as buf:
+            with zipfile.ZipFile(buf, "r") as zf:
+                manifest = zf.read("skipped-maintenance-pipelines.txt").decode("utf-8")
+        self.assertIn("PipeTwo (p2)", manifest)
+
+    def test_single_pipeline_yaml_raises_on_maintenance(self):
+        import automator_app.corehub as corehub
+
+        with mock.patch.object(corehub, "fetch_core_hub", return_value={
+            "pipelineId": "p1", "name": "PipeOne", "isInMaintenanceMode": True,
+        }):
+            with self.assertRaises(corehub.PipelineInMaintenanceError):
+                corehub.export_pipeline_yaml(
+                    token="tok", base_url="http://test", pipeline_id="p1",
+                    use_ssl=False, skip_verify=False,
+                )
+
+    def test_single_pipeline_full_backup_raises_on_maintenance(self):
+        import automator_app.corehub as corehub
+
+        with mock.patch.object(corehub, "fetch_core_hub", return_value={
+            "pipelineId": "p1", "name": "PipeOne", "isInMaintenanceMode": True,
+        }):
+            with self.assertRaises(corehub.PipelineInMaintenanceError):
+                corehub.export_pipeline_full_backup(
+                    token="tok", base_url="http://test", pipeline_id="p1",
+                    use_ssl=False, skip_verify=False,
+                )
+
+    def test_single_pipeline_yaml_exports_when_not_in_maintenance(self):
+        import automator_app.corehub as corehub
+
+        entities = [_simple_entity("A", "s1")]
+        with mock.patch.object(corehub, "fetch_core_hub", return_value={
+            "pipelineId": "p1", "name": "PipeOne", "isInMaintenanceMode": False,
+        }), mock.patch.object(corehub, "fetch_pipeline_entities", return_value=entities), \
+             mock.patch.object(corehub, "build_entities_maps", side_effect=lambda ent: {e["entityId"]: e for e in ent}), \
+             mock.patch.object(corehub, "fetch_groups_map", return_value=({}, {}, {})), \
+             mock.patch.object(corehub, "fetch_pipeline_jobs", return_value=[]), \
+             mock.patch.object(corehub, "infer_agent_schema_types", return_value=("SQL", "SQL")), \
+             mock.patch.object(corehub, "enrich_null_column_types_from_discovery", return_value=0):
+            yaml_text = corehub.export_pipeline_yaml(
+                token="tok", base_url="http://test", pipeline_id="p1",
+                use_ssl=False, skip_verify=False,
+            )
+        self.assertIn("exportMetadata", yaml_text)
+
+
 class ExportGlobalConfigsTests(unittest.TestCase):
     """Verify export_global_configs fetches all global config endpoints."""
 
