@@ -221,56 +221,6 @@ def fetch_core_hub(path, method='GET', token=None, body=None, params=None, heade
         raise RuntimeError(message) from e
 
 
-def apply_agent_host_credentials_and_certificate(
-    *,
-    token: str,
-    pipeline_id: str,
-    agent: dict,
-    upload_certificate_fn,
-) -> None:
-    """Upload agent connection credentials, then optional certificate.
-
-    CoreHub 2.2.11.1+ rejects certificate uploads when the agent has no
-    connection configured: "configure its credentials before uploading a
-    certificate". certificatePath / certificateType are Hub upload metadata
-    and must be stripped from hostCredentials before the credentials PUT.
-    """
-    if "agentId" not in agent:
-        logger.warning("Agent missing 'agentId' field: %s", agent)
-        return
-
-    host_credentials = dict(agent["hostCredentials"]) if agent.get("hostCredentials") else {}
-    custom_host_credentials = agent.get("customHostCredentials")
-    certificate_path = host_credentials.pop("certificatePath", None)
-    certificate_type = host_credentials.pop("certificateType", None)
-
-    fetch_core_hub(
-        f"/pipelines/{pipeline_id}/agents/{agent['agentId']}/config/credentials",
-        method="PUT",
-        token=token,
-        body={
-            "hostCredentials": host_credentials,
-            "customHostCredentials": custom_host_credentials,
-        },
-    )
-
-    if certificate_path and certificate_type:
-        try:
-            upload_certificate_fn(
-                token=token,
-                pipeline_id=pipeline_id,
-                agent_id=agent["agentId"],
-                certificate_type=certificate_type,
-                certificate_path=certificate_path,
-            )
-        except Exception as cert_error:
-            log_failure(
-                logger,
-                f"Failed to upload certificate for agent {agent['agentId']}: {cert_error}",
-            )
-            raise
-
-
 def generate_short_guid():
     return str(uuid.uuid4()).split('-')[0]
 
