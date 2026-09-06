@@ -4,7 +4,7 @@ This module implements three invocation modes:
 
 - API Gateway POST /convert:
     * Parses multipart/form-data with the uploaded XML (and optional template).
-    * Stages the raw payload on the existing FTP server.
+    * Stages the raw payload on the S3 downloads bucket (optional FTP dual-write).
     * Enqueues a job on SQS and creates/updates a DynamoDB job record.
     * Returns a fast HTTP 200 with {status: "queued", job_id: "..."}.
 
@@ -12,9 +12,9 @@ This module implements three invocation modes:
     * Returns the current job status from DynamoDB.
 
 - SQS-triggered worker:
-    * Downloads staged XML/template from FTP.
+    * Downloads staged XML/template from S3.
     * Runs the existing conversion pipeline (parse_xml/export_as_yaml/write_conversion_report).
-    * Creates the ZIP, uploads it to FTP, and updates the DynamoDB job record.
+    * Creates the ZIP, uploads it to S3, and updates the DynamoDB job record.
 """
 
 # This program is part of Gluesync.
@@ -245,72 +245,89 @@ def create_output_zip(output_dir, temp_dir):
     return zip_path
 
 
-def upload_to_ftp(local_path, remote_filename):
-    """Upload a file to the FTP server and return its FTP URL."""
+def _s3_client():
+    return boto3.client("s3")
+
+
+def _s3_bucket_and_key(remote_filename):
+    bucket = os.environ.get("DOWNLOADS_S3_BUCKET", "molo17-website-downloads-162172359273")
+    prefix = os.environ.get("DOWNLOADS_S3_PREFIX", "gs-content/dbmoto-conversion").strip("/")
+    key = f"{prefix}/{remote_filename}" if prefix else remote_filename
+    return bucket, key
+
+
+def _upload_to_ftp_legacy(local_path, remote_filename):
+    """Optional SiteGround FTP dual-write (DUAL_WRITE_SG=1)."""
     ftp_host = os.environ.get("FTP_HOST")
     ftp_user = os.environ.get("FTP_USER")
     ftp_password = os.environ.get("FTP_PASSWORD")
-    ftp_base_path = os.environ.get("FTP_BASE_PATH", "/molo17.com/public_html/gs-content/dbmoto-conversion/")
+    ftp_base_path = os.environ.get(
+        "FTP_BASE_PATH", "/molo17.com/public_html/gs-content/dbmoto-conversion/"
+    )
 
     if not all([ftp_host, ftp_user, ftp_password]):
         raise ValueError(
             "FTP credentials not configured. Please set FTP_HOST, FTP_USER, and FTP_PASSWORD environment variables."
         )
 
+    ftp = ftplib.FTP(ftp_host, ftp_user, ftp_password)
+    ftp.voidcmd("TYPE I")
+
     try:
-        ftp = ftplib.FTP(ftp_host, ftp_user, ftp_password)
-        ftp.voidcmd("TYPE I")
+        ftp.cwd(ftp_base_path)
+    except ftplib.error_perm:
+        parts = ftp_base_path.strip("/").split("/")
+        current_path = ""
+        for part in parts:
+            current_path += "/" + part
+            try:
+                ftp.cwd(current_path)
+            except ftplib.error_perm:
+                ftp.mkd(current_path)
+                ftp.cwd(current_path)
 
-        try:
-            ftp.cwd(ftp_base_path)
-        except ftplib.error_perm:
-            parts = ftp_base_path.strip("/").split("/")
-            current_path = ""
-            for part in parts:
-                current_path += "/" + part
-                try:
-                    ftp.cwd(current_path)
-                except ftplib.error_perm:
-                    ftp.mkd(current_path)
-                    ftp.cwd(current_path)
+    with open(local_path, "rb") as f:
+        ftp.storbinary(f"STOR {remote_filename}", f)
 
-        with open(local_path, "rb") as f:
-            ftp.storbinary(f"STOR {remote_filename}", f)
+    ftp.quit()
+    return f"ftp://{ftp_host}{ftp_base_path}{remote_filename}"
 
-        ftp.quit()
 
-        return f"ftp://{ftp_host}{ftp_base_path}{remote_filename}"
+def upload_to_ftp(local_path, remote_filename):
+    """Upload artifact to S3 downloads bucket (primary). Optional FTP dual-write.
 
+    Kept name upload_to_ftp for call-site compatibility; returns public HTTPS URL.
+    """
+    bucket, key = _s3_bucket_and_key(remote_filename)
+    try:
+        _s3_client().upload_file(local_path, bucket, key)
+        print(f"Uploaded s3://{bucket}/{key}")
     except Exception as e:
-        error_msg = f"FTP upload failed: {str(e)}"
+        error_msg = f"S3 upload failed: {str(e)}"
         print(error_msg)
         raise Exception(error_msg)
 
+    ftp_url = None
+    if os.environ.get("DUAL_WRITE_SG", "0") == "1":
+        try:
+            ftp_url = _upload_to_ftp_legacy(local_path, remote_filename)
+            print(f"Dual-wrote to FTP: {ftp_url}")
+        except Exception as e:
+            # S3 succeeded; surface FTP failure but do not fail the job
+            print(f"WARNING: DUAL_WRITE_SG FTP upload failed: {e}")
+
+    public_url = f"https://molo17.com/{key}"
+    return public_url if ftp_url is None else public_url
+
 
 def download_from_ftp(remote_filename, local_path):
-    """Download a file from the FTP server to local_path."""
-    ftp_host = os.environ.get("FTP_HOST")
-    ftp_user = os.environ.get("FTP_USER")
-    ftp_password = os.environ.get("FTP_PASSWORD")
-    ftp_base_path = os.environ.get("FTP_BASE_PATH", "/molo17.com/public_html/gs-content/dbmoto-conversion/")
-
-    if not all([ftp_host, ftp_user, ftp_password]):
-        raise ValueError(
-            "FTP credentials not configured. Please set FTP_HOST, FTP_USER, and FTP_PASSWORD environment variables."
-        )
-
+    """Download artifact from S3 downloads bucket (primary). FTP name kept for compatibility."""
+    bucket, key = _s3_bucket_and_key(remote_filename)
     try:
-        ftp = ftplib.FTP(ftp_host, ftp_user, ftp_password)
-        ftp.voidcmd("TYPE I")
-        ftp.cwd(ftp_base_path)
-
-        with open(local_path, "wb") as f:
-            ftp.retrbinary(f"RETR {remote_filename}", f.write)
-
-        ftp.quit()
-
+        _s3_client().download_file(bucket, key, local_path)
+        print(f"Downloaded s3://{bucket}/{key} -> {local_path}")
     except Exception as e:
-        error_msg = f"FTP download failed: {str(e)}"
+        error_msg = f"S3 download failed: {str(e)}"
         print(error_msg)
         raise Exception(error_msg)
 
@@ -404,10 +421,12 @@ def _run_conversion_job(xml_content, filename, template_content, include_targets
         zip_path = create_output_zip(output_dir, temp_dir)
 
         request_id = job_id or getattr(context, "aws_request_id", "unknown")
-        base_url = "https://molo17.com/gs-content/dbmoto-conversion/"
+        prefix = os.environ.get("DOWNLOADS_S3_PREFIX", "gs-content/dbmoto-conversion").strip("/")
+        base_url = f"https://molo17.com/{prefix}/"
 
         zip_filename = f"conversion_{request_id}.zip"
-        ftp_url = upload_to_ftp(zip_path, zip_filename)
+        # Primary publish is S3; function name retained for compatibility
+        storage_url = upload_to_ftp(zip_path, zip_filename)
         public_url = urljoin(base_url, zip_filename)
 
         stats = {
@@ -426,13 +445,13 @@ def _run_conversion_job(xml_content, filename, template_content, include_targets
             "message": f"Successfully processed {exported_count} YAML files",
             "request_id": request_id,
             "download_url": public_url,
-            "ftp_path": ftp_url,
+            "ftp_path": storage_url,  # public HTTPS (S3-backed); legacy field name
             "stats": stats,
         }
 
 
 def _handle_submit_request(event, context):
-    """Handle API Gateway POST /convert: stage XML to FTP, enqueue SQS job, create DDB record."""
+    """Handle API Gateway POST /convert: stage XML to S3, enqueue SQS job, create DDB record."""
     headers = event.get("headers", {}) or {}
     content_type = headers.get("content-type") or headers.get("Content-Type", "")
 

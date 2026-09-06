@@ -20,7 +20,23 @@ Parameters:
   FtpBasePath:
     Type: String
     Default: '/molo17.com/public_html/gs-content/dbmoto-conversion/'
-    Description: 'Base path on FTP server for uploads'
+    Description: 'Legacy SiteGround FTP base path (used only when DualWriteSg=1)'
+
+  DownloadsS3Bucket:
+    Type: String
+    Default: 'molo17-website-downloads-162172359273'
+    Description: 'S3 downloads bucket for conversion artifacts (primary publish target)'
+
+  DownloadsS3Prefix:
+    Type: String
+    Default: 'gs-content/dbmoto-conversion'
+    Description: 'S3 key prefix for DbMoto conversion artifacts (no leading/trailing slash required)'
+
+  DualWriteSg:
+    Type: String
+    Default: '0'
+    AllowedValues: ['0', '1']
+    Description: 'Also write to SiteGround FTP when 1 (default S3-only)'
 
   CustomDomainName:
     Type: String
@@ -61,6 +77,24 @@ Resources:
                   - dynamodb:UpdateItem
                   - dynamodb:GetItem
                 Resource: !GetAtt JobsTable.Arn
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                Resource: !Sub 'arn:aws:s3:::${DownloadsS3Bucket}'
+                Condition:
+                  StringLike:
+                    s3:prefix:
+                      - !Sub '${DownloadsS3Prefix}'
+                      - !Sub '${DownloadsS3Prefix}/*'
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:AbortMultipartUpload
+                  - s3:ListMultipartUploadParts
+                Resource: !Sub 'arn:aws:s3:::${DownloadsS3Bucket}/${DownloadsS3Prefix}/*'
 
   # Lambda function
   ConversionLambda:
@@ -79,6 +113,9 @@ Resources:
           FTP_USER: !Ref FtpUser
           FTP_PASSWORD: !Ref FtpPassword
           FTP_BASE_PATH: !Ref FtpBasePath
+          DOWNLOADS_S3_BUCKET: !Ref DownloadsS3Bucket
+          DOWNLOADS_S3_PREFIX: !Ref DownloadsS3Prefix
+          DUAL_WRITE_SG: !Ref DualWriteSg
           SQS_QUEUE_URL: !Ref JobsQueue
           DDB_TABLE_NAME: !Ref JobsTable
       Role: !GetAtt LambdaExecutionRole.Arn
@@ -227,8 +264,14 @@ Outputs:
     Value: !Ref ConversionLambda
 
   FtpBasePath:
-    Description: Base path for FTP uploads
+    Description: Legacy SiteGround FTP base path (DualWriteSg only)
     Value: !Ref FtpBasePath
+  DownloadsS3Bucket:
+    Description: S3 downloads bucket for conversion artifacts
+    Value: !Ref DownloadsS3Bucket
+  DownloadsS3Prefix:
+    Description: S3 key prefix for DbMoto conversion artifacts
+    Value: !Ref DownloadsS3Prefix
 
   JobsQueueUrl:
     Description: URL of the SQS queue used for async conversion jobs
