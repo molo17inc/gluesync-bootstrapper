@@ -80,6 +80,7 @@ class AutomatorState:
                 return None
 
             from utils.gluesync_sdk_client import get_token, initialize_gluesync_sdk
+from utils.mcp_token_file import remove_mcp_token_file, write_mcp_token_file
 
             # Set env vars for SDK initialization
             _os.environ["CORE_HUB_URL"] = base_url
@@ -105,32 +106,22 @@ class AutomatorState:
         use_ssl: Optional[bool],
         skip_verify: Optional[bool],
     ) -> None:
-        """Write authentication credentials to a file for MCP server (stdio transport)."""
+        """Write authentication credentials for MCP stdio to a user-private path."""
         try:
-            # Write to project directory so stdio transport can find it without
-            # relying on the HOME env var (which Claude Desktop doesn't pass).
-            import os
-            cwd = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            token_file = Path(cwd) / ".gluesync_mcp_token"
-            with open(token_file, "w") as f:
-                f.write(f"{token}\n")
-                f.write(f"{base_url}\n")
-                if use_ssl is not None:
-                    f.write(f"SSL_ENABLED={use_ssl}\n")
-                if skip_verify is not None:
-                    f.write(f"SSL_SKIP_VERIFY={skip_verify}\n")
+            lines = [f"{token}\n", f"{base_url}\n"]
+            if use_ssl is not None:
+                lines.append(f"SSL_ENABLED={use_ssl}\n")
+            if skip_verify is not None:
+                lines.append(f"SSL_SKIP_VERIFY={skip_verify}\n")
+            write_mcp_token_file("".join(lines))
         except Exception:
             # Silently fail - this is optional
             pass
 
     def _remove_token_file(self) -> None:
-        """Remove the token file on logout."""
+        """Remove the private MCP token file on logout."""
         try:
-            import os
-            cwd = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            token_file = Path(cwd) / ".gluesync_mcp_token"
-            if token_file.exists():
-                token_file.unlink()
+            remove_mcp_token_file()
         except Exception:
             # Silently fail
             pass

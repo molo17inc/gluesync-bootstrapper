@@ -48,3 +48,6 @@ automator_app/static/app.*.js
 !automator_app/static/app.js
 automator_app/static/styles.*.css
 !automator_app/static/styles.css
+
+# Automator/MCP runtime credentials (never commit)
+.gluesync_mcp_token

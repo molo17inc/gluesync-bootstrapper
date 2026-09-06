@@ -28,7 +28,8 @@ Transports
 
 Authentication
 ~~~~~~~~~~~~~~
-Pass ``token`` in each tool call, or set ``COREHUB_TOKEN`` env var.
+Pass ``token`` in each tool call, set ``COREHUB_TOKEN``, or authenticate via
+Automator (token file under a user-private path, never the repo root).
 """
 
 from __future__ import annotations
@@ -38,6 +39,8 @@ import logging
 import os
 import sys
 from pathlib import Path
+
+from utils.mcp_token_file import mcp_token_file_path
 from typing import Any, Dict, List, Optional, Sequence
 
 import mcp.types as types
@@ -59,11 +62,9 @@ def set_token_provider(provider: callable) -> None:
     _token_provider = provider
 
 def _read_token_from_file() -> Optional[str]:
-    """Read token from .gluesync_mcp_token in the project root (written by Automator)."""
+    """Read token from the user-private path written by Automator login."""
     try:
-        # Resolve relative to this file's location: <project_root>/mcp_server/server.py
-        # (Claude Desktop ignores the cwd config option and runs the process from /)
-        token_file = Path(__file__).resolve().parent.parent / ".gluesync_mcp_token"
+        token_file = mcp_token_file_path()
         logger.info("Looking for token file at: %s (exists=%s)", token_file, token_file.exists())
         if token_file.exists():
             with open(token_file, "r") as f:
