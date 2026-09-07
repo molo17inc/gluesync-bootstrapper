@@ -71,7 +71,9 @@ def write_mcp_token_file(contents: str) -> Path:
     path = mcp_token_file_path()
     ensure_mcp_token_parent(path)
     # Prefer atomic-ish write with explicit mode on POSIX.
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    flags = os.O_WRONLY
+    flags |= os.O_CREAT
+    flags |= os.O_TRUNC
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
     fd = os.open(str(path), flags, 0o600)
