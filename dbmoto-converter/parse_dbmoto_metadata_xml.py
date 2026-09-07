@@ -962,7 +962,7 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
     # Load the template structure to reference
     template_structure = None
     if os.path.exists(template_file):
-        with open(template_file, 'r') as f:
+        with open(template_file, 'r', encoding='utf-8') as f:
             template_content = f.read()
             try:
                 template_structure = yaml.safe_load(template_content)
@@ -1241,7 +1241,7 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                         filename = f"{conn_name}__{schema_name}.yaml".replace("/", "_")
                     filepath = os.path.join(output_dir, filename)
 
-                    with open(filepath, "w") as f:
+                    with open(filepath, "w", encoding='utf-8') as f:
                         # Write header comment with source database information
                         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         f.write(f"# Generated from DbMoto metadata XML\n")
@@ -1280,7 +1280,7 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                 cp_dir = os.path.join(output_dir, journal_library)
                 os.makedirs(cp_dir, exist_ok=True)
                 cp_filepath = os.path.join(cp_dir, f"{journal_name}.cp")
-                with open(cp_filepath, 'w') as cp_f:
+                with open(cp_filepath, 'w', encoding='utf-8') as cp_f:
                     json.dump(checkpoint_data, cp_f, separators=(',', ':'))
                 print(f"  Written checkpoint file: {cp_filepath}")
 
@@ -1305,7 +1305,7 @@ def write_conversion_report(output_dir=None):
     
     report_path = os.path.join(output_dir, 'conversion_report.txt')
     
-    with open(report_path, 'w') as f:
+    with open(report_path, 'w', encoding='utf-8') as f:
         f.write("=" * 80 + "\n")
         f.write("DbMoto to Gluesync YAML Conversion Report\n")
         f.write("=" * 80 + "\n\n")
@@ -1432,7 +1432,7 @@ def view_table_list_template(template_path=None):
     
     print(f"Viewing template: {template_path}")
     if os.path.exists(template_path):
-        with open(template_path, 'r') as f:
+        with open(template_path, 'r', encoding='utf-8') as f:
             template_content = f.read()
             print("\nTemplate content (first 300 chars):")
             print("\n" + template_content[:300] + "...\n")  # Show first 300 chars
