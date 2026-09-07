@@ -80,7 +80,7 @@ class AutomatorState:
                 return None
 
             from utils.gluesync_sdk_client import get_token, initialize_gluesync_sdk
-from utils.mcp_token_file import remove_mcp_token_file, write_mcp_token_file
+            from utils.mcp_token_file import remove_mcp_token_file, write_mcp_token_file
 
             # Set env vars for SDK initialization
             _os.environ["CORE_HUB_URL"] = base_url
