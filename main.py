@@ -498,6 +498,43 @@ def save_token(token):
     except Exception as e:
         print(f"Warning: Failed to save authentication token: {e}")
 
+def change_password(token, old_password, new_password):
+    """Change the user password and return the new token."""
+    response = fetch_core_hub(
+        '/authentication/reset-password',
+        method='POST',
+        token=token,
+        body={
+            'oldPassword': old_password,
+            'newPassword': new_password
+        }
+    )
+
+    if response != "Password changed":
+        raise Exception(f"Unexpected response from password reset: {response}")
+
+    print("Password reset successful")
+
+    # Re-authenticate with the new password to get a fresh token
+    auth_response = fetch_core_hub(
+        '/authentication/login',
+        method='POST',
+        body={'username': default_user, 'password': new_password}
+    )
+    new_token = auth_response.get('apiToken')
+    if not new_token:
+        raise Exception('Failed to re-authenticate after password change')
+
+    change_required = auth_response.get('changeRequired', False)
+    if change_required:
+        raise Exception('Password change still required after reset')
+
+    # Save the new token
+    save_token(new_token)
+
+    return new_token
+
+
 # Retrieve use_sdk from environment early to avoid unnecessary imports/checks
 use_sdk = os.getenv('USE_SDK', 'False').lower() in ['true', '1', 't', 'y', 'yes']
 
@@ -799,42 +836,6 @@ if True:
                 print(f"Error starting sync for entity {entityName} (ID: {entityId}): {str(e)}")
                 # Log the error using the enhanced logging framework
                 log_failure(logger, f"Failed to start sync for entity {entityName}")
-
-    def change_password(token, old_password, new_password):
-        """Change the user password and return the new token."""
-        response = fetch_core_hub(
-            '/authentication/reset-password',
-            method='POST',
-            token=token,
-            body={
-                'oldPassword': old_password,
-                'newPassword': new_password
-            }
-        )
-
-        if response != "Password changed":
-            raise Exception(f"Unexpected response from password reset: {response}")
-
-        print("Password reset successful")
-
-        # Re-authenticate with the new password to get a fresh token
-        auth_response = fetch_core_hub(
-            '/authentication/login',
-            method='POST',
-            body={'username': default_user, 'password': new_password}
-        )
-        new_token = auth_response.get('apiToken')
-        if not new_token:
-            raise Exception('Failed to re-authenticate after password change')
-
-        change_required = auth_response.get('changeRequired', False)
-        if change_required:
-            raise Exception('Password change still required after reset')
-
-        # Save the new token
-        save_token(new_token)
-
-        return new_token
 
 def main():
     # Parse command line arguments
