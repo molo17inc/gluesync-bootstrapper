@@ -62,7 +62,7 @@ CHANGELOG_API_BASE_URL = "https://api.backoffice.molo17.com"
 # because they are global CoreHub config files, not pipeline definitions.
 GLOBAL_CONFIG_NAMES = {
     "global-config", "global-configs", "smtp", "webhooks",
-    "thresholds", "schedules", "users", "oidc",
+    "thresholds", "schedules", "users", "oidc", "ai-studio",
 }
 
 
@@ -2061,6 +2061,49 @@ def create_app() -> FastAPI:
             summary_parts.append(f"{key}: {status}")
         return ApiMessage(message="OIDC import completed. " + "; ".join(summary_parts))
 
+    @app.post("/api/import/ai-studio", response_model=ApiMessage)
+    async def import_ai_studio(file: UploadFile = File(...)) -> ApiMessage:
+        """Restore AI Studio providers, agents, and retention from a YAML backup."""
+        if not state.token or not state.base_url:
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+        contents = await file.read()
+        if not contents:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+        try:
+            ai_studio_data = yaml.safe_load(contents.decode("utf-8"))
+        except yaml.YAMLError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid YAML: {exc}") from exc
+
+        if not isinstance(ai_studio_data, dict):
+            raise HTTPException(status_code=400, detail="Invalid AI Studio backup: expected a YAML object")
+
+        try:
+            result = corehub.import_ai_studio_settings(
+                token=state.token,
+                base_url=state.base_url,
+                use_ssl=state.use_ssl,
+                skip_verify=state.skip_verify,
+                ai_studio_data=ai_studio_data,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Failed to import AI Studio settings")
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        status = result.get("status", "unknown")
+        providers = result.get("providers") or {}
+        agents = result.get("agents") or {}
+        retention = result.get("conversation_retention") or {}
+        return ApiMessage(
+            message=(
+                f"AI Studio import {status}. "
+                f"providers: {providers.get('status', providers)}; "
+                f"agents: {agents.get('status', agents)}; "
+                f"retention: {retention.get('status', retention)}"
+            )
+        )
+
     @app.get("/api/export/all-pipelines")
     async def export_all_pipelines(include_secrets: bool = False):
         if not state.token or not state.base_url:
@@ -2222,6 +2265,25 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
         return JSONResponse(oidc_config)
+
+    @app.get("/api/export/ai-studio")
+    async def export_ai_studio():
+        """Export AI Studio LLM providers, agents, and conversation retention."""
+        if not state.token or not state.base_url:
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+        try:
+            ai_studio_config = corehub.export_ai_studio_settings(
+                token=state.token,
+                base_url=state.base_url,
+                use_ssl=state.use_ssl,
+                skip_verify=state.skip_verify,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Failed to export AI Studio settings")
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        return JSONResponse(ai_studio_config)
 
     @app.get("/api/export/full-backup")
     async def export_full_backup(include_secrets: bool = False):

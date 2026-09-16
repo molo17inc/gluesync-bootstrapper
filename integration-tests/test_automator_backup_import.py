@@ -8,6 +8,7 @@ Covers:
 - import_global_notifications (restore SMTP settings from backup)
 - import_users (restore user list from backup)
 - import_oidc_config (restore OIDC settings from backup)
+- import_ai_studio_settings (restore LLM providers/agents/retention, incl. enabled)
 - import-all skip-list for global-config.yaml
 
 Mocks fetch_core_hub on automator_app.corehub since all CoreHub calls
@@ -468,6 +469,155 @@ class ImportOidcConfigTests(unittest.TestCase):
 
         self.assertEqual(result["oidc_configuration"]["status"], "skipped")
         self.assertEqual(result["oidc_auth_url"]["status"], "restored")
+
+
+
+class ImportAiStudioSettingsTests(unittest.TestCase):
+    """Verify import_ai_studio_settings restores providers (incl. enabled), agents, retention."""
+
+    def test_creates_providers_agents_and_retention(self):
+        import automator_app.corehub as corehub
+
+        calls: list[tuple[str, str, Any]] = []
+
+        def fake_fetch(path, method="GET", **kwargs):
+            calls.append((method, path, kwargs.get("body")))
+            if method == "GET" and path == "/ai-studio/providers":
+                created = [c for c in calls if c[0] == "POST" and c[1] == "/ai-studio/providers"]
+                if created:
+                    return [{
+                        "id": "new-p1",
+                        "name": "Ollama local",
+                        "type": "OLLAMA",
+                        "model": "llama3",
+                        "enabled": True,
+                    }]
+                return []
+            if method == "GET" and path == "/ai-studio/agents":
+                return []
+            if method == "POST" and path == "/ai-studio/providers":
+                return {
+                    "id": "new-p1",
+                    "name": "Ollama local",
+                    "type": "OLLAMA",
+                    "model": "llama3",
+                    "enabled": True,
+                }
+            if method == "POST" and path == "/ai-studio/agents":
+                return {"id": "new-a1", "name": "Helper"}
+            return {"status": "ok"}
+
+        with mock.patch.object(corehub, "fetch_core_hub", side_effect=fake_fetch):
+            result = corehub.import_ai_studio_settings(
+                token="tok", base_url="http://test", use_ssl=False, skip_verify=False,
+                ai_studio_data={
+                    "providers": [
+                        {
+                            "id": "old-p1",
+                            "name": "Ollama local",
+                            "type": "OLLAMA",
+                            "model": "llama3",
+                            "baseUrl": "http://localhost:11434",
+                            "hasApiKey": False,
+                            "enabled": False,
+                        }
+                    ],
+                    "agents": [
+                        {
+                            "id": "old-a1",
+                            "name": "Helper",
+                            "systemPrompt": "Help",
+                            "toolAllowList": [],
+                            "providerId": "old-p1",
+                        }
+                    ],
+                    "conversation_retention": {"days": 21, "defaultDays": 30},
+                },
+            )
+
+        self.assertEqual(result["status"], "restored")
+        self.assertEqual(result["providers"]["created"], 1)
+        self.assertEqual(result["agents"]["created"], 1)
+        self.assertEqual(result["conversation_retention"]["status"], "restored")
+
+        enabled_calls = [c for c in calls if c[0] == "PUT" and c[1].endswith("/enabled")]
+        self.assertEqual(len(enabled_calls), 1)
+        self.assertEqual(enabled_calls[0][2], {"enabled": False})
+
+        agent_posts = [c for c in calls if c[0] == "POST" and c[1] == "/ai-studio/agents"]
+        self.assertEqual(agent_posts[0][2]["providerId"], "new-p1")
+
+        retention_puts = [
+            c for c in calls
+            if c[0] == "PUT" and c[1] == "/ai-studio/conversations/retention"
+        ]
+        self.assertEqual(retention_puts[0][2], {"days": 21})
+
+    def test_updates_existing_provider_by_name(self):
+        import automator_app.corehub as corehub
+
+        calls: list[tuple[str, str, Any]] = []
+
+        def fake_fetch(path, method="GET", **kwargs):
+            calls.append((method, path, kwargs.get("body")))
+            if method == "GET" and path == "/ai-studio/providers":
+                return [{
+                    "id": "existing-p",
+                    "name": "OpenAI",
+                    "type": "OPENAI",
+                    "model": "gpt-4o-mini",
+                    "enabled": True,
+                }]
+            if method == "GET" and path == "/ai-studio/agents":
+                return []
+            return {"status": "ok"}
+
+        with mock.patch.object(corehub, "fetch_core_hub", side_effect=fake_fetch):
+            result = corehub.import_ai_studio_settings(
+                token="tok", base_url="http://test", use_ssl=False, skip_verify=False,
+                ai_studio_data={
+                    "providers": [
+                        {
+                            "id": "old-p",
+                            "name": "OpenAI",
+                            "type": "OPENAI",
+                            "model": "gpt-4o",
+                            "baseUrl": "https://api.openai.com/v1",
+                            "hasApiKey": True,
+                            "enabled": True,
+                            "inputPriceUsdPerMillionTokens": 2.5,
+                        }
+                    ],
+                    "agents": [],
+                },
+            )
+
+        self.assertEqual(result["providers"]["updated"], 1)
+        self.assertEqual(result["providers"]["created"], 0)
+        put_provider = next(
+            c for c in calls if c[0] == "PUT" and c[1] == "/ai-studio/providers/existing-p"
+        )
+        self.assertEqual(put_provider[2]["model"], "gpt-4o")
+        self.assertNotIn("apiKey", put_provider[2])
+
+    def test_skips_errored_export_sections(self):
+        import automator_app.corehub as corehub
+
+        with mock.patch.object(corehub, "fetch_core_hub"):
+            result = corehub.import_ai_studio_settings(
+                token="tok", base_url="http://test", use_ssl=False, skip_verify=False,
+                ai_studio_data={
+                    "providers": {"error": "forbidden"},
+                    "agents": {"error": "forbidden"},
+                    "conversation_retention": {"error": "forbidden"},
+                },
+            )
+
+        self.assertEqual(result["providers"]["status"], "skipped")
+        self.assertEqual(result["agents"]["status"], "skipped")
+        self.assertEqual(result["conversation_retention"]["status"], "skipped")
+        self.assertEqual(result["status"], "skipped")
+
 
 
 if __name__ == "__main__":

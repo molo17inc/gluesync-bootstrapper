@@ -648,6 +648,27 @@ class ExportFullCorehubBackupTests(unittest.TestCase):
                 "/users": [{"id": "1", "username": "admin"}],
                 "/oidc/configuration": {"enabled": True},
                 "/oidc/auth-url": {"url": "http://auth"},
+                "/ai-studio/providers": [
+                    {
+                        "id": "p1",
+                        "name": "Ollama local",
+                        "type": "OLLAMA",
+                        "model": "llama3",
+                        "baseUrl": "http://localhost:11434",
+                        "hasApiKey": False,
+                        "enabled": False,
+                    }
+                ],
+                "/ai-studio/agents": [
+                    {
+                        "id": "a1",
+                        "name": "Helper",
+                        "systemPrompt": "Help",
+                        "toolAllowList": [],
+                        "providerId": "p1",
+                    }
+                ],
+                "/ai-studio/conversations/retention": {"days": 30, "defaultDays": 30},
                 "/pipelines": [],
             }
             return routes.get(path, {})
@@ -672,6 +693,7 @@ class ExportFullCorehubBackupTests(unittest.TestCase):
         self.assertIn("schedules.yaml", namelist)
         self.assertIn("users.yaml", namelist)
         self.assertIn("oidc.yaml", namelist)
+        self.assertIn("ai-studio.yaml", namelist)
 
         # Parse global-configs.yaml and verify content
         with io.BytesIO(zip_bytes) as buf:
@@ -692,6 +714,12 @@ class ExportFullCorehubBackupTests(unittest.TestCase):
 
                 oidc_cfg = yaml.safe_load(zf.read("oidc.yaml").decode("utf-8"))
                 self.assertTrue(oidc_cfg["oidc_configuration"]["enabled"])
+
+                ai_studio_cfg = yaml.safe_load(zf.read("ai-studio.yaml").decode("utf-8"))
+                self.assertEqual(ai_studio_cfg["providers"][0]["name"], "Ollama local")
+                self.assertFalse(ai_studio_cfg["providers"][0]["enabled"])
+                self.assertEqual(ai_studio_cfg["agents"][0]["providerId"], "p1")
+                self.assertEqual(ai_studio_cfg["conversation_retention"]["days"], 30)
 
 
 class ExportUsersTests(unittest.TestCase):
@@ -734,6 +762,62 @@ class ExportOidcConfigTests(unittest.TestCase):
 
         self.assertTrue(result["oidc_configuration"]["enabled"])
         self.assertEqual(result["oidc_auth_url"]["authorizationUrl"], "http://auth")
+
+
+
+class ExportAiStudioSettingsTests(unittest.TestCase):
+    """Verify export_ai_studio_settings fetches providers, agents, and retention."""
+
+    def test_exports_ai_studio_settings(self):
+        import automator_app.corehub as corehub
+
+        def fake_fetch(path, **kwargs):
+            routes = {
+                "/ai-studio/providers": [
+                    {
+                        "id": "p1",
+                        "name": "OpenAI",
+                        "type": "OPENAI",
+                        "model": "gpt-4o",
+                        "baseUrl": "https://api.openai.com/v1",
+                        "hasApiKey": True,
+                        "enabled": True,
+                    },
+                    {
+                        "id": "p2",
+                        "name": "Paused Ollama",
+                        "type": "OLLAMA",
+                        "model": "llama3",
+                        "baseUrl": "http://localhost:11434",
+                        "hasApiKey": False,
+                        "enabled": False,
+                    },
+                ],
+                "/ai-studio/agents": [
+                    {
+                        "id": "a1",
+                        "name": "Analyst",
+                        "systemPrompt": "Analyse",
+                        "toolAllowList": ["list_pipelines"],
+                        "providerId": "p1",
+                    }
+                ],
+                "/ai-studio/conversations/retention": {"days": 14, "defaultDays": 30},
+            }
+            return routes.get(path, {})
+
+        with mock.patch.object(corehub, "fetch_core_hub", side_effect=fake_fetch):
+            result = corehub.export_ai_studio_settings(
+                token="tok", base_url="http://test", use_ssl=False, skip_verify=False,
+            )
+
+        self.assertEqual(len(result["providers"]), 2)
+        self.assertTrue(result["providers"][0]["enabled"])
+        self.assertFalse(result["providers"][1]["enabled"])
+        self.assertEqual(result["agents"][0]["name"], "Analyst")
+        self.assertEqual(result["conversation_retention"]["days"], 14)
+        # API keys must never appear in the export payload from CoreHub list DTOs
+        self.assertNotIn("apiKey", result["providers"][0])
 
 
 class ImportGlobalConfigsTests(unittest.TestCase):

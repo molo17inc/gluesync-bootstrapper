@@ -2113,6 +2113,61 @@ def export_oidc_config(
     return configs
 
 
+def export_ai_studio_settings(
+    *,
+    token: str,
+    base_url: str,
+    use_ssl: Optional[bool],
+    skip_verify: Optional[bool],
+) -> Dict[str, Any]:
+    """Export AI Studio LLM providers, agents, and conversation retention.
+
+    Provider API keys are never returned by CoreHub (only ``hasApiKey``). The
+    export therefore preserves provider metadata including ``enabled``, but
+    restore requires re-entering API keys in the CoreHub UI for non-Ollama
+    providers.
+    """
+    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+
+    configs: Dict[str, Any] = {}
+
+    try:
+        response = fetch_core_hub("/ai-studio/providers", token=token)
+        if isinstance(response, list):
+            configs["providers"] = response
+        elif isinstance(response, dict):
+            configs["providers"] = response.get("items") or response.get("providers") or response
+        else:
+            configs["providers"] = {"value": response}
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("Failed to fetch AI Studio providers: %s", exc)
+        configs["providers"] = {"error": str(exc)}
+
+    try:
+        response = fetch_core_hub("/ai-studio/agents", token=token)
+        if isinstance(response, list):
+            configs["agents"] = response
+        elif isinstance(response, dict):
+            configs["agents"] = response.get("items") or response.get("agents") or response
+        else:
+            configs["agents"] = {"value": response}
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("Failed to fetch AI Studio agents: %s", exc)
+        configs["agents"] = {"error": str(exc)}
+
+    try:
+        response = fetch_core_hub("/ai-studio/conversations/retention", token=token)
+        if isinstance(response, dict):
+            configs["conversation_retention"] = response
+        else:
+            configs["conversation_retention"] = {"value": response}
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("Failed to fetch AI Studio conversation retention: %s", exc)
+        configs["conversation_retention"] = {"error": str(exc)}
+
+    return configs
+
+
 def _dump_to_yaml(data: Dict[str, Any]) -> str:
     """Serialize a dict to a YAML string."""
     return yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
@@ -2135,6 +2190,9 @@ def export_full_corehub_backup(
       - webhooks.yaml
       - thresholds.yaml
       - schedules.yaml
+      - users.yaml
+      - oidc.yaml
+      - ai-studio.yaml
       - pipelines/ (individual pipeline YAMLs)
       - agents-config.yaml
     """
@@ -2223,6 +2281,27 @@ def export_full_corehub_backup(
         except Exception as exc:  # pylint: disable=broad-except
             logger.warning("Failed to export OIDC config: %s", exc)
             zip_file.writestr("oidc.yaml", _dump_to_yaml({"error": str(exc)}).encode("utf-8"))
+
+        # AI Studio (LLM providers, agents, retention)
+        try:
+            ai_studio = export_ai_studio_settings(
+                token=token, base_url=base_url, use_ssl=use_ssl, skip_verify=skip_verify
+            )
+            ai_studio_comment = (
+                "# NOTE: LLM provider API keys are write-only in CoreHub (hasApiKey only).\n"
+                "# After importing this backup:\n"
+                "#   - Provider metadata (name, type, model, baseUrl, pricing, enabled) is restored.\n"
+                "#   - Providers that require an API key must have it re-entered in AI Studio.\n"
+                "#   - Ollama providers typically do not need an API key.\n"
+                "#   - AI agents are remapped to restored providers by name.\n"
+            )
+            zip_file.writestr(
+                "ai-studio.yaml",
+                (ai_studio_comment + _dump_to_yaml(ai_studio)).encode("utf-8"),
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("Failed to export AI Studio settings: %s", exc)
+            zip_file.writestr("ai-studio.yaml", _dump_to_yaml({"error": str(exc)}).encode("utf-8"))
 
         # Pipelines backup (already a ZIP, extract contents).
         # We skip embedding schedules in pipeline YAMLs because the full backup
@@ -2703,6 +2782,327 @@ def import_oidc_config(
     return results
 
 
+def _ai_studio_provider_payload(provider: Dict[str, Any]) -> Dict[str, Any]:
+    """Build a SaveLlmProviderRequest body from an exported provider DTO."""
+    payload: Dict[str, Any] = {
+        "name": provider.get("name", ""),
+        "type": provider.get("type"),
+        "model": provider.get("model", ""),
+    }
+    if provider.get("baseUrl") is not None:
+        payload["baseUrl"] = provider.get("baseUrl")
+    if provider.get("azureDeployment") is not None:
+        payload["azureDeployment"] = provider.get("azureDeployment")
+    if provider.get("apiVersion") is not None:
+        payload["apiVersion"] = provider.get("apiVersion")
+    if provider.get("inputPriceUsdPerMillionTokens") is not None:
+        payload["inputPriceUsdPerMillionTokens"] = provider.get("inputPriceUsdPerMillionTokens")
+    if provider.get("outputPriceUsdPerMillionTokens") is not None:
+        payload["outputPriceUsdPerMillionTokens"] = provider.get("outputPriceUsdPerMillionTokens")
+    # Never send apiKey: CoreHub list responses do not include it.
+    return payload
+
+
+def _ai_studio_agent_payload(agent: Dict[str, Any], provider_id: str) -> Dict[str, Any]:
+    """Build a SaveAiAgentRequest body from an exported agent DTO."""
+    payload: Dict[str, Any] = {
+        "name": agent.get("name", ""),
+        "systemPrompt": agent.get("systemPrompt", ""),
+        "toolAllowList": agent.get("toolAllowList") or [],
+        "providerId": provider_id,
+    }
+    if agent.get("description") is not None:
+        payload["description"] = agent.get("description")
+    return payload
+
+
+def import_ai_studio_settings(
+    *,
+    token: str,
+    base_url: str,
+    use_ssl: Optional[bool],
+    skip_verify: Optional[bool],
+    ai_studio_data: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Restore AI Studio providers, agents, and conversation retention.
+
+    Providers are matched by name. API keys cannot be restored from the backup
+    (CoreHub never exports them); existing keys are preserved on update, and
+    newly created providers that require a key must be completed in the UI.
+    The ``enabled`` flag is restored via PUT /ai-studio/providers/{id}/enabled.
+    Agents are remapped to restored providers using the exported provider id →
+    restored id mapping (falling back to provider name).
+    """
+    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+
+    results: Dict[str, Any] = {
+        "providers": {"created": 0, "updated": 0, "errors": []},
+        "agents": {"created": 0, "updated": 0, "errors": []},
+        "conversation_retention": {"status": "skipped", "reason": "not present in backup"},
+        "notes": [
+            "LLM provider API keys are not included in backups; re-enter keys in AI Studio when needed",
+        ],
+    }
+
+    providers_raw = ai_studio_data.get("providers")
+    agents_raw = ai_studio_data.get("agents")
+    retention_raw = ai_studio_data.get("conversation_retention")
+
+    provider_id_map: Dict[str, str] = {}  # old id -> new/current id
+
+    # --- Providers ---
+    if providers_raw is None:
+        results["providers"] = {"status": "skipped", "reason": "not present in backup"}
+    elif isinstance(providers_raw, dict) and "error" in providers_raw:
+        results["providers"] = {"status": "skipped", "reason": "exported with error"}
+    else:
+        providers_list = _unwrap_value_if_needed(providers_raw)
+        if not isinstance(providers_list, list):
+            results["providers"] = {"status": "skipped", "reason": "invalid providers format"}
+        else:
+            try:
+                existing_resp = fetch_core_hub("/ai-studio/providers", token=token)
+                if isinstance(existing_resp, list):
+                    existing_providers = existing_resp
+                elif isinstance(existing_resp, dict):
+                    existing_providers = (
+                        existing_resp.get("items")
+                        or existing_resp.get("providers")
+                        or []
+                    )
+                else:
+                    existing_providers = []
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning("Failed to list existing AI Studio providers: %s", exc)
+                existing_providers = []
+
+            existing_by_name: Dict[str, dict] = {
+                str(p.get("name")): p
+                for p in existing_providers
+                if isinstance(p, dict) and p.get("name")
+            }
+
+            created = updated = 0
+            errors: list[str] = []
+
+            for provider in providers_list:
+                if not isinstance(provider, dict):
+                    continue
+                name = provider.get("name")
+                old_id = provider.get("id")
+                if not name:
+                    continue
+
+                payload = _ai_studio_provider_payload(provider)
+                enabled = provider.get("enabled", True)
+                current_id = ""
+                try:
+                    if name in existing_by_name:
+                        existing = existing_by_name[name]
+                        existing_id = existing.get("id")
+                        fetch_core_hub(
+                            f"/ai-studio/providers/{existing_id}",
+                            method="PUT",
+                            token=token,
+                            body=payload,
+                        )
+                        current_id = str(existing_id) if existing_id else ""
+                        updated += 1
+                    else:
+                        created_resp = fetch_core_hub(
+                            "/ai-studio/providers",
+                            method="POST",
+                            token=token,
+                            body=payload,
+                        )
+                        if isinstance(created_resp, dict) and created_resp.get("id"):
+                            current_id = str(created_resp["id"])
+                        else:
+                            # Re-list to find by name if response shape differs
+                            refreshed = fetch_core_hub("/ai-studio/providers", token=token)
+                            refreshed_list = refreshed if isinstance(refreshed, list) else []
+                            match = next(
+                                (p for p in refreshed_list if isinstance(p, dict) and p.get("name") == name),
+                                None,
+                            )
+                            current_id = str(match["id"]) if match and match.get("id") else ""
+                        created += 1
+                        if current_id:
+                            existing_by_name[name] = {"id": current_id, "name": name}
+
+                    if current_id and enabled is not None:
+                        fetch_core_hub(
+                            f"/ai-studio/providers/{current_id}/enabled",
+                            method="PUT",
+                            token=token,
+                            body={"enabled": bool(enabled)},
+                        )
+
+                    if old_id and current_id:
+                        provider_id_map[str(old_id)] = current_id
+                except Exception as exc:  # pylint: disable=broad-except
+                    logger.warning("Failed to restore AI Studio provider %s: %s", name, exc)
+                    errors.append(f"provider {name}: {exc}")
+
+            results["providers"] = {
+                "status": "restored" if (created or updated) and not errors else (
+                    "failed" if errors and not (created or updated) else "restored"
+                ),
+                "created": created,
+                "updated": updated,
+                "errors": errors,
+            }
+
+    # Also map by name for agents whose provider id was not in the export map
+    # (e.g. providers skipped). Build name → current id from live list.
+    try:
+        live_providers = fetch_core_hub("/ai-studio/providers", token=token)
+        live_list = live_providers if isinstance(live_providers, list) else []
+        name_to_id = {
+            str(p.get("name")): str(p.get("id"))
+            for p in live_list
+            if isinstance(p, dict) and p.get("name") and p.get("id")
+        }
+    except Exception:  # pylint: disable=broad-except
+        name_to_id = {}
+
+    exported_providers = providers_raw if isinstance(providers_raw, list) else []
+    exported_id_to_name = {
+        str(p.get("id")): str(p.get("name"))
+        for p in exported_providers
+        if isinstance(p, dict) and p.get("id") and p.get("name")
+    }
+
+    def resolve_provider_id(exported_provider_id: Any) -> Optional[str]:
+        if not exported_provider_id:
+            return None
+        key = str(exported_provider_id)
+        if key in provider_id_map:
+            return provider_id_map[key]
+        name = exported_id_to_name.get(key)
+        if name and name in name_to_id:
+            return name_to_id[name]
+        return None
+
+    # --- Agents ---
+    if agents_raw is None:
+        results["agents"] = {"status": "skipped", "reason": "not present in backup"}
+    elif isinstance(agents_raw, dict) and "error" in agents_raw:
+        results["agents"] = {"status": "skipped", "reason": "exported with error"}
+    else:
+        agents_list = _unwrap_value_if_needed(agents_raw)
+        if not isinstance(agents_list, list):
+            results["agents"] = {"status": "skipped", "reason": "invalid agents format"}
+        else:
+            try:
+                existing_resp = fetch_core_hub("/ai-studio/agents", token=token)
+                if isinstance(existing_resp, list):
+                    existing_agents = existing_resp
+                elif isinstance(existing_resp, dict):
+                    existing_agents = (
+                        existing_resp.get("items")
+                        or existing_resp.get("agents")
+                        or []
+                    )
+                else:
+                    existing_agents = []
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning("Failed to list existing AI Studio agents: %s", exc)
+                existing_agents = []
+
+            existing_by_name: Dict[str, dict] = {
+                str(a.get("name")): a
+                for a in existing_agents
+                if isinstance(a, dict) and a.get("name")
+            }
+
+            created = updated = 0
+            errors: list[str] = []
+
+            for agent in agents_list:
+                if not isinstance(agent, dict):
+                    continue
+                name = agent.get("name")
+                if not name:
+                    continue
+                new_provider_id = resolve_provider_id(agent.get("providerId"))
+                if not new_provider_id:
+                    errors.append(f"agent {name}: could not resolve providerId")
+                    continue
+
+                payload = _ai_studio_agent_payload(agent, new_provider_id)
+                try:
+                    if name in existing_by_name:
+                        existing_id = existing_by_name[name].get("id")
+                        fetch_core_hub(
+                            f"/ai-studio/agents/{existing_id}",
+                            method="PUT",
+                            token=token,
+                            body=payload,
+                        )
+                        updated += 1
+                    else:
+                        fetch_core_hub(
+                            "/ai-studio/agents",
+                            method="POST",
+                            token=token,
+                            body=payload,
+                        )
+                        created += 1
+                except Exception as exc:  # pylint: disable=broad-except
+                    logger.warning("Failed to restore AI Studio agent %s: %s", name, exc)
+                    errors.append(f"agent {name}: {exc}")
+
+            results["agents"] = {
+                "status": "restored" if (created or updated) and not errors else (
+                    "failed" if errors and not (created or updated) else "restored"
+                ),
+                "created": created,
+                "updated": updated,
+                "errors": errors,
+            }
+
+    # --- Conversation retention (caller/owner preference) ---
+    if retention_raw is None:
+        pass  # already skipped
+    elif isinstance(retention_raw, dict) and "error" in retention_raw:
+        results["conversation_retention"] = {"status": "skipped", "reason": "exported with error"}
+    else:
+        retention = _unwrap_value_if_needed(retention_raw)
+        days = None
+        if isinstance(retention, dict):
+            days = retention.get("days")
+        elif isinstance(retention, int):
+            days = retention
+        if days is None:
+            results["conversation_retention"] = {"status": "skipped", "reason": "missing days"}
+        else:
+            try:
+                fetch_core_hub(
+                    "/ai-studio/conversations/retention",
+                    method="PUT",
+                    token=token,
+                    body={"days": int(days)},
+                )
+                results["conversation_retention"] = {"status": "restored", "days": int(days)}
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning("Failed to restore AI Studio conversation retention: %s", exc)
+                results["conversation_retention"] = {"status": "failed", "error": str(exc)}
+
+    # Top-level status for full-backup summary
+    provider_status = results["providers"].get("status") if isinstance(results["providers"], dict) else None
+    agent_status = results["agents"].get("status") if isinstance(results["agents"], dict) else None
+    retention_status = results["conversation_retention"].get("status")
+    if any(s == "failed" for s in (provider_status, agent_status, retention_status)):
+        results["status"] = "failed"
+    elif any(s == "restored" for s in (provider_status, agent_status, retention_status)):
+        results["status"] = "restored"
+    else:
+        results["status"] = "skipped"
+
+    return results
+
+
 def import_full_corehub_backup(
     *,
     token: str,
@@ -2807,6 +3207,16 @@ def import_full_corehub_backup(
             )
         else:
             results["oidc"] = {"status": "skipped", "reason": "oidc.yaml not found"}
+
+        # Restore AI Studio
+        ai_studio = _read_yaml("ai-studio.yaml")
+        if ai_studio is not None:
+            results["ai_studio"] = import_ai_studio_settings(
+                token=token, base_url=base_url, use_ssl=use_ssl, skip_verify=skip_verify,
+                ai_studio_data=ai_studio,
+            )
+        else:
+            results["ai_studio"] = {"status": "skipped", "reason": "ai-studio.yaml not found"}
 
         # Restore pipelines (reuse existing import-all logic)
         pipelines_zip_path = extract_dir / "pipelines.zip"
