@@ -929,8 +929,13 @@ def create_app() -> FastAPI:
 
     @app.get("/api/export/pipeline/{pipeline_id}")
     async def export_pipeline(pipeline_id: str, include_secrets: bool = False):
-        """Export only the YAML metadata for a single pipeline.
-        
+        """Export entity metadata for a single pipeline.
+
+        Returns plain YAML when no entity-level UDFs are referenced. When UDFs
+        are present, returns a ZIP containing the YAML plus ``udf-<agentId>/``
+        source folders (same layout full backup / import already understand)
+        so entity-only export round-trips mapping-function sources (GSSD-1355).
+
         Duplicate source tables are handled by creating unique keys (e.g., table@@2, table@@3)
         within the same YAML file to avoid key conflicts.
         """
@@ -939,7 +944,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=401, detail="Authentication required")
 
         try:
-            yaml_text = corehub.export_pipeline_yaml(
+            payload, media_type, filename = corehub.export_pipeline_entities_package(
                 token=state.token,
                 base_url=state.base_url,
                 pipeline_id=pipeline_id,
@@ -955,11 +960,9 @@ def create_app() -> FastAPI:
             logger.exception("Failed to export pipeline %s", pipeline_id)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"backup_{pipeline_id}_{timestamp}.yaml"
         return StreamingResponse(
-            io.BytesIO(yaml_text.encode("utf-8")),
-            media_type="application/x-yaml",
+            io.BytesIO(payload),
+            media_type=media_type,
             headers={
                 "Content-Disposition": f'attachment; filename="{filename}"',
             },
