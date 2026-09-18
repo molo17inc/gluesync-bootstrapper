@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import yaml
 
 from commons import fetch_core_hub, get_table_columns
+from field_function_utils import apply_field_functions_to_column_mappings
 from utils.chronos_client import ChronosClient
 from utils.log import create_log_file, get_logger, log_failure, log_success
 
@@ -622,6 +623,28 @@ def _process_single_entity(
         if column_mappings:
             table_cfg["columns"] = column_mappings
             logger.debug(f"Exported {len(column_mappings)} column mappings with metadata for {source_table_name}")
+
+    # Field Functions (per-column expressions on Target entityType) — GSSD-1355
+    # CoreHub stores these on entityType.fieldFunctions as
+    # {columnId, tableOrObjectId, expression:{type,...}}; YAML documents them
+    # as columns[].expression (Date2Str / TrimStr / StaticStr / …).
+    target_et_early = target_ae.get("entityType", {}) or {}
+    field_functions = target_et_early.get("fieldFunctions") or []
+    if field_functions:
+        column_mappings = table_cfg.get("columns") or []
+        if not isinstance(column_mappings, list):
+            column_mappings = []
+        column_mappings = apply_field_functions_to_column_mappings(
+            column_mappings,
+            target_ae.get("columns", []) or [],
+            field_functions,
+        )
+        if column_mappings:
+            table_cfg["columns"] = column_mappings
+            logger.info(
+                f"Exported {sum(1 for c in column_mappings if isinstance(c, dict) and c.get('expression'))} "
+                f"field function expression(s) for {source_table_name}"
+            )
 
     # Filters on target entityType
     target_et = target_ae.get("entityType", {}) or {}
