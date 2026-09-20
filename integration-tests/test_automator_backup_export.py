@@ -4,6 +4,7 @@ Regression tests for Automator backup/export flows.
 
 Covers:
 - export_pipeline_yaml (single pipeline YAML export)
+- export_pipeline_entities_package (entity-only: YAML, or ZIP with YAML + UDFs)
 - export_pipeline_full_backup (ZIP with YAML + agents-config + UDFs)
 - export_all_pipelines_yaml (bulk export all pipelines)
 
@@ -12,6 +13,7 @@ real HTTP requests are made.
 """
 
 import io
+import tempfile
 import logging
 import sys
 import unittest
@@ -264,6 +266,113 @@ class ExportPipelineFullBackupTests(unittest.TestCase):
                         break
                 else:
                     self.fail("agents-config.yaml not found in ZIP")
+
+
+
+class ExportPipelineEntitiesPackageTests(unittest.TestCase):
+    """Entity-only export must include UDF sources when entities reference them."""
+
+    def test_without_udfs_returns_plain_yaml(self):
+        import automator_app.corehub as corehub
+
+        entities = [_simple_entity("DRIVERS", "demo")]
+
+        with mock.patch.object(corehub, "fetch_pipeline_entities", return_value=entities), \
+             mock.patch.object(corehub, "build_entities_maps", return_value={"ent-DRIVERS": entities[0]}), \
+             mock.patch.object(corehub, "fetch_groups_map", return_value=({}, {}, {})), \
+             mock.patch.object(corehub, "fetch_pipeline_jobs", return_value=[]), \
+             mock.patch.object(corehub, "infer_agent_schema_types", return_value=("SQL", "SQL")), \
+             mock.patch.object(corehub, "enrich_null_column_types_from_discovery", return_value=0), \
+             mock.patch.object(corehub, "_load_agent_type_catalog", return_value={"mssql": "RDBMS"}), \
+             mock.patch.object(corehub, "fetch_core_hub", return_value={"name": "TestPipe"}):
+            payload, media_type, filename = corehub.export_pipeline_entities_package(
+                token="tok", base_url="http://test", pipeline_id="pipe",
+                use_ssl=False, skip_verify=False,
+            )
+
+        self.assertEqual(media_type, "application/x-yaml")
+        self.assertTrue(filename.endswith(".yaml"))
+        data = yaml.safe_load(payload.decode("utf-8"))
+        self.assertIn("demo", data)
+
+    def test_with_udfs_returns_zip_with_udf_agent_folder(self):
+        import automator_app.corehub as corehub
+
+        entities = [_entity_with_udf("DRIVERS", "demo", "UDF_DRIVERS")]
+
+        def fake_fetch(path, **kwargs):
+            routes = {
+                "/pipelines/pipe": {"pipelineId": "pipe", "name": "TestPipe"},
+                "/pipelines/pipe/config/entities/mapping-functions/UDF_DRIVERS": {
+                    "code": "public class UDF_DRIVERS { }",
+                    "type": "Java",
+                },
+            }
+            return routes.get(path, {})
+
+        with mock.patch.object(corehub, "fetch_pipeline_entities", return_value=entities), \
+             mock.patch.object(corehub, "build_entities_maps", return_value={"ent-DRIVERS": entities[0]}), \
+             mock.patch.object(corehub, "fetch_groups_map", return_value=({}, {}, {})), \
+             mock.patch.object(corehub, "fetch_pipeline_jobs", return_value=[]), \
+             mock.patch.object(corehub, "infer_agent_schema_types", return_value=("SQL", "SQL")), \
+             mock.patch.object(corehub, "enrich_null_column_types_from_discovery", return_value=0), \
+             mock.patch.object(corehub, "_load_agent_type_catalog", return_value={"mssql": "RDBMS"}), \
+             mock.patch.object(corehub, "fetch_core_hub", side_effect=fake_fetch):
+            payload, media_type, filename = corehub.export_pipeline_entities_package(
+                token="tok", base_url="http://test", pipeline_id="pipe",
+                use_ssl=False, skip_verify=False,
+            )
+
+        self.assertEqual(media_type, "application/zip")
+        self.assertTrue(filename.endswith(".zip"))
+        with io.BytesIO(payload) as buf:
+            with zipfile.ZipFile(buf, "r") as zf:
+                namelist = zf.namelist()
+                yaml_files = [n for n in namelist if n.endswith(".yaml")]
+                udf_files = [n for n in namelist if "udf-" in n]
+                self.assertTrue(yaml_files, "Expected YAML inside entity-only ZIP")
+                self.assertTrue(udf_files, "Expected udf-<agentId>/ source in entity-only ZIP")
+                # Layout import understands: udf-<agentId>/<name>.java (flat, no pipeline_ prefix)
+                self.assertTrue(
+                    any(n.startswith("udf-tgt-agent/") and n.endswith("UDF_DRIVERS.java") for n in udf_files),
+                    f"Unexpected UDF paths: {udf_files}",
+                )
+                # No agents-config in entity-only package
+                self.assertFalse(any("agents-config" in n for n in namelist))
+                code = zf.read(
+                    next(n for n in udf_files if n.endswith("UDF_DRIVERS.java"))
+                ).decode("utf-8")
+                self.assertIn("UDF_DRIVERS", code)
+
+    def test_discover_udfs_prefers_mapping_function_info(self):
+        import automator_app.corehub as corehub
+
+        entities = [_entity_with_udf("DRIVERS", "demo", "UDF_DRIVERS")]
+        discovered = corehub.discover_udfs_from_entities(entities)
+        self.assertIn("UDF_DRIVERS", discovered)
+        self.assertEqual(discovered["UDF_DRIVERS"]["agentId"], "tgt-agent")
+        self.assertEqual(discovered["UDF_DRIVERS"]["type"], "Java")
+
+    def test_import_finds_udf_from_entity_package_layout(self):
+        """Simulate upload extract: UDF under udf-<agentId>/ must be findable."""
+        import create_user_defined_functions as udf_mod
+        from create_user_defined_functions import UdfFunctionType
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            udf_dir = root / "udf-tgt-agent"
+            udf_dir.mkdir()
+            (udf_dir / "UDF_DRIVERS.java").write_text("public class UDF_DRIVERS {}", encoding="utf-8")
+            (root / "backup_pipe.yaml").write_text("demo: {}\n", encoding="utf-8")
+
+            old = udf_mod.UDF_PATH
+            try:
+                udf_mod.UDF_PATH = str(root)
+                found = udf_mod.find_udf_definition_in_path("UDF_DRIVERS", UdfFunctionType.java)
+                self.assertIsNotNone(found)
+                self.assertEqual(found.name, "UDF_DRIVERS.java")
+            finally:
+                udf_mod.UDF_PATH = old
 
 
 class ExportAllPipelinesYamlTests(unittest.TestCase):

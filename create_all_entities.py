@@ -29,6 +29,7 @@ from commons import get_node_info, get_table_columns, fetch_core_hub, get_pipeli
     process_filter_clauses, create_group, assign_entities_to_group, get_table_id, extract_target_column_types
 from create_all_tables import handle_table_creation
 from create_user_defined_functions import handle_udf_function_definition
+from field_function_utils import build_field_functions_for_entity_type
 import create_user_defined_functions as udf_module
 from utils.log import get_logger, create_log_file, log_success, log_failure, lockfile_failure, lockfile_complete, exit_on_fail
 from utils.core_hub_client import CoreHubClient
@@ -37,7 +38,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Metadata-only fields used in the export format {source: ..., target: ..., type: ..., ...}
 # These are never column names in the explicit export format.
-_EXPORT_METADATA_FIELDS = {"source", "target", "type", "dataLength", "numericPrecision", "numericScale", "isNullable", "id", "ordinalPosition", "targetDataType", "charSet"}
+_EXPORT_METADATA_FIELDS = {"source", "target", "type", "dataLength", "numericPrecision", "numericScale", "isNullable", "id", "ordinalPosition", "targetDataType", "charSet", "expression"}
 
 # Tells "the YAML declared charSet: null" apart from "the YAML said nothing about charSet".
 # The first must clear the character set discovered on the column, the second must leave it
@@ -289,10 +290,16 @@ def _extract_mapping_pairs(column_entry):
         if src is not None:
             return [(src, tgt)]
         return []
-    # Legacy user format: every key that is not a known metadata field is a mapping
-    # In this format metadata fields (type, id, etc.) are never present, so this
-    # simply returns all key-value pairs.
-    return list(column_entry.items())
+    # Target-only technical columns (Field Functions with no source mapping):
+    # {target: "COL", type: ..., expression: {...}} — not a source→target pair.
+    if column_entry.get("expression") and "target" in column_entry and "name" not in column_entry:
+        return []
+    # Legacy user format: every key that is not a known metadata field is a mapping.
+    return [
+        (k, v)
+        for k, v in column_entry.items()
+        if k not in _EXPORT_METADATA_FIELDS and isinstance(v, str)
+    ]
 
 
 # Initialize logger
@@ -1930,6 +1937,19 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         target_entity_type_name = "NoSqlEntity" if is_target_nosql else "SingleTable"
         logger.debug(f"Target entity type determination: target_type='{target_type}', is_target_nosql={is_target_nosql}, selected type='{target_entity_type_name}'")
 
+
+        # Field Functions from YAML columns[].expression → entityType.fieldFunctions (GSSD-1355)
+        _ff = build_field_functions_for_entity_type(
+            custom_config.get("columns"),
+            target_columns_def,
+            target_table_id,
+        )
+        if _ff:
+            target_entity_type["fieldFunctions"] = _ff
+            logger.info(
+                f"Table {table_name}: attaching {len(_ff)} field function(s) on target entityType"
+            )
+
         target_entity = {
             "type": target_entity_type_name,
             "entityType": target_entity_type,
@@ -2448,6 +2468,19 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         target_table_properties = {}
         if document_key:
             target_table_properties["documentKey"] = document_key
+
+
+        # Field Functions from YAML columns[].expression → entityType.fieldFunctions (GSSD-1355)
+        _ff = build_field_functions_for_entity_type(
+            custom_config.get("columns"),
+            target_columns_def,
+            target_table_id,
+        )
+        if _ff:
+            target_entity_type["fieldFunctions"] = _ff
+            logger.info(
+                f"Table {yaml_table_key}: attaching {len(_ff)} field function(s) on target entityType"
+            )
 
         target_entity = {
             "type": target_entity_type_name,
