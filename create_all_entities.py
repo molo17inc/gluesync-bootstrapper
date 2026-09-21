@@ -278,6 +278,9 @@ def _extract_mapping_pairs(column_entry):
        {col_name: "target_name"}  e.g. {id: "ID", firstName: "first_name"}
        -> returns [("col_name", "target_name")]
 
+    Target-only Field Function columns ``{target, expression, ...}`` (no ``source`` /
+    ``name``) are not source→target pairs and return ``[]``.
+
     Returns:
         List of (source_name, target_name) tuples
     """
@@ -288,18 +291,84 @@ def _extract_mapping_pairs(column_entry):
         src = column_entry.get("source")
         tgt = column_entry.get("target", src)
         if src is not None:
-            return [(src, tgt)]
+            return [(str(src), str(tgt) if tgt is not None else str(src))]
         return []
     # Target-only technical columns (Field Functions with no source mapping):
     # {target: "COL", type: ..., expression: {...}} — not a source→target pair.
-    if column_entry.get("expression") and "target" in column_entry and "name" not in column_entry:
+    if (
+        column_entry.get("expression")
+        and "target" in column_entry
+        and "name" not in column_entry
+        and "source" not in column_entry
+    ):
         return []
-    # Legacy user format: every key that is not a known metadata field is a mapping.
-    return [
-        (k, v)
-        for k, v in column_entry.items()
-        if k not in _EXPORT_METADATA_FIELDS and isinstance(v, str)
-    ]
+    # Legacy user format: mapping keys only (skip export metadata). Coerce non-dict
+    # values to str so numeric YAML targets still produce a pair (pre-GSSD-1355
+    # returned raw items() and would keep them).
+    pairs = []
+    for k, v in column_entry.items():
+        if k in _EXPORT_METADATA_FIELDS:
+            continue
+        if v is None or isinstance(v, (dict, list, bool)):
+            continue
+        pairs.append((str(k), v if isinstance(v, str) else str(v)))
+    return pairs
+
+
+def _coerce_is_pk(value):
+    """Normalize discovery/YAML isPK values to a real bool for CoreHub."""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "t", "yes", "y"}
+    return bool(value)
+
+
+def _yaml_key_names(custom_config):
+    """Lower-cased key names declared in YAML ``keys:`` (strings or dict shapes)."""
+    if not custom_config or custom_config.get("keys") is None:
+        return set()
+    names = set()
+    for k in custom_config.get("keys") or []:
+        if isinstance(k, str):
+            names.add(k.lower())
+        elif isinstance(k, dict):
+            key_name = k.get("name")
+            if key_name is None and k:
+                key_name = next(iter(k))
+            if key_name is not None:
+                names.add(str(key_name).lower())
+    return names
+
+
+def _paint_is_pk_on_columns(columns_def, key_column_dicts):
+    """Force isPK=True on columns that appear in the resolved keys list.
+
+    CoreHub derives SingleTable primary keys solely from ``columns.filter(isPK)``.
+    The bootstrapper also builds a separate ``keys`` list for CREATE TABLE; if the
+    two ever diverge (Field Functions mapping extraction, case mismatch on pgsql,
+    null discovery isPK), the PUT fails with "Missing entity primary keys".
+    Painting after keys are resolved keeps both views aligned.
+    """
+    if not columns_def or not key_column_dicts:
+        return
+    key_names = {
+        str(k.get("name")).lower()
+        for k in key_column_dicts
+        if isinstance(k, dict) and k.get("name") is not None
+    }
+    if not key_names:
+        return
+    for col in columns_def:
+        if not isinstance(col, dict):
+            continue
+        name = col.get("name")
+        if name is not None and str(name).lower() in key_names:
+            col["isPK"] = True
 
 
 # Initialize logger
@@ -1045,7 +1114,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 mapping_pairs = _extract_mapping_pairs(column_map)
                 for source_name, target_name in mapping_pairs:
                     # Find the matching column from discovered columns
-                    matched_col = next((c for c in columns["columns"] if c.get("name") == source_name), None)
+                    matched_col = next((c for c in columns["columns"] if str(c.get("name","")).lower() == str(source_name).lower()), None)
                     
                     if matched_col:
                         col_id = matched_col.get('id')
@@ -1060,7 +1129,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             "name": matched_col["name"],
                             "alias": target_name,
                             "dataType": matched_col.get("dataType"),
-                            "isPK": matched_col.get("isPK", False) or _is_in_keys(matched_col["name"], custom_config), 
+                            "isPK": _coerce_is_pk(matched_col.get("isPK")) or _is_in_keys(matched_col["name"], custom_config), 
                             "isIdentity": matched_col.get("isIdentity", False), 
                             "isNullable": matched_col.get("isNullable", False)
                         }, matched_col))
@@ -1089,7 +1158,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 
                 # Find the matching column from discovered columns
                 for col in columns["columns"]:
-                    if col["name"] == source_col_name:
+                    if str(col["name"]).lower() == str(source_col_name).lower():
                         col_id = col.get('id')
                         if col_id is None:
                             error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response."
@@ -1106,7 +1175,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             "name": source_col_name,
                             "alias": target_col_name,
                             "dataType": col.get("dataType"),
-                            "isPK": col.get("isPK", False) or _is_in_keys(source_col_name, custom_config),
+                            "isPK": _coerce_is_pk(col.get("isPK")) or _is_in_keys(source_col_name, custom_config),
                             "isIdentity": col.get("isIdentity", False),
                             "isNullable": col.get("isNullable", True),
                         }, col))
@@ -1137,7 +1206,33 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     "name": col["name"],
                     "alias": col["name"],
                     "dataType": col.get("dataType"),
-                    "isPK": col.get("isPK", False) or _is_in_keys(col["name"], custom_config), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
+                    "isPK": _coerce_is_pk(col.get("isPK")) or _is_in_keys(col["name"], custom_config), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
+                }, col))
+
+        # GSSD-1355 regression guard: target-only Field Function entries make
+        # _is_column_mappings() true but _extract_mapping_pairs() returns []. Without
+        # a discovery fallback, columns_def (and therefore CoreHub tablesKeys via
+        # isPK) stay empty → "Missing entity primary keys" on plain SQL tables.
+        if has_column_mappings and not columns_def:
+            logger.warning(
+                f"Table {table_name}: column mappings produced no source columns "
+                f"(likely target-only Field Function entries). Falling back to discovery."
+            )
+            for col in columns["columns"]:
+                col_id = col.get('id')
+                if col_id is None:
+                    error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
+                columns_def.append(_enrich_column({
+                    "id": col_id,
+                    "position": col.get("position", 0),
+                    "name": col["name"],
+                    "alias": col["name"],
+                    "dataType": col.get("dataType"),
+                    "isPK": _coerce_is_pk(col.get("isPK")) or _is_in_keys(col["name"], custom_config),
+                    "isIdentity": col.get("isIdentity", False),
+                    "isNullable": col.get("isNullable", False)
                 }, col))
 
         logger.debug(f"Columns definition for {table_name}: {columns_def}")
@@ -1165,8 +1260,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         # Extract source:target pairs, ignoring metadata fields
                         mapping_pairs = _extract_mapping_pairs(column_map)
                         for source_name, target_name in mapping_pairs:
-                            name_match = col["name"] == source_name
-                            in_keys = col["name"] in custom_config["keys"]
+                            name_match = col["name"].lower() == str(source_name).lower()
+                            in_keys = _is_in_keys(col["name"], custom_config)
                             if name_match and in_keys:
                                 keys.append(_enrich_column({
                                     "id": col_id,  # Use actual ordinal position from database
@@ -1176,7 +1271,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                     "dataType": col.get("dataType")
                                 }, col))
                                 logger.info(f"Key matched: col={col['name']!r}, source_name={source_name!r}, target_name={target_name!r}")
-                            elif col["name"] in custom_config["keys"]:
+                            elif _is_in_keys(col["name"], custom_config):
                                 logger.warning(f"Key col={col['name']!r} is in keys list but source_name={source_name!r} did not match (name_match={name_match}, in_keys={in_keys})")
             else:
                 # No column mappings, use keys directly from source columns
@@ -1224,7 +1319,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         else:
             keys = []
             for col in columns["columns"]:
-                if col.get("isPK"):
+                if _coerce_is_pk(col.get("isPK")):
                     # Use the id field from CoreHub API as the column ID
                     col_id = col.get('id')
                     if col_id is None:
@@ -1240,6 +1335,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         "dataType": col.get("dataType")
                     }, col))
             logger.debug(f"Using primary keys for {table_name}: {keys}")
+
+        # Keep column isPK flags aligned with the resolved keys list (CoreHub reads isPK).
+        _paint_is_pk_on_columns(columns_def, keys)
 
         # Apply the charSet declared in the YAML on the source columns. Done here, on the
         # already built list, so it covers every shape it can be built from: explicit
@@ -1544,7 +1642,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     # Extract source:target pairs, ignoring metadata fields
                     mapping_pairs = _extract_mapping_pairs(column_map)
                     for source_name, target_name in mapping_pairs:
-                        if source_name == col["name"]:
+                        if str(col["name"]).lower() == str(source_name).lower():
                             discovered_target_col = target_discovered_columns_by_name.get(target_name.lower())
                             resolved_target_type = None
                             target_col_id = source_col_id  # Default to source ID
@@ -1581,7 +1679,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
                             max_target_col_id = max(max_target_col_id, target_col_id)
                             # Get isPrimaryKey from discovered target column or fall back to source column
-                            target_is_primary_key = (discovered_target_col.get("isPK") if discovered_target_col else False) or col.get("isPK", False) or _is_in_keys(col["name"], custom_config)
+                            target_is_primary_key = (discovered_target_col.get("isPK") if discovered_target_col else False) or _coerce_is_pk(col.get("isPK")) or _is_in_keys(col["name"], custom_config)
                             target_columns_def.append(_enrich_column({
                                 "id": target_col_id,  # Use target column ID
                                 "position": 0,
@@ -1600,7 +1698,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 
                 # Find the matching column from discovered source columns
                 for col in columns["columns"]:
-                    if col["name"] == source_col_name:
+                    if str(col["name"]).lower() == str(source_col_name).lower():
                         source_col_id = col.get('id')
                         if source_col_id is None:
                             error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response."
@@ -1647,7 +1745,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         max_target_col_id = max(max_target_col_id, target_col_id)
                         # Target columns are serialised with `dataType` (not `type`) in the
                         # UpsertEntitiesDto contract. Align with the mapping/default branches.
-                        target_is_primary_key = (discovered_target_col.get("isPK") if discovered_target_col else False) or col.get("isPK", False) or _is_in_keys(col["name"], custom_config)
+                        target_is_primary_key = (discovered_target_col.get("isPK") if discovered_target_col else False) or _coerce_is_pk(col.get("isPK")) or _is_in_keys(col["name"], custom_config)
                         target_columns_def.append(_enrich_column({
                             "id": target_col_id,
                             "position": col.get("position", 0),
@@ -1699,7 +1797,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 # Fall back to source column name if target column not found
                 target_col_name = discovered_target_col.get('name') if discovered_target_col else col["name"]
                 # Get isPrimaryKey from discovered target column or fall back to source column
-                target_is_primary_key = (discovered_target_col.get("isPK") if discovered_target_col else False) or col.get("isPK", False) or _is_in_keys(col["name"], custom_config)
+                target_is_primary_key = (discovered_target_col.get("isPK") if discovered_target_col else False) or _coerce_is_pk(col.get("isPK")) or _is_in_keys(col["name"], custom_config)
                 target_columns_def.append(_enrich_column({
                     "id": target_col_id,  # Use target column ID
                     "position": 0,
@@ -1709,6 +1807,43 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     "isPK": target_is_primary_key, "isIdentity": (discovered_target_col.get("isIdentity") if discovered_target_col else None) or col.get("isIdentity", False), "isNullable": discovered_target_col.get("isNullable") if discovered_target_col and "isNullable" in discovered_target_col else col.get("isNullable", False)
                 }, discovered_target_col if 'discovered_target_col' in locals() and discovered_target_col else col))
         
+        if has_column_mappings_target and not target_columns_def:
+            logger.warning(
+                f"Table {table_name}: target column mappings produced no columns "
+                f"(likely target-only Field Function entries). Falling back to discovery."
+            )
+            for col in columns["columns"]:
+                source_col_id = col.get('id')
+                if source_col_id is None:
+                    error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
+                discovered_target_col = target_discovered_columns_by_name.get(col["name"].lower())
+                resolved_target_type = None
+                target_col_id = source_col_id
+                if discovered_target_col:
+                    if discovered_target_col.get('dataType'):
+                        resolved_target_type = discovered_target_col.get('dataType')
+                    if discovered_target_col.get('id') is not None:
+                        target_col_id = discovered_target_col.get('id')
+                else:
+                    resolved_target_type = map_data_type(col.get("dataType"), source_node_info, target_node_info,
+                                                         source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
+                                                         target_table_column_types=target_table_column_types)
+                max_target_col_id = max(max_target_col_id, target_col_id)
+                target_col_name = discovered_target_col.get('name') if discovered_target_col else col["name"]
+                target_is_primary_key = _coerce_is_pk(discovered_target_col.get("isPK") if discovered_target_col else False) or _coerce_is_pk(col.get("isPK")) or _is_in_keys(col["name"], custom_config)
+                target_columns_def.append(_enrich_column({
+                    "id": target_col_id,
+                    "position": 0,
+                    "name": target_col_name,
+                    "alias": target_col_name,
+                    "dataType": resolved_target_type,
+                    "isPK": target_is_primary_key,
+                    "isIdentity": (discovered_target_col.get("isIdentity") if discovered_target_col else None) or col.get("isIdentity", False),
+                    "isNullable": discovered_target_col.get("isNullable") if discovered_target_col and "isNullable" in discovered_target_col else col.get("isNullable", False)
+                }, discovered_target_col if discovered_target_col else col))
+
         # Add target-only columns if specified (only supported with unlocked schema)
         target_only_columns = custom_config.get('targetOnlyColumns', [])
         if target_only_columns:
@@ -1818,7 +1953,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         # Extract source:target pairs, ignoring metadata fields
                         mapping_pairs = _extract_mapping_pairs(column_map)
                         for source_name, target_name in mapping_pairs:
-                            if source_name == col["name"] and source_name in custom_config.get('keys', []):
+                            if col["name"].lower() == str(source_name).lower() and _is_in_keys(col["name"], custom_config):
                                 discovered_target_col = target_discovered_columns_by_name.get(target_name.lower())
                                 resolved_target_type = None
                                 target_col_id = source_col_id  # Default to source ID
@@ -1906,7 +2041,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         else:
             target_keys = []
             for col in columns["columns"]:
-                if col.get("isPK"):
+                if _coerce_is_pk(col.get("isPK")):
                     # Use the id field from CoreHub API as the column ID
                     col_id = col.get('id')
                     if col_id is None:
@@ -1930,6 +2065,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         "dataType": _resolved_dt
                     }, discovered_target_col if 'discovered_target_col' in locals() and discovered_target_col else col))
             logger.debug(f"Using primary target keys for {table_name}: {target_keys}")
+
+        _paint_is_pk_on_columns(target_columns_def, target_keys)
 
         # Determine target entity type based on target_type
         # Check if target_type indicates NoSQL (case-insensitive)
@@ -2157,7 +2294,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 # Extract source:target pairs, ignoring metadata fields
                 mapping_pairs = _extract_mapping_pairs(column_map)
                 for source_name, target_name in mapping_pairs:
-                    matched_col = next((c for c in columns["columns"] if c.get("name") == source_name), None)
+                    matched_col = next((c for c in columns["columns"] if str(c.get("name","")).lower() == str(source_name).lower()), None)
                     
                     if matched_col:
                         col_id = matched_col.get('id')
@@ -2170,7 +2307,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             "name": matched_col["name"],
                             "alias": target_name,
                             "dataType": matched_col.get("dataType"),
-                            "isPK": matched_col.get("isPK", False) or _is_in_keys(matched_col["name"], custom_config), 
+                            "isPK": _coerce_is_pk(matched_col.get("isPK")) or _is_in_keys(matched_col["name"], custom_config), 
                             "isIdentity": matched_col.get("isIdentity", False), 
                             "isNullable": matched_col.get("isNullable", False)
                         }, matched_col))
@@ -2198,7 +2335,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     "name": col["name"],
                     "alias": col["name"],
                     "dataType": col.get("dataType"),
-                    "isPK": col.get("isPK", False) or _is_in_keys(col["name"], custom_config), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
+                    "isPK": _coerce_is_pk(col.get("isPK")) or _is_in_keys(col["name"], custom_config), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
                 }, col))
 
         # Process keys
@@ -2213,7 +2350,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         # Extract source:target pairs, ignoring metadata fields
                         mapping_pairs = _extract_mapping_pairs(column_map)
                         for source_name, target_name in mapping_pairs:
-                            if col["name"] == source_name and col["name"] in custom_config["keys"]:
+                            if col["name"].lower() == str(source_name).lower() and _is_in_keys(col["name"], custom_config):
                                 keys.append(_enrich_column({
                                     "id": col_id,
                                     "position": col.get("position", 0),
@@ -2253,7 +2390,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         else:
             keys = []
             for col in columns["columns"]:
-                if col.get("isPK"):
+                if _coerce_is_pk(col.get("isPK")):
                     col_id = col.get('id')
                     if col_id is None:
                         raise ValueError(f"Primary key column '{col.get('name')}' in {yaml_table_key} missing 'id' field")
@@ -2264,6 +2401,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         "alias": col["name"],
                         "dataType": col.get("dataType")
                     }, col))
+
+        _paint_is_pk_on_columns(columns_def, keys)
 
         char_set_overrides = _build_char_set_overrides((custom_config or {}).get('columns', []))
         _apply_char_set_overrides(columns_def, char_set_overrides, yaml_table_key)
@@ -2406,7 +2545,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 "name": col["name"],
                 "alias": col["name"],
                 "dataType": resolved_target_type,
-                "isPK": col.get("isPK", False) or _is_in_keys(col["name"], custom_config), "isIdentity": (discovered_target_col.get("isIdentity") if discovered_target_col else None) or col.get("isIdentity", False), "isNullable": discovered_target_col.get("isNullable") if discovered_target_col and "isNullable" in discovered_target_col else col.get("isNullable", False)
+                "isPK": _coerce_is_pk(col.get("isPK")) or _is_in_keys(col["name"], custom_config), "isIdentity": (discovered_target_col.get("isIdentity") if discovered_target_col else None) or col.get("isIdentity", False), "isNullable": discovered_target_col.get("isNullable") if discovered_target_col and "isNullable" in discovered_target_col else col.get("isNullable", False)
             }, discovered_target_col if 'discovered_target_col' in locals() and discovered_target_col else col))
 
         # Build target keys
@@ -2446,7 +2585,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
         else:
             for col in columns["columns"]:
-                if col.get("isPK"):
+                if _coerce_is_pk(col.get("isPK")):
                     col_id = col.get('id')
                     if col_id is None:
                         raise ValueError(f"Primary key '{col.get('name')}' in {yaml_table_key} missing 'id' field")
@@ -2469,6 +2608,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         if document_key:
             target_table_properties["documentKey"] = document_key
 
+        _paint_is_pk_on_columns(target_columns_def, target_keys)
 
         # Field Functions from YAML columns[].expression → entityType.fieldFunctions (GSSD-1355)
         _ff = build_field_functions_for_entity_type(
@@ -2714,7 +2854,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             else:
                 keys = []
                 for col in columns["columns"]:
-                    if col.get("isPK"):
+                    if _coerce_is_pk(col.get("isPK")):
                         # Use the id field from CoreHub API as the column ID
                         col_id = col.get('id')
                         if col_id is None:
@@ -3019,7 +3159,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             else:
                 keys = []
                 for col in columns["columns"]:
-                    if col.get("isPK"):
+                    if _coerce_is_pk(col.get("isPK")):
                         # Use ordinalPosition from API if available
                         col_id = col.get('position', col.get('id'))
                         if col_id is None:
