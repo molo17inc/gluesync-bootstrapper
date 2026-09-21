@@ -198,6 +198,76 @@ public:
             [("id", "id")],
         )
 
+    def test_pgsql_it_style_id_shorthand_mapping_keeps_pk(self):
+        """IT tables-list uses ``{id: ID}`` — must not skip ``id`` as export metadata."""
+        yaml_text = """
+public:
+  target: PUBLIC
+  tables:
+    whitelist: ["drivers"]
+    blacklist: []
+    custom:
+      drivers:
+        name: DRIVERS
+        columns:
+          - id: ID
+          - first_name: FIRST_NAME
+        keys:
+          - id
+"""
+        cols = _pgsql_drivers_columns()
+        # Even if discovery forgets isPK, YAML keys + mapping must paint it.
+        for c in cols["columns"]:
+            c["isPK"] = False
+        payload = self._run_create(yaml_text, columns_by_table={"drivers": cols})
+        source_ae, target_ae = payload["entities"][0]["agentEntities"]
+        src_cols = {c["name"]: c for c in source_ae["columns"]}
+        self.assertIn("id", src_cols, f"source columns={source_ae['columns']}")
+        self.assertTrue(src_cols["id"]["isPK"], f"source columns={source_ae['columns']}")
+        tgt_pks = [c["name"] for c in target_ae["columns"] if c.get("isPK")]
+        self.assertEqual(tgt_pks, ["ID"], f"target columns={target_ae['columns']}")
+
+    def test_extract_mapping_pairs_keeps_id_shorthand(self):
+        import create_all_entities as cae
+
+        # Regression: ``id`` is in _EXPORT_METADATA_FIELDS but is also a column name.
+        self.assertEqual(cae._extract_mapping_pairs({"id": "ID"}), [("id", "ID")])
+        # Export rows still use the source/target branch (id metadata ignored there).
+        self.assertEqual(
+            cae._extract_mapping_pairs(
+                {"source": "id", "target": "ID", "id": 1, "type": "int4"}
+            ),
+            [("id", "ID")],
+        )
+
+    def test_yaml_keys_survive_when_pk_omitted_from_column_mappings(self):
+        """keys: [id] must resolve from discovery if columns mappings omit the PK."""
+        yaml_text = """
+public:
+  target: PUBLIC
+  tables:
+    whitelist: ["drivers"]
+    blacklist: []
+    custom:
+      drivers:
+        name: DRIVERS
+        columns:
+          - first_name: FIRST_NAME
+        keys:
+          - id
+"""
+        cols = _pgsql_drivers_columns()
+        for c in cols["columns"]:
+            c["isPK"] = False
+        payload = self._run_create(yaml_text, columns_by_table={"drivers": cols})
+        source_ae, target_ae = payload["entities"][0]["agentEntities"]
+        self.assertTrue(
+            next(c for c in source_ae["columns"] if c["name"] == "id")["isPK"],
+            f"source columns={source_ae['columns']}",
+        )
+        self.assertTrue(any(c.get("isPK") for c in target_ae["columns"]))
+
+
 
 if __name__ == "__main__":
     unittest.main()

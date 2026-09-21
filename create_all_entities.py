@@ -302,13 +302,17 @@ def _extract_mapping_pairs(column_entry):
         and "source" not in column_entry
     ):
         return []
-    # Legacy user format: mapping keys only (skip export metadata). Coerce non-dict
-    # values to str so numeric YAML targets still produce a pair (pre-GSSD-1355
-    # returned raw items() and would keep them).
+    # Legacy user format: shorthand ``{source_col: target_col}``.
+    #
+    # GSSD-1355 originally skipped keys in ``_EXPORT_METADATA_FIELDS`` here so
+    # export rows would not leak ``type`` / ``id`` / etc. into mapping pairs.
+    # Export rows already return above via the ``source`` key branch, so filtering
+    # metadata in *this* branch is wrong for hand-written IT YAML such as
+    # ``{id: ID}`` — ``id`` is the most common PK column name and was dropped,
+    # leaving columns_def without the PK → CoreHub "Missing entity primary keys".
+    # Restore 2.7.6 behavior (all scalar items), only skipping non-scalar values.
     pairs = []
     for k, v in column_entry.items():
-        if k in _EXPORT_METADATA_FIELDS:
-            continue
         if v is None or isinstance(v, (dict, list, bool)):
             continue
         pairs.append((str(k), v if isinstance(v, str) else str(v)))
@@ -1273,6 +1277,78 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                 logger.info(f"Key matched: col={col['name']!r}, source_name={source_name!r}, target_name={target_name!r}")
                             elif _is_in_keys(col["name"], custom_config):
                                 logger.warning(f"Key col={col['name']!r} is in keys list but source_name={source_name!r} did not match (name_match={name_match}, in_keys={in_keys})")
+                # If YAML keys: were not paired via mappings (e.g. historical id-as-metadata
+                # skip, or key omitted from columns:), resolve remaining keys from discovery.
+                found_key_names = {
+                    str(k.get("name")).lower()
+                    for k in keys
+                    if isinstance(k, dict) and k.get("name") is not None
+                }
+                for key_name in custom_config["keys"]:
+                    if isinstance(key_name, dict):
+                        key_name = key_name.get("name") or (next(iter(key_name)) if key_name else None)
+                    if key_name is None:
+                        continue
+                    if str(key_name).lower() in found_key_names:
+                        continue
+                    matched = next(
+                        (c for c in columns["columns"] if str(c.get("name", "")).lower() == str(key_name).lower()),
+                        None,
+                    )
+                    if not matched:
+                        matched_def = next(
+                            (c for c in columns_def if str(c.get("name", "")).lower() == str(key_name).lower()),
+                            None,
+                        )
+                        if matched_def:
+                            keys.append(copy.deepcopy(matched_def))
+                            found_key_names.add(str(key_name).lower())
+                            logger.info(
+                                f"Key {key_name!r} resolved from columns_def after mapping miss for {table_name}"
+                            )
+                            continue
+                        error_msg = (
+                            f"CRITICAL ERROR: Key '{key_name}' not found in discovery or columns_def "
+                            f"for table '{table_name}' in schema '{source_schema}'. This key is required "
+                            f"by the YAML configuration but does not exist in the source database discovery."
+                        )
+                        logger.error(error_msg)
+                        raise ValueError(error_msg)
+                    col_id = matched.get("id")
+                    if col_id is None:
+                        error_msg = (
+                            f"CRITICAL ERROR: Column '{key_name}' in table {table_name} is missing "
+                            f"'id' field in CoreHub API response. This indicates a serious issue "
+                            f"with the discovery API."
+                        )
+                        logger.error(error_msg)
+                        raise ValueError(error_msg)
+                    keys.append(_enrich_column({
+                        "id": col_id,
+                        "position": matched.get("position", 0),
+                        "name": matched["name"],
+                        "alias": matched["name"],
+                        "dataType": matched.get("dataType"),
+                    }, matched))
+                    found_key_names.add(str(matched["name"]).lower())
+                    logger.info(
+                        f"Key {key_name!r} resolved from discovery after mapping miss for {table_name}"
+                    )
+                    # Ensure the PK column is present on columns_def (mapping may have dropped it)
+                    if not any(str(c.get("name", "")).lower() == str(matched["name"]).lower() for c in columns_def):
+                        columns_def.append(_enrich_column({
+                            "id": col_id,
+                            "position": matched.get("position", 0),
+                            "name": matched["name"],
+                            "alias": matched["name"],
+                            "dataType": matched.get("dataType"),
+                            "isPK": True,
+                            "isIdentity": matched.get("isIdentity", False),
+                            "isNullable": matched.get("isNullable", False),
+                        }, matched))
+                        logger.info(
+                            f"Re-added key column {matched['name']!r} to columns_def for {table_name}"
+                        )
             else:
                 # No column mappings, use keys directly from source columns
                 logger.debug(f"Processing keys for {table_name}: {custom_config['keys']}")
@@ -1982,6 +2058,83 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                                 }, discovered_target_col if 'discovered_target_col' in locals() and discovered_target_col else col))
                                 logger.debug(f"Target key: {source_name} -> {target_name} (source ID={source_col_id}, target ID={target_col_id})")
                                 break
+                # Resolve YAML keys: missed by mapping pairs (same defense as source path).
+                found_target_key_names = {
+                    str(k.get("name")).lower()
+                    for k in target_keys
+                    if isinstance(k, dict) and k.get("name") is not None
+                }
+                for key_name in custom_config["keys"]:
+                    if isinstance(key_name, dict):
+                        key_name = key_name.get("name") or (next(iter(key_name)) if key_name else None)
+                    if key_name is None:
+                        continue
+                    if str(key_name).lower() in found_target_key_names:
+                        continue
+                    matched = next(
+                        (c for c in columns["columns"] if str(c.get("name", "")).lower() == str(key_name).lower()),
+                        None,
+                    )
+                    if not matched:
+                        error_msg = (
+                            f"CRITICAL ERROR: Target key '{key_name}' not found in discovery for table "
+                            f"'{table_name}' in schema '{yaml_target_schema}'."
+                        )
+                        logger.error(error_msg)
+                        raise ValueError(error_msg)
+                    source_col_id = matched.get("id")
+                    if source_col_id is None:
+                        error_msg = (
+                            f"CRITICAL ERROR: Column '{key_name}' in table {table_name} is missing "
+                            f"'id' field in CoreHub API response."
+                        )
+                        logger.error(error_msg)
+                        raise ValueError(error_msg)
+                    # Prefer mapped target alias if present on source columns_def; else source name.
+                    src_def = next(
+                        (c for c in columns_def if str(c.get("name", "")).lower() == str(matched["name"]).lower()),
+                        None,
+                    )
+                    target_name = (src_def.get("alias") if src_def and src_def.get("alias") else matched["name"])
+                    discovered_target_col = target_discovered_columns_by_name.get(str(target_name).lower())
+                    resolved_target_type = None
+                    target_col_id = source_col_id
+                    if discovered_target_col:
+                        if discovered_target_col.get("dataType"):
+                            resolved_target_type = discovered_target_col.get("dataType")
+                        if discovered_target_col.get("id") is not None:
+                            target_col_id = discovered_target_col.get("id")
+                    else:
+                        resolved_target_type = map_data_type(
+                            matched.get("dataType"), source_node_info, target_node_info,
+                            source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
+                            target_table_column_types=target_table_column_types,
+                        )
+                    _override = target_data_type_overrides.get(matched["name"].lower())
+                    if _override:
+                        resolved_target_type = _override
+                    target_keys.append(_enrich_column({
+                        "id": target_col_id,
+                        "position": 0,
+                        "name": target_name,
+                        "alias": target_name,
+                        "dataType": resolved_target_type,
+                    }, discovered_target_col if discovered_target_col else matched))
+                    found_target_key_names.add(str(target_name).lower())
+                    if not any(str(c.get("name", "")).lower() == str(target_name).lower() for c in target_columns_def):
+                        target_columns_def.append(_enrich_column({
+                            "id": target_col_id,
+                            "position": 0,
+                            "name": target_name,
+                            "alias": target_name,
+                            "dataType": resolved_target_type,
+                            "isPK": True,
+                            "isIdentity": matched.get("isIdentity", False),
+                            "isNullable": matched.get("isNullable", False),
+                        }, discovered_target_col if discovered_target_col else matched))
+                    logger.info(
+                        f"Target key {key_name!r} -> {target_name!r} resolved from discovery after mapping miss"
+                    )
             else:
                 # No column mappings, use keys directly from source columns
                 for key_name in custom_config['keys']:
