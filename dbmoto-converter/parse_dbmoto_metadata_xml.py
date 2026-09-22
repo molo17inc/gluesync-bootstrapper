@@ -102,9 +102,77 @@ conversion_stats = {
 }
 
 # Known type aliases that should be normalized to canonical names
+# (source-dialect short names → a portable canonical form).
 TYPE_ALIASES = {
     "TIMESTMP": "TIMESTAMP",
 }
+
+# ---------------------------------------------------------------------------
+# Cross-database type remapping (source dialect → target dialect)
+# ---------------------------------------------------------------------------
+# On Microsoft SQL Server, TIMESTAMP is a synonym for rowversion (an opaque
+# binary concurrency token), NOT a date/time type. IBM i / AS400 TIMESTMP
+# (and the canonical TIMESTAMP alias) must therefore become datetime2 when
+# the Gluesync YAML targets MSSQL — otherwise DDL creates the wrong column
+# type (GSSD-1359 / MOVRAT00F).
+IBMI_TO_MSSQL_TYPE_MAP = {
+    "TIMESTMP": "datetime2",
+    "TIMESTAMP": "datetime2",
+    # IBM i DATETIME is uncommon but treat similarly if present
+    "DATETIME": "datetime2",
+}
+
+
+def _normalize_db_type_token(database_type: Optional[str]) -> str:
+    """Lowercase token for datasource / connection type matching."""
+    return (database_type or "").strip().lower()
+
+
+def is_mssql_database(database_type: Optional[str]) -> bool:
+    """Return True if database_type refers to Microsoft SQL Server."""
+    t = _normalize_db_type_token(database_type)
+    if not t:
+        return False
+    return (
+        "sqlserver" in t
+        or "sql server" in t
+        or t in ("mssql", "microsoft.sqlserver")
+        or t.endswith(".sqlserver")
+    )
+
+
+def is_ibmi_database(database_type: Optional[str]) -> bool:
+    """Return True if database_type refers to IBM i / AS400 / Db2 for i."""
+    t = _normalize_db_type_token(database_type)
+    if not t:
+        return False
+    return (
+        "ibm.db2.i" in t
+        or "db2.i" in t
+        or "as400" in t
+        or "ibm i" in t
+        or "ibmi" in t
+        or t in ("ibm.db2.i",)
+    )
+
+
+def map_type_for_target(
+    field_type: str,
+    source_database_type: Optional[str] = None,
+    target_database_type: Optional[str] = None,
+) -> str:
+    """Remap a column type for the target database dialect when needed.
+
+    Today this only adjusts IBM i timestamp-with-time types for MSSQL targets
+    (TIMESTMP / TIMESTAMP → datetime2). Other pairs pass through unchanged.
+    """
+    if not field_type:
+        return field_type
+    if is_ibmi_database(source_database_type) and is_mssql_database(target_database_type):
+        mapped = IBMI_TO_MSSQL_TYPE_MAP.get(field_type.upper())
+        if mapped:
+            return mapped
+    return field_type
 
 
 def parse_connect_params(params_text: str) -> Dict[str, str]:
@@ -747,6 +815,11 @@ def _build_table_entry_helper(table, table_lookup, replications, field_mappings,
     target_table_id = target_id
     repl_id_for_table = repl_id
 
+    # Source/target DB dialects for cross-DB type remapping (GSSD-1359).
+    source_lookup = table_lookup.get(table["id"]) or {}
+    source_database_type = source_lookup.get("database_type") or ""
+    target_database_type = (target_info or {}).get("database_type") or ""
+
     # Determine if the replication is disabled
     is_disabled = False
     if repl_id_for_table and replications.get(repl_id_for_table, {}).get("repl_status") == '3':
@@ -776,9 +849,17 @@ def _build_table_entry_helper(table, table_lookup, replications, field_mappings,
                 if target_field_name != field["name"]:
                     print(f"        Mapped field: {field['name']} -> {target_field_name}")
 
+        # Remap IBM i timestamp types when the replication target is MSSQL
+        # (TIMESTAMP on SQL Server is rowversion — GSSD-1359).
+        col_type = map_type_for_target(
+            field.get("type") or "VARCHAR",
+            source_database_type,
+            target_database_type,
+        )
+
         col_def = {
             "name": target_field_name,
-            "type": field.get("type") or "VARCHAR",
+            "type": col_type,
             "dataLength": field.get("data_length", 0),
             "numericPrecision": field.get("numeric_precision", 0),
             "numericScale": field.get("numeric_scale", 0),
@@ -818,9 +899,14 @@ def _build_table_entry_helper(table, table_lookup, replications, field_mappings,
                 None
             )
             if target_field_info:
+                expr_type = map_type_for_target(
+                    target_field_info.get("type") or "VARCHAR",
+                    source_database_type,
+                    target_database_type,
+                )
                 expr_col = {
                     "name": target_field_name,
-                    "type": target_field_info.get("type") or "VARCHAR",
+                    "type": expr_type,
                     "dataLength": target_field_info.get("data_length", 0),
                     "numericPrecision": target_field_info.get("numeric_precision", 0),
                     "numericScale": target_field_info.get("numeric_scale", 0),
@@ -1030,6 +1116,7 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                     "schema_name": schema["name"],
                     "connection_name": conn["name"],
                     "is_source": conn["is_source"],
+                    "database_type": conn.get("database_type") or "",
                 }
     
     source_to_target_tables = {}
