@@ -141,7 +141,7 @@ To determine source-to-target schema mappings:
 ### Output Normalization Rules
 
 - **Table names**: Whitelist entries keep the exact casing from the source schema, even when the table is mapped to a differently cased target table.
-- **Field types**: The parser preserves the original case-sensitive data type string from the metadata. Specific source aliases are converted to their canonical form (e.g., IBM i `TIMESTMP` → `TIMESTAMP`).
+- **Field types**: The parser preserves the original case-sensitive data type string from the metadata. Specific source aliases are converted to their canonical form (e.g., IBM i `TIMESTMP` → `TIMESTAMP`). When the source is IBM i / AS400 and the target is Microsoft SQL Server, timestamp-with-time types are remapped for the target dialect (`TIMESTMP` / `TIMESTAMP` → `datetime2`) because MSSQL `TIMESTAMP` is `rowversion`, not a date/time type (GSSD-1359).
 
 ## Special Cases
 
