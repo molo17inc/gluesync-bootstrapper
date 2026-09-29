@@ -45,6 +45,32 @@ from utils.core_hub_client import CoreHubClient
 from utils.transactions_audit_client import TransactionsAuditClient
 from commons import extract_schemas_from_yaml, extract_all_schemas_from_yaml, extract_schema_types_from_yaml, configure_core_hub
 
+def _connect_requested(argv):
+    """True for the kit command: python main.py --connect-import PATH --connect-setup."""
+    flags = (
+        '--connect-import',
+        '--connect-setup',
+        '--connect-export',
+        '--connect-org-id',
+        '--connect-relay',
+        '--connect-jdbc-token',
+        '--connect-jdbc-token-name',
+        '--connect-mcp-token',
+        '--connect-mcp-token-name',
+        '--connect-mcp-client',
+    )
+    for arg in argv:
+        if arg.split('=', 1)[0] in flags:
+            return True
+    return False
+
+
+if __name__ == "__main__" and _connect_requested(sys.argv[1:]):
+    from connect_portable import run_cli
+    run_cli(sys.argv[1:])
+    raise SystemExit(0)
+
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Core Hub API paths used more than once
@@ -1403,32 +1429,6 @@ def main():
 
     _complete_pipeline(token, pipeline_id, pipeline_name)
 
-
-def _connect_requested(argv):
-    """True for the kit command: python main.py --connect-import PATH --connect-setup."""
-    flags = (
-        '--connect-import',
-        '--connect-setup',
-        '--connect-export',
-        '--connect-org-id',
-        '--connect-relay',
-        '--connect-jdbc-token',
-        '--connect-jdbc-token-name',
-        '--connect-mcp-token',
-        '--connect-mcp-token-name',
-        '--connect-mcp-client',
-    )
-    for arg in argv:
-        if arg.split('=', 1)[0] in flags:
-            return True
-    return False
-
-
 if __name__ == "__main__":
-    import sys
-    if _connect_requested(sys.argv[1:]):
-        from connect_portable import run_cli
-        run_cli(sys.argv[1:])
-    else:
-        main()
+    main()
 

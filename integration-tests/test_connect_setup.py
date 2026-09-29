@@ -5,6 +5,7 @@ import io
 import json
 import sys
 import unittest
+import unittest.mock
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -347,6 +348,44 @@ class MainWiringTests(unittest.TestCase):
         self.assertIn("'--connect-import'", source)
         self.assertIn("'--connect-setup'", source)
         self.assertIn("run_cli", source)
+
+
+
+class HubCredentialTests(unittest.TestCase):
+    def test_hub_login_is_preferred_over_shared_token(self):
+        seen = {}
+
+        def transport(method, url, headers, body):
+            seen["method"] = method
+            seen["url"] = url
+            seen["authorization"] = headers.get("Authorization")
+            if not url.endswith(connect._HUB_LOGIN):
+                raise AssertionError(method)
+            return 200, {"token": "issued-by-hub-login", "changeRequired": False}
+
+        env = {
+            "COREHUB_URL": "http://hub.example",
+            "COREHUB_TOKEN": "shared-kit-token",
+            "COREHUB_USERNAME": "hub-admin",
+            "COREHUB_PASSWORD": "hub-admin-pass",
+        }
+        import os
+        with unittest.mock.patch.dict(os.environ, env, clear=False):
+            client = connect._hub_from_env(transport)
+        self.assertEqual(seen["method"], "POST")
+        self.assertTrue(seen["url"].endswith(connect._HUB_LOGIN))
+        self.assertIsNone(seen["authorization"])
+        self.assertEqual(client.bearer, "issued-by-hub-login")
+        self.assertEqual(client.cookie_token, "issued-by-hub-login")
+        self.assertNotEqual(client.bearer, "shared-kit-token")
+
+    def test_hub_login_without_token_is_rejected(self):
+        def transport(method, url, headers, body):
+            return 200, {"changeRequired": False}
+
+        with self.assertRaises(connect.ConnectError):
+            connect.login_hub("http://hub.example", "hub-admin", "hub-admin-pass", transport=transport)
+
 
 
 if __name__ == "__main__":

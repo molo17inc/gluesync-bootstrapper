@@ -982,12 +982,17 @@ def _write_enrollment(out: Any, mqtt_url: str, enrollment_token: str, relay: boo
     out.flush()
 
 
+_HUB_LOGIN = "/authentication/login"
+_HUB_CONFIGURE = "/connect/configure"
+
+
 def _configure_hub(hub: Optional[ConnectClient], mqtt_url: str, enrollment_token: str, enroll_name: str) -> bool:
     if hub is None:
         return False
+    # enrollment_token is the MQTT plaintext. It is not a hub Authorization credential.
     hub.request(
         "POST",
-        "/connect/configure",
+        _HUB_CONFIGURE,
         {"connectUrl": mqtt_url, "enrollmentToken": enrollment_token, "siteName": enroll_name},
     )
     return True
@@ -1116,6 +1121,20 @@ def login_connect(base_url: str, email: str, password: str, transport: Optional[
     return ConnectClient(base_url, bearer=result["token"], transport=transport)
 
 
+def login_hub(base_url: str, username: str, password: str, transport: Optional[Transport] = None) -> ConnectClient:
+    """Hub session for POST /connect/configure. Not the MQTT enrollment plaintext."""
+    anonymous = ConnectClient(base_url, transport=transport)
+    result = anonymous.request(
+        "POST",
+        _HUB_LOGIN,
+        {"username": username, "password": password},
+    )
+    if not isinstance(result, dict) or not isinstance(result.get("token"), str):
+        raise ConnectError(f"POST {_HUB_LOGIN} did not return a token")
+    token = result["token"]
+    return ConnectClient(base_url, bearer=token, cookie_token=token, transport=transport)
+
+
 def _reject_mixed_mode(args: Any) -> None:
     exporting = bool(getattr(args, "connect_export", None))
     importing = bool(getattr(args, "connect_import", None) or getattr(args, "connect_setup", False))
@@ -1143,16 +1162,40 @@ def _export_requested(args: Any, client: ConnectClient) -> bool:
     return True
 
 
+def _hub_url() -> Optional[str]:
+    return _env("COREHUB_URL") or _env("CORE_HUB_URL")
+
+
+def _hub_credentials() -> Optional[Tuple[str, str]]:
+    username = _env("COREHUB_USERNAME") or _env("CORE_HUB_USERNAME")
+    password = _env("COREHUB_PASSWORD") or _env("CORE_HUB_PASSWORD")
+    if username and password:
+        return username, password
+    return None
+
+
+def _hub_shared_token() -> Optional[str]:
+    return _env("COREHUB_TOKEN") or _env("GS_AUTH")
+
+
+def _skip_hub_configure() -> None:
+    print(
+        f"Skipping POST {_HUB_CONFIGURE} because COREHUB_URL and either "
+        "COREHUB_USERNAME/COREHUB_PASSWORD or COREHUB_TOKEN are required.",
+        file=sys.stderr,
+    )
+
+
 def _hub_from_env(transport: Optional[Transport]) -> Optional[ConnectClient]:
-    hub_url = _env("COREHUB_URL") or _env("CORE_HUB_URL")
-    hub_token = _env("COREHUB_TOKEN") or _env("GS_AUTH")
-    if hub_url and hub_token:
-        return ConnectClient(hub_url, bearer=hub_token, cookie_token=hub_token, transport=transport)
-    if hub_url or hub_token:
-        print(
-            "Skipping POST /connect/configure because both COREHUB_URL and COREHUB_TOKEN are required.",
-            file=sys.stderr,
-        )
+    hub_url = _hub_url()
+    credentials = _hub_credentials()
+    if hub_url and credentials:
+        return login_hub(hub_url, credentials[0], credentials[1], transport=transport)
+    shared = _hub_shared_token()
+    if hub_url and shared:
+        return ConnectClient(hub_url, bearer=shared, cookie_token=shared, transport=transport)
+    if hub_url or shared or credentials:
+        _skip_hub_configure()
     return None
 
 
