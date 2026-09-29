@@ -492,7 +492,7 @@ class ConnectPermissionIntegrationTest(unittest.TestCase):
     def _assert_super_admin_accepted(self, server, base, hub_admin, enrollment):
         accepted, accepted_body = self._configure(base, hub_admin, enrollment)
         self.assertEqual(accepted, 200)
-        self.assertEqual(accepted_body["success"], True)
+        self.assertTrue(accepted_body["success"])
         call = server.state.configure_calls[-1]
         self.assertEqual(call["auth"], hub_admin)
         self.assertEqual(call["enrollment"], enrollment)
