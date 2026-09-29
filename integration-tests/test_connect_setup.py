@@ -316,14 +316,15 @@ class SetupOrderTests(unittest.TestCase):
             ]
         )
         client = connect.ConnectClient("http://connect-api:3000", bearer="session", transport=fake)
-        with self.assertRaises(connect.ConnectConflict):
-            connect.setup_bundle(
-                client,
-                bundle(),
-                mqtt_url=MQTT,
-                admin_email=ADMIN,
-                stdout=io.StringIO(),
-            )
+        self.assertRaises(
+            connect.ConnectConflict,
+            connect.setup_bundle,
+            client,
+            bundle(),
+            mqtt_url=MQTT,
+            admin_email=ADMIN,
+            stdout=io.StringIO(),
+        )
         self.assertEqual(len(fake.calls), 2)
         self.assertEqual(fake.calls[1][0], "POST")
         self.assertTrue(fake.calls[1][1].endswith("/api/organizations"))
@@ -345,7 +346,7 @@ class MainWiringTests(unittest.TestCase):
         source = (PROJECT_ROOT / "main.py").read_text(encoding="utf-8")
         self.assertIn("'--connect-import'", source)
         self.assertIn("'--connect-setup'", source)
-        self.assertIn("run_from_args", source)
+        self.assertIn("run_cli", source)
 
 
 if __name__ == "__main__":
