@@ -841,7 +841,76 @@ def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Gluesync Bootstrapper')
     parser.add_argument('--pipeline-name', type=str, help='Optional name for the pipeline')
+    parser.add_argument(
+        '--connect-import',
+        metavar='PATH',
+        help=(
+            'Portable Connect bundle (YAML or JSON) to import. '
+            'Broker and hub URLs are not read from this file.'
+        ),
+    )
+    parser.add_argument(
+        '--connect-setup',
+        action='store_true',
+        help='Apply --connect-import on Connect and mint one enrollment token.',
+    )
+    parser.add_argument(
+        '--connect-export',
+        metavar='PATH',
+        help='Export a portable Connect bundle by calling the Connect read APIs.',
+    )
+    parser.add_argument(
+        '--connect-org-id',
+        help='Organization id for --connect-export. Defaults to CONNECT_ORG_ID.',
+    )
+    parser.add_argument(
+        '--connect-relay',
+        action='store_true',
+        help=(
+            'Print GLUESYNC_JDBC_CONNECT_RELAY_ENABLED=true for the hub process. '
+            'Does not mint a JDBC token.'
+        ),
+    )
+    parser.add_argument(
+        '--connect-jdbc-token',
+        action='store_true',
+        help=(
+            'Mint one JDBC relay token after enrollment. The site must already '
+            'advertise query-forge-relay-v1. Plaintext is printed once and is not '
+            'written to the bundle.'
+        ),
+    )
+    parser.add_argument('--connect-jdbc-token-name', help='Name for --connect-jdbc-token.')
+    parser.add_argument(
+        '--connect-mcp-token',
+        action='store_true',
+        help='Mint one MCP token after enrollment. Plaintext is printed once and is not written to the bundle.',
+    )
+    parser.add_argument('--connect-mcp-token-name', help='Name for --connect-mcp-token.')
+    parser.add_argument('--connect-mcp-client', help='Client name for --connect-mcp-token.')
     args = parser.parse_args()
+
+    if (
+        args.connect_export
+        or args.connect_import
+        or args.connect_setup
+        or args.connect_jdbc_token
+        or args.connect_mcp_token
+        or args.connect_relay
+    ):
+        from connect_portable import run_from_args
+        try:
+            run_from_args(args)
+        except Exception as exc:  # noqa: BLE001 — operator-facing Connect setup errors
+            from connect_portable import ConnectError
+            if isinstance(exc, (ConnectError, SystemExit)):
+                if isinstance(exc, SystemExit):
+                    raise
+                import sys as _sys
+                print(f"Connect setup failed: {exc}", file=_sys.stderr)
+                raise SystemExit(1) from exc
+            raise
+        return
 
     # Display ASCII art at startup
     ascii_art = """
