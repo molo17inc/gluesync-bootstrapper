@@ -23,6 +23,7 @@ import os
 import sys
 import json
 from enum import Enum
+from typing import Optional
 
 from annotated_types import T
 import requests
@@ -31,6 +32,8 @@ import argparse
 
 from utils.log import get_logger, create_log_file, log_success, log_failure, lockfile_failure, lockfile_complete
 from utils.core_hub_client import CoreHubClient
+from utils.udf_signature import adapt_udf_signature, corehub_supports_is_snapshot
+import commons
 from commons import get_node_info, get_table_columns, fetch_core_hub, get_pipeline_config, get_pipeline_agents, \
     get_agent_tables, create_entity_schedules, create_pipeline_schedules, map_data_type, load_yaml_config, process_filter_clauses
 from pathlib import Path, PosixPath
@@ -90,6 +93,64 @@ class UdfFunctionCompileRequest(BaseModel):
     code: str
     type: UdfFunctionType
     udfName: str
+
+class UdfFunctionTestRequest(BaseModel):
+    """Body of ``test-mapping-function`` (``TestMappingFunctionRequest`` in CoreHub).
+
+    ``isSnapshot`` tells the UDF under test whether the row comes from the snapshot
+    (true) or from CDC (false, the CoreHub default). CoreHubs before 2.3 do not know the
+    field, so it is left out of the body for them (see :func:`test_udf_function`).
+    """
+    model_config = ConfigDict(use_enum_values=True)
+    data: dict
+    oldData: Optional[dict] = None
+    operation: str = "Insert"
+    type: UdfFunctionType
+    udfName: str
+    targetTable: dict
+    sourceColumns: list[dict] = []
+    targetColumns: list[dict] = []
+    columnsMappingMatrix: list[dict] = []
+    isSchemaLocked: bool = True
+    isSnapshot: bool = False
+
+# CoreHub base URL -> whether its UDFs take isSnapshot. Read once per CoreHub and run.
+_IS_SNAPSHOT_SUPPORT_BY_COREHUB: dict[str, bool] = {}
+
+def corehub_udfs_take_is_snapshot(token: str) -> bool:
+    """Whether the CoreHub in use expects the Gluesync 2.3 ``onChange`` signature (with ``isSnapshot``).
+
+    Decided on ``GET /version``: 2.3 and later take ``isSnapshot``, older releases do not.
+    When the version cannot be read the current signature is assumed.
+    """
+    base_url = getattr(commons.core_hub_client, "base_url", CORE_HUB_URL)
+    if base_url not in _IS_SNAPSHOT_SUPPORT_BY_COREHUB:
+        try:
+            version = fetch_core_hub("/version", token=token)
+        except Exception as e:  # pylint: disable=broad-except
+            logger.warning(f"Could not read the CoreHub version ({e}); assuming UDFs take isSnapshot (Gluesync 2.3+)")
+            version = None
+        supported = corehub_supports_is_snapshot(version)
+        logger.info(
+            f"CoreHub version {version!r}: UDF onChange signature "
+            f"{'with' if supported else 'without'} isSnapshot"
+        )
+        _IS_SNAPSHOT_SUPPORT_BY_COREHUB[base_url] = supported
+    return _IS_SNAPSHOT_SUPPORT_BY_COREHUB[base_url]
+
+def adapt_udf_code_for_corehub(code: str, udf_type, udf_name: str, token: str) -> str:
+    """``code`` with the ``onChange`` signature the CoreHub in use compiles.
+
+    Raises :class:`UdfSignatureError` when the source cannot be adapted safely.
+    """
+    adaptation = adapt_udf_signature(
+        code, udf_type, supports_is_snapshot=corehub_udfs_take_is_snapshot(token), udf_name=udf_name
+    )
+    if adaptation.changed:
+        logger.info(f"UDF '{udf_name}': {adaptation.note}")
+    elif adaptation.note:
+        logger.warning(f"UDF '{udf_name}': {adaptation.note}")
+    return adaptation.code
 
 def get_udf_function_for_table(table_name: str, udf: list[dict]) -> dict:
     return next((item for item in udf if item.get("name") == table_name), {})
@@ -157,21 +218,33 @@ def read_file(filepath):
     else:
         return content
 
-def test_udf_function(pipeline_id: str, token: str, udf_compile_request: UdfFunctionCompileRequest) -> str:
+def test_udf_function(pipeline_id: str, token: str, udf_test_request: UdfFunctionTestRequest) -> str:
+    """Run a compiled UDF on one row; ``udf_test_request.isSnapshot`` picks a snapshot or a CDC row."""
     try:
-        logger.info(f"Testing UDF function for entity {udf_compile_request.udfName} (type: {udf_compile_request.type})")
-        logger.debug(f"Test UDF function request: {udf_compile_request.model_dump()}")
+        logger.info(
+            f"Testing UDF function for entity {udf_test_request.udfName} (type: {udf_test_request.type}, "
+            f"isSnapshot: {udf_test_request.isSnapshot})"
+        )
+        body = udf_test_request.model_dump()
+        if not corehub_udfs_take_is_snapshot(token):
+            if udf_test_request.isSnapshot:
+                logger.warning(
+                    f"CoreHub before 2.3 cannot test UDF {udf_test_request.udfName} as a snapshot row; "
+                    f"isSnapshot is not sent"
+                )
+            body.pop("isSnapshot", None)
+        logger.debug(f"Test UDF function request: {body}")
         response = fetch_core_hub(
             f"/pipelines/{pipeline_id}/config/entities/mapping-functions/test-mapping-function",
             method="POST",
             token=token,
-            body=udf_compile_request.model_dump()
+            body=body
         )
-        logger.info(f"Successfully tested UDF function for entity {udf_compile_request.udfName}")
+        logger.info(f"Successfully tested UDF function for entity {udf_test_request.udfName}")
         return response
     except requests.exceptions.RequestException as e:
         error_msg = str(e)
-        logger.error(f"Failed to compile UDF function for entity {udf_compile_request.udfName}: {error_msg}")
+        logger.error(f"Failed to test UDF function for entity {udf_test_request.udfName}: {error_msg}")
         raise
 
 def compile_udf_function(pipeline_id: str, token: str, udf_compile_request: UdfFunctionCompileRequest) -> str:
@@ -202,6 +275,7 @@ def check_and_compile_udf_function(table_name: str, udf_definition: dict, pipeli
         try:
             file_data = read_file(file_path)
             logger.debug(f"Read {len(file_data)} characters from UDF file")
+            file_data = adapt_udf_code_for_corehub(file_data, udf_type, udf_name, token)
             b64_file_data = base64.b64encode(file_data.encode())
             udf_compile_request = UdfFunctionCompileRequest(code=b64_file_data, type=udf_type, udfName=udf_name)
             compile_udf_function(pipeline_id=pipeline_id, token=token, udf_compile_request=udf_compile_request)

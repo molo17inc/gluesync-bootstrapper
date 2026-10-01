@@ -24,6 +24,7 @@ hiddenimports = [
     'commons',
     'utils.log',
     'utils.core_hub_client',
+    'utils.udf_signature',
     'utils.chronos_client',
     'utils.gluesync_sdk_client',
     'automator_app.app',
