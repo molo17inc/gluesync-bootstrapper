@@ -24,10 +24,11 @@ import java.time.LocalDateTime;
  * The function is invoked by Gluesync whatever the operation is (INSERT, UPDATE, DELETE),
  * as well as while performing the Snapshot task, and must return a Pair of the
  * (possibly changed) operation and the new values for the target row.
+ * isSnapshot is true when the row comes from the Snapshot task, false when it comes from CDC.
  */
 public class UDF_KBM400MFG_FKLOCMST {
 
-    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, Logger logger) {
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, boolean isSnapshot, Logger logger) {
         // Source columns: LMBOSS, LMCODE, LMLDES, LMSDES, LMPN, LMTYPE, LMROPD, LMROPT, LMROQT, LMRS, LMSEQ, LMCO, LMLOT, LMTQTY, LMMOLR, LMDALR, LMYRLR, LMAQTY, LMID, LMDCNT, LMDNCC, LMPKRV, LMOVIS, LMCTLR, LMDNCT, LMWARE, LMGLCD, LMDTCC, LMDTLC, LMDTLR
         // Target columns: LMBOSS, LMCODE, LMLDES, LMSDES, LMPN, LMTYPE, LMROPD, LMROPT, LMROQT, LMRS, LMSEQ, LMCO, LMLOT, LMTQTY, LMDATELR, LMAQTY, LMID, LMDCNT, LMDNCC, LMPKRV, LMOVIS, LMDNCT, LMWARE, LMGLCD, LMDTCC, LMDTLC, LMDTLR
 

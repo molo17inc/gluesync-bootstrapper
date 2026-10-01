@@ -21,10 +21,11 @@ import java.time.LocalDateTime;
  * The function is invoked by Gluesync whatever the operation is (INSERT, UPDATE, DELETE),
  * as well as while performing the Snapshot task, and must return a Pair of the
  * (possibly changed) operation and the new values for the target row.
+ * isSnapshot is true when the row comes from the Snapshot task, false when it comes from CDC.
  */
 public class UDF_ESPRODLIB_FEFMHR {
 
-    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, Logger logger) {
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, boolean isSnapshot, Logger logger) {
         // Source columns: CODE, CONBR, PARENT, MODEL, PDCATE, SERIES, NEWCST, RELDAT, RELTIM, LABCST, LTHALF, GEHALF, SHADMH, SHDBO1, SHDBO2, A1FCT, HM1MH, HM2MH, X1FCT, A2FCT, STDBOD, ALTBOD, ALTCOD, GLZ1MH, GLZ2MH, FXL1MH, FXL2MH, IOGZMH, PJV1MH, PJV2MH, CASA1M, CASA2M, CASB1M, CASB2M, TPH1MH, TPH2MH, STKFMH, LLEGMH, MUNTMH, MITRMH, SPLCMH, WELDMH, SAWCMH, EXT1MH, EXT2MH, EXT3MH, EXT4MH, EXT5MH, EXT6MH, UEQFMH, PANFMH, SPNFMH, EXTFMH, GRD1MH, GRD2MH, GRD3MH, GRD4MH, GRD5MH, GRD6MH, GRD7MH, GRD8MH, UPDUSR, OVSZMH, TEMPMH, ARGOMH, LTG0MH, LTG1MH, LTG2MH, LTG3MH, LTG4MH, LTG5MH, MHCRTD, MHUPDD, MHCRTT, MHUPDT, MHCRTU, MHUPDU, MHPGMN
         // Target columns: CODE, CONBR, PARENT, MODEL, PDCATE, SERIES, NEWCST, RELDATETIME, LABCST, LTHALF, GEHALF, SHADMH, SHDBO1, SHDBO2, A1FCT, HM1MH, HM2MH, X1FCT, A2FCT, STDBOD, ALTBOD, ALTCOD, GLZ1MH, GLZ2MH, FXL1MH, FXL2MH, IOGZMH, PJV1MH, PJV2MH, CASA1M, CASA2M, CASB1M, CASB2M, TPH1MH, TPH2MH, STKFMH, LLEGMH, MUNTMH, MITRMH, SPLCMH, WELDMH, SAWCMH, EXT1MH, EXT2MH, EXT3MH, EXT4MH, EXT5MH, EXT6MH, UEQFMH, PANFMH, SPNFMH, EXTFMH, GRD1MH, GRD2MH, GRD3MH, GRD4MH, GRD5MH, GRD6MH, GRD7MH, GRD8MH, UPDUSR, OVSZMH, TEMPMH, ARGOMH, LTG0MH, LTG1MH, LTG2MH, LTG3MH, LTG4MH, LTG5MH, MHCRTDATETIME, MHUPDDATETIME, MHCRTU, MHUPDU, MHPGMN
 

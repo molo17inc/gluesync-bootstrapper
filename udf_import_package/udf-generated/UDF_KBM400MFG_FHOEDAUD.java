@@ -25,10 +25,11 @@ import java.time.LocalDateTime;
  * The function is invoked by Gluesync whatever the operation is (INSERT, UPDATE, DELETE),
  * as well as while performing the Snapshot task, and must return a Pair of the
  * (possibly changed) operation and the new values for the target row.
+ * isSnapshot is true when the row comes from the Snapshot task, false when it comes from CDC.
  */
 public class UDF_KBM400MFG_FHOEDAUD {
 
-    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, Logger logger) {
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, boolean isSnapshot, Logger logger) {
         // Source columns: ODCO, ODONO, ODLINE, ODTYPE, ODTRGD, ODTRGT, ODUSER, CDLINE, CDQTY, SACTCT, SACTMO, SACTDA, SACTYR, CDPRIC, CDDISC, CDSQTY, CDPN, CDC01, CDC02, CDC03, CDC04, CDC05, CDC06, CDC07, CDC08, CDC09, CDC10, CDDSCD, CDDTLD, CDMIIN, CDORTP, CDSTS, CDHTYP, CDPQTY, CDQWSP, NDLINE, NDQTY, NACTCT, NACTMO, NACTDA, NACTYR, NDPRIC, NDDISC, NDSQTY, NDPN, NDC01, NDC02, NDC03, NDC04, NDC05, NDC06, NDC07, NDC08, NDC09, NDC10, NDDSCD, NDDTLD, NDMIIN, NDORTP, NDSTS, NDHTYP, NDPQTY, NDQWSP, CHODCT, CHODDA, CHODMO, CHODYR, CHUPGM, NHODCT, NHODDA, NHODMO, NHODYR, NHUPGM, ACTPGM, CDASH, CDDCO, NDASH, NDDCO, SREQCT, SREQMO, SREQDA, SREQYR, CDID, NREQCT, NREQMO, NREQDA, NREQYR, NDID
         // Target columns: RECORDID, ODCO, ODONO, ODLINE, ODTYPE, ODTRGDTTM, ODUSER, CDLINE, CDQTY, SACTDATE, CDPRIC, CDDISC, CDSQTY, CDPN, CDC01, CDC02, CDC03, CDC04, CDC05, CDC06, CDC07, CDC08, CDC09, CDC10, CDDSCD, CDDTLDATE, CDMIIN, CDORTP, CDSTS, CDHTYP, CDPQTY, CDQWSP, NDLINE, NDQTY, NACTDATE, NDPRIC, NDDISC, NDSQTY, NDPN, NDC01, NDC02, NDC03, NDC04, NDC05, NDC06, NDC07, NDC08, NDC09, NDC10, NDDSCD, NDDTLDATE, NDMIIN, NDORTP, NDSTS, NDHTYP, NDPQTY, NDQWSP, CHODDATE, CHUPGM, NHODDATE, NHUPGM, ACTPGM, CDASH, CDDCO, NDASH, NDDCO
 

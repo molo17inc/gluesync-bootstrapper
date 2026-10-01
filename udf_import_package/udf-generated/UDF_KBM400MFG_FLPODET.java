@@ -39,10 +39,11 @@ import java.time.LocalDateTime;
  * The function is invoked by Gluesync whatever the operation is (INSERT, UPDATE, DELETE),
  * as well as while performing the Snapshot task, and must return a Pair of the
  * (possibly changed) operation and the new values for the target row.
+ * isSnapshot is true when the row comes from the Snapshot task, false when it comes from CDC.
  */
 public class UDF_KBM400MFG_FLPODET {
 
-    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, Logger logger) {
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, boolean isSnapshot, Logger logger) {
         // Source columns: PEBSTS, PEBTYP, PECO, PECOMP, PECSCT, PECSDA, PECSDT, PECSMO, PECSYR, PEDTA, PEDTAK, PEDTAV, PEDTCC, PEDTK, PEDTLR, PEDTO, PEDTOR, PEFLG1, PELINE, PEMCCQ, PEMCDG, PEMCEM, PEMCGN, PEMCID, PEMCRC, PEMCRD, PEMCRV, PEMCTG, PEMCTR, PEMPCQ, PEMPDG, PEMPDR, PEMPEM, PEMPGN, PEMPID, PEMPRD, PEMPRV, PEMPTG, PEMPTR, PEMVCQ, PEMVEM, PEMVRD, PENO, PEPN, PEQOUS, PEQSRA, PEQSRV, PEQTA, PEQTC, PEQTK, PEQTO, PERDTY, PESEQ, PEUDTE, PEUEVT, PEUPGM, PEUTGT, PEUTIM, PEUUSR, PEVEND, PEWHSE, PRMCDR
         // Target columns: PEBSTS, PEBTYP, PECO, PECOMP, PECSDATE, PECSDT, PEDTA, PEDTAK, PEDTAV, PEDTK, PEDTLR, PEDTO, PEDTOR, PEFLG1, PELINE, PEMCCQ, PEMCDG, PEMCEM, PEMCID, PEMCRC, PEMCRD, PEMPCQ, PEMPDG, PEMPDR, PEMPEM, PEMPID, PEMPRD, PEMVCQ, PEMVEM, PEMVRD, PENO, PEPN, PEQOUS, PEQSRA, PEQSRV, PEQTA, PEQTC, PEQTK, PEQTO, PERDTY, PESEQ, PEUDTE, PEUEVT, PEUPGM, PEUTGT, PEUUSR, PEVEND, PEWHSE, PRMCDR, PEMCGDATETM, PEMCRDATETM, PEMPGDATETM, PEMPRDATETM
 

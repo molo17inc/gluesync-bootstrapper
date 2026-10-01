@@ -12,6 +12,7 @@ import org.slf4j.Logger;
  * - newValues: the new values of the row
  * - oldValues: the old values of the row (for UPDATE and DELETE operations)
  * - operation: the operation performed on the row (INSERT, UPDATE, DELETE), operation is an enum that can be Insert, Update, Delete
+ * - isSnapshot: true when the row comes from the Snapshot task, false when it comes from CDC
  * 
  * The function should return a Pair of the following values:
  * - the operation performed on the row (INSERT, UPDATE, DELETE): this is the operation that will be performed on the target table, it can be different from the operation performed on the source table
@@ -22,7 +23,7 @@ import org.slf4j.Logger;
 
 public class UDF_fd84c12ae981451693ff25e33f6a7f00 {
 
-    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, Logger logger) {
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, boolean isSnapshot, Logger logger) {
         // Source columns: user_key, user_account_id, user_display_name, user_email, role_type, custom_field_id, last_sync_at, timezone, customer_id
         // Target columns: emailAddress, name, surname, user_account_id, user_display_name, timezone, customerId, roleType
         

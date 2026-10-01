@@ -32,10 +32,11 @@ import java.time.LocalDateTime;
  * The function is invoked by Gluesync whatever the operation is (INSERT, UPDATE, DELETE),
  * as well as while performing the Snapshot task, and must return a Pair of the
  * (possibly changed) operation and the new values for the target row.
+ * isSnapshot is true when the row comes from the Snapshot task, false when it comes from CDC.
  */
 public class UDF_ESPRODLIB_FTPQUOTE {
 
-    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, Logger logger) {
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, boolean isSnapshot, Logger logger) {
         // Source columns: ESTNBR, JOBNAM, AGENT, DATSYS, TIMSYS, USER, AGTNBR, PRNTID, ESTYR, ESTDSH, AGNTCT, JBLOC1, JBLOC2, CUSNBR, CUSNAM, CUSTCT, SOLDT1, SOLDT2, SOLDTC, SOLDTS, SOLDZ1, SOLDZ2, AREACD, PHNENO, EXT, RECDBY, RCVDTE, RQDATE, ASNDTE, PRTDTE, SNTVIA, TYPCUR, BIDDTE, BIDTIM, BIDTM2, CHKOUT, CHKDTE, TTO, FTO, CTO, PPS, FPS, PPSDT, FPSDT, FPSANM, FPSADT, ESTPRF, REVISE, CTS, PSP, PSPDT, UGRPL, MTO, PCC, FSP, FSPDT, STATE, PPPJB, FTCO, FTDATC, FTDATU, FTTIMC, FTTIMU, FTUSRC, FTUSRU, FTPGMN
         // Target columns: ESTNBR, JOBNAM, AGENT, DATSYS, USER, AGTNBR, PRNTID, ESTYR, ESTDSH, AGNTCT, JBLOC1, JBLOC2, CUSNBR, CUSNAM, CUSTCT, SOLDT1, SOLDT2, SOLDTC, SOLDTS, SOLDZ1, SOLDZ2, AREACD, PHNENO, EXT, RECDBY, RCVDTE, RQDATE, ASNDTE, PRTDTE, SNTVIA, TYPCUR, BIDDTE, BIDTIM, BIDTM2, CHKOUT, CHKDTE, TTO, FTO, CTO, PPS, FPS, PPSDT, FPSDT, FPSANM, FPSADT, ESTPRF, REVISE, CTS, PSP, PSPDT, UGRPL, MTO, PCC, FSP, FSPDT, STATE, PPPJB, FTCO, FTDATCTM, FTDATUTM, FTUSRC, FTUSRU, FTPGMN
 

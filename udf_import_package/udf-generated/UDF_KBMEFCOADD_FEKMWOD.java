@@ -24,10 +24,11 @@ import java.time.LocalDateTime;
  * The function is invoked by Gluesync whatever the operation is (INSERT, UPDATE, DELETE),
  * as well as while performing the Snapshot task, and must return a Pair of the
  * (possibly changed) operation and the new values for the target row.
+ * isSnapshot is true when the row comes from the Snapshot task, false when it comes from CDC.
  */
 public class UDF_KBMEFCOADD_FEKMWOD {
 
-    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, Logger logger) {
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, boolean isSnapshot, Logger logger) {
         // Source columns: RTCO, WOWONO, RTOPNO, RTALTC, RTWCNO, RTSTSU, RTSTLB, WDQTCM, WDDSTS, RTSDSC, RTDRGN, RTTOLR, WDSLOC, RTCRFC, WDTFRZ, RTSTMV, WDRSTS, WDQTLM, WDCD, RTSUCD, RTINDR, WDSLNO, WDSURP, WDRNRP, WDOPCT, WDQTIN, RTOPCD, RTNBSC, RTPTRV, RTNBSU, RTOUTS, WDPTNO, WDMVPT, WDNOVM, WDLINE, WDMHGP, WDSTMH, WDMHRP, WDSTLR, WDSTLT, WDSTBR, WDSTBT, WDVRBR, WDVRBT, WDSTMR, WDSTMT, WDSTOR, WDSTOT, WDDUYY, WDDUMM, WDDUDD, WDACYY, WDACMM, WDACDD, WDSTYY, WDSTMM, WDSTDD, WDSTOP, WDTMTL, WDTFXM, WDTVRM, WDTUS1, WDTUS2, WDUMTL, WDUFXM, WDUVRM, WDUUS1, WDUUS2, WDDUCC, WDCRTD, WDUPDD, WDCRTT, WDUPDT, WDCRTU, WDUPDU, WDPGMN, WDUDTE, WDUEVT, WDUPGM, WDUTGT, WDUTIM, WDUUSR
         // Target columns: WDSTDTE, WDACDTE, WDDUDTE, RTCO, WOWONO, RTOPNO, RTALTC, RTWCNO, RTSTSU, RTSTLB, WDQTCM, WDDSTS, RTSDSC, RTDRGN, RTTOLR, WDSLOC, RTCRFC, WDTFRZ, RTSTMV, WDRSTS, WDQTLM, WDCD, RTSUCD, RTINDR, WDSLNO, WDSURP, WDRNRP, WDOPCT, WDQTIN, RTOPCD, RTNBSC, RTPTRV, RTNBSU, RTOUTS, WDPTNO, WDMVPT, WDNOVM, WDLINE, WDMHGP, WDSTMH, WDMHRP, WDSTLR, WDSTLT, WDSTBR, WDSTBT, WDVRBR, WDVRBT, WDSTMR, WDSTMT, WDSTOR, WDSTOT, WDSTOP, WDTMTL, WDTFXM, WDTVRM, WDTUS1, WDTUS2, WDUMTL, WDUFXM, WDUVRM, WDUUS1, WDUUS2, WDCRTDTM, WDUPDDTM, WDCRTU, WDUPDU, WDPGMN, WDUDTETM, WDUEVT, WDUPGM, WDUTGT, WDUUSR
 

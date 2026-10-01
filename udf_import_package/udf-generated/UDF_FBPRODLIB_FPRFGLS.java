@@ -19,10 +19,11 @@ import java.time.LocalDateTime;
  * The function is invoked by Gluesync whatever the operation is (INSERT, UPDATE, DELETE),
  * as well as while performing the Snapshot task, and must return a Pair of the
  * (possibly changed) operation and the new values for the target row.
+ * isSnapshot is true when the row comes from the Snapshot task, false when it comes from CDC.
  */
 public class UDF_FBPRODLIB_FPRFGLS {
 
-    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, Logger logger) {
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, boolean isSnapshot, Logger logger) {
         // Source columns: IMCO, ESTPRF, ESTYR, ESTNBR, ESTDSH, CYEAR, CNMBR, CDASH, MARK, QUANTITY, WIDTH, HEIGHT, PDCATE, WSYSTM, SERIES, JBGLS, TYPECD, REFPART, PARTDESC, PRTSHP, PARTMRK, GLSCOST, GLSPRICE, DISCOUNT, GLSTOTPRIC, GLSSQFT1, GLSCOST1, GLSPRIC1, GLSSQFT2, GLSCOST2, GLSPRIC2, TOTMHR, TOTWGT, PREFNUM, PREFVERS, PREFORDER, PREFVERSTP, PREFREF, RDCRTD, RDUPDD, RDCRTT, RDUPDT, RDCRTU, RDUPDU, RDPGMN, PRFGLSNBR, PRFINTNMTN, SCNMESH, SCNWIDTH, SCNHEIGHT, SCNJBFIN
         // Target columns: IMCO, ESTPRF, ESTYR, ESTNBR, ESTDSH, CYEAR, CNMBR, CDASH, MARK, QUANTITY, WIDTH, HEIGHT, PDCATE, WSYSTM, SERIES, JBGLS, TYPECD, REFPART, PARTDESC, PRTSHP, PARTMRK, GLSCOST, GLSPRICE, DISCOUNT, GLSTOTPRIC, GLSSQFT1, GLSCOST1, GLSPRIC1, GLSSQFT2, GLSCOST2, GLSPRIC2, TOTMHR, TOTWGT, PREFNUM, PREFVERS, PREFORDER, PREFVERSTP, PREFREF, PRFGLSNBR, PRFINTNMTN, SCNMESH, SCNWIDTH, SCNHEIGHT, SCNJBFIN, RDCRTD, RDUPDD, RDCRTU, RDUPDU, RDPGMN
 

@@ -20,10 +20,11 @@ import java.time.LocalDateTime;
  * The function is invoked by Gluesync whatever the operation is (INSERT, UPDATE, DELETE),
  * as well as while performing the Snapshot task, and must return a Pair of the
  * (possibly changed) operation and the new values for the target row.
+ * isSnapshot is true when the row comes from the Snapshot task, false when it comes from CDC.
  */
 public class UDF_ESPRODLIB_ESPUSER {
 
-    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, Logger logger) {
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, boolean isSnapshot, Logger logger) {
         // Source columns: USER, UNAME, UGROUP, UGRPL, SYSUSR, EGCONBR, EGDATCRT, EGDATUPD, EGTIMCRT, EGTIMUPD, EGUSRCRT, EGUSRUPD, EGPGMNAM
         // Target columns: USER, UNAME, UGROUP, UGRPL, SYSUSR, EGCONBR, EGCRTDT, EGUPDDT, EGUSRCRT, EGUSRUPD, EGPGMNAM
 

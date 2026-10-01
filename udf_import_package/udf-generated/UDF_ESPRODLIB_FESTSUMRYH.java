@@ -22,10 +22,11 @@ import java.time.LocalDateTime;
  * The function is invoked by Gluesync whatever the operation is (INSERT, UPDATE, DELETE),
  * as well as while performing the Snapshot task, and must return a Pair of the
  * (possibly changed) operation and the new values for the target row.
+ * isSnapshot is true when the row comes from the Snapshot task, false when it comes from CDC.
  */
 public class UDF_ESPRODLIB_FESTSUMRYH {
 
-    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, Logger logger) {
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, boolean isSnapshot, Logger logger) {
         // Source columns: QTPRF, QTYR, QTNBR, QTDSH, QTJOBNAME, QTESTMATOR, QTESTGROUP, QTRECDATE, QTSETUPDT, QTSALESREP, QTCUSTNUM, QTJOBTOTAL, QTJOBTYPE, QTDOD, QTLMIMPACT, QTNEWDIE, QTBLAST, QTNATACCT, QTEFCO, QTENG, QTQUOTED, QTBUDGET, QTBOGLASS, QTBOHARDWR, QTQUOTEDRW, QTBASIC, QTFULLENG, QTSTATUS, QTPENDTYPE, QTRESCOD, QTVERBAL, QTPOGIVEN, QTLETTER, QTAPPROVYR, QTAPPROVMO, QTSHIPYR, QTSHIPMO, QTSHOPS, QTDRAWTYPE, QTPRODTECH, QTSDCKLST, QTPRJINF, QTCRTD, QTUPDD, QTCRTT, QTUPDT, QTCRTU, QTUPDU, QTPGMN, QTENVIROPD
         // Target columns: QTPRF, QTYR, QTNBR, QTDSH, QTJOBNAME, QTESTMATOR, QTESTGROUP, QTRECDATE, QTSETUPDT, QTSALESREP, QTCUSTNUM, QTJOBTOTAL, QTJOBTYPE, QTDOD, QTLMIMPACT, QTNEWDIE, QTBLAST, QTNATACCT, QTEFCO, QTENG, QTQUOTED, QTBUDGET, QTBOGLASS, QTBOHARDWR, QTQUOTEDRW, QTBASIC, QTFULLENG, QTSTATUS, QTPENDTYPE, QTRESCOD, QTVERBAL, QTPOGIVEN, QTLETTER, QTAPPROVYR, QTAPPROVMO, QTSHIPYR, QTSHIPMO, QTSHOPS, QTDRAWTYPE, QTPRODTECH, QTSDCKLST, QTPRJINF, QTCRTDT, QTUPDDT, QTCRTU, QTUPDU, QTPGMN, QTENVIROPD
 

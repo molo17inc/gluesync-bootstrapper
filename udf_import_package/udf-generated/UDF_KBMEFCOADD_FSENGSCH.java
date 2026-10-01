@@ -34,10 +34,11 @@ import java.time.LocalDateTime;
  * The function is invoked by Gluesync whatever the operation is (INSERT, UPDATE, DELETE),
  * as well as while performing the Snapshot task, and must return a Pair of the
  * (possibly changed) operation and the new values for the target row.
+ * isSnapshot is true when the row comes from the Snapshot task, false when it comes from CDC.
  */
 public class UDF_KBMEFCOADD_FSENGSCH {
 
-    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, Logger logger) {
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, boolean isSnapshot, Logger logger) {
         // Source columns: SECO, SESLSORD, SESCHTYPE, SESCHNAME, SESCHNUM, SESCHSEQ, SESTATE, SENODASHES, SENOSDASHS, SESCHDATE, SESCHWEEK, SESCHEDFLG, SESHOP, SESHOPDUE, SESHOPRCVD, SECUSTDUE, SESTRLRCVD, SERTFDUE, SEDODBLAST, SESTRLCALC, SESDDUEDTE, SESDRCVDTE, SEMAILDATE, SESTRLDUE, SEESTHRS, SESTARTDTE, SESTRWEEK, SEESTDUE, SERVSDHRS, SERVSDDUE, SEACTHRS, SETOTHRS, SECMPLHRS, SETOTCMPL, SECMPLDATE, SESTATUS, SEENGINEER, SEPESEAL, SECALCAMT, SESTRLAMT, SECONSAMT, SEPRFTAMT, SECUSER, SECPGMN, SECRTDT, SECRTTM, SEUUSER, SEUPGMN, SEUPDDT, SEUPDTM
         // Target columns: SECo, SESlsOrd, SESchType, SESchName, SESchNum, SESchSeq, SESTATE, SENODashes, SENOSDashs, SESchDate, SESchWeek, SESchedFlg, SEShop, SEShopDue, SEShopRcvd, SECustDue, SEStrlRcvd, SERTFDue, SEDODBlast, SEStrlCalc, SESDDueDte, SESDRcvDte, SEMailDate, SEStrlDue, SEEstHrs, SEStartDte, SEEstDue, SERvsdHrs, SERvsdDue, SEActHrs, SETotHrs, SECmplHrs, SETotCmpl, SECmplDate, SEStrWeek, SEStatus, SEEngineer, SEPESeal, SECalcAmt, SEStrlAmt, SEConsAmt, SEPrftAmt, SECUser, SECPgmn, SECrtDtTm, SEUUser, SEUPgmn, SEUpdDtTm
 

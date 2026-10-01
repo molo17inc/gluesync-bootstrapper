@@ -21,10 +21,11 @@ import java.time.LocalDateTime;
  * The function is invoked by Gluesync whatever the operation is (INSERT, UPDATE, DELETE),
  * as well as while performing the Snapshot task, and must return a Pair of the
  * (possibly changed) operation and the new values for the target row.
+ * isSnapshot is true when the row comes from the Snapshot task, false when it comes from CDC.
  */
 public class UDF_KBMEFCOADD_KMPNEWD3 {
 
-    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, Logger logger) {
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, boolean isSnapshot, Logger logger) {
         // Source columns: CYEAR, CNMBR, CDASH, ENGREV, MFMRNO, ITEMNB, PRTNB, MRFTYP, MRFCLS, MRFCOL, MRFMIS, OMRDT, WKREQ, OMRQTY, OMRLEN, OPNMRQ, BSLNEF, BSQTEF, CUTINS, MRSTUS, OVHSCP, WEIGHT, TBVT, PERM, PDCATE, IMCO, FHCRTD, FHUPDD, FHCRTT, FHUPDT, FHCRTU, FHUPDU, FHPGMN, OPTION, OPTDET, OPTQTY, OPTPRT, ITMCLS, IRFTYP, IRFCLS, IRFCOL, IRFMIS
         // Target columns: RECORDID, CYEAR, CNMBR, CDASH, ENGREV, MFMRNO, ITEMNB, PRTNB, MRFTYP, MRFCLS, MRFCOL, MRFMIS, OMRDT, WKREQ, OMRQTY, OMRLEN, OPNMRQ, BSLNEF, BSQTEF, CUTINS, MRSTUS, OVHSCP, WEIGHT, TBVT, PERM, PDCATE, IMCO, FHCRTDATE, FHUPDDATE, FHCRTU, FHUPDU, FHPGMN, OPTIONING, OPTDET, OPTQTY, OPTPRT, ITMCLS, IRFTYP, IRFCLS, IRFCOL, IRFMIS
 

@@ -20,10 +20,11 @@ import java.time.LocalDateTime;
  * The function is invoked by Gluesync whatever the operation is (INSERT, UPDATE, DELETE),
  * as well as while performing the Snapshot task, and must return a Pair of the
  * (possibly changed) operation and the new values for the target row.
+ * isSnapshot is true when the row comes from the Snapshot task, false when it comes from CDC.
  */
 public class UDF_KBM400MFG_FHINVDET {
 
-    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, Logger logger) {
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, boolean isSnapshot, Logger logger) {
         // Source columns: INCODE, INDBLL, INDCC, INDCCL, INDCGS, INDCM, INDCO, INDCOL, INDCOM, INDCRA, INDCRC, INDCRT, INDCT, INDCUM, INDDA, INDDES, INDDWN, INDETP, INDGLC, INDIC, INDICL, INDLBA, INDLBC, INDMDL, INDMMO, INDMO, INDMSA, INDMSC, INDNUM, INDOCA, INDOCC, INDOCD, INDOCL, INDOCT, INDODA, INDODC, INDODD, INDODL, INDODT, INDPN, INDPP, INDPPL, INDPQ, INDPQL, INDPRJ, INDQTY, INDRMA, INDRML, INDRSA, INDRSC, INDRSN, INDSHA, INDSHC, INDSHN, INDSHP, INDSO, INDSOL, INDSUM, INDTAX, INDTIM, INDTO, INDTOL, INDTS, INDTSL, INDTXP, INDTYP, INDUDE, INDUEV, INDUPG, INDUTG, INDUTI, INDUUS, INDVAT, INDYR, INORTP, INPRC, INPRDM, INPTID, INSCHG, INSRC, INTDSC, INTOPT, INTXIM, INUPDM, INUPRC, INDDCO, RECORDID
         // Target columns: RECORDID, INCODE, INDBLL, INDCC, INDCCL, INDCGS, INDCM, INDCO, INDCOL, INDCOM, INDCRA, INDCRC, INDCRT, INDCUM, INDDATE, INDDES, INDDWN, INDETP, INDGLC, INDIC, INDICL, INDLBA, INDLBC, INDMDL, INDMMO, INDMSA, INDMSC, INDNUM, INDOCA, INDOCC, INDOCD, INDOCL, INDOCT, INDODA, INDODC, INDODD, INDODL, INDODT, INDPN, INDPP, INDPPL, INDPQ, INDPQL, INDPRJ, INDQTY, INDRMA, INDRML, INDRSA, INDRSC, INDRSN, INDSHA, INDSHC, INDSHN, INDSHP, INDSO, INDSOL, INDSUM, INDTAX, INDTIM, INDTO, INDTOL, INDTS, INDTSL, INDTXP, INDTYP, INDUDE, INDUEV, INDUPG, INDUTG, INDUUS, INDVAT, INORTP, INPRC, INPRDM, INPTID, INSCHG, INSRC, INTDSC, INTOPT, INTXIM, INUPDM, INUPRC, INDDCO
 

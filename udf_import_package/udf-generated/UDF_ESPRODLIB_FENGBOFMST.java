@@ -22,10 +22,11 @@ import java.time.LocalDateTime;
  * The function is invoked by Gluesync whatever the operation is (INSERT, UPDATE, DELETE),
  * as well as while performing the Snapshot task, and must return a Pair of the
  * (possibly changed) operation and the new values for the target row.
+ * isSnapshot is true when the row comes from the Snapshot task, false when it comes from CDC.
  */
 public class UDF_ESPRODLIB_FENGBOFMST {
 
-    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, Logger logger) {
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, boolean isSnapshot, Logger logger) {
         // Source columns: BOECO, BOEPRF, BOEYR, BOENBR, BOEDSH, BOCYEAR, BOCNMBR, BOCDASH, BOORIG, BOSEQ#, BOSSEQ#, BEORF, BOPCAT, BOPSER, BOCAT, BOSER, BOTYPE, BODPRF, BODSC, BOXDESC, BOUTMS, BOCLS, BOCODE, BOBUY, BOABC, BOACD, BOSTS, BOLDTM, BOINST, BOLSHZ, BOPCCOD, BOIMCLS, BODIE, BOSHIPS, BODATE, BOQTY, BOGLASS, BOUTPRC, BOACT$, BOUTNPRC, BONET$, BOWGT, BOMHR, BOMHACT$, BOMHUPRC, BOMHNET$, BOESF, BOEUPRC, BOEACT$, BOENUPRC, BOENET$, BOISF, BOIUPRC, BOIACT$, BOINUPRC, BOINET$, BOEFINSF, BOEFUPRC, BOEFACT$, BOEFUNPRC, BOEFNET$, BOIFINSF, BOIFUPRC, BOIFACT$, BOIFUNPRC, BOIFNET$, BOSOURCE, BOCOM1, BOCOM2, BOCRTU, BOCRTD, BOCRTT, BOUPDU, BOUPDD, BOUPDT, BOPGMN, BOEBLU, BOEBLD, BOEBLT, BOEBLP, BOFBLU, BOFBLD, BOFBLT, BOFBLP, BOPN
         // Target columns: BOECO, BOEPRF, BOEYR, BOENBR, BOEDSH, BOCYEAR, BOCNMBR, BOCDASH, BOORIG, BOSEQ#, BOSSEQ#, BEORF, BOPCAT, BOPSER, BOCAT, BOSER, BOTYPE, BODPRF, BODSC, BOXDESC, BOUTMS, BOCLS, BOCODE, BOBUY, BOABC, BOACD, BOSTS, BOLDTM, BOINST, BOLSHZ, BOPCCOD, BOIMCLS, BODIE, BOSHIPS, BODATE, BOQTY, BOGLASS, BOUTPRC, BOACT$, BOUTNPRC, BONET$, BOWGT, BOMHR, BOMHACT$, BOMHUPRC, BOMHNET$, BOESF, BOEUPRC, BOEACT$, BOENUPRC, BOENET$, BOISF, BOIUPRC, BOIACT$, BOINUPRC, BOINET$, BOEFINSF, BOEFUPRC, BOEFACT$, BOEFUNPRC, BOEFNET$, BOIFINSF, BOIFUPRC, BOIFACT$, BOIFUNPRC, BOIFNET$, BOSOURCE, BOCOM1, BOCOM2, BOCRTU, BOCRTDT, BOUPDU, BOUPDDT, BOPGMN, BOEBLU, BOEBLDT, BOEBLP, BOFBLU, BOFBLDT, BOFBLP
 

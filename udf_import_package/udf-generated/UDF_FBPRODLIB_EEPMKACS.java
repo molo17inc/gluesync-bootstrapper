@@ -20,10 +20,11 @@ import java.time.LocalDateTime;
  * The function is invoked by Gluesync whatever the operation is (INSERT, UPDATE, DELETE),
  * as well as while performing the Snapshot task, and must return a Pair of the
  * (possibly changed) operation and the new values for the target row.
+ * isSnapshot is true when the row comes from the Snapshot task, false when it comes from CDC.
  */
 public class UDF_FBPRODLIB_EEPMKACS {
 
-    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, Logger logger) {
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, boolean isSnapshot, Logger logger) {
         // Source columns: IMCO, ESTPRF, ESTYR, ESTNBR, ESTDSH, CYEAR, CNMBR, CDASH, PDCATE, WSYSTM, SERIES, BAYMRK, REF#, BAYQTY, WDWIDE, WDHIGH, JBFIN, JBFINI, AHEAD, AJAMB, AMULL, ASILL, MISC, CLIPS, WLDKD, ENGQTY, ATTL, ATBR, BTTL, BTBR, CTTL, CTBR, RDIM, PRINT, QTYDSC, DTSTMP, TMSTMP, AFLDB, APARTA, APARTB, ASIZEA, ASIZEB, ASNGLA, ASNGLB, PARENT, MODEL, MSSDES, LBRCD1, LBRCD2, PCQTY, ARCRTD, ARUPDD, ARCRTT, ARUPDT, ARCRTU, ARUPDU, ARPGMN
         // Target columns: IMCO, ESTPRF, ESTYR, ESTNBR, ESTDSH, CYEAR, CNMBR, CDASH, PDCATE, WSYSTM, SERIES, BAYMRK, REF#, BAYQTY, WDWIDE, WDHIGH, JBFIN, JBFINI, AHEAD, AJAMB, AMULL, ASILL, MISC, CLIPS, WLDKD, ENGQTY, ATTL, ATBR, BTTL, BTBR, CTTL, CTBR, RDIM, PRINT, QTYDSC, DTSTMP, TMSTMP, AFLDB, APARTA, APARTB, ASIZEA, ASIZEB, ASNGLA, ASNGLB, PARENT, MODEL, MSSDES, LBRCD1, LBRCD2, PCQTY, ARCRTD, ARUPDD, ARCRTU, ARUPDU, ARPGMN
 

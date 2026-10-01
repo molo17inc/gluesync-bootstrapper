@@ -23,10 +23,11 @@ import java.time.LocalDateTime;
  * The function is invoked by Gluesync whatever the operation is (INSERT, UPDATE, DELETE),
  * as well as while performing the Snapshot task, and must return a Pair of the
  * (possibly changed) operation and the new values for the target row.
+ * isSnapshot is true when the row comes from the Snapshot task, false when it comes from CDC.
  */
 public class UDF_KBM400D011_MARTRAN {
 
-    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, Logger logger) {
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, boolean isSnapshot, Logger logger) {
         // Source columns: ACT, ACTIVE, AMTBSE, AMTDOL, AMTDSC, APP, AUDOPR, AUDTIM, BATCH, BILLTO, CDEDSC, CO, CRSTAT, CURRCD, CUSTPO, DOCEXT, DOCINV, DOCSRC, DTEAPL, DTEDUE, DTEDSC, DTEEFF, DTETRN, EXRATE, EXSRCE, FAMBSE, FAMDSC, FORAMT, GLREF, ITEMNO, LINED, LOC, MFG, NAMEID, OFFSET, PRJECT, QTYAMT, REFER, RSNCDE, SHIPTO, STAXCD, SUMREF, STATUS, TRMDAY, TRMPCT, TYPTRN, USR02A, USR10A, USR30A
         // Target columns: RECORDID, ACT, ACTIVE, AMTBSE, AMTDOL, AMTDSC, APP, AUDOPR, AUDTIM, BATCH, BILLTO, CDEDSC, CO, CRSTAT, CURRCD, CUSTPO, DOCEXT, DOCINV, DOCSRC, DTEAPL, DTEDUE, DTEDSC, DTEEFF, DTETRN, EXRATE, EXSRCE, FAMBSE, FAMDSC, FORAMT, GLREF, ITEMNO, LINED, LOC, MFG, NAMEID, OFFSET, PRJECT, QTYAMT, REFER, RSNCDE, SHIPTO, STAXCD, SUMREF, STATUS, TRMDAY, TRMPCT, TYPTRN, USR02A, USR10A, USR30A
 

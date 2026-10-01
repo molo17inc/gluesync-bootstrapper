@@ -20,10 +20,11 @@ import java.time.LocalDateTime;
  * The function is invoked by Gluesync whatever the operation is (INSERT, UPDATE, DELETE),
  * as well as while performing the Snapshot task, and must return a Pair of the
  * (possibly changed) operation and the new values for the target row.
+ * isSnapshot is true when the row comes from the Snapshot task, false when it comes from CDC.
  */
 public class UDF_KBM400GLBL_GLDFLT {
 
-    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, Logger logger) {
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, boolean isSnapshot, Logger logger) {
         // Source columns: ACT, ACTIVE, AUDOPR, AUDTIM, CDGLCD, CDORT3, CMCLAS, CMGLCD, CO, DEFLT, DESC30, DFCAUS, DFDFCD, DFGLCD, IMCCOD, IMCLS3, IMCOD3, IMGLCD, IMPRFG, IMSTS3, LMGLCD, LMTYP3, LMWAR3, LOC, POGLCD, POTYP3, RTNTYP, VATCDE, VMGLCD, WOGLCD, WOTYP3, MCSRTC, MCTYPE, ESTAPP, SOAPP, MCDES1, ALLPCT, ALLNEG, DFCRTD, DFUPDD, DFCRTT, DFUPDT, DFCRTU, DFUPDU, DFPGMN
         // Target columns: RECORDID, ACT, ACTIVE, AUDOPR, AUDTIM, CDGLCD, CDORT3, CMCLAS, CMGLCD, CO, DEFLT, DESC30, DFCAUS, DFDFCD, DFGLCD, IMCCOD, IMCLS3, IMCOD3, IMGLCD, IMPRFG, IMSTS3, LMGLCD, LMTYP3, LMWAR3, LOC, POGLCD, POTYP3, RTNTYP, VATCDE, VMGLCD, WOGLCD, WOTYP3, MCSRTC, MCTYPE, ESTAPP, SOAPP, MCDES1, ALLPCT, ALLNEG, DFCRTDATE, DFUPDDATE, DFCRTU, DFUPDU, DFPGMN
 

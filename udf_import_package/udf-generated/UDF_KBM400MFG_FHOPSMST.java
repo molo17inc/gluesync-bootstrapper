@@ -22,10 +22,11 @@ import java.time.LocalDateTime;
  * The function is invoked by Gluesync whatever the operation is (INSERT, UPDATE, DELETE),
  * as well as while performing the Snapshot task, and must return a Pair of the
  * (possibly changed) operation and the new values for the target row.
+ * isSnapshot is true when the row comes from the Snapshot task, false when it comes from CDC.
  */
 public class UDF_KBM400MFG_FHOPSMST {
 
-    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, Logger logger) {
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, boolean isSnapshot, Logger logger) {
         // Source columns: OACTCT, OACTDA, OACTMO, OACTYR, OSCO, OSLDOF, OSLINE, OSLMDT, OSLSDA, OSLSMO, OSLSYR, OSNBSP, OSODDA, OSODMO, OSODYR, OSORD, OSPHAN, OSPN, OSPRI, OSPRSC, OSQTLS, OSQTY, OSQTYR, OSQWSP, OSSEQ, OSSQTY, OSSTS, OSTQTY, OSTYP, OSDCO, OSMTYP, OSWHAT, OSNUMB, OCYEAR, OCNMBR, OCDASH, OESTPRF, OESTYR, OESTNBR, OESTDSH
         // Target columns: OACTDATE, OSCO, OSLDOF, OSLINE, OSLMDT, OSLSDATE, OSNBSP, OSODDATE, OSORD, OSPHAN, OSPN, OSPRI, OSPRSC, OSQTLS, OSQTY, OSQTYR, OSQWSP, OSSEQ, OSSQTY, OSSTS, OSTQTY, OSTYP, OSDCO, OSMTYP, OSWHAT, OSNUMB, OCYEAR, OCNMBR, OCDASH, OESTPRF, OESTYR, OESTNBR, OESTDSH
 

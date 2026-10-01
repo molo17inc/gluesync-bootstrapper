@@ -23,10 +23,11 @@ import java.time.LocalDateTime;
  * The function is invoked by Gluesync whatever the operation is (INSERT, UPDATE, DELETE),
  * as well as while performing the Snapshot task, and must return a Pair of the
  * (possibly changed) operation and the new values for the target row.
+ * isSnapshot is true when the row comes from the Snapshot task, false when it comes from CDC.
  */
 public class UDF_KBM400MFG_FHINVHDR {
 
-    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, Logger logger) {
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, boolean isSnapshot, Logger logger) {
         // Source columns: INBAD1, INBAD2, INBAD3, INBAD4, INBAD5, INBCOT, INBILL, INBNAM, INBZIP, INCURR, INDISC, INDSCD, INDUCT, INDUDA, INDUMO, INDUYR, INERTS, INFCEX, INFOB, INHCM, INHCO, INHCT, INHCUS, INHDA, INHDTG, INHDWN, INHMO, INHNUM, INHRMA, INHRML, INHRTA, INHSCM, INHSLS, INHSO, INHSRC, INHSTS, INHTAX, INHTIM, INHTOT, INHUDE, INHUEV, INHUPG, INHUTG, INHUTI, INHUUS, INHVAT, INHWBN, INHYR, INICT, INIDA, INIMO, INIYR, INLSCM, INMEMO, INPAID, INPO, INPOST, INPRTI, INREFR, INRFCT, INRFDA, INRFMO, INRFTM, INRFYR, INSAD1, INSAD2, INSAD3, INSAD4, INSAD5, INSCND, INSCOT, INSHIP, INSMTH, INSNAM, INSZIP, INTAX1, INTAX2, INTAX3, INTAX4, INTRMS, INTYPE, INGEOC, INCNTY, INCTYL, INSSEQ
         // Target columns: RECORDID, INBAD1, INBAD2, INBAD3, INBAD4, INBAD5, INBCOT, INBILL, INBNAM, INBZIP, INCURR, INDISC, INDSCD, INDUDATE, INERTS, INFCEX, INFOB, INHCM, INHCO, INHCUS, INHDATE, INHDTG, INHDWN, INHNUM, INHRMA, INHRML, INHRTA, INHSCM, INHSLS, INHSO, INHSRC, INHSTS, INHTAX, INHTIM, INHTOT, INHUDTTM, INHUEV, INHUPG, INHUTG, INHUUS, INHVAT, INHWBN, INIDATE, INLSCM, INMEMO, INPAID, INPO, INPOST, INPRTI, INREFR, INRFDATETM, INSAD1, INSAD2, INSAD3, INSAD4, INSAD5, INSCND, INSCOT, INSHIP, INSMTH, INSNAM, INSZIP, INTAX1, INTAX2, INTAX3, INTAX4, INTRMS, INTYPE, INGEOC, INCNTY, INCTYL, INSSEQ
 

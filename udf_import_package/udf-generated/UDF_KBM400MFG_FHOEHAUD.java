@@ -21,10 +21,11 @@ import java.time.LocalDateTime;
  * The function is invoked by Gluesync whatever the operation is (INSERT, UPDATE, DELETE),
  * as well as while performing the Snapshot task, and must return a Pair of the
  * (possibly changed) operation and the new values for the target row.
+ * isSnapshot is true when the row comes from the Snapshot task, false when it comes from CDC.
  */
 public class UDF_KBM400MFG_FHOEHAUD {
 
-    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, Logger logger) {
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, boolean isSnapshot, Logger logger) {
         // Source columns: OHUSER, OHTYPE, OHTRGT, OHTRGD, OHONO, OHCO, NMTRMS, NMTAX4, NMTAX3, NMTAX2, NMTAX1, NMSZIP, NMSPMT, NMSPCN, NMSNAM, NMSLSM, NMSAD3, NMSAD2, NMSAD1, NMDSCD, NMDISC, NMBZIP, NMBNAM, NMBAD3, NMBAD2, NMBAD1, NHUPGM, NHSTS, NHREGN, NHODYR, NHODMO, NHODDA, NHODCT, NHCM10, NHCM09, NHCM08, NHCM07, NHCM06, NHCM05, NHCM04, NHCM03, NHCM02, NHCM01, NHBTCN, NHBLCL, CMTRMS, CMTAX4, CMTAX3, CMTAX2, CMTAX1, CMSZIP, CMSPMT, CMSPCN, CMSNAM, CMSLSM, CMSAD3, CMSAD2, CMSAD1, CMDSCD, CMDISC, CMBZIP, CMBNAM, CMBAD3, CMBAD2, CMBAD1, CHUPGM, CHSTS, CHREGN, CHODYR, CHODMO, CHODDA, CHODCT, CHCM10, CHCM09, CHCM08, CHCM07, CHCM06, CHCM05, CHCM04, CHCM03, CHCM02, CHCM01, CHBTCN, CHBLCL, ACTPGM
         // Target columns: ACTPGM, NHUPGM, NHODDATETIME, CHUPGM, CHODDATETIME, NMTAX4, NMTAX3, NMTAX2, NMTAX1, NHREGN, NHCM10, NHCM09, NHCM08, NHCM07, NHCM06, NHCM05, NHCM04, NHCM03, NHCM02, NHCM01, NHBTCN, NHBLCL, NMTRMS, NMSLSM, NMSPMT, NHSTS, NMSZIP, NMSPCN, NMSNAM, NMSAD3, NMSAD2, NMSAD1, NMDISC, NMDSCD, NMBZIP, NMBNAM, NMBAD3, NMBAD2, NMBAD1, CMTAX4, CMTAX3, CMTAX2, CMTAX1, CHREGN, CHCM10, CHCM09, CHCM08, CHCM07, CHCM06, CHCM05, CHCM04, CHCM03, CHCM02, CHCM01, CHBTCN, CHBLCL, CMTRMS, CMSLSM, CMSPMT, CHSTS, CMSPCN, CMSZIP, CMSNAM, CMSAD3, CMSAD2, CMSAD1, CMDISC, CMDSCD, CMBZIP, CMBNAM, CMBAD3, CMBAD2, CMBAD1, OHUSER, OHTRGDATETIME, OHTYPE, OHONO, OHCO
 

@@ -24,10 +24,11 @@ import java.time.LocalDateTime;
  * The function is invoked by Gluesync whatever the operation is (INSERT, UPDATE, DELETE),
  * as well as while performing the Snapshot task, and must return a Pair of the
  * (possibly changed) operation and the new values for the target row.
+ * isSnapshot is true when the row comes from the Snapshot task, false when it comes from CDC.
  */
 public class UDF_KBM400MFG_FHSHPHIS {
 
-    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, Logger logger) {
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, boolean isSnapshot, Logger logger) {
         // Source columns: CHCO, CHONO, COCUNO, CDORTP, SHPTYP, CHNO, SHSTCN, SHBTCN, CHCSPO, CHSLSM, CHSPMT, CHSPCN, CHNOSD, CHBNAM, CDLINE, CDBO, SHPPNO, SHUPRI, SHPRIC, SHPQTY, SHPDBY, SHWBNO, SHSLSM, SHCRTY, SHSTAT, SHREGN, SHTER, SHOQTY, SHODYR, SHODMO, SHODDA, SHQTYR, SHSPRY, SHSPRM, SHSPRD, SHSREY, SHSREM, SHSRED, SHQTIN, SHGLNO, SHSMTL, SHSLTL, SHSBTL, SHSVBT, SHSOTL, SHLSYR, SHLSMO, SHLSDA, SHPRFG, SHLSCT, SHSMB, SHSFXM, SHSVRM, SHSUS1, SHSUS2, SHCUOM, SHSSEQ, SHINCT, SHINDA, SHINMO, SHINVN, SHINYR, SHDWN, SHPSNO, SHCARR, SHPRON, SHSEAL, SHSHN, SHUDTE, SHUEVT, SHUPGM, SHUTGT, SHUTIM, SHUUSR, SHDCO, SHUSEQ
         // Target columns: CHCO, CHONO, COCUNO, CDORTP, SHPTYP, CHNO, SHSTCN, SHBTCN, CHCSPO, CHSLSM, CHSPMT, CHSPCN, CHNOSD, CHBNAM, CDLINE, CDBO, SHPPNO, SHUPRI, SHPRIC, SHPQTY, SHPDBY, SHWBNO, SHSLSM, SHCRTY, SHSTAT, SHREGN, SHTER, SHOQTY, SHODDATE, SHQTYR, SHSPRDATE, SHSREDATE, SHQTIN, SHGLNO, SHSMTL, SHSLTL, SHSBTL, SHSVBT, SHSOTL, SHLSDATE, SHPRFG, SHSMB, SHSFXM, SHSVRM, SHSUS1, SHSUS2, SHCUOM, SHSSEQ, SHINDATE, SHINVN, SHDWN, SHPSNO, SHCARR, SHPRON, SHSEAL, SHSHN, SHUDATETIME, SHUEVT, SHUPGM, SHUTGT, SHUUSR, SHDCO, SHUSEQ
 

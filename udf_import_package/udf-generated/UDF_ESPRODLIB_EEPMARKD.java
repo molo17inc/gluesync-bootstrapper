@@ -20,10 +20,11 @@ import java.time.LocalDateTime;
  * The function is invoked by Gluesync whatever the operation is (INSERT, UPDATE, DELETE),
  * as well as while performing the Snapshot task, and must return a Pair of the
  * (possibly changed) operation and the new values for the target row.
+ * isSnapshot is true when the row comes from the Snapshot task, false when it comes from CDC.
  */
 public class UDF_ESPRODLIB_EEPMARKD {
 
-    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, Logger logger) {
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, boolean isSnapshot, Logger logger) {
         // Source columns: WSYSTM, WSHAPE, WDWIDE, WDHIGH, VDIM, TMSTMP, THERM, SLLEG, SERIES, SASHFRM, RJLEG, RIBN, REFSER, RADAPT, QTYDSC, PDCATE, PARENT, MTGRAIL, MRUPDU, MRUPDT, MRUPDD, MRPGMN, MRCRTU, MRCRTT, MRCRTD, MODELFRM, MODEL, MKQTY, MAXVRT, MAXHRZ, MARK, LJLEG, LADAPT, JBGLS, JBFINI, JBFIN, INFO3, INFO2, INFO1, IMCO, HV, HDLEG, GLZTYPE, GLSBT, GLAZE, FDIM, EXTFLD9, EXTFLD8, EXTFLD7, EXTFLD6, EXTFLD5, EXTFLD4, EXTFLD3, EXTFLD2, EXTFLD1, ESTYR, ESTPRF, ESTNBR, ESTDSH, DTSTMP, DHL5, DHL4, DHL3, DHL2, DHL1, CYEAR, CNMBR, CLROPN, CDASH
         // Target columns: INFO3, INFO2, INFO1, GLSBT, REFSER, MRPGMN, MRUPDU, MRCRTU, MRUPDD, MRCRTD, DHL5, DHL4, DHL3, DHL2, DHL1, CLROPN, VDIM, FDIM, RADAPT, LADAPT, QTYDSC, TMSTMP, DTSTMP, WSHAPE, MAXHRZ, MAXVRT, GLAZE, JBGLS, RJLEG, LJLEG, SLLEG, HDLEG, JBFINI, JBFIN, RIBN, HV, THERM, SERIES, WSYSTM, PDCATE, MODEL, PARENT, IMCO, WDHIGH, WDWIDE, MKQTY, MARK, CDASH, CNMBR, CYEAR, ESTDSH, ESTNBR, ESTYR, ESTPRF
 

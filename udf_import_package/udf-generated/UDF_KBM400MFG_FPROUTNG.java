@@ -21,10 +21,11 @@ import java.time.LocalDateTime;
  * The function is invoked by Gluesync whatever the operation is (INSERT, UPDATE, DELETE),
  * as well as while performing the Snapshot task, and must return a Pair of the
  * (possibly changed) operation and the new values for the target row.
+ * isSnapshot is true when the row comes from the Snapshot task, false when it comes from CDC.
  */
 public class UDF_KBM400MFG_FPROUTNG {
 
-    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, Logger logger) {
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, boolean isSnapshot, Logger logger) {
         // Source columns: RTCO, RTPN, RTWCNO, RTOPNO, RTALTC, RTSTLB, RTSTMH, RTSTSU, RTNBSC, RTDRGN, RTTOLR, RTOUTS, RTOPCT, RTSUCD, RTINDR, RTOPCD, RTNBSU, RTEFMO, RTEFDA, RTEFYR, RTEXMO, RTEXDA, RTEXYR, RTSTMV, RTSMLB, RTSMSU, RTSMMH, RTSMOC, RTCRFC, RTCRSU, RTCRLB, RTCROC, RTCRMH, RTPTRV, RTSDSC, RTMHGP, RTEFCT, RTEXCT, RTUDTE, RTUEVT, RTUPGM, RTUTGT, RTUTIM, RTUUSR
         // Target columns: RTCO, RTPN, RTWCNO, RTOPNO, RTALTC, RTSTLB, RTSTMH, RTSTSU, RTNBSC, RTDRGN, RTTOLR, RTOUTS, RTOPCT, RTSUCD, RTINDR, RTOPCD, RTNBSU, RTEFDATE, RTEXDATE, RTSTMV, RTSMLB, RTSMSU, RTSMMH, RTSMOC, RTCRFC, RTCRSU, RTCRLB, RTCROC, RTCRMH, RTPTRV, RTSDSC, RTMHGP, RTUDTE, RTUEVT, RTUPGM, RTUTGT, RTUUSR
 

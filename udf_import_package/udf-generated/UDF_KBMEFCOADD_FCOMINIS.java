@@ -22,10 +22,11 @@ import java.time.LocalDateTime;
  * The function is invoked by Gluesync whatever the operation is (INSERT, UPDATE, DELETE),
  * as well as while performing the Snapshot task, and must return a Pair of the
  * (possibly changed) operation and the new values for the target row.
+ * isSnapshot is true when the row comes from the Snapshot task, false when it comes from CDC.
  */
 public class UDF_KBMEFCOADD_FCOMINIS {
 
-    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, Logger logger) {
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, boolean isSnapshot, Logger logger) {
         // Source columns: SEQUENCE, OWNER, CONTROLCO, SLCODE, PDSN, STATUS, CONAME, COADD1, COADD2, COADD3, COSTAT, COZIP, PHONE, FAX, CONTACT, HOURS, DATEOP, DATECL, LMWARE1, LMCODE1, LMWARE2, LMCODE2, LMWARE3, LMCODE3, LMWARE4, LMCODE4, FCCRTD, FCUPDD, FCCRTT, FCUPDT, FCCRTU, FCUPDU, FCPGMN
         // Target columns: SEQUENCE, OWNER, CONTROLCO, SLCODE, PDSN, STATUS, CONAME, COADD1, COADD2, COADD3, COSTAT, COZIP, PHONE, FAX, CONTACT, HOURS, DATEOP, DATECL, LMWARE1, LMCODE1, LMWARE2, LMCODE2, LMWARE3, LMCODE3, LMWARE4, LMCODE4, FCCRTDATETIME, FCUPDDATETIME, FCCRTU, FCUPDU, FCPGMN
 

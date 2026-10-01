@@ -20,10 +20,11 @@ import java.time.LocalDateTime;
  * The function is invoked by Gluesync whatever the operation is (INSERT, UPDATE, DELETE),
  * as well as while performing the Snapshot task, and must return a Pair of the
  * (possibly changed) operation and the new values for the target row.
+ * isSnapshot is true when the row comes from the Snapshot task, false when it comes from CDC.
  */
 public class UDF_KBMEFCOADD_FPROD {
 
-    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, Logger logger) {
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, boolean isSnapshot, Logger logger) {
         // Source columns: PARENT, MODEL, PDCATE, SERIES, WSYSTM, GSTS, SERPRD, VALEEP, UOM, PDESC, WDWTYPE, STYPE, PTYP, STHRML, THRMTYP, ASPEC, CSPEC, NWTHCK, FRMDPH, ISSL, ISFB, PDCATSL, DISPLAY, LADDERPGM, MATRIXPGM, WARS, WARM, PMAT, GMETH, CMDTY, VALGEEP, SPTYP, HNGTYP, PRCCT, CODEA, CODEB, HRSADJ, EFCRTD, EFUPDD, EFCRTT, EFUPDT, EFCRTU, EFUPDU, EFPGMN
         // Target columns: PARENT, MODEL, PDCATE, SERIES, WSYSTM, GSTS, SERPRD, VALEEP, UOM, PDESC, WDWTYPE, STYPE, PTYP, STHRML, THRMTYP, ASPEC, CSPEC, NWTHCK, FRMDPH, ISSL, ISFB, PDCATSL, DISPLAY, LADDERPGM, MATRIXPGM, WARS, WARM, PMAT, GMETH, CMDTY, VALGEEP, SPTYP, HNGTYP, PRCCT, CODEA, CODEB, EFCRTD, EFUPDD, EFCRTU, EFUPDU, EFPGMN
 
