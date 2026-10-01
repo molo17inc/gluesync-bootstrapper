@@ -190,6 +190,32 @@ def _skip_quoted_literal(code: str, i: int, length: int, ch: str) -> int:
     return min(j + 1, length)
 
 
+def _blank_range(out: list[str], start: int, end: int) -> None:
+    limit = min(end, len(out))
+    for k in range(start, limit):
+        if out[k] != "\n":
+            out[k] = " "
+
+
+def _skip_line_comment(code: str, i: int, length: int) -> int:
+    end = code.find("\n", i)
+    return length if end == -1 else end
+
+
+def _next_token_end(code: str, i: int, length: int) -> Optional[int]:
+    ch = code[i]
+    nxt = code[i + 1] if i + 1 < length else ""
+    if ch == "/" and nxt == "/":
+        return _skip_line_comment(code, i, length)
+    if ch == "/" and nxt == "*":
+        return _skip_block_comment(code, i, length)
+    if code.startswith('"""', i):
+        return _skip_triple_quote(code, i, length)
+    if ch in ('"', "'"):
+        return _skip_quoted_literal(code, i, length, ch)
+    return None
+
+
 def blank_comments_and_literals(code: str) -> str:
     """``code`` with comments, string and char literals replaced by spaces (newlines kept).
 
@@ -199,31 +225,10 @@ def blank_comments_and_literals(code: str) -> str:
     out = list(code)
     length = len(code)
     i = 0
-
-    def blank(start: int, end: int) -> None:
-        for k in range(start, min(end, length)):
-            if out[k] != "\n":
-                out[k] = " "
-
     while i < length:
-        ch = code[i]
-        nxt = code[i + 1] if i + 1 < length else ""
-        if ch == "/" and nxt == "/":
-            end = code.find("\n", i)
-            end = length if end == -1 else end
-            blank(i, end)
-            i = end
-        elif ch == "/" and nxt == "*":
-            j = _skip_block_comment(code, i, length)
-            blank(i, j)
-            i = j
-        elif code.startswith('"""', i):
-            end = _skip_triple_quote(code, i, length)
-            blank(i, end)
-            i = end
-        elif ch in ('"', "'"):
-            end = _skip_quoted_literal(code, i, length, ch)
-            blank(i, end)
+        end = _next_token_end(code, i, length)
+        if end is not None:
+            _blank_range(out, i, end)
             i = end
         else:
             i += 1
