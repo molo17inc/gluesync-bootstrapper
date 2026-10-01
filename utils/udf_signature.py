@@ -158,6 +158,38 @@ def _language(udf_type) -> Optional[str]:
     return None
 
 
+def _skip_block_comment(code: str, i: int, length: int) -> int:
+    depth = 0
+    j = i
+    while j < length:
+        if code.startswith("/*", j):
+            depth += 1
+            j += 2
+        elif code.startswith("*/", j):
+            depth -= 1
+            j += 2
+            if depth == 0:
+                break
+        else:
+            j += 1
+    return j
+
+
+def _skip_triple_quote(code: str, i: int, length: int) -> int:
+    end = code.find('"""', i + 3)
+    end = length if end == -1 else end + 3
+    while end < length and code[end] == '"':
+        end += 1
+    return end
+
+
+def _skip_quoted_literal(code: str, i: int, length: int, ch: str) -> int:
+    j = i + 1
+    while j < length and code[j] != ch and code[j] != "\n":
+        j += 2 if code[j] == "\\" else 1
+    return min(j + 1, length)
+
+
 def blank_comments_and_literals(code: str) -> str:
     """``code`` with comments, string and char literals replaced by spaces (newlines kept).
 
@@ -182,33 +214,15 @@ def blank_comments_and_literals(code: str) -> str:
             blank(i, end)
             i = end
         elif ch == "/" and nxt == "*":
-            depth = 0
-            j = i
-            while j < length:
-                if code.startswith("/*", j):
-                    depth += 1
-                    j += 2
-                elif code.startswith("*/", j):
-                    depth -= 1
-                    j += 2
-                    if depth == 0:
-                        break
-                else:
-                    j += 1
+            j = _skip_block_comment(code, i, length)
             blank(i, j)
             i = j
         elif code.startswith('"""', i):
-            end = code.find('"""', i + 3)
-            end = length if end == -1 else end + 3
-            while end < length and code[end] == '"':  # a raw string may end with extra quotes
-                end += 1
+            end = _skip_triple_quote(code, i, length)
             blank(i, end)
             i = end
         elif ch in ('"', "'"):
-            j = i + 1
-            while j < length and code[j] != ch and code[j] != "\n":
-                j += 2 if code[j] == "\\" else 1
-            end = min(j + 1, length)
+            end = _skip_quoted_literal(code, i, length, ch)
             blank(i, end)
             i = end
         else:

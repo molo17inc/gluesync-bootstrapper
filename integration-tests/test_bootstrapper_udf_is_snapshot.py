@@ -189,10 +189,7 @@ class ReservedNameTests(unittest.TestCase):
         self.assertIn("isSnapshot", str(raised.exception))
 
     def assert_rewritten(self, code, udf_type, label):
-        try:
-            result = add_is_snapshot_parameter(code, udf_type)
-        except UdfSignatureError as exc:  # pragma: no cover - failure path
-            self.fail(f"{label}: {exc}")
+        result = add_is_snapshot_parameter(code, udf_type)
         self.assertTrue(result.changed, label)
 
     def test_java_field_of_the_udf_class(self):

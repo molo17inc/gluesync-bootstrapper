@@ -793,45 +793,6 @@ body.is-authenticated #auth-card {
   }
 }
 
-/* @media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0f1726;
-    --surface: #152238;
-    --surface-alt: rgba(21, 34, 56, 0.8);
-    --border: #233447;
-    --border-strong: #2e4259;
-    --text: #e4e9f1;
-    --muted: #a9b8ce;
-    --heading: #ffffff;
-    --accent: #4d82ff;
-    --accent-dark: #2f5de2;
-    --success: #46c173;
-    --error: #ff6b6b;
-    --warn: #f4a259;
-  }
-
-  body {
-    background: var(--bg);
-  }
-
-  .card {
-    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.24);
-  }
-
-  .fieldset {
-    background: var(--surface-alt);
-  }
-
-  .secondary {
-    background: rgba(228, 235, 245, 0.15);
-    color: var(--text);
-  }
-
-  .secondary:not(:disabled):hover {
-    background: rgba(228, 235, 245, 0.25);
-  }
-} */
-
 .checkbox-label {
   display: flex;
   align-items: center;
