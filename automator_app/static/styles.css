@@ -830,7 +830,7 @@ body.is-authenticated #auth-card {
   .secondary:not(:disabled):hover {
     background: rgba(228, 235, 245, 0.25);
   }
-}
+} */
 
 .checkbox-label {
   display: flex;

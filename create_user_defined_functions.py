@@ -25,7 +25,6 @@ import json
 from enum import Enum
 from typing import Optional
 
-from annotated_types import T
 import requests
 import urllib3
 import argparse
