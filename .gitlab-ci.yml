@@ -427,6 +427,8 @@ automator_publish:
 
       BUCKET="${DOWNLOADS_S3_BUCKET:-molo17-website-downloads-162172359273}"
       REGION="${AWS_DEFAULT_REGION:-eu-central-1}"
+      # molo17.com production distribution. The public download is cached here.
+      DISTRIBUTION_ID="${WEBSITE_CLOUDFRONT_DISTRIBUTION_ID:-E3K3J3ZOYR5QOP}"
       PREFIX="gs-content/gluesync-automator"
       S3_URI="s3://${BUCKET}/${PREFIX}"
       FTP_ROOT="/molo17.com/public_html/gs-content/gluesync-automator"
@@ -453,6 +455,11 @@ automator_publish:
       else
         echo "table-list-template.yaml not found in project root"
       fi
+
+      echo "Invalidating CloudFront ${DISTRIBUTION_ID} for /${PREFIX}/*"
+      aws cloudfront create-invalidation \
+        --distribution-id "$DISTRIBUTION_ID" \
+        --paths "/${PREFIX}/*"
 
       if [ "${DUAL_WRITE_SG:-0}" = "1" ]; then
         echo "DUAL_WRITE_SG=1 — also mirroring to SiteGround FTP"
