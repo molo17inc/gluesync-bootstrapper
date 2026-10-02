@@ -344,8 +344,16 @@ automator_build_windows:
       $python = Join-Path $env:CI_PROJECT_DIR 'python\python.exe'
       $version = $env:CI_COMMIT_TAG -replace '^automator-', ''
       Write-Host "Building Gluesync Automator version $version for Windows"
-      Set-Content -Path (Join-Path $env:CI_PROJECT_DIR 'automator_app\VERSION') -Value $version
+      $versionFile = Join-Path $env:CI_PROJECT_DIR 'automator_app\VERSION'
+      $utf8 = New-Object System.Text.UTF8Encoding $false
+      [System.IO.File]::WriteAllText($versionFile, $version, $utf8)
       & $python -m PyInstaller automator-windows.spec --clean --distpath .automator-build/dist --workpath .automator-build/build
+      $exe = Join-Path $env:CI_PROJECT_DIR '.automator-build\dist\gluesync-automator-windows.exe'
+      $info = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($exe)
+      Write-Host "Stamped ProductVersion=$($info.ProductVersion) FileVersion=$($info.FileVersion)"
+      if ($info.ProductVersion -ne $version) {
+        throw "Windows ProductVersion '$($info.ProductVersion)' does not match tag version '$version'"
+      }
     - Get-ChildItem .automator-build/dist
   artifacts:
     name: "gluesync-automator-windows-${CI_COMMIT_TAG}"
