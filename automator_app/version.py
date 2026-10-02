@@ -34,7 +34,7 @@ def _read_version_file() -> str:
     try:
       version_path = Path(__file__).with_name("VERSION")
       if version_path.exists():
-          text = version_path.read_text(encoding="utf-8").strip()
+          text = version_path.read_text(encoding="utf-8-sig").strip()
           if text:
               return text
     except Exception:
