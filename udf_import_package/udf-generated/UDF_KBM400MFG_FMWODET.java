@@ -22,10 +22,11 @@ import java.time.LocalDateTime;
  * The function is invoked by Gluesync whatever the operation is (INSERT, UPDATE, DELETE),
  * as well as while performing the Snapshot task, and must return a Pair of the
  * (possibly changed) operation and the new values for the target row.
+ * isSnapshot is true when the row comes from the Snapshot task, false when it comes from CDC.
  */
 public class UDF_KBM400MFG_FMWODET {
 
-    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, Logger logger) {
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, boolean isSnapshot, Logger logger) {
         // Source columns: RTALTC, RTCO, RTCRFC, RTDRGN, RTINDR, RTNBSC, RTNBSU, RTOPCD, RTOPNO, RTOUTS, RTPTRV, RTSDSC, RTSTLB, RTSTMV, RTSTSU, RTSUCD, RTTOLR, RTWCNO, WDACDD, WDACMM, WDACYY, WDCD, WDDSTS, WDDUCC, WDDUDD, WDDUMM, WDDUYY, WDLINE, WDMHGP, WDMHRP, WDMVPT, WDNOVM, WDOPCT, WDPTNO, WDQTCM, WDQTIN, WDQTLM, WDRNRP, WDRSTS, WDSLNO, WDSLOC, WDSTBR, WDSTBT, WDSTDD, WDSTLR, WDSTLT, WDSTMH, WDSTMM, WDSTMR, WDSTMT, WDSTOP, WDSTOR, WDSTOT, WDSTYY, WDSURP, WDTFRZ, WDTFXM, WDTMTL, WDTUS1, WDTUS2, WDTVRM, WDUDTE, WDUEVT, WDUFXM, WDUMTL, WDUPGM, WDUTGT, WDUTIM, WDUUSR, WDUUS1, WDUUS2, WDUVRM, WDVRBR, WDVRBT, WOWONO
         // Target columns: RTALTC, RTCO, RTCRFC, RTDRGN, RTINDR, RTNBSC, RTNBSU, RTOPCD, RTOPNO, RTOUTS, RTPTRV, RTSDSC, RTSTLB, RTSTMV, RTSTSU, RTSUCD, RTTOLR, RTWCNO, WDACDATE, WDCD, WDDSTS, WDDUDATE, WDLINE, WDMHGP, WDMHRP, WDMVPT, WDNOVM, WDOPCT, WDPTNO, WDQTCM, WDQTIN, WDQTLM, WDRNRP, WDRSTS, WDSLNO, WDSLOC, WDSTBR, WDSTBT, WDSTDATE, WDSTLR, WDSTLT, WDSTMH, WDSTMR, WDSTMT, WDSTOP, WDSTOR, WDSTOT, WDSURP, WDTFRZ, WDTFXM, WDTMTL, WDTUS1, WDTUS2, WDTVRM, WDUDATETIME, WDUEVT, WDUFXM, WDUMTL, WDUPGM, WDUTGT, WDUUSR, WDUUS1, WDUUS2, WDUVRM, WDVRBR, WDVRBT, WOWONO
 

@@ -24,10 +24,11 @@ import java.time.LocalDateTime;
  * The function is invoked by Gluesync whatever the operation is (INSERT, UPDATE, DELETE),
  * as well as while performing the Snapshot task, and must return a Pair of the
  * (possibly changed) operation and the new values for the target row.
+ * isSnapshot is true when the row comes from the Snapshot task, false when it comes from CDC.
  */
 public class UDF_KBM400MFG_FMALOCAT {
 
-    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, Logger logger) {
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, boolean isSnapshot, Logger logger) {
         // Source columns: ALAIQ, ALBFRM, ALBLN, ALBSTS, ALCC1, ALCOMP, ALCT, ALCTYP, ALDA, ALDCCO, ALDD1, ALDISS, ALDUOM, ALFLG1, ALFLG2, ALFLG3, ALISS, ALLNLC, ALLOC, ALLOT, ALMM1, ALMO, ALMSDT, ALMSID, ALMSTM, ALPLF, ALPQPR, ALPRIM, ALPRNG, ALQTY, ALQTY1, ALQTY2, ALQTY3, ALRQPR, ALRSDT, ALRVBY, ALRVDT, ALRVTM, ALYLD, ALYR, ALYUOM, ALYY1, PSCMRN, PSLDOF, PSOPR, PSPMRN, PSQTYI, WOCO, WODTOR, WOWONO, RECORDID
         // Target columns: RECORDID, ALAIQ, ALBFRM, ALBLN, ALBSTS, ALCOMP, ALCTYP, ALDCCO, ALDISS, ALDUOM, ALFLG1, ALFLG2, ALFLG3, ALISS, ALLNLC, ALLOC, ALLOT, ALDATE1, ALDATE, ALMSDT, ALMSID, ALPLF, ALPQPR, ALPRIM, ALPRNG, ALQTY, ALQTY1, ALQTY2, ALQTY3, ALRQPR, ALRSDT, ALRVBY, ALRVDATE, ALYLD, ALYUOM, PSCMRN, PSLDOF, PSOPR, PSPMRN, PSQTYI, WOCO, WODTOR, WOWONO
 

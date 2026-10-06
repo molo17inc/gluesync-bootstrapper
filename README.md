@@ -402,15 +402,54 @@ UDF source files should be placed in a directory specified by the `UDF_PATH` env
 - Java: `.java`
 - Kotlin: `.kt`
 
+The class name must match the UDF name. Gluesync calls its `onChange` method for every row (INSERT, UPDATE, DELETE, and while performing the Snapshot task); `isSnapshot` is `true` when the row comes from the snapshot and `false` when it comes from CDC.
+
 Example for `UPPERCASE_NAMES.java`:
 
 ```java
+import java.util.Map;
+import kotlin.Pair;
+import com.molo17.gluesync.commons.model.api.MappingFunctionOperation;
+import org.slf4j.Logger;
+
 public class UPPERCASE_NAMES {
-    public String transform(String value) {
-        return value != null ? value.toUpperCase() : null;
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, boolean isSnapshot, Logger logger) {
+        Object name = newValues.get("NAME");
+        if (operation != MappingFunctionOperation.Delete && name != null) {
+            newValues.put("NAME", name.toString().toUpperCase());
+        }
+        return new Pair<>(operation, newValues);
     }
 }
 ```
+
+Example for `FORMAT_PHONE.kt`:
+
+```kotlin
+import com.molo17.gluesync.commons.model.api.MappingFunctionOperation
+import org.slf4j.Logger
+
+class FORMAT_PHONE {
+    fun onChange(newValues: Map<String, Any?>, oldValues: Map<String, Any?>, operation: MappingFunctionOperation, isSnapshot: Boolean, logger: Logger): Pair<MappingFunctionOperation, Map<String, Any?>?> {
+        val phone = newValues["PHONE"]?.toString()?.filter { it.isDigit() }
+        return operation to newValues + ("PHONE" to phone)
+    }
+}
+```
+
+#### The `isSnapshot` parameter (Gluesync 2.3)
+
+`isSnapshot` was added to `onChange` in Gluesync 2.3, right before the logger. A 2.3 CoreHub refuses to compile a UDF written for the previous signature `onChange(newValues, oldValues, operation, logger)`, and a CoreHub before 2.3 cannot call one written for the new signature. The bootstrapper reads the CoreHub version (`GET /version`) and, before compiling, adapts the `onChange` declaration of every UDF it deploys (from `UDF_PATH`, an import package, or a duplicated pipeline):
+
+- CoreHub 2.3 or later (or a version that cannot be read): `boolean isSnapshot` / `isSnapshot: Boolean` is inserted before the logger parameter. Only the declaration changes; calls, comments and strings are left alone.
+- CoreHub before 2.3: the parameter is removed again.
+
+The bootstrapper stops with an error, and compiles nothing, when it cannot adapt a UDF safely:
+
+- a UDF on the previous signature that already has its own variable named `isSnapshot` (a field or property of the class, or a variable used in the body of `onChange`). Rename the variable. Parameters and locals of other methods, such as a helper `tag(Map<String, Object> values, boolean isSnapshot)`, are fine;
+- a UDF that reads `isSnapshot` but is deployed to a CoreHub before 2.3.
+
+UDFs already deployed on a CoreHub are migrated by the CoreHub itself when it starts on 2.3.
 
 ### Docker Integration
 

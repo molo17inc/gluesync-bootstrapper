@@ -20,10 +20,11 @@ import java.time.LocalDateTime;
  * The function is invoked by Gluesync whatever the operation is (INSERT, UPDATE, DELETE),
  * as well as while performing the Snapshot task, and must return a Pair of the
  * (possibly changed) operation and the new values for the target row.
+ * isSnapshot is true when the row comes from the Snapshot task, false when it comes from CDC.
  */
 public class UDF_KBMEFCOADD_FESOMM01 {
 
-    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, Logger logger) {
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, boolean isSnapshot, Logger logger) {
         // Source columns: EFCOCO, ESTPRF, ESTYR, ESTNBR, ESTDSH, EFCO#, ESTMTR, PRTENG, JOBNAM, ARCHTC, ARCHT1, ARCADR, ARCHCT, ARCHST, ARCZIP, GENCRT, GENCT1, GENADR, GENCTY, GENCST, GENZIP, ERRCTR, ERRCT1, ERRADR, ERRCTY, ERRCST, ERRZIP, BLGOWN, BLGON1, BLGADR, BLGCTY, BLGCST, BLGZIP, EFDODC, APPRVW, REFYR, REFNBR, REFDSH, BKCHGC, COMM1, COMM2, SXCRTD, SXUPDD, SXCRTT, SXUPDT, SXCRTU, SXUPDU, SXPGMN, DEST_ZIP, SO_LOI
         // Target columns: EFCOCO, ESTPRF, ESTYR, ESTNBR, ESTDSH, EFCO#, ESTMTR, PRTENG, JOBNAM, ARCHTC, ARCHT1, ARCADR, ARCHCT, ARCHST, ARCZIP, GENCRT, GENCT1, GENADR, GENCTY, GENCST, GENZIP, ERRCTR, ERRCT1, ERRADR, ERRCTY, ERRCST, ERRZIP, BLGOWN, BLGON1, BLGADR, BLGCTY, BLGCST, BLGZIP, EFDODC, APPRVW, REFYR, REFNBR, REFDSH, BKCHGC, COMM1, COMM2, SXCRTDTM, SXUPDDTM, SXCRTU, SXUPDU, SXPGMN, DEST_ZIP, SO_LOI
 

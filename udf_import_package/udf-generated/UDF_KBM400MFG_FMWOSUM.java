@@ -31,10 +31,11 @@ import java.time.LocalDateTime;
  * The function is invoked by Gluesync whatever the operation is (INSERT, UPDATE, DELETE),
  * as well as while performing the Snapshot task, and must return a Pair of the
  * (possibly changed) operation and the new values for the target row.
+ * isSnapshot is true when the row comes from the Snapshot task, false when it comes from CDC.
  */
 public class UDF_KBM400MFG_FMWOSUM {
 
-    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, Logger logger) {
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, boolean isSnapshot, Logger logger) {
         // Source columns: WOACD, WOAIQ, WOAOQ, WOBALT, WOBS, WOCCC, WOCDD, WOCMM, WOCO, WOCOCS, WOCOPN, WOCUEC, WOCYY, WODLCC, WODLSA, WODTCC, WODTCL, WODTCM, WODTLR, WODTOR, WODTST, WODUOM, WOGLCD, WOGNPN, WOIO, WOLINE, WOLOT, WOLSPD, WOLSPQ, WOLULN, WOMCDG, WOMCDR, WOMCEM, WOMCID, WOMCRD, WOMCTG, WOMCTR, WOMPDG, WOMPDR, WOMPEM, WOMPID, WOMPRD, WOMPSA, WOMPTG, WOMPTR, WOMSG, WOMVPT, WONOSP, WONOUT, WOODUE, WOOQTY, WOPLNR, WOPN, WOPOC, WOPPD, WOPPQ, WOPRJ, WOPRTD, WOPRTY, WOPRV, WOQTRC, WOQTSC, WOQTWH, WOQTY, WORALT, WOSCST, WOSLNO, WOSPLT, WOSTS, WOTBUR, WOTFXM, WOTLAB, WOTMAT, WOTMTL, WOTUS1, WOTUS2, WOTVAR, WOTVRM, WOTYPE, WOUDTE, WOUEVT, WOUNTM, WOUPGM, WOUTGT, WOUTIM, WOUUSR, WOWONO, WOWRKR, WOWTRS, WOYLD, WOYUOM
         // Target columns: WOACD, WOAIQ, WOAOQ, WOBALT, WOBS, WOCDATE, WOCO, WOCOCS, WOCOPN, WOCUEC, WODLDATE, WODTCLDT, WODTCMDT, WODTLRDT, WODTORDT, WODTSTDT, WODUOM, WOGLCD, WOGNPN, WOIO, WOLINE, WOLOT, WOLSPD, WOLSPQ, WOLULN, WOMCTGDATE, WOMCTRDATE, WOMCEM, WOMCID, WOMCRD, WOMPDGDATE, WOMPDRDATE, WOMPEM, WOMPID, WOMPRD, WOMPSA, WOMPTG, WOMPTR, WOMSG, WOMVPT, WONOSP, WONOUT, WOODUE, WOOQTY, WOPLNR, WOPN, WOPOC, WOPPD, WOPPQ, WOPRJ, WOPRTD, WOPRTY, WOPRV, WOQTRC, WOQTSC, WOQTWH, WOQTY, WORALT, WOSCST, WOSLNO, WOSPLT, WOSTS, WOTBUR, WOTFXM, WOTLAB, WOTMAT, WOTMTL, WOTUS1, WOTUS2, WOTVAR, WOTVRM, WOTYPE, WOUDATE, WOUEVT, WOUPGM, WOUTGT, WOUNTM, WOUUSR, WOWONO, WOWRKR, WOWTRS, WOYLD, WOYUOM
 

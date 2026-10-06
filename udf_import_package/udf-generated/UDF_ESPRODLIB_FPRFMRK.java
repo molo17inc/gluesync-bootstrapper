@@ -20,10 +20,11 @@ import java.time.LocalDateTime;
  * The function is invoked by Gluesync whatever the operation is (INSERT, UPDATE, DELETE),
  * as well as while performing the Snapshot task, and must return a Pair of the
  * (possibly changed) operation and the new values for the target row.
+ * isSnapshot is true when the row comes from the Snapshot task, false when it comes from CDC.
  */
 public class UDF_ESPRODLIB_FPRFMRK {
 
-    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, Logger logger) {
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, boolean isSnapshot, Logger logger) {
         // Source columns: WSYSTM, WDWIDE, WDHIGH, UNITPRICE, UNITCOST, SILLOPT, SERIES, RIGHTJBOPT, RDUPDU, RDUPDT, RDUPDD, RDPGMN, RDCRTU, RDCRTT, RDCRTD, PRTSHP, PREFVERSTP, PREFVERS, PREFREF, PREFORDER, PREFNUM, PDCATE, NUMBLITES, MRKPRICE, MKTOTWGT, MKTOTMHR, MKQTY, MKGLSWGT, MKGLSSQFT2, MKGLSSQFT1, MKGLSPRIC2, MKGLSPRIC1, MKGLSCOST2, MKGLSCOST1, MKFINSQFT2, MKFINSQFT1, MKFINPRIC2, MKFINPRIC1, MKFINCOST2, MKFINCOST1, MKDESC, MKALUMPRIC, MKALUMLBS, MKALUMCOST, MARK, LEFTJBOPT, JOBNAM, JBGLSI, JBGLS, JBFINI, JBFIN, IMCO, HEADOPT, FINISHDESC, ESTYR, ESTPRF, ESTNBR, ESTDSH, DISCOUNT, CYEAR, CONFIG, CNMBR, CDASH
         // Target columns: JBGLS, JBFINI, JBFIN, SERIES, WSYSTM, PDCATE, IMCO, WDHIGH, WDWIDE, MKQTY, MARK, CDASH, CNMBR, CYEAR, ESTDSH, ESTNBR, ESTYR, ESTPRF, RDPGMN, RDUPDU, RDCRTU, RDUPDD, RDCRTD, RIGHTJBOPT, LEFTJBOPT, SILLOPT, HEADOPT, NUMBLITES, PREFREF, PREFVERSTP, PREFORDER, PREFVERS, PREFNUM, PRTSHP, FINISHDESC, MKTOTWGT, MKGLSWGT, MKTOTMHR, MKALUMPRIC, MKALUMCOST, MKALUMLBS, MKFINPRIC2, MKFINCOST2, MKFINSQFT2, MKFINPRIC1, MKFINCOST1, MKFINSQFT1, MKGLSPRIC2, MKGLSCOST2, MKGLSSQFT2, MKGLSPRIC1, MKGLSCOST1, MKGLSSQFT1, MRKPRICE, DISCOUNT, UNITPRICE, UNITCOST, JOBNAM, CONFIG, MKDESC, JBGLSI
 

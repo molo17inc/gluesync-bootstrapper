@@ -20,10 +20,11 @@ import java.time.LocalDateTime;
  * The function is invoked by Gluesync whatever the operation is (INSERT, UPDATE, DELETE),
  * as well as while performing the Snapshot task, and must return a Pair of the
  * (possibly changed) operation and the new values for the target row.
+ * isSnapshot is true when the row comes from the Snapshot task, false when it comes from CDC.
  */
 public class UDF_KBM400MFG_FTSLSMAN {
 
-    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, Logger logger) {
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, boolean isSnapshot, Logger logger) {
         // Source columns: SLCO, SLCODE, SLNAME, SLSMTD, SLSYTD, SLCOMM, SLCMRT1, SLCMRT2, SLCMRT3, SLCMRT4, SLCMRT5, SLCMRT6, SLFNAME, SLLNAME, SLAGENT, SLMADRI, SLMCITY, SLMSTAT, SLMZIP, SLDADRI, SLDCITY, SLDSTAT, SLDZIP, SLPHONE, SLCUSNBR, SLCNTPRS, SLSPEED, SLFAX, SLEMAIL, SLURL, SLCCAT, SLCELL, SLPAGER, SLFLAG1, SLFLAG2, SLFLAG3, SLFLAG4, SLFLAG5, SLCOMM1, SLCOMM2, SLCOMM3, SLCOMM4, SLCOMM5, SLFEDEX, SLACTIV, SLNAMEL, SLCTDT, SLCTTM, SLCTID, SLUPDT, SLUPTM, SLUPID
         // Target columns: SLCO, SLCODE, SLNAME, SLSMTD, SLSYTD, SLCOMM, SLCMRT1, SLCMRT2, SLCMRT3, SLCMRT4, SLCMRT5, SLCMRT6, SLFNAME, SLLNAME, SLAGENT, SLMADRI, SLMCITY, SLMSTAT, SLMZIP, SLDADRI, SLDCITY, SLDSTAT, SLDZIP, SLPHONE, SLCUSNBR, SLCNTPRS, SLSPEED, SLFAX, SLEMAIL, SLURL, SLCCAT, SLCELL, SLPAGER, SLFLAG1, SLFLAG2, SLFLAG3, SLFLAG4, SLFLAG5, SLCOMM1, SLCOMM2, SLCOMM3, SLCOMM4, SLCOMM5, SLFEDEX, SLACTIV, SLNAMEL, SLCTDTTM, SLCTID, SLUPDTTM, SLUPID
 

@@ -16,7 +16,12 @@
 #     are placed under a udf-* folder so they are compiled automatically).
 #
 # Usage:
-#   python3 generate_udf_import_package.py <metadata.xml> [--output-dir DIR] [--no-zip]
+#   python3 generate_udf_import_package.py <metadata.xml> [--output-dir DIR] [--no-zip] [--legacy-udf-signature]
+#
+# The UDFs are written for the Gluesync 2.3 onChange signature, which takes
+# `boolean isSnapshot` before the logger. --legacy-udf-signature writes the
+# previous one instead, for a CoreHub before 2.3. Either way the bootstrapper
+# adapts the signature to the CoreHub it compiles on.
 
 import argparse
 import hashlib
@@ -757,8 +762,13 @@ def build_java_udf(
     mappings: List[Dict[str, Any]],
     source_columns: List[str],
     target_columns: List[str],
+    is_snapshot_signature: bool = True,
 ) -> str:
-    """Assemble the full Java UDF source for one entity."""
+    """Assemble the full Java UDF source for one entity.
+
+    ``is_snapshot_signature`` selects the Gluesync 2.3 ``onChange`` signature (with
+    ``boolean isSnapshot`` before the logger); False writes the previous one.
+    """
     mapping_comments = []
     delete_puts = []
     puts = []
@@ -780,6 +790,14 @@ def build_java_udf(
         recordid_line = '        modified_values.put("RECORDID", newValues.get("_RRN"));\n'
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if is_snapshot_signature:
+        snapshot_parameter = "boolean isSnapshot, "
+        snapshot_doc = (
+            "\n * isSnapshot is true when the row comes from the Snapshot task, false when it comes from CDC."
+        )
+    else:
+        snapshot_parameter = ""
+        snapshot_doc = ""
     header = f"""import java.util.Map;
 import kotlin.Pair;
 import com.molo17.gluesync.commons.model.api.MappingFunctionOperation;
@@ -800,13 +818,13 @@ import java.time.LocalDateTime;
  *
  * The function is invoked by Gluesync whatever the operation is (INSERT, UPDATE, DELETE),
  * as well as while performing the Snapshot task, and must return a Pair of the
- * (possibly changed) operation and the new values for the target row.
+ * (possibly changed) operation and the new values for the target row.{snapshot_doc}
  */
 """
 
     body = f"""public class {udf_name} {{
 
-    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, Logger logger) {{
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, {snapshot_parameter}Logger logger) {{
         // Source columns: {', '.join(source_columns)}
         // Target columns: {', '.join(target_columns)}
 
@@ -885,6 +903,8 @@ def main():
     parser.add_argument("--output-dir", type=str, default="udf_import_package",
                         help="Directory for the generated package (default: udf_import_package)")
     parser.add_argument("--no-zip", action="store_true", help="Do not create the import ZIP archive")
+    parser.add_argument("--legacy-udf-signature", action="store_true",
+                        help="Write UDFs for the onChange signature of CoreHub before 2.3 (without isSnapshot)")
     cli = parser.parse_args()
 
     xml_path = os.path.expanduser(cli.xml_path)
@@ -1070,7 +1090,8 @@ def main():
             meta["name"] for meta in target_field_types.values()
         ] or source_columns
         java_source = build_java_udf(
-            udf_name, schema_name, table_name, repl_id, decoded, source_columns, target_columns
+            udf_name, schema_name, table_name, repl_id, decoded, source_columns, target_columns,
+            is_snapshot_signature=not cli.legacy_udf_signature,
         )
         java_path = os.path.join(udf_dir, f"{udf_name}.java")
         if not os.path.exists(java_path):

@@ -22,10 +22,11 @@ import java.time.LocalDateTime;
  * The function is invoked by Gluesync whatever the operation is (INSERT, UPDATE, DELETE),
  * as well as while performing the Snapshot task, and must return a Pair of the
  * (possibly changed) operation and the new values for the target row.
+ * isSnapshot is true when the row comes from the Snapshot task, false when it comes from CDC.
  */
 public class UDF_KBMEFCOADD_FEFGLSS {
 
-    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, Logger logger) {
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, boolean isSnapshot, Logger logger) {
         // Source columns: YEAR, UNITS, QTY9, QTY8, QTY7, QTY6, QTY5, QTY4, QTY3, QTY2, QTY15, QTY14, QTY13, QTY12, QTY11, QTY10, QTY1, QTY0, LOC, GSUPDU, GSUPDT, GSUPDD, GSPGMN, GSCRTU, GSCRTT, GSCRTD, BCHNAM, AMT9, AMT8, AMT7, AMT6, AMT5, AMT4, AMT3, AMT2, AMT15, AMT14, AMT13, AMT12, AMT11, AMT10, AMT1, AMT0, ACT, ACCO
         // Target columns: GSPGMN, GSUPDU, GSCRTU, GSUPDD, GSCRTD, AMT15, QTY15, AMT14, QTY14, AMT13, QTY13, AMT12, QTY12, AMT11, QTY11, AMT10, QTY10, AMT9, QTY9, AMT8, QTY8, AMT7, QTY7, AMT6, QTY6, AMT5, QTY5, AMT4, QTY4, AMT3, QTY3, AMT2, QTY2, AMT1, QTY1, AMT0, QTY0, UNITS, YEAR, LOC, ACT, BCHNAM, ACCO, GSUPDT, GSCRTT
 

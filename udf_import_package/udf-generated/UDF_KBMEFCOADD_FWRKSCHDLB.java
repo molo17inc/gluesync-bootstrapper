@@ -21,10 +21,11 @@ import java.time.LocalDateTime;
  * The function is invoked by Gluesync whatever the operation is (INSERT, UPDATE, DELETE),
  * as well as while performing the Snapshot task, and must return a Pair of the
  * (possibly changed) operation and the new values for the target row.
+ * isSnapshot is true when the row comes from the Snapshot task, false when it comes from CDC.
  */
 public class UDF_KBMEFCOADD_FWRKSCHDLB {
 
-    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, Logger logger) {
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, boolean isSnapshot, Logger logger) {
         // Source columns: WRPART, MKTTLHRS, MKTTLDLR, WKCOMPDATE, WKCOMPTIME, WRWCNO, RPDUE, WRSORD, WRDASH, SOURCE, WRWHAT, MARKQTY, SHIPDATE2, RPSTATE, JOBMARK, LITEQTY, RDTP_FLAG, GRID_FLAG, BLIND_FLAG, STRUCTUAL, PANELS, MUNTN_FLAG, OPEN_FLAG, CONFIG, MKHEIGHT, MKWIDTH, SFTYPE, SFHWD, SFMOREMTN, SFGLAZED, WRCO, GLASSTYPE1, GLASSTYPE2, GLASSTYPE3, DURA_FLAG, GSNAP_FLAG, GGLAZ_FLAG, GINTR_FLAG, MKMATDLR, FTYPEEXT, FCLASSEXT, FCOLOREXT, FMISCEXT, FTYPEINT, FCLASSINT, FCOLORINT, FMISCINT, FOAM_FLAG, BUTT_FLAG, WELD_FLAG, MKWEIGHT, FIXEDLITES, OPERLITES, RPCSRWC
         // Target columns: WRPART, MKTTLHRS, MKTTLDLR, WKCOMPDTTM, WRWCNO, RPDUE, WRSORD, WRDASH, SOURCE, WRWHAT, MARKQTY, SHIPDATE2, RPSTATE, JOBMARK, LITEQTY, RDTP_FLAG, GRID_FLAG, BLIND_FLAG, STRUCTUAL, PANELS, MUNTN_FLAG, OPEN_FLAG, CONFIG, MKHEIGHT, MKWIDTH, SFTYPE, SFHWD, SFMOREMTN, SFGLAZED, WRCO, GLASSTYPE1, GLASSTYPE2, GLASSTYPE3, DURA_FLAG, GSNAP_FLAG, GGLAZ_FLAG, GINTR_FLAG, MKMATDLR, FTYPEEXT, FCLASSEXT, FCOLOREXT, FMISCEXT, FTYPEINT, FCLASSINT, FCOLORINT, FMISCINT, FOAM_FLAG, BUTT_FLAG, WELD_FLAG, MKWEIGHT, FIXEDLITES, OPERLITES, RPCSRWC
 

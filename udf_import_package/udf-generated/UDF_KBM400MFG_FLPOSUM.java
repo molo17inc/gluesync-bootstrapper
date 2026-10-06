@@ -27,10 +27,11 @@ import java.time.LocalDateTime;
  * The function is invoked by Gluesync whatever the operation is (INSERT, UPDATE, DELETE),
  * as well as while performing the Snapshot task, and must return a Pair of the
  * (possibly changed) operation and the new values for the target row.
+ * isSnapshot is true when the row comes from the Snapshot task, false when it comes from CDC.
  */
 public class UDF_KBM400MFG_FLPOSUM {
 
-    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, Logger logger) {
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, boolean isSnapshot, Logger logger) {
         // Source columns: POABOM, POACN, POACQT, POACT, POAPVN, POBLKT, POBLLT, POBTYP, POBUYR, POCATG, POCCUP, POCFLG, POCHG, POCO, POCOST, POCSME, POCURR, POCXBY, PODACC, PODATE, PODTCC, PODTCR, PODTED, PODTEF, PODTEX, PODTRC, PODTRL, POECC, POEDD, POEDIC, POEMM, POERTS, POETM, POEYY, POFCEX, POFCUC, POGLCD, POINSP, POLDRC, POLINE, POLOC, POLSEQ, PONO, PONOWC, PONPMT, PONSPN, PONXOP, POOPOP, POOPWO, POPAID, POPN, POPPDA, POPPDQ, POPROJ, POPRTD, POPRV, POQRTV, POQRW, POQSCP, POQSRA, POQSRV, POQTAD, POQTNO, POQTRC, POQTY, POQTY1, POQTY2, POQTY3, PORDTP, POSCSF, POSCST, POSET, POSORD, POSTS, POTAXE, POTOOL, POTQC, POUDTE, POUEVT, POUNTM, POUPGM, POUTGT, POUTIM, POUUSR, POVEND, POWHSE, POWIPA, POWIPQ
         // Target columns: POABOM, POACN, POACQT, POACT, POAPVN, POBLKT, POBLLT, POBTYP, POBUYR, POCATG, POCCUP, POCFLG, POCHG, POCO, POCOST, POCSME, POCURR, POCXBY, PODATE, PODTCC, PODTCR, PODTED, PODTEF, PODTEX, PODTRC, PODTRL, POEDATETM, POEDIC, POERTS, POFCEX, POFCUC, POGLCD, POINSP, POLDRC, POLINE, POLOC, POLSEQ, PONO, PONOWC, PONPMT, PONSPN, PONXOP, POOPOP, POOPWO, POPAID, POPN, POPPDA, POPPDQ, POPROJ, POPRTD, POPRV, POQRTV, POQRW, POQSCP, POQSRA, POQSRV, POQTAD, POQTNO, POQTRC, POQTY, POQTY1, POQTY2, POQTY3, PORDTP, POSCSF, POSCST, POSET, POSORD, POSTS, POTAXE, POTOOL, POTQC, POUDATETM, POUEVT, POUNTM, POUPGM, POUTGT, POUUSR, POVEND, POWHSE, POWIPA, POWIPQ
 

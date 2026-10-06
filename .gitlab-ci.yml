@@ -538,9 +538,13 @@ build-sonar:
   allow_failure: true
   rules:
     - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
+      allow_failure: true
     - if: $CI_COMMIT_BRANCH == 'master'
+      allow_failure: true
     - if: $CI_COMMIT_BRANCH == 'main'
+      allow_failure: true
     - if: $CI_COMMIT_BRANCH == 'develop'
+      allow_failure: true
 
 deploy_lambda:
   stage: deploy

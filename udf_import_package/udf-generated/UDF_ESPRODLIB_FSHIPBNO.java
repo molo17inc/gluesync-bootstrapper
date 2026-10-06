@@ -23,10 +23,11 @@ import java.time.LocalDateTime;
  * The function is invoked by Gluesync whatever the operation is (INSERT, UPDATE, DELETE),
  * as well as while performing the Snapshot task, and must return a Pair of the
  * (possibly changed) operation and the new values for the target row.
+ * isSnapshot is true when the row comes from the Snapshot task, false when it comes from CDC.
  */
 public class UDF_ESPRODLIB_FSHIPBNO {
 
-    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, Logger logger) {
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, boolean isSnapshot, Logger logger) {
         // Source columns: SHCO, SHBLNO, SHIPDT, SHMETH, SHPRO, SHWGHT, SHSCO, SHYR, SHNBR, SHDSH, SHWTWG, SHWTWN, SHWTDG, SHWTDN, SHWTL, SHWTS, SHWTG, SHWTHA, SHWTHS, SHWTP, SHQTWG, SHQTWN, SHQTDG, SHQTDN, SHQTL, SHQTS, SHQTG, SHQTHA, SHQTHS, SHQTP, SXCRTD, SXUPDD, SXCRTT, SXUPDT, SXCRTU, SXUPDU, SXPGMN, SHDDT1, SHDME1, SHDPR1, SHDDT2, SHDME2, SHDPR2, SHQGPT, SHTGPT, SHQTPT, SHTTPT
         // Target columns: SHCO, SHBLNO, SHIPDATE, SHMETH, SHPRO, SHWGHT, SHSCO, SHYR, SHNBR, SHDSH, SHWTWG, SHWTWN, SHWTDG, SHWTDN, SHWTL, SHWTS, SHWTG, SHWTHA, SHWTHS, SHWTP, SHQTWG, SHQTWN, SHQTDG, SHQTDN, SHQTL, SHQTS, SHQTG, SHQTHA, SHQTHS, SHQTP, SXCRTDATETIME, SXUPDDATETIME, SXCRTU, SXUPDU, SXPGMN, SHDDATE1, SHDME1, SHDPR1, SHDDATE2, SHDME2, SHDPR2, SHQGPT, SHTGPT, SHQTPT, SHTTPT
 

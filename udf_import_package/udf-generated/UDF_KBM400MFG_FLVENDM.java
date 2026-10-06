@@ -20,10 +20,11 @@ import java.time.LocalDateTime;
  * The function is invoked by Gluesync whatever the operation is (INSERT, UPDATE, DELETE),
  * as well as while performing the Snapshot task, and must return a Pair of the
  * (possibly changed) operation and the new values for the target row.
+ * isSnapshot is true when the row comes from the Snapshot task, false when it comes from CDC.
  */
 public class UDF_KBM400MFG_FLVENDM {
 
-    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, Logger logger) {
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, boolean isSnapshot, Logger logger) {
         // Source columns: VMAC, VMACT, VMACTV, VMADR1, VMADR2, VMADR3, VMADTE, VMAPVN, VMATPY, VMBUYR, VMCC01, VMCC02, VMCC03, VMCC04, VMCC05, VMCC06, VMCC07, VMCC08, VMCC09, VMCC10, VMCL, VMCMT, VMCNTC, VMCO, VMCOUN, VMCS, VMCTCD, VMCTRY, VMCURR, VMDBNO, VMDSCD, VMDYPY, VMEDGR, VMEDIC, VMFAXN, VMFED, VMGLCD, VMID, VMLDGR, VMLOC, VMLVSN, VMMISC, VMMLNG, VMNAME, VMNO, VMOREX, VMPAC, VMPAD1, VMPAD2, VMPAD3, VMPAEE, VMPCNT, VMPCTO, VMPCTU, VMPFXN, VMPHON, VMPNAM, VMPPHN, VMPTYP, VMPZIP, VMRGAF, VMSCC, VMSHPC, VMSHPM, VMSPCK, VMSTC, VMTRCD, VMTRMS, VMTXBL, VMUDTE, VMUEVT, VMUPGM, VMUTGT, VMUTIM, VMUUSR, VMVRDY, VMVSDS, VMVSPY, VMVSTX, VMXCNO, VMZIP, VM1099
         // Target columns: VMAC, VMACT, VMACTV, VMADR1, VMADR2, VMADR3, VMADTE, VMAPVN, VMATPY, VMBUYR, VMCC01, VMCC02, VMCC03, VMCC04, VMCC05, VMCC06, VMCC07, VMCC08, VMCC09, VMCC10, VMCL, VMCMT, VMCNTC, VMCO, VMCOUN, VMCS, VMCTCD, VMCTRY, VMCURR, VMDBNO, VMDSCD, VMDYPY, VMEDGR, VMEDIC, VMFAXN, VMFED, VMGLCD, VMID, VMLDGR, VMLOC, VMLVSN, VMMISC, VMMLNG, VMNAME, VMNO, VMOREX, VMPAC, VMPAD1, VMPAD2, VMPAD3, VMPAEE, VMPCNT, VMPCTO, VMPCTU, VMPFXN, VMPHON, VMPNAM, VMPPHN, VMPTYP, VMPZIP, VMRGAF, VMSCC, VMSHPC, VMSHPM, VMSPCK, VMSTC, VMTRCD, VMTRMS, VMTXBL, VMUDTE, VMUEVT, VMUPGM, VMUTGT, VMUTIM, VMUUSR, VMVRDY, VMVSDS, VMVSPY, VMVSTX, VMXCNO, VMZIP, VM1099
 

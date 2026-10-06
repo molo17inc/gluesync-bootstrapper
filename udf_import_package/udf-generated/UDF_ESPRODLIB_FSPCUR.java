@@ -22,10 +22,11 @@ import java.time.LocalDateTime;
  * The function is invoked by Gluesync whatever the operation is (INSERT, UPDATE, DELETE),
  * as well as while performing the Snapshot task, and must return a Pair of the
  * (possibly changed) operation and the new values for the target row.
+ * isSnapshot is true when the row comes from the Snapshot task, false when it comes from CDC.
  */
 public class UDF_ESPRODLIB_FSPCUR {
 
-    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, Logger logger) {
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, boolean isSnapshot, Logger logger) {
         // Source columns: CYEAR, CNMBR, CDASH, ITEM#, ITMMRK, QTYBAY, PRTIDT, LENGTH, JBFIN, FS#, BAYMRK, WSYSTM, PRINT, PRINTS, PRTD, PDCATE, DATSYS, IMCO, JBFINI, SERIES, THERM, HV, TMSTMP, FE, HSTATS, DATECR, TIMECR, USERCR, DATEUP, TIMEUP, USERUP, BXCO, BXCRTD, BXUPDD, BXCRTT, BXUPDT, BXCRTU, BXUPDU, BXPGMN, FS#2
         // Target columns: RECORDID, CYEAR, CNMBR, CDASH, ITEM#, ITMMRK, QTYBAY, PRTIDT, LENGTH, JBFIN, FS#, BAYMRK, WSYSTM, PRINT, PRINTS, PRTD, PDCATE, DATSYS, IMCO, JBFINI, SERIES, THERM, HV, TMSTMP, FE, HSTATS, DATECR, USERCR, DATEUP, USERUP, BXCO, BXCRTD, BXUPDD, BXCRTU, BXUPDU, BXPGMN
 

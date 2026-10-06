@@ -53,6 +53,7 @@ from create_all_entities import (
     main as create_entities_main,
     set_create_table_if_not_exists,
 )
+from create_user_defined_functions import adapt_udf_code_for_corehub
 from export_template_from_corehub import (
     fetch_pipeline_entities,
     build_entities_maps,
@@ -3648,6 +3649,7 @@ def duplicate_pipeline(
                                     
                                     # Read and encode the UDF code
                                     udf_code = udf_file.read_text(encoding="utf-8")
+                                    udf_code = adapt_udf_code_for_corehub(udf_code, udf_type, udf_name, token)
                                     b64_code = base64.b64encode(udf_code.encode("utf-8")).decode("utf-8")
                                     
                                     # Compile the UDF directly via API

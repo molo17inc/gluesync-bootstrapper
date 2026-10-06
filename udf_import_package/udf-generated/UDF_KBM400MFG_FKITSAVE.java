@@ -25,10 +25,11 @@ import java.time.LocalDateTime;
  * The function is invoked by Gluesync whatever the operation is (INSERT, UPDATE, DELETE),
  * as well as while performing the Snapshot task, and must return a Pair of the
  * (possibly changed) operation and the new values for the target row.
+ * isSnapshot is true when the row comes from the Snapshot task, false when it comes from CDC.
  */
 public class UDF_KBM400MFG_FKITSAVE {
 
-    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, Logger logger) {
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, boolean isSnapshot, Logger logger) {
         // Source columns: TSAFLG, TSAINF, TSALCL, TSALLT, TSBO, TSCCFM, TSCCTO, TSCCUB, TSCLSP, TSCO, TSCODE, TSCPS1, TSCPS2, TSCUSN, TSCYCC, TSDATE, TSDCNT, TSDFOR, TSDNCC, TSDPTN, TSDSCO, TSDTCC, TSDTCN, TSDTDU, TSDTTR, TSDUCC, TSDUDT, TSFLG1, TSFLG2, TSFLG3, TSGLR1, TSGLR2, TSHTWC, TSLINE, TSLMPN, TSLOCF, TSLOCN, TSLOCT, TSLOTN, TSOPRN, TSPKBY, TSPKNO, TSPLOT, TSPN, TSPOTF, TSPROJ, TSQADJ, TSQOH, TSQOHF, TSQPRJ, TSQSHT, TSQTY1, TSQTY2, TSRCVN, TSREFN, TSREJR, TSRFLG, TSRINF, TSRSN, TSSCRP, TSSESN, TSSLSN, TSSPQT, TSTAGN, TSTIME, TSTQTY, TSUTMS, TSVNDN, TSWARE, TSWCCR, USRPRF
         // Target columns: RECORDID, TSAFLG, TSAINF, TSALCL, TSALLT, TSBO, TSCCFM, TSCCTO, TSCCUB, TSCLSP, TSCO, TSCODE, TSCPS1, TSCPS2, TSCUSN, TSCYCC, TSDCNT, TSDFOR, TSDNCC, TSDPTN, TSDSCO, TSDTCC, TSDTCN, TSDTDU, TSDTTR, TSDUDATE, TSFLG1, TSFLG2, TSFLG3, TSGLR1, TSGLR2, TSHTWC, TSLINE, TSLMPN, TSLOCF, TSLOCN, TSLOCT, TSLOTN, TSOPRN, TSPKBY, TSPKNO, TSPLOT, TSPN, TSPOTF, TSPROJ, TSQADJ, TSQOH, TSQOHF, TSQPRJ, TSQSHT, TSQTY1, TSQTY2, TSRCVN, TSREFN, TSREJR, TSRFLG, TSRINF, TSRSN, TSSCRP, TSSESN, TSSLSN, TSSPQT, TSTAGN, TSDATETIME, TSTQTY, TSUTMS, TSVNDN, TSWARE, TSWCCR, USRPRF
 
