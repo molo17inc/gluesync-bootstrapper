@@ -22,6 +22,7 @@ hiddenimports = [
     'create_all_tables',
     'create_all_entities',
     'commons',
+    'courier_support',
     'utils.log',
     'utils.core_hub_client',
     'utils.udf_signature',

@@ -30,7 +30,8 @@ from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
 
 import yaml
 
-from commons import fetch_core_hub, get_table_columns, is_length_type, is_temporal_type, catalog_type_for_agent_tag
+from commons import fetch_core_hub, get_table_columns, is_length_type, is_temporal_type, catalog_type_for_agent_tag, \
+    embedded_agent_categories
 from field_function_utils import apply_field_functions_to_column_mappings, normalize_expression_for_yaml
 from entity_mapping import read_entry, relations_of, yaml_rows
 from utils.chronos_client import ChronosClient
@@ -118,7 +119,10 @@ def _load_agent_type_catalog() -> Dict[str, str]:
     if _AGENT_TYPE_BY_NAME is not None:
         return _AGENT_TYPE_BY_NAME
 
-    mapping: Dict[str, str] = {}
+    # Embedded agents first: an agents.json entry with the same tag overrides them.
+    mapping: Dict[str, str] = embedded_agent_categories(
+        lambda category: "SQL" if category.strip().upper() == "RDBMS" else "NoSQL"
+    )
 
     try:
         base_dir = Path(__file__).resolve().parent

@@ -43,9 +43,11 @@ from utils.log import get_logger, create_log_file, log_success, log_failure, loc
 from utils.gluesync_sdk_client import initialize_gluesync_sdk, get_token, get_gluesync_client
 from utils.core_hub_client import CoreHubClient
 from utils.transactions_audit_client import TransactionsAuditClient
-from commons import extract_schemas_from_yaml, extract_all_schemas_from_yaml, extract_schema_types_from_yaml, configure_core_hub, catalog_type_for_agent_tag
+from commons import extract_schemas_from_yaml, extract_all_schemas_from_yaml, extract_schema_types_from_yaml, configure_core_hub, catalog_type_for_agent_tag, \
+    embedded_agent_categories
 from commons import admin_credentials_path, admin_password_problem, load_admin_password, login_password_candidates, save_admin_credentials
 from utils.redact import redact
+from courier_support import is_courier_agent, courier_block, provision_courier, apply_courier_defaults, CourierConfigError
 
 def _connect_requested(argv):
     """True for the kit command: python main.py --connect-import PATH --connect-setup."""
@@ -180,7 +182,10 @@ def _load_agent_type_catalog_for_bootstrapper() -> dict[str, str]:
     if _AGENT_TYPE_BY_NAME_BOOT is not None:
         return _AGENT_TYPE_BY_NAME_BOOT
 
-    mapping: dict[str, str] = {}
+    # Embedded agents first: an agents.json entry with the same tag overrides them.
+    mapping: dict[str, str] = embedded_agent_categories(
+        lambda category: "SQL" if category.strip().upper() == "RDBMS" else "NoSQL"
+    )
 
     try:
         base_dir = Path(__file__).resolve().parent
@@ -1224,6 +1229,8 @@ def _provision_agent(token, pipeline_id, conf_agent):
         'customHostCredentials': conf_agent.get('customHostCredentials', {}),
         'specificConfiguration': conf_agent.get('specificConfiguration', {}),
         'entities': conf_agent.get('entities', []),
+        # HTTP Target only: Courier collections/endpoints to create before the agent is configured.
+        'courier': courier_block(conf_agent),
     }
 
 
@@ -1247,6 +1254,26 @@ def _upload_agent_credentials(token, pipeline_id, agent):
     custom_host_credentials = agent['customHostCredentials']
     certificate_path = host_credentials.pop('certificatePath', None)
     certificate_type = host_credentials.pop('certificateType', None)
+
+    # HTTP Target (Courier outbound): the definitions it discovers (collection = schema,
+    # endpoint = table, binding = column) must exist before the agent is configured, otherwise
+    # discovery is empty and no entity can be created. Create or update them from the
+    # `courier` block of the agent configuration, then default the outbound collection.
+    if is_courier_agent(agent):
+        if agent.get('courier'):
+            try:
+                collection_names = provision_courier(token, agent['courier'], fetch=fetch_core_hub, logger=logger)
+            except CourierConfigError as courier_error:
+                log_failure(logger, str(courier_error))
+                lockfile_failure()
+                raise
+            apply_courier_defaults(agent, collection_names, logger=logger)
+            custom_host_credentials = agent['customHostCredentials']
+        else:
+            logger.warning(
+                "HTTP Target agent %s has no 'courier' block: its Courier collections and endpoints "
+                "must already exist in CoreHub", agent['agentId']
+            )
 
     # Upload certificate first (if present)
     if certificate_path and certificate_type:
