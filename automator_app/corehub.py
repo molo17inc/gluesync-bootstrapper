@@ -40,6 +40,7 @@ import requests
 from commons import (
     configure_core_hub,
     set_scheduling_enabled,
+    embedded_agent_categories,
     fetch_core_hub,
     get_pipeline_agents,
     get_agent_tables,
@@ -119,7 +120,8 @@ def _load_agent_type_catalog() -> Dict[str, str]:
         items = data.get("data") or data.get("items") or []
     else:
         items = data
-    catalog: Dict[str, str] = {}
+    # Embedded agents first: an agents.json entry with the same tag overrides them.
+    catalog: Dict[str, str] = embedded_agent_categories(lambda category: category.upper())
     if not isinstance(items, list):
         items = []
     for agent in items:

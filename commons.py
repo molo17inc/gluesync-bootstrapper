@@ -85,6 +85,21 @@ logger = get_logger()
 
 _ORACLE_AGENT_TAGS: Optional[set[str]] = None
 
+# Agents that ship inside CoreHub and may be missing from agents.json (which CI regenerates from the
+# backoffice catalog). Their category is what agents.json would carry in `type`, so the SQL/NoSQL
+# inference of the bootstrapper, the export and the Automator does not fall back to "SQL" for them.
+# The HTTP Target (Courier outbound) is an object-store-like target: no CREATE TABLE, NoSqlEntity.
+EMBEDDED_AGENT_CATEGORIES: dict[str, str] = {
+    "api-agent-shadow": "Object Store",
+}
+
+
+def embedded_agent_categories(normalize=None) -> dict[str, str]:
+    """``EMBEDDED_AGENT_CATEGORIES`` with each category passed through ``normalize`` (identity by default)."""
+    if normalize is None:
+        return dict(EMBEDDED_AGENT_CATEGORIES)
+    return {tag: normalize(category) for tag, category in EMBEDDED_AGENT_CATEGORIES.items()}
+
 
 def get_oracle_agent_tags() -> set[str]:
     """Return a cached set of agent tags that map to Oracle from agents.json."""
