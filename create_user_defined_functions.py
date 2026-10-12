@@ -113,29 +113,20 @@ class UdfFunctionTestRequest(BaseModel):
     isSchemaLocked: bool = True
     isSnapshot: bool = False
 
-# CoreHub base URL -> whether its UDFs take isSnapshot. Read once per CoreHub and run.
-_IS_SNAPSHOT_SUPPORT_BY_COREHUB: dict[str, bool] = {}
-
 def corehub_udfs_take_is_snapshot(token: str) -> bool:
     """Whether the CoreHub in use expects the Gluesync 2.3 ``onChange`` signature (with ``isSnapshot``).
 
-    Decided on ``GET /version``: 2.3 and later take ``isSnapshot``, older releases do not.
-    When the version cannot be read the current signature is assumed.
+    Decided on ``GET /version`` (read once per CoreHub by :func:`commons.corehub_version`): 2.3 and
+    later take ``isSnapshot``, older releases do not. When the version cannot be read the current
+    signature is assumed.
     """
-    base_url = getattr(commons.core_hub_client, "base_url", CORE_HUB_URL)
-    if base_url not in _IS_SNAPSHOT_SUPPORT_BY_COREHUB:
-        try:
-            version = fetch_core_hub("/version", token=token)
-        except Exception as e:  # pylint: disable=broad-except
-            logger.warning(f"Could not read the CoreHub version ({e}); assuming UDFs take isSnapshot (Gluesync 2.3+)")
-            version = None
-        supported = corehub_supports_is_snapshot(version)
-        logger.info(
-            f"CoreHub version {version!r}: UDF onChange signature "
-            f"{'with' if supported else 'without'} isSnapshot"
-        )
-        _IS_SNAPSHOT_SUPPORT_BY_COREHUB[base_url] = supported
-    return _IS_SNAPSHOT_SUPPORT_BY_COREHUB[base_url]
+    version = commons.corehub_version(token, fetch=fetch_core_hub)
+    supported = corehub_supports_is_snapshot(version)
+    logger.debug(
+        f"CoreHub version {version!r}: UDF onChange signature "
+        f"{'with' if supported else 'without'} isSnapshot"
+    )
+    return supported
 
 def adapt_udf_code_for_corehub(code: str, udf_type, udf_name: str, token: str) -> str:
     """``code`` with the ``onChange`` signature the CoreHub in use compiles.

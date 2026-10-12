@@ -252,6 +252,48 @@ def get_agent_tables(token, pipeline_id, agent_id, schema_name):
         return []
 
 
+# CoreHub base URL -> what its GET /version answered (None when unreadable). Read once per CoreHub and run.
+_COREHUB_VERSION_BY_URL: Dict[str, Any] = {}
+
+# The first release whose entity upsert takes the grouped column mapping matrix (lists of column ids).
+GROUPED_MATRIX_MIN_COREHUB_VERSION = (2, 3)
+
+
+def reset_corehub_version_cache():
+    """Forget the CoreHub versions read so far (tests, or a CoreHub upgraded during a run)."""
+    _COREHUB_VERSION_BY_URL.clear()
+
+
+def corehub_version(token, fetch=None):
+    """What ``GET /version`` of the CoreHub in use answers, read once per CoreHub and run.
+
+    ``fetch`` is the request function to use (``fetch_core_hub`` of this module by default), so a
+    caller keeps going through its own client. None when the version cannot be read.
+    """
+    base_url = getattr(core_hub_client, "base_url", CORE_HUB_URL)
+    if base_url not in _COREHUB_VERSION_BY_URL:
+        try:
+            version = (fetch or fetch_core_hub)("/version", token=token)
+        except Exception as e:  # pylint: disable=broad-except
+            logger.warning(f"Could not read the CoreHub version ({e}); assuming a current CoreHub (Gluesync 2.3+)")
+            version = None
+        logger.info(f"CoreHub version: {version!r}")
+        _COREHUB_VERSION_BY_URL[base_url] = version
+    return _COREHUB_VERSION_BY_URL[base_url]
+
+
+def corehub_takes_grouped_matrix(token, fetch=None):
+    """Whether the CoreHub in use takes the grouped column mapping matrix of Gluesync 2.3.
+
+    Older releases decode only the single pair ``sourceColumnId``/``targetColumnId``. A version that
+    cannot be read is taken as a current CoreHub, as for the UDF signature.
+    """
+    from utils.udf_signature import parse_corehub_version
+
+    parsed = parse_corehub_version(corehub_version(token, fetch=fetch))
+    return parsed is None or parsed[:2] >= GROUPED_MATRIX_MIN_COREHUB_VERSION
+
+
 def get_table_columns(token, pipeline_id, agent_id, schema_name, table_name):
     params = {'tableschema': schema_name, 'tablename': table_name}
     return fetch_core_hub(f"/pipelines/{pipeline_id}/agents/{agent_id}/discovery/columns", token=token, params=params)

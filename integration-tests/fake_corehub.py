@@ -96,7 +96,10 @@ class FakeCoreHub:
 def run_create_entities(hub, yaml_text, source_tables, *, source_schema="src", target_schema="tgt",
                         source_type="RDBMS", target_type="RDBMS", skip_errors=True, chunk_size=50):
     """Run ``create_entities`` on ``yaml_text`` against ``hub``; returns its result."""
+    import commons
     import create_all_entities
+
+    commons.reset_corehub_version_cache()
 
     patches = [
         mock.patch.object(create_all_entities, "CREATE_TABLE_IF_NOT_EXISTS", False),
@@ -109,8 +112,6 @@ def run_create_entities(hub, yaml_text, source_tables, *, source_schema="src", t
         mock.patch.object(create_all_entities, "create_group", side_effect=lambda token, pipeline_id, name, **k: f"group-{name}"),
         mock.patch.object(create_all_entities, "assign_entities_to_group", return_value=True),
     ]
-    if hasattr(create_all_entities, "corehub_version"):
-        patches.append(mock.patch.object(create_all_entities, "corehub_version", side_effect=lambda token: hub.version))
     with contextlib.ExitStack() as stack:
         for patch in patches:
             stack.enter_context(patch)

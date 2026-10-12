@@ -374,8 +374,11 @@ class CompileAndTestRequestTests(unittest.TestCase):
         import create_user_defined_functions as udf
 
         self.udf = udf
-        udf._IS_SNAPSHOT_SUPPORT_BY_COREHUB.clear()
-        self.addCleanup(udf._IS_SNAPSHOT_SUPPORT_BY_COREHUB.clear)
+        import commons
+
+        self.commons = commons
+        commons.reset_corehub_version_cache()
+        self.addCleanup(commons.reset_corehub_version_cache)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         patcher = mock.patch.object(udf, "UDF_PATH", self.tmp.name)
@@ -440,6 +443,32 @@ class CompileAndTestRequestTests(unittest.TestCase):
                 self.udf.check_and_compile_udf_function("T", {"name": name, "type": "Java"}, "pipe", "tok")
         self.assertEqual(1, sum(1 for path, _, _ in corehub.calls if path == "/version"))
         self.assertEqual(2, len(corehub.bodies("/compile-mapping-function")))
+
+    def test_udf_signature_and_matrix_encoding_share_one_version_read(self):
+        corehub = FakeCoreHub("2.2.6.0")
+        with mock.patch.object(self.udf, "fetch_core_hub", side_effect=corehub):
+            self.assertFalse(self.udf.corehub_udfs_take_is_snapshot("tok"))
+            self.assertFalse(self.commons.corehub_takes_grouped_matrix("tok", fetch=corehub))
+        self.assertEqual(1, sum(1 for path, _, _ in corehub.calls if path == "/version"))
+
+    def test_grouped_matrix_is_chosen_by_release(self):
+        for version, grouped in (
+            ("2.3.0.0 - build 7a328c2", True),
+            ("2.4.1.0", True),
+            ("2.2.11.5 - build abc", False),
+            ("2.2.6.0", False),
+            ("NA", True),
+            (None, True),
+        ):
+            self.commons.reset_corehub_version_cache()
+            with self.subTest(version=version):
+                self.assertEqual(grouped, self.commons.corehub_takes_grouped_matrix("tok", fetch=FakeCoreHub(version)))
+
+    def test_unreachable_version_counts_as_a_current_corehub_for_the_matrix(self):
+        import requests
+
+        corehub = FakeCoreHub(requests.exceptions.ConnectionError("down"))
+        self.assertTrue(self.commons.corehub_takes_grouped_matrix("tok", fetch=corehub))
 
     def make_test_request(self, **overrides):
         fields = dict(
