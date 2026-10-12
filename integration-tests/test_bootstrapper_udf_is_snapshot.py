@@ -503,6 +503,38 @@ class CompileAndTestRequestTests(unittest.TestCase):
         body = self.run_test_request("2.2.6.0", self.make_test_request(isSnapshot=True))
         self.assertNotIn("isSnapshot", body)
 
+    def make_mapping_request(self):
+        return self.make_test_request(
+            sourceColumns=[{"id": 1, "name": "ID", "isPK": True}, {"id": 2, "name": "NAME"}],
+            targetColumns=[{"id": 11, "name": "id", "isPK": True}, {"id": 12, "name": "name"}],
+            columnsMappingMatrix=[
+                {"sourceTableObjectId": 7, "targetTableObjectId": 8, "sourceColumnId": 1, "targetColumnId": 11},
+                {"sourceTableObjectId": 7, "targetTableObjectId": 8, "sourceColumnIds": [2], "targetColumnIds": [12]},
+            ],
+            fieldFunctions=[{"columnId": 12, "tableOrObjectId": 8, "expression": {"type": "TrimStr"}}],
+        )
+
+    def test_test_request_carries_the_2_3_mapping_fields(self):
+        """T16: lists, field functions, unlocked tables and isPrimaryKey for a 2.3 CoreHub (C-7)."""
+        body = self.run_test_request("2.3.0.0", self.make_mapping_request())
+        self.assertEqual(body["columnsMappingMatrix"], [
+            {"sourceTableObjectId": 7, "targetTableObjectId": 8, "sourceColumnIds": [1], "targetColumnIds": [11]},
+            {"sourceTableObjectId": 7, "targetTableObjectId": 8, "sourceColumnIds": [2], "targetColumnIds": [12]},
+        ])
+        self.assertEqual(body["fieldFunctions"][0]["columnId"], 12)
+        self.assertEqual(body["tablesWithUnlockedSchema"], [])
+        self.assertNotIn("entityUsesArrowOnlyShapes", body)
+        self.assertEqual([c["isPrimaryKey"] for c in body["sourceColumns"]], [True, False])
+        self.assertEqual([c["isPrimaryKey"] for c in body["targetColumns"]], [True, False])
+        self.assertIs(True, body["isSchemaLocked"])
+
+    def test_test_request_sends_pairs_to_an_older_corehub(self):
+        body = self.run_test_request("2.2.6.0", self.make_mapping_request())
+        self.assertEqual(body["columnsMappingMatrix"], [
+            {"sourceTableObjectId": 7, "targetTableObjectId": 8, "sourceColumnId": 1, "targetColumnId": 11},
+            {"sourceTableObjectId": 7, "targetTableObjectId": 8, "sourceColumnId": 2, "targetColumnId": 12},
+        ])
+
 
 class GeneratedAndShippedUdfTests(unittest.TestCase):
     """UDFs this repository generates or ships declare the Gluesync 2.3 signature."""
