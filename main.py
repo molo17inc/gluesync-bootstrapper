@@ -44,7 +44,7 @@ from utils.gluesync_sdk_client import initialize_gluesync_sdk, get_token, get_gl
 from utils.core_hub_client import CoreHubClient
 from utils.transactions_audit_client import TransactionsAuditClient
 from commons import extract_schemas_from_yaml, extract_all_schemas_from_yaml, extract_schema_types_from_yaml, configure_core_hub, catalog_type_for_agent_tag, \
-    embedded_agent_categories
+    embedded_agent_categories, agent_types_by_tag, sql_or_nosql
 from commons import admin_credentials_path, admin_password_problem, load_admin_password, login_password_candidates, save_admin_credentials
 from utils.redact import redact
 from courier_support import is_courier_agent, courier_block, provision_courier, apply_courier_defaults, CourierConfigError
@@ -183,9 +183,7 @@ def _load_agent_type_catalog_for_bootstrapper() -> dict[str, str]:
         return _AGENT_TYPE_BY_NAME_BOOT
 
     # Embedded agents first: an agents.json entry with the same tag overrides them.
-    mapping: dict[str, str] = embedded_agent_categories(
-        lambda category: "SQL" if category.strip().upper() == "RDBMS" else "NoSQL"
-    )
+    mapping: dict[str, str] = embedded_agent_categories(sql_or_nosql)
 
     try:
         base_dir = Path(__file__).resolve().parent
@@ -202,21 +200,7 @@ def _load_agent_type_catalog_for_bootstrapper() -> dict[str, str]:
             _AGENT_TYPE_BY_NAME_BOOT = mapping
             return mapping
 
-        for entry in items:
-            if not isinstance(entry, dict):
-                continue
-            name = entry.get("internalName")
-            kind = entry.get("type")
-            if not name or not kind:
-                continue
-            label = str(kind).strip().upper()
-            if not label:
-                continue
-            if label == "RDBMS":
-                normalized = "SQL"
-            else:
-                normalized = "NoSQL"
-            mapping[str(name).lower()] = normalized
+        mapping.update(agent_types_by_tag(items))
     except Exception as exc:  # pylint: disable=broad-except
         logger.exception("Failed to load agents.json catalog for type inference in bootstrapper: %s", exc)
         mapping = {}
@@ -971,6 +955,33 @@ if True:
                 # Log the error using the enhanced logging framework
                 log_failure(logger, f"Failed to start sync for entity {entityName}")
 
+def _prepare_courier_agent(token: str, agent: dict, custom_host_credentials: dict) -> dict:
+    """Courier provisioning for an HTTP Target agent; returns its (possibly defaulted) customHostCredentials.
+
+    HTTP Target (Courier outbound): the definitions it discovers (collection = schema,
+    endpoint = table, binding = column) must exist before the agent is configured, otherwise
+    discovery is empty and no entity can be created. Create or update them from the
+    `courier` block of the agent configuration, then default the outbound collection.
+    Any other agent is returned unchanged.
+    """
+    if not is_courier_agent(agent):
+        return custom_host_credentials
+    if not agent.get('courier'):
+        logger.warning(
+            "HTTP Target agent %s has no 'courier' block: its Courier collections and endpoints "
+            "must already exist in CoreHub", agent['agentId']
+        )
+        return custom_host_credentials
+    try:
+        collection_names = provision_courier(token, agent['courier'], fetch=fetch_core_hub, logger=logger)
+    except CourierConfigError as courier_error:
+        log_failure(logger, str(courier_error))
+        lockfile_failure()
+        raise
+    apply_courier_defaults(agent, collection_names, logger=logger)
+    return agent['customHostCredentials']
+
+
 def _parse_args():
     """Parse the command line arguments of the bootstrapper."""
     parser = argparse.ArgumentParser(description='Gluesync Bootstrapper')
@@ -1255,25 +1266,7 @@ def _upload_agent_credentials(token, pipeline_id, agent):
     certificate_path = host_credentials.pop('certificatePath', None)
     certificate_type = host_credentials.pop('certificateType', None)
 
-    # HTTP Target (Courier outbound): the definitions it discovers (collection = schema,
-    # endpoint = table, binding = column) must exist before the agent is configured, otherwise
-    # discovery is empty and no entity can be created. Create or update them from the
-    # `courier` block of the agent configuration, then default the outbound collection.
-    if is_courier_agent(agent):
-        if agent.get('courier'):
-            try:
-                collection_names = provision_courier(token, agent['courier'], fetch=fetch_core_hub, logger=logger)
-            except CourierConfigError as courier_error:
-                log_failure(logger, str(courier_error))
-                lockfile_failure()
-                raise
-            apply_courier_defaults(agent, collection_names, logger=logger)
-            custom_host_credentials = agent['customHostCredentials']
-        else:
-            logger.warning(
-                "HTTP Target agent %s has no 'courier' block: its Courier collections and endpoints "
-                "must already exist in CoreHub", agent['agentId']
-            )
+    custom_host_credentials = _prepare_courier_agent(token, agent, custom_host_credentials)
 
     # Upload certificate first (if present)
     if certificate_path and certificate_type:
