@@ -183,7 +183,8 @@ Today both are accepted, and the runtime writes the function's value over the so
 
 Recommendation A: B changes the relation without the user stating it, as BOP-3 B would change keys; C gives the same
 outcome later. On a CoreHub older than 2.3 the row is sent as today (BOP-5). The check sits in
-`build_field_functions_for_entity_type`, and is dropped if P16 does not reach `release/2.3.0.0` with !2521. The DBMoto converter is not affected: its
+`build_field_functions_for_entity_type`. P16 reached the remote feature branch as `b1c352e912`; `2063e42c63` adds the
+target scalar function on a fed column to it, which the check refuses as well. The DBMoto converter is not affected: its
 expressions go to the UDF (`dbmoto-converter/generate_udf_import_package.py:977`), not to field functions.
 
 ### BOP-15 Spelling of a target column name that differs from discovery only by case
@@ -191,7 +192,8 @@ expressions go to the UDF (`dbmoto-converter/generate_udf_import_package.py:977`
 The mapping and whitelist branches write the YAML target spelling (`create_all_entities.py:1762`, `:1828`); only the
 branch without `columns:` writes the discovered name (`:1874`). The 2.3 key rules compare key names case-sensitively, so
 a YAML `id:` against a physical primary key `ID` is refused by B2.
-- A. On 2.3 only, write the discovered spelling when the names match case-insensitively; older CoreHubs unchanged.
+- A. On 2.3 only, write the discovered spelling when the names match case-insensitively, for target names and for
+  the source names of whitelist rows (B1); older CoreHubs unchanged.
 - B. Do it for every CoreHub.
 - C. Keep the YAML spelling and let B2 refuse.
 
@@ -258,6 +260,7 @@ Each is implemented on its recommendation; the alternative is one commit away.
 | RK-6 | Old exports now create columns they used to drop (BOP-10) | named in the release notes; the columns are the ones the original entity wrote |
 | RK-7 | `{source: [..]}` rows edited by hand bind a custom function whose arguments do not match the sources; a repeated `source` (1:N) without a function silently copies the value to every target | CoreHub's CFF binding checks refuse the first at save (backend OP-108 A); the second is a WARNING of `POST /validate`, not a refusal (backend appendix A.18, `81b5e46b51`); the README example shows the binding and states the copy |
 | RK-8 | The tests that pin the matrix today are not run in CI, so the rewrite could break them unseen | 03 §1 adds them to the CI job |
+| RK-9 | A CoreHub whose `GET /version` cannot be read is taken as 2.3 (C-2, as for the UDF signature), and a 2.2.x CoreHub cannot decode a lists-only entry: every entity of the run would fail there, not one UDF compile | the merge request description names it; the version read logs what it got and the choice it made |
 
 ## 4. Summary for the maintainer
 

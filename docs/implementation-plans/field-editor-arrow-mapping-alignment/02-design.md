@@ -64,9 +64,9 @@ still mean the source name (`create_all_entities.py:292-294`), the shorthand `{S
 On 2.3 an `expression` on a row with a `source` must not be a fixed or technical field function (Static*, LocalTs,
 LocalDate, TsOff, RecordID): P16 refuses it on a fed target, so `build_field_functions_for_entity_type` (`field_function_utils.py:200-238`), the one
 place that holds both the relation and the function, refuses it before the request (BOP-14); it stays allowed on a
-`{target, expression}` row (null:1). The rows of an imported 2.2.x export go through the same function. This assumes
-P16 (`62ef93bb43`) reaches `release/2.3.0.0` with !2521; if it does not, the check is dropped, since it would be
-stricter than CoreHub.
+`{target, expression}` row (null:1). The rows of an imported 2.2.x export go through the same function. P16 is on
+`feature/field-editor-arrow-mapping` (`b1c352e912`, rebased from `62ef93bb43`), and since `2063e42c63` it also names a
+target scalar function on a fed column (already refused there at every save by rule (f)), which the check refuses too.
 
 The `CustomFn` shape is CoreHub's (`BE: commons-model/.../entity/FieldFunction.kt:900-925`); arguments bind by source
 name (BE-plan D18). Rows are grouped into entries by `build_entries`: rows sharing a source form one 1:N entry; a row
@@ -120,8 +120,8 @@ without keys is refused whatever the target.
 
 The key rules compare the persisted key names with the discovered ones as case-sensitive sets (`KeyTable.primaryKeyIssue`).
 On the 2.3 path a YAML target name that matches a discovered target column case-insensitively is written with the
-discovered spelling, so a hand-written `id:` against a physical `ID` passes B2; on an older CoreHub the YAML spelling
-stays (BOP-15).
+discovered spelling, so a hand-written `id:` against a physical `ID` passes B2, and so is the source name of a whitelist
+row (B1); on an older CoreHub the YAML spelling stays (BOP-15).
 
 Inputs per table pair: `Ph_S`, `Ph_T` = the discovered `isPK` columns of the source and of the existing target table
 (read after table creation, `:1566-1581`), empty on a side that does not honour physical keys (NoSQL category, or agent
