@@ -941,29 +941,22 @@ def _process_multitable_entity(
             ]
             ordered_source = list(enumerate(column_groups[table_name], start=1))
             if _is_grouped_matrix(pair_matrix):
+                # The rows, target keys and field functions of a SingleTable entity, so every 2.3 form comes back
+                # (BOP-16 A): a column fed by no source is a {target, expression} row, which the import checks with
+                # the key rules, instead of a targetOnlyColumns entry. The source of a MultiTable entity holds every
+                # column, so a column read and never written needs no target: [] row unless it is a source key,
+                # which the import would otherwise map by name; without one, a 1:1 chain still imports into 2.2.x.
                 rows, relations = _grouped_mapping_rows(pair_matrix, ordered_source, target_cols)
-                table_cfg["columns"] = [row for row in rows if row.get("source") and row.get("target") != []]
-                target_only = []
-                for target_name in relations["unlinked_targets"]:
-                    tcol = next(c for c in target_cols if c.get("name") == target_name)
-                    entry: Dict[str, Any] = {
-                        "name": target_name,
-                        "type": _column_data_type(tcol),
-                        "dataLength": _column_attr(tcol, "charMaxLength", "dataLength", 0),
-                        "numericPrecision": _column_attr(tcol, "numPrec", "numericPrecision", 0),
-                        "numericScale": _column_attr(tcol, "numScale", "numericScale", 0),
-                        "isNullable": tcol.get("isNullable", True),
-                    }
-                    expression = next((
-                        normalize_expression_for_yaml(ff.get("expression")) for ff in field_functions
-                        if ff.get("columnId") == tcol.get("id")
-                        and (paired_target is None or str(ff.get("tableOrObjectId")) == str(paired_target.get("id")))
-                    ), None)
-                    if expression:
-                        entry["expression"] = expression
-                    target_only.append(entry)
-                if target_only:
-                    table_cfg.setdefault("customProperties", {}).setdefault("target", {})["targetOnlyColumns"] = target_only
+                source_keys = set(_keys_from_columns(column_groups[table_name]))
+                rows = [row for row in rows if row.get("target") != [] or row.get("source") in source_keys]
+                pair_functions = [
+                    ff for ff in field_functions
+                    if paired_target is None or str(ff.get("tableOrObjectId")) == str(paired_target.get("id"))
+                ]
+                table_cfg["columns"] = apply_field_functions_to_column_mappings(rows, target_cols, pair_functions)
+                target_keys = _target_keys_to_export(relations, column_groups[table_name], target_cols)
+                if target_keys:
+                    table_cfg["targetKeys"] = target_keys
             else:
                 table_cfg["columns"] = _legacy_mapping_rows(
                     pair_matrix, ordered_source, list(enumerate(target_cols, start=1)), table_name

@@ -211,7 +211,16 @@ writer also builds no N:1, 1:N or 1:null relation.
 
 Implemented: B, the smaller change, until the maintainer answers. Recommendation A for the keys (same outcome as
 SingleTable, refused earlier with the table named), B for the forms (no MultiTable user has asked for them).
-Answered on 2026-10-12: A for the keys and A for the forms (supported, not refused).
+Answered on 2026-10-12: A for the keys and A for the forms (supported, not refused). Implemented: on 2.3 each
+table pair of a chain goes through the SingleTable assembly (`_assemble_chain_pair`), so it gets the same relations,
+keys, target columns and field functions as the table's SingleTable entity; the chain loop adds every discovered
+source column (1:null when no row names it, BOP-17.4) and the `targetOnlyColumns`. A refusal refuses the chain,
+naming the table and the rule. The export of a 2.3 chain writes the rows of a SingleTable entity, field functions
+and `targetKeys` included: a column fed by no source is a `{target, expression}` row, no longer a
+`targetOnlyColumns` entry, and a `target: []` row is written for a source key only, so a 1:1 chain still imports into
+2.2.x. Limitation: the key rules run before the `targetOnlyColumns` are added, so a target primary key fed only by
+one is refused (BOP-13); a `{target, expression}` row is the way to write it. Older CoreHubs keep the chain payload,
+and the 2.3 forms in a chain are refused for them with the message of a SingleTable entity.
 
 ### BOP-17 Choices made while implementing, to confirm at review
 
@@ -262,6 +271,22 @@ as their refused chains already did. An error `main` skips under `skip_errors` (
 returned as the only error instead of nothing, so it fails the Automator run too. The bulk creation adds the list to
 its "Some entities failed" message.
 
+### BOP-19 The target table of a chain table whose `name` differs from its key
+
+Found while implementing BOP-16. For a chained table the first loop creates and discovers the target table the
+YAML `name` gives (`_target_table_name`, as for every table), and the export writes the target table as `name`; the
+chain loop pointed the MultiTable entity at the YAML key instead. A chain whose target tables are named differently
+from its source tables (an Oracle `CUSTOMERS` into a PostgreSQL `customers`) got an entity naming a table the run did
+not create, and on 2.3 the key rules of the pair would run against one table while the entity names another.
+- A. Keep the YAML key everywhere, and give it to the pair assembly too: payloads unchanged; the defect stays, and the
+  key rules read a table that may not exist (no physical key).
+- B. On 2.3 only, the target table is the one `name` gives, in the entity and in the pair assembly; older CoreHubs
+  keep the YAML key and their payload.
+- C. B on every CoreHub: also fixes 2.2.x, and changes the 2.2.x chain payload of a table with a different `name`.
+
+Recommendation B: the key rules need the table the entity names, and 2.2.x payloads stay pinned (RK-2); C is a fix
+for 2.2.x users for the maintainer to decide on its own. Implemented: B, until the maintainer answers.
+
 ## 2. Pending verifications
 
 | Id | Question | How | Changes |
@@ -289,7 +314,8 @@ its "Some entities failed" message.
 
 Answered on 2026-10-12: BOP-1 A (with backward compatibility, sub-question (a)), BOP-3 A, BOP-4 A, BOP-5 A, BOP-6 A,
 BOP-12 A, and the per-table extraction of 02 §4 in this merge request, in its own commit. Found while implementing
-and answered the same day: BOP-15 A, BOP-16 A for the keys and the forms, BOP-17 all A, BOP-18 A. To answer before
+and answered the same day: BOP-15 A, BOP-16 A for the keys and the forms, BOP-17 all A, BOP-18 A. BOP-19, found
+while implementing BOP-16, is written on its recommendation B until the maintainer answers. To answer before
 implementation: none; BOP-13 A and BOP-14 A were answered the same day. BOP-2, BOP-7, BOP-8, BOP-9 and BOP-10 can
 take their recommendations at review; BOP-11 at release. PV-1 and PV-3 are checked before the merge request leaves
 Draft.

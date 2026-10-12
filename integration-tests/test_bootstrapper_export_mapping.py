@@ -169,15 +169,28 @@ class MultiTableExportTests(unittest.TestCase):
         _process_multitable_entity({"entityName": "src.ORDERS chain"}, source_ae, target_ae, schemas, {})
         return schemas["src"]["tables"]["custom"]["ORDERS"]
 
-    def test_grouped_matrix_exports_mapping_rows_and_produced_target_only_columns(self):
+    def test_grouped_matrix_exports_the_rows_of_a_single_table(self):
+        # BOP-16 A: a column fed by no source is a {target, expression} row, which the import checks with the key
+        # rules. A non-key source column read and never written needs no row: the MultiTable source holds it anyway.
         cfg = self.export(
             [entry([1], [1]), entry([2], [2]), entry([3], []), entry([], [4])],
             field_functions=[{"columnId": 4, "tableOrObjectId": 200, "expression": {"type": "LocalTs"}}],
         )
-        self.assertEqual(shape(cfg["columns"]), [("ORDER_ID", "ORDER_ID"), ("TOTAL", "AMOUNT")])
-        only = cfg["customProperties"]["target"]["targetOnlyColumns"]
-        self.assertEqual([(c["name"], c["expression"]) for c in only], [("SYNCED_AT", {"type": "LocalTs"})])
+        self.assertEqual(shape(cfg["columns"]), [("ORDER_ID", "ORDER_ID"), ("TOTAL", "AMOUNT"), (None, "SYNCED_AT")])
+        self.assertEqual(cfg["columns"][2]["expression"], {"type": "LocalTs"})
+        self.assertNotIn("customProperties", cfg)
         self.assertEqual(cfg["keys"], ["ORDER_ID"])
+
+    def test_a_source_key_read_and_never_written_keeps_its_row(self):
+        cfg = self.export([entry([1], []), entry([2], [2]), entry([3], []), entry([], [1])])
+        self.assertEqual(shape(cfg["columns"])[:2], [("ORDER_ID", []), ("TOTAL", "AMOUNT")])
+
+    def test_field_functions_of_another_table_of_the_chain_are_left_out(self):
+        cfg = self.export(
+            [entry([1], [1]), entry([2], [2]), entry([3], [])],
+            field_functions=[{"columnId": 2, "tableOrObjectId": 999, "expression": {"type": "LocalTs"}}],
+        )
+        self.assertNotIn("expression", cfg["columns"][1])
 
     def test_legacy_pairs_export_mapping_rows_with_the_target_names(self):
         cfg = self.export([pair(1, 1), pair(2, 2), pair(3, 3)])

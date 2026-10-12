@@ -216,6 +216,11 @@ A CoreHub older than 2.3 stores only one source column per target column: the fo
 request, and the other forms are sent as they always were. The export writes these forms only for entities
 of a 2.3 CoreHub.
 
+On a 2.3 CoreHub each table of a MultiTable chain (`chainId`) follows the same rules and takes the same forms
+as a table of its own, and its target table is the one `name` gives. A chain is refused as a whole, naming the
+table and the rule. The source of a chain keeps every column of its tables: a column no row names is read and
+never written.
+
 ### Entity Naming
 
 Entities created in CoreHub from this YAML are named automatically:
@@ -1118,7 +1123,7 @@ ARTICLES:
 ### Technical Details
 
 - **Column IDs**: Target-only columns receive sequential IDs following the mapped source columns
-- **Column Mapping**: In `columnsMappingMatrix`, target-only columns have no entry of their own with an unlocked schema (its single entry pairs the tables); in a MultiTable chain on Gluesync 2.3 each one has an entry with no source column and needs an `expression` (a field function that produces its value), or the chain is refused
+- **Column Mapping**: In `columnsMappingMatrix`, target-only columns have no entry of their own with an unlocked schema (its single entry pairs the tables); in a MultiTable chain on Gluesync 2.3 each one has an entry with no source column and needs an `expression` (a field function that produces its value), or the chain is refused. A `{target, expression}` row in the table's `columns:` does the same and is what the export writes; use it for a target primary key no source feeds, which the key rules check before the target-only columns are added
 - **Discovery Priority**: If a target-only column exists in the target table, discovered properties are used over user-defined ones
 - **Required Fields**: When using object format, you must specify: `name`, `type`, `dataLength`, `numericPrecision`, `numericScale`, `isNullable`
 - **Default Values**: When using simple string format, defaults are: `varchar` type, `dataLength: 1024`, `numericPrecision: 0`, `numericScale: 0`, `isNullable: false`

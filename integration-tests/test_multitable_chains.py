@@ -199,12 +199,15 @@ class MultiTablePayloadTests(unittest.TestCase):
                 return {"ok": True}
             return {}
 
+        # Every column the YAML maps: a Gluesync 2.3 CoreHub refuses a mapping onto no column (BS-5).
         columns_by_table = {
             "ORDERS_HEADERS": [
                 _source_col("ID", 1, "int", is_pk=True),
+                _source_col("ORDER_NUMBER", 2, "varchar"),
             ],
             "ORDERS_ROWS": [
                 _source_col("ID", 1, "int", is_pk=True),
+                _source_col("ARTICLE_ID", 2, "int"),
             ],
         }
 

@@ -33,7 +33,7 @@ from create_user_defined_functions import handle_udf_function_definition
 from field_function_utils import build_field_functions_for_entity_type, normalize_expression_for_corehub, \
     produced_target_names
 from entity_mapping import EntityMappingError, build_entries, derive_keys, drop_forbidden_key_links, \
-    encode_entries, group_relations, grouped_only_forms, yaml_relations
+    encode_entries, group_relations, grouped_only_forms, read_entry, yaml_relations
 import create_user_defined_functions as udf_module
 from utils.log import get_logger, create_log_file, log_success, log_failure, lockfile_failure, lockfile_complete, exit_on_fail
 from utils.core_hub_client import CoreHubClient
@@ -330,6 +330,34 @@ def _relations_by_id(name_relations, columns_def, target_columns_def, table_name
     return by_id
 
 
+def _target_table_name(custom_config, table_name, yaml_table_key):
+    """The target table of a source table: the YAML ``name``, else the source table name.
+
+    The YAML ``name`` stores the target table name as CoreHub recorded it. For AS/400 sources the agent may return a
+    library-qualified name (e.g. FILELIB.TABLE), stored verbatim: when it is a library prefix prepended to the YAML
+    key, the prefix is stripped so the target entity gets the unqualified name.
+    """
+    raw_target_name = custom_config.get('name', table_name)
+    if raw_target_name != table_name and '.' in raw_target_name and raw_target_name.rsplit('.', 1)[-1] == yaml_table_key:
+        target_table_name = raw_target_name.rsplit('.', 1)[-1]
+        logger.info(
+            f"Stripped library prefix from target table name: '{raw_target_name}' → '{target_table_name}' "
+            f"(source table key: '{yaml_table_key}')"
+        )
+        return target_table_name
+    return raw_target_name
+
+
+def _refuse_forms_of_gluesync_23(relations, custom_config, table_name):
+    """Refuse the column mapping forms only a Gluesync 2.3 CoreHub can store, for an older one."""
+    forms = grouped_only_forms(relations, custom_config)
+    if forms:
+        raise EntityMappingError(
+            f"Table {table_name} uses column mapping forms that a CoreHub older than Gluesync 2.3 cannot store: "
+            f"{'; '.join(forms)}"
+        )
+
+
 def _http_status(error):
     """The HTTP status of a failed CoreHub request (commons.fetch_core_hub chains requests' error), or None."""
     while error is not None:
@@ -411,12 +439,7 @@ def _assemble_source_columns(columns, custom_config, table_name, source_schema, 
     """
     relations = yaml_relations(custom_config.get('columns'), label=table_name)
     if not grouped and check_forms:
-        forms = grouped_only_forms(relations, custom_config)
-        if forms:
-            raise EntityMappingError(
-                f"Table {table_name} uses column mapping forms that a CoreHub older than Gluesync 2.3 cannot store: "
-                f"{'; '.join(forms)}"
-            )
+        _refuse_forms_of_gluesync_23(relations, custom_config, table_name)
 
     # Build columns definition with IDs
     columns_def = []
@@ -1527,6 +1550,34 @@ def _assemble_target_side(token, pipeline_id, target_agent_id, yaml_target_schem
     return target_columns_def, target_keys
 
 
+def _assemble_chain_pair(token, pipeline_id, target_agent_id, yaml_target_schema, target_table_name, table_key,
+                         columns, table_config, source_schema, source_table_id, target_table_id, source_node_info,
+                         target_node_info, source_agent_tag, target_agent_tag, skip_errors, source_is_nosql=False,
+                         target_is_nosql=False):
+    """One table pair of a MultiTable chain for a Gluesync 2.3 CoreHub, through the SingleTable assembly (BOP-16 A).
+
+    The 2.3 key rules run per table pair on a MultiTable target too, so the pair is assembled as the same table's
+    SingleTable entity: same relations, keys, target columns and field functions. Returns ``(target_columns_def,
+    relations, field_functions, source_key_names)``, the relations over column ids, for the chain loop to add its
+    target-only columns and every discovered source column. Refusals raise :class:`entity_mapping.EntityMappingError`.
+    """
+    columns_def, _keys, has_mappings, is_whitelist, discovery_types, relations = _assemble_source_columns(
+        columns, table_config, table_key, source_schema, grouped=True)
+    pair_entity_type = {}
+    target_columns_def, _target_keys = _assemble_target_side(
+        token, pipeline_id, target_agent_id, yaml_target_schema, target_table_name, table_key, columns, columns_def,
+        table_config, has_mappings, is_whitelist, discovery_types, False, source_table_id, target_table_id,
+        pair_entity_type, source_node_info, target_node_info, source_agent_tag, target_agent_tag, skip_errors,
+        relations=relations, grouped=True, source_is_nosql=source_is_nosql, target_is_nosql=target_is_nosql,
+    )
+    pair_relations = []
+    for entry in pair_entity_type["columnsMappingMatrix"]:
+        _, _, sources, targets = read_entry(entry)
+        pair_relations.append({"sources": sources, "targets": targets, "explicit": True})
+    source_key_names = {c["name"] for c in columns_def if c.get("isPK")}
+    return target_columns_def, pair_relations, pair_entity_type.get("fieldFunctions", []), source_key_names
+
+
 # Initialize logger
 log_file = create_log_file()
 logger = get_logger(log_file)
@@ -2184,26 +2235,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         logger.debug(f"Source custom properties for {table_name}: {source_custom_properties}")
         logger.debug(f"Target custom properties for {table_name}: {target_custom_properties}")
 
-        # Get custom target table name if specified.
-        # The YAML `name` field stores the target table name as recorded by CoreHub.
-        # For AS/400 sources the agent may return a library-qualified name
-        # (e.g. FILELIB.TABLE) which then gets stored verbatim.  When the actual
-        # source table name used as key is the bare form (e.g. TABLE), and the
-        # `name` field is just a library prefix prepended to that bare name, strip
-        # the prefix so the target entity gets the unqualified name.
-        raw_target_name = custom_config.get('name', table_name)
-        if (
-            raw_target_name != table_name
-            and '.' in raw_target_name
-            and raw_target_name.rsplit('.', 1)[-1] == yaml_table_key
-        ):
-            target_table_name = raw_target_name.rsplit('.', 1)[-1]
-            logger.info(
-                f"Stripped library prefix from target table name: '{raw_target_name}' → '{target_table_name}' "
-                f"(source table key: '{yaml_table_key}')"
-            )
-        else:
-            target_table_name = raw_target_name
+        target_table_name = _target_table_name(custom_config, table_name, yaml_table_key)
         logger.info(f"Using target table name: {target_table_name} for source table: {table_name}")
 
         # Get filter configurations (processed later after target_table_id is resolved)
@@ -2409,8 +2441,13 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 source_is_nosql=is_source_nosql_type, target_is_nosql=is_target_nosql_type,
             )
         except EntityMappingError as error:
-            refuse_table(table_name, error)
-            continue
+            if not custom_config.get('chainId'):
+                refuse_table(table_name, error)
+                continue
+            # Its chain is written, or refused, by the chain loop below; the rest of this loop (partitions, UDFs)
+            # still runs for the table, whose SingleTable entity is not sent.
+            logger.debug(f"Table {table_name} of chain {custom_config.get('chainId')}: {error}")
+            target_columns_def, target_keys = [], []
 
 
         # Determine target entity type based on target_type
@@ -2845,6 +2882,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         multi_columns = []
         multi_keys = []
         tables_properties = {}
+        # The source columns of each table, whose key flags the 2.3 key rules of its pair set (BOP-16 A).
+        chain_source_columns = {}
 
         # Process each table in the chain (in YAML order)
         for table_key, table_data in tables_list:
@@ -2902,6 +2941,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 "schema": source_schema
             })
             multi_columns.append(table_columns)
+            chain_source_columns[table_key] = table_columns
 
             # Process keys
             custom_config = table_data
@@ -3039,28 +3079,30 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         for table_key, table_data in tables_list:
             # Use sourceTableName if present (for duplicate tables with unique YAML keys)
             actual_table_name = table_data.get('sourceTableName', table_key) if table_data else table_key
-            
-            target_table_id = resolve_table_id(yaml_target_schema, table_key, target_tables_lookup, "target")
-            # Add table to the list (use table_key for target, as it may have custom target name)
+            # On 2.3 the target table is the one the YAML `name` gives, which the first loop creates and the export
+            # writes; older CoreHubs keep the YAML key (BOP-19 B).
+            pair_target_name = _target_table_name(table_data or {}, actual_table_name, table_key) if grouped else table_key
+
+            target_table_id = resolve_table_id(yaml_target_schema, pair_target_name, target_tables_lookup, "target")
             target_table_obj = {
                 "id": int(target_table_id),
-                "name": table_key,
+                "name": pair_target_name,
                 "schema": target_schema
             }
             target_tables.append(target_table_obj)
             chain_target_ids[table_key] = target_table_id
 
             # Add table to tables_properties
-            target_tables_properties[f"{target_schema}.{table_key}"] = {}
+            target_tables_properties[f"{target_schema}.{pair_target_name}"] = {}
 
             # Get columns for this table using actual source table name
             columns = get_table_columns(token, pipeline_id, source_agent_id, source_schema, actual_table_name)
 
             # Discover target columns for this specific table to enable type-mapping fallback
             try:
-                table_target_columns = get_table_columns(token, pipeline_id, target_agent_id, target_schema, table_key)
+                table_target_columns = get_table_columns(token, pipeline_id, target_agent_id, target_schema, pair_target_name)
             except Exception as e:
-                logger.debug(f"Could not get target columns for {target_schema}.{table_key}: {str(e)}")
+                logger.debug(f"Could not get target columns for {target_schema}.{pair_target_name}: {str(e)}")
                 table_target_columns = None
             target_table_column_types = extract_target_column_types(table_target_columns)
 
@@ -3069,76 +3111,95 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 table_data.get('columns', []) if table_data else []
             )
 
-            # Process columns for target
-            target_table_columns = []
-            max_target_col_id = 0
+            if grouped:
+                # Gluesync 2.3: the pair goes through the SingleTable assembly, so its keys follow the R12 rules and it
+                # takes every 2.3 form (BOP-16 A). On 2.3 it replaces the target columns built below from the YAML
+                # mapping, the refusal of the 2.3 forms in a chain and the 1:1 entries of every mapped column.
+                try:
+                    target_table_columns, pair_relations, pair_field_functions, source_key_names = _assemble_chain_pair(
+                        token, pipeline_id, target_agent_id, yaml_target_schema, pair_target_name, table_key, columns,
+                        table_data or {}, source_schema, chain_source_ids[table_key], target_table_id, source_node_info,
+                        target_node_info, source_agent_tag, target_agent_tag, skip_errors,
+                        source_is_nosql=is_source_nosql_type, target_is_nosql=is_target_nosql_type,
+                    )
+                except EntityMappingError as error:
+                    chain_refusals.append(str(error))
+                    target_table_columns, pair_relations, pair_field_functions, source_key_names = [], [], [], set()
+                mt_field_functions.extend(pair_field_functions)
+                for col in chain_source_columns[table_key]:
+                    col["isPK"] = col["name"] in source_key_names
+                max_target_col_id = max([c["id"] for c in target_table_columns if isinstance(c.get("id"), int)] + [0])
+            else:
+                # Process columns for target
+                target_table_columns = []
+                max_target_col_id = 0
             
-            # Check if this table has column mappings or whitelist
-            table_yaml_columns = table_data.get('columns', []) if table_data else []
-            table_has_mappings = _is_column_mappings(table_yaml_columns)
-            table_has_whitelist = _is_column_whitelist(table_yaml_columns)
+                # Check if this table has column mappings or whitelist
+                table_yaml_columns = table_data.get('columns', []) if table_data else []
+                table_has_mappings = _is_column_mappings(table_yaml_columns)
+                table_has_whitelist = _is_column_whitelist(table_yaml_columns)
             
-            try:
-                table_relations = yaml_relations(table_yaml_columns, label=table_key)
-            except EntityMappingError as error:
-                chain_refusals.append(str(error))
-                table_relations = None
+                try:
+                    table_relations = yaml_relations(table_yaml_columns, label=table_key)
+                except EntityMappingError as error:
+                    chain_refusals.append(str(error))
+                    table_relations = None
 
-            # Build lookup from source column name -> (target_name, yaml_type)
-            source_to_target_mapping = {}
-            if table_has_mappings:
-                for relation in table_relations or []:
-                    for source_name, target_name in _relation_pairs([relation]):
-                        source_to_target_mapping[source_name.lower()] = {
-                            'target_name': target_name,
-                            'yaml_type': relation["row"].get('type')
-                        }
-            elif table_has_whitelist:
-                for yaml_col in table_yaml_columns:
-                    source_name = yaml_col.get('sourceName') or yaml_col.get('name')
-                    target_name = yaml_col.get('name')
-                    if source_name:
-                        source_to_target_mapping[source_name.lower()] = {
-                            'target_name': target_name,
-                            'yaml_type': yaml_col.get('type')
-                        }
+                # Build lookup from source column name -> (target_name, yaml_type)
+                source_to_target_mapping = {}
+                if table_has_mappings:
+                    for relation in table_relations or []:
+                        for source_name, target_name in _relation_pairs([relation]):
+                            source_to_target_mapping[source_name.lower()] = {
+                                'target_name': target_name,
+                                'yaml_type': relation["row"].get('type')
+                            }
+                elif table_has_whitelist:
+                    for yaml_col in table_yaml_columns:
+                        source_name = yaml_col.get('sourceName') or yaml_col.get('name')
+                        target_name = yaml_col.get('name')
+                        if source_name:
+                            source_to_target_mapping[source_name.lower()] = {
+                                'target_name': target_name,
+                                'yaml_type': yaml_col.get('type')
+                            }
             
-            has_filter = table_has_mappings or table_has_whitelist
-            # The forms of Gluesync 2.3 (N:1, 1:N, 1:null, targetKeys) are not written for a MultiTable chain (BOP-16).
-            forms = grouped_only_forms(table_relations, table_data)
-            if forms:
-                chain_refusals.append(f"table {table_key} uses column mapping forms a MultiTable chain does not take: {'; '.join(forms)}")
+                has_filter = table_has_mappings or table_has_whitelist
+                try:
+                    _refuse_forms_of_gluesync_23(table_relations, table_data, table_key)
+                except EntityMappingError as error:
+                    chain_refusals.append(str(error))
             
-            # First add source columns mapped to target with their actual ordinal positions
-            for col in columns["columns"]:
-                # Use the id field from CoreHub API as the column ID
-                col_id = col.get('id')
-                if col_id is None:
-                    error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
-                    logger.error(error_msg)
-                    raise ValueError(error_msg)
+                # First add source columns mapped to target with their actual ordinal positions
+                for col in columns["columns"]:
+                    # Use the id field from CoreHub API as the column ID
+                    col_id = col.get('id')
+                    if col_id is None:
+                        error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
+                        logger.error(error_msg)
+                        raise ValueError(error_msg)
                 
-                # When filter is active, skip columns not in the whitelist/mapping
-                mapping_info = source_to_target_mapping.get(col["name"].lower())
-                if has_filter and not mapping_info:
-                    logger.debug(f"Skipping column {col['name']} for MultiTable target: not in whitelist/mapping for table {table_key}")
-                    continue
+                    # When filter is active, skip columns not in the whitelist/mapping
+                    mapping_info = source_to_target_mapping.get(col["name"].lower())
+                    if has_filter and not mapping_info:
+                        logger.debug(f"Skipping column {col['name']} for MultiTable target: not in whitelist/mapping for table {table_key}")
+                        continue
                 
-                # Use target name from mapping if available, otherwise source name
-                target_name = mapping_info['target_name'] if mapping_info else col["name"]
+                    # Use target name from mapping if available, otherwise source name
+                    target_name = mapping_info['target_name'] if mapping_info else col["name"]
                     
-                max_target_col_id = max(max_target_col_id, col_id)
-                _resolved_dt = table_target_data_type_overrides.get(col["name"].lower()) or map_data_type(
-                    col.get("dataType"), source_node_info, target_node_info,
-                    source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
-                    target_table_column_types=target_table_column_types)
-                target_table_columns.append(_enrich_column({
-                    "id": col_id,  # Use actual ordinal position from database
-                    "position": col.get("position", 0),
-                    "name": target_name,
-                    "dataType": _resolved_dt,
-                    "isPK": col.get("isPK", False) or _is_in_keys(col["name"], table_data), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
-                }, col))
+                    max_target_col_id = max(max_target_col_id, col_id)
+                    _resolved_dt = table_target_data_type_overrides.get(col["name"].lower()) or map_data_type(
+                        col.get("dataType"), source_node_info, target_node_info,
+                        source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
+                        target_table_column_types=target_table_column_types)
+                    target_table_columns.append(_enrich_column({
+                        "id": col_id,  # Use actual ordinal position from database
+                        "position": col.get("position", 0),
+                        "name": target_name,
+                        "dataType": _resolved_dt,
+                        "isPK": col.get("isPK", False) or _is_in_keys(col["name"], table_data), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
+                    }, col))
 
             # Add target-only columns for this table if specified
             table_custom_config = table_data.get('customProperties', {}).get('target', {}) if table_data else {}
@@ -3221,14 +3282,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     logger.debug(f"Added target-only column to MultiTable: {col_name} (type: {mapped_type}, id: {max_target_col_id})")
 
             if grouped:
-                # Every column of the pair in one entry: a mapped source onto its target column (which MultiTable
-                # targets keep under the source id), a filtered source read and never written, and each target-only
+                # Every column of the pair in one entry: the pair's relations, every discovered source column the
+                # MultiTable source holds (a filtered one read and never written, BOP-17.4), and each target-only
                 # column fed by no source, which needs a field function that produces it (P12, BOP-12 A).
-                pair_relations = [
-                    {"sources": [col["id"]], "targets": [col["id"]], "explicit": has_filter}
-                    for col in columns["columns"]
-                    if not has_filter or source_to_target_mapping.get(col["name"].lower())
-                ]
                 target_ids_by_name = {c["name"]: c["id"] for c in target_table_columns}
                 for target_col in table_target_only_columns:
                     col_name = target_col if isinstance(target_col, str) else target_col.get('name')
@@ -3256,36 +3312,75 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             # Add columns for this table
             target_columns.append({
                 "id": int(target_table_id),
-                "name": table_key,
+                "name": pair_target_name,
                 "schema": target_schema
             })
             target_columns.append(target_table_columns)
 
-            # Process keys for target with IDs
-            custom_config = table_data
-            if custom_config and 'keys' in custom_config and custom_config['keys'] is not None:
-                keys = []
-                for key_def in custom_config['keys']:
-                    if isinstance(key_def, dict):
-                        key_name = next(iter(key_def)) if not key_def.get('name') else key_def['name']
-                    else:
-                        key_name = key_def
+            # The target keys of a 2.3 pair are its assembled target columns flagged isPK (above).
+            if not grouped:
+                # Process keys for target with IDs
+                custom_config = table_data
+                if custom_config and 'keys' in custom_config and custom_config['keys'] is not None:
+                    keys = []
+                    for key_def in custom_config['keys']:
+                        if isinstance(key_def, dict):
+                            key_name = next(iter(key_def)) if not key_def.get('name') else key_def['name']
+                        else:
+                            key_name = key_def
 
-                    # Try to find the key in the columns to get its type and ID (case-insensitive)
-                    found = False
-                    for col in columns["columns"]:
-                        if col["name"].lower() == key_name.lower():
-                            # Use the id field from CoreHub API as the column ID
-                            col_id = col.get('id')
-                            if col_id is None:
-                                error_msg = f"CRITICAL ERROR: Column '{key_name}' in table {table_key} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
-                                logger.error(error_msg)
-                                raise ValueError(error_msg)
+                        # Try to find the key in the columns to get its type and ID (case-insensitive)
+                        found = False
+                        for col in columns["columns"]:
+                            if col["name"].lower() == key_name.lower():
+                                # Use the id field from CoreHub API as the column ID
+                                col_id = col.get('id')
+                                if col_id is None:
+                                    error_msg = f"CRITICAL ERROR: Column '{key_name}' in table {table_key} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
+                                    logger.error(error_msg)
+                                    raise ValueError(error_msg)
                             
-                            # Use target name from mapping if available, otherwise source name
-                            key_mapping_info = source_to_target_mapping.get(col["name"].lower())
-                            target_key_name = key_mapping_info['target_name'] if key_mapping_info else col["name"]
+                                # Use target name from mapping if available, otherwise source name
+                                key_mapping_info = source_to_target_mapping.get(col["name"].lower())
+                                target_key_name = key_mapping_info['target_name'] if key_mapping_info else col["name"]
                                 
+                                _resolved_dt = table_target_data_type_overrides.get(col["name"].lower()) or map_data_type(
+                                    col.get("dataType"), source_node_info, target_node_info,
+                                    source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
+                                    target_table_column_types=target_table_column_types)
+                                keys.append(_enrich_column({
+                                    "id": col_id,  # Use actual ordinal position from database
+                                    "position": col.get("position", 0),
+                                    "name": target_key_name,
+                                    "type": _resolved_dt
+                                }, col))
+                                found = True
+                                break
+                    
+                        if not found:
+                            logger.warning(f"Warning: Target key '{key_name}' not found in columns for table '{table_key}'. Searching in target_table_columns...")
+                            for col_def in target_table_columns:
+                                if col_def.get('name', '').lower() == key_name.lower():
+                                    keys.append(copy.deepcopy(col_def))
+                                    found = True
+                                    break
+                    
+                        if not found:
+                            error_msg = f"CRITICAL ERROR: Target key '{key_name}' not found in discovery or target_table_columns for MultiTable component '{table_key}' in schema '{yaml_target_schema}'."
+                            logger.error(error_msg)
+                            raise ValueError(error_msg)
+
+
+                else:
+                    keys = []
+                    for col in columns["columns"]:
+                        if _coerce_is_pk(col.get("isPK")):
+                            # Use ordinalPosition from API if available
+                            col_id = col.get('position', col.get('id'))
+                            if col_id is None:
+                                # Fallback to finding position if not provided
+                                col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
+                            
                             _resolved_dt = table_target_data_type_overrides.get(col["name"].lower()) or map_data_type(
                                 col.get("dataType"), source_node_info, target_node_info,
                                 source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
@@ -3293,46 +3388,12 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                             keys.append(_enrich_column({
                                 "id": col_id,  # Use actual ordinal position from database
                                 "position": col.get("position", 0),
-                                "name": target_key_name,
+                                "name": col["name"],
                                 "type": _resolved_dt
                             }, col))
-                            found = True
-                            break
-                    
-                    if not found:
-                        logger.warning(f"Warning: Target key '{key_name}' not found in columns for table '{table_key}'. Searching in target_table_columns...")
-                        for col_def in target_table_columns:
-                            if col_def.get('name', '').lower() == key_name.lower():
-                                keys.append(copy.deepcopy(col_def))
-                                found = True
-                                break
-                    
-                    if not found:
-                        error_msg = f"CRITICAL ERROR: Target key '{key_name}' not found in discovery or target_table_columns for MultiTable component '{table_key}' in schema '{yaml_target_schema}'."
-                        logger.error(error_msg)
-                        raise ValueError(error_msg)
-
 
             else:
-                keys = []
-                for col in columns["columns"]:
-                    if _coerce_is_pk(col.get("isPK")):
-                        # Use ordinalPosition from API if available
-                        col_id = col.get('position', col.get('id'))
-                        if col_id is None:
-                            # Fallback to finding position if not provided
-                            col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
-                            
-                        _resolved_dt = table_target_data_type_overrides.get(col["name"].lower()) or map_data_type(
-                            col.get("dataType"), source_node_info, target_node_info,
-                            source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
-                            target_table_column_types=target_table_column_types)
-                        keys.append(_enrich_column({
-                            "id": col_id,  # Use actual ordinal position from database
-                            "position": col.get("position", 0),
-                            "name": col["name"],
-                            "type": _resolved_dt
-                        }, col))
+                keys = [col for col in target_table_columns if col.get("isPK")]
 
             # Add keys for this table
             target_keys.append(_enrich_column({

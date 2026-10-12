@@ -17,9 +17,10 @@ TESTS_DIR = Path(__file__).resolve().parent
 if str(TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(TESTS_DIR))
 
-from export_template_from_corehub import _process_single_entity  # noqa: E402
+from export_template_from_corehub import _process_multitable_entity, _process_single_entity  # noqa: E402
 from fake_corehub import FakeCoreHub, run_create_entities  # noqa: E402
 from test_bootstrapper_entity_payloads_23 import keyed, matrix, table  # noqa: E402
+from test_bootstrapper_multitable_23 import SHAPES as CHAIN_SHAPES, yaml_of  # noqa: E402
 from test_bootstrapper_payload_golden import SOURCE_TABLES, TARGET_TABLES, _source_list  # noqa: E402
 
 V23 = "2.3.0.0 - build test"
@@ -102,6 +103,48 @@ class RoundTripTests(unittest.TestCase):
 
                 restored = create(yaml.safe_dump(exported, sort_keys=False), table_name)
                 self.assertEqual(view(restored), view(original))
+
+
+def create_chain(yaml_text, table_name):
+    hub = FakeCoreHub(SOURCE_TABLES, TARGET_TABLES, version=V23)
+    result = run_create_entities(hub, yaml_text, _source_list(table_name, "PARTS"))
+    assert result["failed"] == 0, result
+    return hub.puts[0]["entities"][0]
+
+
+def export_chain(entity):
+    source_ae, target_ae = json.loads(json.dumps(entity["agentEntities"]))
+    schemas = {}
+    _process_multitable_entity(entity, source_ae, target_ae, schemas, {})
+    return {"src": {"target": "tgt", "tables": {"whitelist": sorted(schemas["src"]["tables"]["whitelist"]),
+                                                "custom": schemas["src"]["tables"]["custom"]}}}
+
+
+def chain_view(entity):
+    source, target = entity["agentEntities"]
+    return {
+        "tables": [(s["name"], t["name"]) for s, t in zip(source["tables"], target["tables"])],
+        "matrix": target["entityType"]["columnsMappingMatrix"],
+        "source_columns": [[(c["name"], bool(c.get("isPK"))) for c in item] for item in source["columns"] if isinstance(item, list)],
+        # The order of the target columns of a pair has no meaning; the matrix pins which ids they are.
+        "target_columns": [sorted((c["name"], bool(c.get("isPK"))) for c in item) for item in target["columns"] if isinstance(item, list)],
+        "field_functions": sorted(json.dumps(ff, sort_keys=True) for ff in target["entityType"].get("fieldFunctions", [])),
+    }
+
+
+class ChainRoundTripTests(unittest.TestCase):
+    """BOP-16 A: a chain whose tables use the 2.3 forms comes back from its export."""
+
+    maxDiff = None
+
+    def test_every_shape_comes_back_in_a_chain(self):
+        import yaml
+
+        for name, (table_name, body) in CHAIN_SHAPES.items():
+            with self.subTest(shape=name):
+                original = create_chain(yaml_of(table_name, body, chained=True), table_name)
+                restored = create_chain(yaml.safe_dump(export_chain(original), sort_keys=False), table_name)
+                self.assertEqual(chain_view(restored), chain_view(original))
 
 
 if __name__ == "__main__":
