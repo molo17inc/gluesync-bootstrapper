@@ -25,6 +25,8 @@ TESTS_DIR = Path(__file__).resolve().parent
 if str(TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(TESTS_DIR))
 
+import yaml  # noqa: E402
+
 from fake_corehub import FakeCoreHub, column, run_create_entities  # noqa: E402
 
 GOLDEN_DIR = TESTS_DIR / "fixtures" / "payload_golden"
@@ -245,16 +247,56 @@ src:
 }
 
 
+def _demo_kit_scenario(template, source_schema, target_schema, target_type="RDBMS"):
+    """A gs-2 demo-kit template of test_bootstrapper_core_yaml_outputs, with its discovery on both sides."""
+    from test_bootstrapper_core_yaml_outputs import _columns_for
+
+    config = yaml.safe_load(template)
+    tables = config[source_schema]["tables"]["whitelist"]
+    return dict(
+        yaml=template,
+        tables=tables,
+        source_schema=source_schema,
+        target_schema=target_schema,
+        source_tables={(source_schema, t): _columns_for(t)["columns"] for t in tables},
+        target_tables={(target_schema, t): _columns_for(t)["columns"] for t in tables},
+        source_list=[{"name": t, "schema": source_schema, "id": 100 + idx} for idx, t in enumerate(tables)],
+        target_type=target_type,
+    )
+
+
+def _demo_kit_scenarios():
+    from test_bootstrapper_core_yaml_outputs import (
+        MSSQL_COUCHBASE_DOCUMENT_KEY_TEMPLATE,
+        MYSQL_MYSQL_TABLES_TEMPLATE,
+        MYSQL_VERTICA_CHRONOS_TEMPLATE,
+    )
+
+    return {
+        "demo_kit_mysql8_mysql8": _demo_kit_scenario(MYSQL_MYSQL_TABLES_TEMPLATE, "demo", "demo"),
+        "demo_kit_mssql_couchbase_document_key": _demo_kit_scenario(
+            MSSQL_COUCHBASE_DOCUMENT_KEY_TEMPLATE, "dbo", "dbo", target_type="NoSQL"),
+        "demo_kit_mysql8_vertica_chronos": _demo_kit_scenario(MYSQL_VERTICA_CHRONOS_TEMPLATE, "demo", "public"),
+    }
+
+
+SCENARIOS.update(_demo_kit_scenarios())
+
+
 def run_scenario(name):
     scenario = SCENARIOS[name]
     target_type = scenario.get("target_type", "RDBMS")
     hub = FakeCoreHub(
-        SOURCE_TABLES,
-        TARGET_TABLES,
+        scenario.get("source_tables", SOURCE_TABLES),
+        scenario.get("target_tables", TARGET_TABLES),
         version="2.2.11.5 - build golden",
         target_category="NoSQL" if target_type == "NoSQL" else "RDBMS",
     )
-    run_create_entities(hub, scenario["yaml"], _source_list(*scenario["tables"]), target_type=target_type)
+    run_create_entities(
+        hub, scenario["yaml"], scenario.get("source_list") or _source_list(*scenario["tables"]),
+        source_schema=scenario.get("source_schema", "src"), target_schema=scenario.get("target_schema", "tgt"),
+        target_type=target_type,
+    )
     return hub.puts
 
 

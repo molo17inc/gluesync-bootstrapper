@@ -185,6 +185,30 @@ class GroupedPayloadTests(unittest.TestCase):
         self.assertIn(([], ["ROW_ID"]), matrix(entities["src.ORDERS"]))
 
 
+class DemoKitTemplatesTests(unittest.TestCase):
+    """The gs-2 demo-kit templates, whose 2.2 payloads are pinned, are accepted for a 2.3 CoreHub too."""
+
+    def test_every_template_is_written_without_refusal(self):
+        from test_bootstrapper_payload_golden import SCENARIOS
+
+        for name, scenario in SCENARIOS.items():
+            if not name.startswith("demo_kit_"):
+                continue
+            with self.subTest(template=name):
+                target_type = scenario.get("target_type", "RDBMS")
+                hub = FakeCoreHub(scenario["source_tables"], scenario["target_tables"], version=V23,
+                                  target_category="NoSQL" if target_type == "NoSQL" else "RDBMS")
+                result = run_create_entities(
+                    hub, scenario["yaml"], scenario["source_list"], source_schema=scenario["source_schema"],
+                    target_schema=scenario["target_schema"], target_type=target_type, skip_errors=False,
+                )
+                self.assertEqual(result["failed"], 0)
+                for put in hub.puts:
+                    for entity in put["entities"]:
+                        for entry in entity["agentEntities"][1]["entityType"]["columnsMappingMatrix"]:
+                            self.assertIn("sourceColumnIds", entry)
+
+
 class RefusedBeforeTheRequestTests(unittest.TestCase):
     def assert_refused(self, yaml_text, table_name, pattern, **kwargs):
         _, result, entities = run(yaml_text, table_name, **kwargs)

@@ -122,7 +122,8 @@ def run_create_entities(hub, yaml_text, source_tables, *, source_schema="src", t
     import commons
     import create_all_entities
 
-    commons.reset_corehub_version_cache()
+    # Absent before the Gluesync 2.3 alignment, whose payloads the golden recordings come from.
+    getattr(commons, "reset_corehub_version_cache", lambda: None)()
 
     patches = [
         mock.patch.object(create_all_entities, "CREATE_TABLE_IF_NOT_EXISTS", False),
@@ -134,6 +135,9 @@ def run_create_entities(hub, yaml_text, source_tables, *, source_schema="src", t
         mock.patch.object(create_all_entities, "handle_udf_function_definition", return_value=None),
         mock.patch.object(create_all_entities, "create_group", side_effect=lambda token, pipeline_id, name, **k: f"group-{name}"),
         mock.patch.object(create_all_entities, "assign_entities_to_group", return_value=True),
+        mock.patch.object(create_all_entities, "create_entity_schedules", return_value=None),
+        mock.patch.object(create_all_entities, "create_group_schedules", return_value=None),
+        mock.patch.object(create_all_entities, "create_pipeline_schedules", return_value=None),
     ]
     with contextlib.ExitStack() as stack:
         for patch in patches:

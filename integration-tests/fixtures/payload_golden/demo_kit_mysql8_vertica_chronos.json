@@ -1,0 +1,580 @@
+[
+  {
+    "entities": [
+      {
+        "agentEntities": [
+          {
+            "agentId": "source-agent",
+            "columns": [
+              {
+                "charMaxLength": 0,
+                "dataType": "int",
+                "id": 1,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": true,
+                "name": "ID",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 1,
+                "tableId": 100
+              },
+              {
+                "charMaxLength": 255,
+                "dataType": "varchar",
+                "id": 2,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "LAST_NAME",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 2,
+                "tableId": 100
+              },
+              {
+                "charMaxLength": 255,
+                "dataType": "varchar",
+                "id": 3,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "GENDER",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 3,
+                "tableId": 100
+              }
+            ],
+            "customProperties": {
+              "maxItemsCountPerIteration": 1000,
+              "pollingIntervalMilliseconds": 1000,
+              "unchangedDataFilterType": "FIELDS"
+            },
+            "entityObject": {
+              "collection": "DRIVERS",
+              "id": "100",
+              "scope": "demo"
+            },
+            "entityType": {
+              "maxItemsCountPerIteration": 1000,
+              "pollingIntervalMilliseconds": 1000,
+              "type": "Source",
+              "unchangedDataFilterType": "FIELDS"
+            },
+            "table": {
+              "id": "100",
+              "name": "DRIVERS",
+              "schema": "demo"
+            },
+            "tablesProperties": {
+              "demo.DRIVERS": {}
+            },
+            "type": "SingleTable"
+          },
+          {
+            "agentId": "target-agent",
+            "columns": [
+              {
+                "charMaxLength": 0,
+                "dataType": "int",
+                "id": 1,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": true,
+                "name": "ID",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 0,
+                "tableId": 9003
+              },
+              {
+                "charMaxLength": 255,
+                "dataType": "varchar",
+                "id": 2,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "LAST_NAME",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 0,
+                "tableId": 9003
+              },
+              {
+                "charMaxLength": 255,
+                "dataType": "varchar",
+                "id": 3,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "GENDER",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 0,
+                "tableId": 9003
+              }
+            ],
+            "customProperties": {},
+            "entityObject": {
+              "collection": "DRIVERS",
+              "id": "9003",
+              "scope": "public"
+            },
+            "entityType": {
+              "allowedOperations": [
+                "INSERT",
+                "DELETE",
+                "UPDATE",
+                "TRUNCATE"
+              ],
+              "columnsMappingMatrix": [
+                {
+                  "sourceColumnId": 1,
+                  "sourceTableObjectId": 100,
+                  "targetColumnId": 1,
+                  "targetTableObjectId": 9003
+                },
+                {
+                  "sourceColumnId": 2,
+                  "sourceTableObjectId": 100,
+                  "targetColumnId": 2,
+                  "targetTableObjectId": 9003
+                },
+                {
+                  "sourceColumnId": 3,
+                  "sourceTableObjectId": 100,
+                  "targetColumnId": 3,
+                  "targetTableObjectId": 9003
+                }
+              ],
+              "snapshotWritingConcurrency": 1,
+              "tablesWithUnlockedDataTypes": [],
+              "tablesWithUnlockedSchema": [],
+              "type": "Target",
+              "useBulkOperationsDuringCDC": false,
+              "useBulkOperationsWhileSnapshot": false
+            },
+            "table": {
+              "id": "9003",
+              "name": "DRIVERS",
+              "schema": "public"
+            },
+            "tablesProperties": {
+              "public.DRIVERS": {}
+            },
+            "type": "SingleTable"
+          }
+        ],
+        "entityName": "demo.DRIVERS"
+      },
+      {
+        "agentEntities": [
+          {
+            "agentId": "source-agent",
+            "columns": [
+              {
+                "charMaxLength": 0,
+                "dataType": "int",
+                "id": 1,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": true,
+                "name": "ID",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 1,
+                "tableId": 101
+              },
+              {
+                "charMaxLength": 255,
+                "dataType": "varchar",
+                "id": 2,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "ARTICLE_NAME",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 2,
+                "tableId": 101
+              }
+            ],
+            "customProperties": {
+              "maxItemsCountPerIteration": 1000,
+              "pollingIntervalMilliseconds": 1000,
+              "unchangedDataFilterType": "FIELDS"
+            },
+            "entityObject": {
+              "collection": "ARTICLES",
+              "id": "101",
+              "scope": "demo"
+            },
+            "entityType": {
+              "maxItemsCountPerIteration": 1000,
+              "pollingIntervalMilliseconds": 1000,
+              "type": "Source",
+              "unchangedDataFilterType": "FIELDS"
+            },
+            "table": {
+              "id": "101",
+              "name": "ARTICLES",
+              "schema": "demo"
+            },
+            "tablesProperties": {
+              "demo.ARTICLES": {}
+            },
+            "type": "SingleTable"
+          },
+          {
+            "agentId": "target-agent",
+            "columns": [
+              {
+                "charMaxLength": 0,
+                "dataType": "int",
+                "id": 1,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": true,
+                "name": "ID",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 0,
+                "tableId": 9002
+              },
+              {
+                "charMaxLength": 255,
+                "dataType": "varchar",
+                "id": 2,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "ARTICLE_NAME",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 0,
+                "tableId": 9002
+              }
+            ],
+            "customProperties": {},
+            "entityObject": {
+              "collection": "ARTICLES",
+              "id": "9002",
+              "scope": "public"
+            },
+            "entityType": {
+              "allowedOperations": [
+                "INSERT",
+                "DELETE",
+                "UPDATE",
+                "TRUNCATE"
+              ],
+              "columnsMappingMatrix": [
+                {
+                  "sourceColumnId": 1,
+                  "sourceTableObjectId": 101,
+                  "targetColumnId": 1,
+                  "targetTableObjectId": 9002
+                },
+                {
+                  "sourceColumnId": 2,
+                  "sourceTableObjectId": 101,
+                  "targetColumnId": 2,
+                  "targetTableObjectId": 9002
+                }
+              ],
+              "snapshotWritingConcurrency": 1,
+              "tablesWithUnlockedDataTypes": [],
+              "tablesWithUnlockedSchema": [],
+              "type": "Target",
+              "useBulkOperationsDuringCDC": false,
+              "useBulkOperationsWhileSnapshot": false
+            },
+            "table": {
+              "id": "9002",
+              "name": "ARTICLES",
+              "schema": "public"
+            },
+            "tablesProperties": {
+              "public.ARTICLES": {}
+            },
+            "type": "SingleTable"
+          }
+        ],
+        "entityName": "demo.ARTICLES",
+        "groupId": "group-test"
+      },
+      {
+        "agentEntities": [
+          {
+            "agentId": "source-agent",
+            "columns": [
+              {
+                "charMaxLength": 0,
+                "dataType": "int",
+                "id": 1,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": true,
+                "name": "ID",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 1,
+                "tableId": 102
+              },
+              {
+                "charMaxLength": 255,
+                "dataType": "varchar",
+                "id": 2,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "CITY",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 2,
+                "tableId": 102
+              }
+            ],
+            "customProperties": {
+              "maxItemsCountPerIteration": 1000,
+              "pollingIntervalMilliseconds": 1000,
+              "unchangedDataFilterType": "FIELDS"
+            },
+            "entityObject": {
+              "collection": "ADDRESSES",
+              "id": "102",
+              "scope": "demo"
+            },
+            "entityType": {
+              "maxItemsCountPerIteration": 1000,
+              "pollingIntervalMilliseconds": 1000,
+              "type": "Source",
+              "unchangedDataFilterType": "FIELDS"
+            },
+            "table": {
+              "id": "102",
+              "name": "ADDRESSES",
+              "schema": "demo"
+            },
+            "tablesProperties": {
+              "demo.ADDRESSES": {}
+            },
+            "type": "SingleTable"
+          },
+          {
+            "agentId": "target-agent",
+            "columns": [
+              {
+                "charMaxLength": 0,
+                "dataType": "int",
+                "id": 1,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": true,
+                "name": "ID",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 0,
+                "tableId": 9000
+              },
+              {
+                "charMaxLength": 255,
+                "dataType": "varchar",
+                "id": 2,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "CITY",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 0,
+                "tableId": 9000
+              }
+            ],
+            "customProperties": {},
+            "entityObject": {
+              "collection": "ADDRESSES",
+              "id": "9000",
+              "scope": "public"
+            },
+            "entityType": {
+              "allowedOperations": [
+                "INSERT",
+                "DELETE",
+                "UPDATE",
+                "TRUNCATE"
+              ],
+              "columnsMappingMatrix": [
+                {
+                  "sourceColumnId": 1,
+                  "sourceTableObjectId": 102,
+                  "targetColumnId": 1,
+                  "targetTableObjectId": 9000
+                },
+                {
+                  "sourceColumnId": 2,
+                  "sourceTableObjectId": 102,
+                  "targetColumnId": 2,
+                  "targetTableObjectId": 9000
+                }
+              ],
+              "snapshotWritingConcurrency": 1,
+              "tablesWithUnlockedDataTypes": [],
+              "tablesWithUnlockedSchema": [],
+              "type": "Target",
+              "useBulkOperationsDuringCDC": false,
+              "useBulkOperationsWhileSnapshot": false
+            },
+            "table": {
+              "id": "9000",
+              "name": "ADDRESSES",
+              "schema": "public"
+            },
+            "tablesProperties": {
+              "public.ADDRESSES": {}
+            },
+            "type": "SingleTable"
+          }
+        ],
+        "entityName": "demo.ADDRESSES",
+        "groupId": "group-test"
+      },
+      {
+        "agentEntities": [
+          {
+            "agentId": "source-agent",
+            "columns": [
+              {
+                "charMaxLength": 0,
+                "dataType": "int",
+                "id": 1,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": true,
+                "name": "ID",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 1,
+                "tableId": 103
+              },
+              {
+                "charMaxLength": 255,
+                "dataType": "varchar",
+                "id": 2,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "CITY",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 2,
+                "tableId": 103
+              }
+            ],
+            "customProperties": {
+              "maxItemsCountPerIteration": 1000,
+              "pollingIntervalMilliseconds": 1000,
+              "unchangedDataFilterType": "FIELDS"
+            },
+            "entityObject": {
+              "collection": "ADDRESSES_REDO",
+              "id": "103",
+              "scope": "demo"
+            },
+            "entityType": {
+              "maxItemsCountPerIteration": 1000,
+              "pollingIntervalMilliseconds": 1000,
+              "type": "Source",
+              "unchangedDataFilterType": "FIELDS"
+            },
+            "table": {
+              "id": "103",
+              "name": "ADDRESSES_REDO",
+              "schema": "demo"
+            },
+            "tablesProperties": {
+              "demo.ADDRESSES_REDO": {}
+            },
+            "type": "SingleTable"
+          },
+          {
+            "agentId": "target-agent",
+            "columns": [
+              {
+                "charMaxLength": 0,
+                "dataType": "int",
+                "id": 1,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": true,
+                "name": "ID",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 0,
+                "tableId": 9001
+              },
+              {
+                "charMaxLength": 255,
+                "dataType": "varchar",
+                "id": 2,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "CITY",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 0,
+                "tableId": 9001
+              }
+            ],
+            "customProperties": {},
+            "entityObject": {
+              "collection": "ADDRESSES_REDO",
+              "id": "9001",
+              "scope": "public"
+            },
+            "entityType": {
+              "allowedOperations": [
+                "INSERT",
+                "DELETE",
+                "UPDATE",
+                "TRUNCATE"
+              ],
+              "columnsMappingMatrix": [
+                {
+                  "sourceColumnId": 1,
+                  "sourceTableObjectId": 103,
+                  "targetColumnId": 1,
+                  "targetTableObjectId": 9001
+                },
+                {
+                  "sourceColumnId": 2,
+                  "sourceTableObjectId": 103,
+                  "targetColumnId": 2,
+                  "targetTableObjectId": 9001
+                }
+              ],
+              "snapshotWritingConcurrency": 1,
+              "tablesWithUnlockedDataTypes": [],
+              "tablesWithUnlockedSchema": [],
+              "type": "Target",
+              "useBulkOperationsDuringCDC": false,
+              "useBulkOperationsWhileSnapshot": false
+            },
+            "table": {
+              "id": "9001",
+              "name": "ADDRESSES_REDO",
+              "schema": "public"
+            },
+            "tablesProperties": {
+              "public.ADDRESSES_REDO": {}
+            },
+            "type": "SingleTable"
+          }
+        ],
+        "entityName": "demo.ADDRESSES_REDO"
+      }
+    ]
+  }
+]

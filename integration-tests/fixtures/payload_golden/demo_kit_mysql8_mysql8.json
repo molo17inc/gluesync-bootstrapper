@@ -1,0 +1,574 @@
+[
+  {
+    "entities": [
+      {
+        "agentEntities": [
+          {
+            "agentId": "source-agent",
+            "columns": [
+              {
+                "charMaxLength": 0,
+                "dataType": "int",
+                "id": 1,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": true,
+                "name": "ID",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 1,
+                "tableId": 100
+              },
+              {
+                "charMaxLength": 255,
+                "dataType": "varchar",
+                "id": 2,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "NAME",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 2,
+                "tableId": 100
+              }
+            ],
+            "customProperties": {
+              "pollingIntervalMilliseconds": 1000
+            },
+            "entityObject": {
+              "collection": "CUSTOMERS_NO_PKEY",
+              "id": "100",
+              "scope": "demo"
+            },
+            "entityType": {
+              "pollingIntervalMilliseconds": 1000,
+              "type": "Source"
+            },
+            "table": {
+              "id": "100",
+              "name": "CUSTOMERS_NO_PKEY",
+              "schema": "demo"
+            },
+            "tablesProperties": {
+              "demo.CUSTOMERS_NO_PKEY": {}
+            },
+            "type": "SingleTable"
+          },
+          {
+            "agentId": "target-agent",
+            "columns": [
+              {
+                "charMaxLength": 0,
+                "dataType": "int",
+                "id": 1,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": true,
+                "name": "ID",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 0,
+                "tableId": 9001
+              },
+              {
+                "charMaxLength": 255,
+                "dataType": "varchar",
+                "id": 2,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "NAME",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 0,
+                "tableId": 9001
+              }
+            ],
+            "customProperties": {
+              "ttlValue": 0,
+              "useBulkOperationsDuringCDC": true,
+              "useBulkOperationsWhileSnapshot": true
+            },
+            "entityObject": {
+              "collection": "CUSTOMERS_NO_PKEY",
+              "id": "9001",
+              "scope": "demo"
+            },
+            "entityType": {
+              "allowedOperations": [
+                "INSERT",
+                "DELETE",
+                "UPDATE",
+                "TRUNCATE"
+              ],
+              "columnsMappingMatrix": [
+                {
+                  "sourceColumnId": 1,
+                  "sourceTableObjectId": 100,
+                  "targetColumnId": 1,
+                  "targetTableObjectId": 9001
+                },
+                {
+                  "sourceColumnId": 2,
+                  "sourceTableObjectId": 100,
+                  "targetColumnId": 2,
+                  "targetTableObjectId": 9001
+                }
+              ],
+              "snapshotWritingConcurrency": 1,
+              "tablesWithUnlockedDataTypes": [],
+              "tablesWithUnlockedSchema": [],
+              "ttlValue": 0,
+              "type": "Target",
+              "useBulkOperationsDuringCDC": true,
+              "useBulkOperationsWhileSnapshot": true
+            },
+            "table": {
+              "id": "9001",
+              "name": "CUSTOMERS_NO_PKEY",
+              "schema": "demo"
+            },
+            "tablesProperties": {
+              "demo.CUSTOMERS_NO_PKEY": {}
+            },
+            "type": "SingleTable"
+          }
+        ],
+        "entityName": "demo.CUSTOMERS_NO_PKEY"
+      },
+      {
+        "agentEntities": [
+          {
+            "agentId": "source-agent",
+            "columns": [
+              {
+                "charMaxLength": 0,
+                "dataType": "int",
+                "id": 1,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": true,
+                "name": "ID",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 1,
+                "tableId": 101
+              },
+              {
+                "charMaxLength": 255,
+                "dataType": "varchar",
+                "id": 2,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "LAST_NAME",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 2,
+                "tableId": 101
+              },
+              {
+                "charMaxLength": 255,
+                "dataType": "varchar",
+                "id": 3,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "GENDER",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 3,
+                "tableId": 101
+              }
+            ],
+            "customProperties": {
+              "pollingIntervalMilliseconds": 1000
+            },
+            "entityObject": {
+              "collection": "DRIVERS",
+              "id": "101",
+              "scope": "demo"
+            },
+            "entityType": {
+              "pollingIntervalMilliseconds": 1000,
+              "type": "Source"
+            },
+            "table": {
+              "id": "101",
+              "name": "DRIVERS",
+              "schema": "demo"
+            },
+            "tablesProperties": {
+              "demo.DRIVERS": {}
+            },
+            "type": "SingleTable"
+          },
+          {
+            "agentId": "target-agent",
+            "columns": [
+              {
+                "charMaxLength": 0,
+                "dataType": "int",
+                "id": 1,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": true,
+                "name": "ID",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 0,
+                "tableId": 9002
+              },
+              {
+                "charMaxLength": 255,
+                "dataType": "varchar",
+                "id": 2,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "LAST_NAME",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 0,
+                "tableId": 9002
+              },
+              {
+                "charMaxLength": 255,
+                "dataType": "varchar",
+                "id": 3,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "GENDER",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 0,
+                "tableId": 9002
+              }
+            ],
+            "customProperties": {
+              "ttlValue": 0,
+              "useBulkOperationsDuringCDC": true,
+              "useBulkOperationsWhileSnapshot": true
+            },
+            "entityObject": {
+              "collection": "DRIVERS",
+              "id": "9002",
+              "scope": "demo"
+            },
+            "entityType": {
+              "allowedOperations": [
+                "INSERT",
+                "DELETE",
+                "UPDATE",
+                "TRUNCATE"
+              ],
+              "columnsMappingMatrix": [
+                {
+                  "sourceColumnId": 1,
+                  "sourceTableObjectId": 101,
+                  "targetColumnId": 1,
+                  "targetTableObjectId": 9002
+                },
+                {
+                  "sourceColumnId": 2,
+                  "sourceTableObjectId": 101,
+                  "targetColumnId": 2,
+                  "targetTableObjectId": 9002
+                },
+                {
+                  "sourceColumnId": 3,
+                  "sourceTableObjectId": 101,
+                  "targetColumnId": 3,
+                  "targetTableObjectId": 9002
+                }
+              ],
+              "snapshotWritingConcurrency": 1,
+              "tablesWithUnlockedDataTypes": [],
+              "tablesWithUnlockedSchema": [],
+              "ttlValue": 0,
+              "type": "Target",
+              "useBulkOperationsDuringCDC": true,
+              "useBulkOperationsWhileSnapshot": true
+            },
+            "table": {
+              "id": "9002",
+              "name": "DRIVERS",
+              "schema": "demo"
+            },
+            "tablesProperties": {
+              "demo.DRIVERS": {}
+            },
+            "type": "SingleTable"
+          }
+        ],
+        "entityName": "demo.DRIVERS"
+      },
+      {
+        "agentEntities": [
+          {
+            "agentId": "source-agent",
+            "columns": [
+              {
+                "charMaxLength": 0,
+                "dataType": "int",
+                "id": 1,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": true,
+                "name": "ID",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 1,
+                "tableId": 102
+              },
+              {
+                "charMaxLength": 255,
+                "dataType": "varchar",
+                "id": 2,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "ARTICLE_NAME",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 2,
+                "tableId": 102
+              }
+            ],
+            "customProperties": {
+              "pollingIntervalMilliseconds": 1000
+            },
+            "entityObject": {
+              "collection": "ARTICLES",
+              "id": "102",
+              "scope": "demo"
+            },
+            "entityType": {
+              "pollingIntervalMilliseconds": 1000,
+              "type": "Source"
+            },
+            "table": {
+              "id": "102",
+              "name": "ARTICLES",
+              "schema": "demo"
+            },
+            "tablesProperties": {
+              "demo.ARTICLES": {}
+            },
+            "type": "SingleTable"
+          },
+          {
+            "agentId": "target-agent",
+            "columns": [
+              {
+                "charMaxLength": 0,
+                "dataType": "int",
+                "id": 1,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": true,
+                "name": "ID",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 0,
+                "tableId": 9000
+              },
+              {
+                "charMaxLength": 255,
+                "dataType": "varchar",
+                "id": 2,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "ARTICLE_NAME",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 0,
+                "tableId": 9000
+              }
+            ],
+            "customProperties": {
+              "ttlValue": 0,
+              "useBulkOperationsDuringCDC": false,
+              "useBulkOperationsWhileSnapshot": false
+            },
+            "entityObject": {
+              "collection": "ARTICLES",
+              "id": "9000",
+              "scope": "demo"
+            },
+            "entityType": {
+              "allowedOperations": [
+                "INSERT",
+                "DELETE",
+                "UPDATE",
+                "TRUNCATE"
+              ],
+              "columnsMappingMatrix": [
+                {
+                  "sourceColumnId": 1,
+                  "sourceTableObjectId": 102,
+                  "targetColumnId": 1,
+                  "targetTableObjectId": 9000
+                },
+                {
+                  "sourceColumnId": 2,
+                  "sourceTableObjectId": 102,
+                  "targetColumnId": 2,
+                  "targetTableObjectId": 9000
+                }
+              ],
+              "snapshotWritingConcurrency": 1,
+              "tablesWithUnlockedDataTypes": [],
+              "tablesWithUnlockedSchema": [],
+              "ttlValue": 0,
+              "type": "Target",
+              "useBulkOperationsDuringCDC": false,
+              "useBulkOperationsWhileSnapshot": false
+            },
+            "table": {
+              "id": "9000",
+              "name": "ARTICLES",
+              "schema": "demo"
+            },
+            "tablesProperties": {
+              "demo.ARTICLES": {}
+            },
+            "type": "SingleTable"
+          }
+        ],
+        "entityName": "demo.ARTICLES"
+      },
+      {
+        "agentEntities": [
+          {
+            "agentId": "source-agent",
+            "columns": [
+              {
+                "charMaxLength": 0,
+                "dataType": "int",
+                "id": 1,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": true,
+                "name": "ID",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 1,
+                "tableId": 103
+              },
+              {
+                "charMaxLength": 0,
+                "dataType": "decimal",
+                "id": 2,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "TOTAL",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 2,
+                "tableId": 103
+              }
+            ],
+            "customProperties": {},
+            "entityObject": {
+              "collection": "SALES DATA",
+              "id": "103",
+              "scope": "demo"
+            },
+            "entityType": {
+              "type": "Source"
+            },
+            "table": {
+              "id": "103",
+              "name": "SALES DATA",
+              "schema": "demo"
+            },
+            "tablesProperties": {
+              "demo.SALES DATA": {}
+            },
+            "type": "SingleTable"
+          },
+          {
+            "agentId": "target-agent",
+            "columns": [
+              {
+                "charMaxLength": 0,
+                "dataType": "int",
+                "id": 1,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": true,
+                "name": "ID",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 0,
+                "tableId": 9003
+              },
+              {
+                "charMaxLength": 0,
+                "dataType": "decimal",
+                "id": 2,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "TOTAL",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 0,
+                "tableId": 9003
+              }
+            ],
+            "customProperties": {},
+            "entityObject": {
+              "collection": "SALES DATA",
+              "id": "9003",
+              "scope": "demo"
+            },
+            "entityType": {
+              "allowedOperations": [
+                "INSERT",
+                "DELETE",
+                "UPDATE",
+                "TRUNCATE"
+              ],
+              "columnsMappingMatrix": [
+                {
+                  "sourceColumnId": 1,
+                  "sourceTableObjectId": 103,
+                  "targetColumnId": 1,
+                  "targetTableObjectId": 9003
+                },
+                {
+                  "sourceColumnId": 2,
+                  "sourceTableObjectId": 103,
+                  "targetColumnId": 2,
+                  "targetTableObjectId": 9003
+                }
+              ],
+              "snapshotWritingConcurrency": 1,
+              "tablesWithUnlockedDataTypes": [],
+              "tablesWithUnlockedSchema": [],
+              "type": "Target",
+              "useBulkOperationsDuringCDC": false,
+              "useBulkOperationsWhileSnapshot": false
+            },
+            "table": {
+              "id": "9003",
+              "name": "SALES DATA",
+              "schema": "demo"
+            },
+            "tablesProperties": {
+              "demo.SALES DATA": {}
+            },
+            "type": "SingleTable"
+          }
+        ],
+        "entityName": "demo.SALES DATA"
+      }
+    ]
+  }
+]
