@@ -1336,6 +1336,8 @@ def enrich_null_column_types_from_discovery(
                     if not (isinstance(col_mapping, dict) and col_mapping.get("type") is None and "source" in col_mapping):
                         continue
                     source_col_name = col_mapping["source"]
+                    if not isinstance(source_col_name, str):
+                        continue  # an N:1 row (a list of sources): its type is the target column's
                     disc_col = disc_by_name.get(source_col_name)
                     if disc_col:
                         resolved = disc_col.get("dataType") or disc_col.get("type")
