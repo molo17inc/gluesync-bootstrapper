@@ -330,6 +330,16 @@ def _relations_by_id(name_relations, columns_def, target_columns_def, table_name
     return by_id
 
 
+def _http_status(error):
+    """The HTTP status of a failed CoreHub request (commons.fetch_core_hub chains requests' error), or None."""
+    while error is not None:
+        response = getattr(error, "response", None)
+        if response is not None and getattr(response, "status_code", None) is not None:
+            return response.status_code
+        error = error.__cause__
+    return None
+
+
 def _coerce_is_pk(value):
     """Normalize discovery/YAML isPK values to a real bool for CoreHub."""
     if isinstance(value, bool):
@@ -3572,9 +3582,26 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             except Exception as e:
                 error_msg = str(e)
                 logger.error(f"Error creating entities {chunk_start}-{chunk_end}: {error_msg}")
-                failed_entities += len(chunk)
                 if not skip_errors:
                     raise
+                if _http_status(e) == 400 and len(chunk) > 1:
+                    # A Gluesync 2.3 CoreHub refuses the whole request at the first entity its mapping stage
+                    # refuses: send the chunk again one entity at a time, so the valid ones are saved (C-6).
+                    logger.warning(f"Chunk {chunk_start}-{chunk_end} refused; sending its {len(chunk)} entities one by one")
+                    for entity_payload in chunk:
+                        try:
+                            fetch_core_hub(
+                                f"/pipelines/{pipeline_id}/config/entities",
+                                method="PUT",
+                                token=token,
+                                body={"entities": [entity_payload]}
+                            )
+                            successful_entities += 1
+                        except Exception as entity_error:  # pylint: disable=broad-except
+                            logger.error(f"Entity {entity_payload.get('entityName', 'unknown')} refused by CoreHub: {entity_error}")
+                            failed_entities += 1
+                    continue
+                failed_entities += len(chunk)
                 logger.warning("Skipping chunk due to skip_errors=True")
 
     if refused_tables:

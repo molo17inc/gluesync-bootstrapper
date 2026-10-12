@@ -44,6 +44,29 @@ def node_info(category="RDBMS"):
     return {"category": category, "dataTypesMatrix": []}
 
 
+class _Response:
+    def __init__(self, status_code, text):
+        self.status_code = status_code
+        self.text = text
+
+    def json(self):
+        return {"message": self.text}
+
+
+def _refusal(path, reason, status_code=400):
+    """The error commons.fetch_core_hub raises for an HTTP error: a RuntimeError caused by requests' HTTPError."""
+    import requests
+
+    cause = requests.exceptions.HTTPError(f"{status_code} Client Error", response=_Response(status_code, reason))
+    try:
+        raise cause
+    except requests.exceptions.HTTPError as error:
+        try:
+            raise RuntimeError(f"CoreHub request PUT {path} failed: {error} | Response: {reason}") from error
+        except RuntimeError as wrapped:
+            return wrapped
+
+
 class FakeCoreHub:
     """In-memory discovery plus a capture of the entity upserts.
 
@@ -85,7 +108,7 @@ class FakeCoreHub:
             if self.refuse:
                 reason = self.refuse(body)
                 if reason:
-                    raise RuntimeError(reason)
+                    raise _refusal(path, reason)
             self.saved.extend(copy.deepcopy(body.get("entities", [])))
             return {"ok": True}
         if path.endswith("/entities") and method == "GET":
