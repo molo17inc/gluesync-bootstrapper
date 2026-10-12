@@ -110,24 +110,30 @@ class BuildEntriesTests(unittest.TestCase):
         self.assertEqual(self.build([rel([1], [11])], unlocked=True), [(100, 200, [], [])])
 
     def test_m_to_n_is_refused_with_the_names(self):
+        relations = [rel([2, 3], [13, 14])]
         with self.assertRaisesRegex(EntityMappingError, r"src\.T.*FIRST_NAME.*LAST_NAME.*first.*last"):
-            self.build([rel([2, 3], [13, 14])])
+            self.build(relations)
 
     def test_a_column_in_two_relations_is_refused(self):
+        same_target = [rel([2], [12]), rel([3], [12])]
         with self.assertRaisesRegex(EntityMappingError, "full_name"):
-            self.build([rel([2], [12]), rel([3], [12])])
+            self.build(same_target)
+        same_source = [rel([2], [13]), rel([2, 3], [12])]
         with self.assertRaisesRegex(EntityMappingError, "FIRST_NAME"):
-            self.build([rel([2], [13]), rel([2, 3], [12])])
+            self.build(same_source)
 
     def test_ids_that_are_no_column_of_the_entity_are_refused(self):
+        unknown_source = [rel([99], [11])]
         with self.assertRaisesRegex(EntityMappingError, "99"):
-            self.build([rel([99], [11])])
+            self.build(unknown_source)
+        zero_target = [rel([1], [0])]
         with self.assertRaisesRegex(EntityMappingError, "0"):
-            self.build([rel([1], [0])])
+            self.build(zero_target)
 
     def test_a_duplicate_id_is_refused(self):
+        listed_twice = [rel([2, 2], [12])]
         with self.assertRaisesRegex(EntityMappingError, "more than once"):
-            self.build([rel([2, 2], [12])])
+            self.build(listed_twice)
 
     def test_not_grouped_keeps_the_relations_as_given(self):
         relations = [rel([3], [13]), rel([1], [11])]
@@ -135,8 +141,9 @@ class BuildEntriesTests(unittest.TestCase):
                          [(100, 200, [3], [13]), (100, 200, [1], [11])])
 
     def test_not_grouped_refuses_what_a_pair_cannot_hold(self):
+        n_to_one = [rel([2, 3], [12])]
         with self.assertRaisesRegex(EntityMappingError, "older than Gluesync 2.3"):
-            build_entries(100, 200, [rel([2, 3], [12])], SOURCE, TARGET, grouped=False, label="src.T")
+            build_entries(100, 200, n_to_one, SOURCE, TARGET, grouped=False, label="src.T")
 
 
 class EncodeEntriesTests(unittest.TestCase):

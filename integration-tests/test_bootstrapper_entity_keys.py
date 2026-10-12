@@ -49,8 +49,9 @@ class SourceKeyTests(unittest.TestCase):
         self.assertEqual(keys([rel(["ID"], ["id"])], ph_s={"ID"}, yaml_keys=["id"])[0], ["ID"])
 
     def test_b1_yaml_keys_that_differ_from_the_primary_key_are_refused(self):
+        relations = [rel(["ID"], ["id"]), rel(["CODE"], ["code"])]
         with self.assertRaisesRegex(EntityMappingError, r"R12\.1.*src\.T.*CODE.*ID"):
-            keys([rel(["ID"], ["id"]), rel(["CODE"], ["code"])], ph_s={"ID"}, yaml_keys=["ID", "CODE"])
+            keys(relations, ph_s={"ID"}, yaml_keys=["ID", "CODE"])
 
     def test_k2b_source_without_key_takes_the_sources_of_the_target_key(self):
         # Worked case 3 of R12: the source has no key, the target is keyed on order_id.
@@ -60,25 +61,30 @@ class SourceKeyTests(unittest.TestCase):
         )
 
     def test_b6_b7_yaml_keys_must_be_the_k2b_keys(self):
+        relations = [rel(["ORDER_NO"], ["order_id"]), rel(["NOTE"], ["note"])]
         with self.assertRaisesRegex(EntityMappingError, "K9.*NOTE"):
-            keys([rel(["ORDER_NO"], ["order_id"]), rel(["NOTE"], ["note"])], ph_t={"order_id"}, yaml_keys=["ORDER_NO", "NOTE"])
+            keys(relations, ph_t={"order_id"}, yaml_keys=["ORDER_NO", "NOTE"])
+        relations = [rel(["ORDER_NO"], ["order_id"]), rel(["NOTE"], ["note"])]
         with self.assertRaisesRegex(EntityMappingError, "K2b.*ORDER_NO"):
-            keys([rel(["ORDER_NO"], ["order_id"]), rel(["NOTE"], ["note"])], ph_t={"order_id"}, yaml_keys=["NOTE"])
+            keys(relations, ph_t={"order_id"}, yaml_keys=["NOTE"])
 
     def test_yaml_keys_on_tables_without_physical_keys(self):
         self.assertEqual(keys([rel(["CODE"], ["code"]), rel(["DESCR"], ["descr"])], yaml_keys=["CODE"]), (["CODE"], ["code"]))
 
     def test_no_key_at_all_is_refused(self):
+        relations = [rel(["A"], ["a"])]
         with self.assertRaisesRegex(EntityMappingError, "no key"):
-            keys([rel(["A"], ["a"])])
+            keys(relations)
 
     def test_mongodb_source_without_keys_names_id(self):
+        relations = [rel(["_id"], ["_id"]), rel(["name"], ["name"])]
         with self.assertRaisesRegex(EntityMappingError, "_id"):
-            keys([rel(["_id"], ["_id"]), rel(["name"], ["name"])], source_is_nosql=True)
+            keys(relations, source_is_nosql=True)
 
     def test_unknown_yaml_key_is_refused(self):
+        relations = [rel(["A"], ["a"])]
         with self.assertRaisesRegex(EntityMappingError, "MISSING"):
-            keys([rel(["A"], ["a"])], yaml_keys=["MISSING"], sources=["A"])
+            keys(relations, yaml_keys=["MISSING"], sources=["A"])
 
 
 class TargetKeyTests(unittest.TestCase):
@@ -90,12 +96,14 @@ class TargetKeyTests(unittest.TestCase):
         self.assertEqual(keys([rel(["ID"], ["a", "b"]), rel(["NAME"], ["name"])], ph_s={"ID"})[1], ["a", "b"])
 
     def test_b7_target_keys_next_to_inherited_ones_are_refused(self):
+        relations = [rel(["ID"], ["id"]), rel(["NAME"], ["name"])]
         with self.assertRaisesRegex(EntityMappingError, "K9.*name"):
-            keys([rel(["ID"], ["id"]), rel(["NAME"], ["name"])], ph_s={"ID"}, yaml_target_keys=["name"])
+            keys(relations, ph_s={"ID"}, yaml_target_keys=["name"])
 
     def test_b5_target_keys_of_a_single_non_key_source_are_refused(self):
+        relations = [rel(["CODE"], ["code"]), rel(["DESCR"], ["descr"])]
         with self.assertRaisesRegex(EntityMappingError, "DESCR"):
-            keys([rel(["CODE"], ["code"]), rel(["DESCR"], ["descr"])], yaml_keys=["CODE"], yaml_target_keys=["descr"])
+            keys(relations, yaml_keys=["CODE"], yaml_target_keys=["descr"])
 
     def test_b5_target_keys_of_an_n_to_one_or_of_a_produced_column_are_accepted(self):
         result = keys(
@@ -105,17 +113,20 @@ class TargetKeyTests(unittest.TestCase):
         self.assertEqual(result[1], ["code", "full", "row_id"])
 
     def test_b2_target_keys_that_differ_from_its_primary_key_are_refused(self):
+        relations = [rel(["ID"], ["id"]), rel(["NAME"], ["name"])]
         with self.assertRaisesRegex(EntityMappingError, r"R12\.2"):
-            keys([rel(["ID"], ["id"]), rel(["NAME"], ["name"])], ph_s={"ID"}, ph_t={"id"}, yaml_target_keys=["name"])
+            keys(relations, ph_s={"ID"}, ph_t={"id"}, yaml_target_keys=["name"])
 
     def test_a_target_with_no_key_is_refused(self):
         # CoreHub refuses an agent entity without keys (checkEntity), the target one included.
+        relations = [rel(["ID"], []), rel(["NAME"], ["name"])]
         with self.assertRaisesRegex(EntityMappingError, "target table of src.T has no key"):
-            keys([rel(["ID"], []), rel(["NAME"], ["name"])], yaml_keys=["ID"])
+            keys(relations, yaml_keys=["ID"])
 
     def test_bop13_target_primary_key_no_source_feeds_is_refused_with_the_expression_hint(self):
+        relations = [rel(["ORDER_ID"], ["ORDER_ID"])]
         with self.assertRaisesRegex(EntityMappingError, "ROW_ID.*expression"):
-            keys([rel(["ORDER_ID"], ["ORDER_ID"])], ph_s={"ORDER_ID"}, ph_t={"ROW_ID"}, targets=["ORDER_ID"])
+            keys(relations, ph_s={"ORDER_ID"}, ph_t={"ROW_ID"}, targets=["ORDER_ID"])
 
     def test_bop13_target_primary_key_produced_by_a_function_is_accepted(self):
         result = keys([rel(["ORDER_ID"], ["ORDER_ID"]), rel([], ["ROW_ID"])], ph_s={"ORDER_ID"}, ph_t={"ROW_ID"},
@@ -134,8 +145,9 @@ class KeyLinkTests(unittest.TestCase):
         self.assertTrue(any("R12.8" in w and "ID" in w for w in warnings))
 
     def test_r12_8_explicit_link_is_refused(self):
+        relations = [rel(["ID"], ["ID"])]
         with self.assertRaisesRegex(EntityMappingError, r"R12\.8.*ID.*ROW_ID"):
-            drop_forbidden_key_links([rel(["ID"], ["ID"])], physical_source={"ID"}, physical_target={"ROW_ID"}, label="src.T")
+            drop_forbidden_key_links(relations, physical_source={"ID"}, physical_target={"ROW_ID"}, label="src.T")
 
     def test_links_onto_the_target_key_are_kept(self):
         relations, dropped, warnings = drop_forbidden_key_links(

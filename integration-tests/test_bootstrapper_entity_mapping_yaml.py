@@ -95,30 +95,35 @@ class GroupRelationsTests(unittest.TestCase):
         self.assertEqual(shapes(grouped), [(["PHONE"], ["phone_home", "phone_work"]), (["ID"], ["id"])])
 
     def test_two_rows_on_one_target_are_refused_with_the_n_to_one_form(self):
+        relations = yaml_relations([{"FIRST_NAME": "full_name"}, {"LAST_NAME": "full_name"}])
         with self.assertRaisesRegex(EntityMappingError, r"full_name of src\.T.*source: \[FIRST_NAME, LAST_NAME\]"):
-            group_relations(yaml_relations([{"FIRST_NAME": "full_name"}, {"LAST_NAME": "full_name"}]), label="src.T")
+            group_relations(relations, label="src.T")
 
     def test_a_row_listed_twice_is_refused(self):
+        relations = yaml_relations([{"A": "a"}, {"A": "a"}])
         with self.assertRaisesRegex(EntityMappingError, "twice"):
-            group_relations(yaml_relations([{"A": "a"}, {"A": "a"}]), label="src.T")
+            group_relations(relations, label="src.T")
 
     def test_n_to_one_source_in_another_row_is_m_to_n(self):
+        relations = yaml_relations([
+            {"source": ["A", "B"], "target": "ab"},
+            {"source": "A", "target": "a"},
+        ])
         with self.assertRaisesRegex(EntityMappingError, "M:N"):
-            group_relations(yaml_relations([
-                {"source": ["A", "B"], "target": "ab"},
-                {"source": "A", "target": "a"},
-            ]), label="src.T")
+            group_relations(relations, label="src.T")
 
     def test_one_to_null_and_another_row_on_the_same_source_is_refused(self):
+        relations = yaml_relations([
+            {"source": "INTERNAL_NOTE", "target": []},
+            {"source": "INTERNAL_NOTE", "target": "note"},
+        ])
         with self.assertRaisesRegex(EntityMappingError, "INTERNAL_NOTE"):
-            group_relations(yaml_relations([
-                {"source": "INTERNAL_NOTE", "target": []},
-                {"source": "INTERNAL_NOTE", "target": "note"},
-            ]), label="src.T")
+            group_relations(relations, label="src.T")
 
     def test_names_compare_case_insensitively(self):
+        relations = yaml_relations([{"A": "x"}, {"B": "X"}])
         with self.assertRaisesRegex(EntityMappingError, "several rows"):
-            group_relations(yaml_relations([{"A": "x"}, {"B": "X"}]), label="src.T")
+            group_relations(relations, label="src.T")
 
 
 class GroupedOnlyFormsTests(unittest.TestCase):
