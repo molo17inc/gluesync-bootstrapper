@@ -169,6 +169,7 @@ Branch `feature/field-editor-arrow-mapping-alignment` from `main` @ `2c540dd`, o
 | docs: MCP tool texts | C-8 | T17 `test_bootstrapper_mcp_texts` |
 | docs: column relations and key rules | 02 §10 | |
 | fix: clone the UDFs of a pipeline before its entities in the Automator | Automator duplicate on 2.3; null-type enrichment and N:1 rows | `DuplicatePipelineUdfTests` in `test_automator_backup_import`, `test_null_column_type_fallback` |
+| fix: read discovery under its own names in the Automator templates | pre-existing defect found while aligning the Automator: template keys were always empty and types null | `test_bootstrapper_automator_templates` |
 
 Still to do before the merge request leaves Draft: the live checks of 03 §3 against a CoreHub built from
 `feature/field-editor-arrow-mapping` (force-pushed again on 2026-10-12: head `76079558a7` on `release/2.3.0.0` @

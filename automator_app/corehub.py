@@ -661,6 +661,14 @@ def list_source_tables(
     return sorted(names)
 
 
+def _discovered(col: Dict[str, Any], name: str, legacy_name: str, default: Any = None) -> Any:
+    """A field of a discovered column under the name discovery uses (``Column.kt`` serial names), else ``legacy_name``."""
+    for key in (name, legacy_name):
+        if col.get(key) is not None:
+            return col[key]
+    return default
+
+
 def discover_primary_key_names(
     *,
     token: str,
@@ -674,7 +682,7 @@ def discover_primary_key_names(
     """Return primary key column names for a given table using discovery.
 
     This mirrors the fallback behavior in create_all_entities when no explicit
-    keys are provided in YAML: primary key columns (isPrimaryKey=true) are
+    keys are provided in YAML: primary key columns (``isPK`` in discovery) are
     treated as the entity keys.
     """
 
@@ -713,7 +721,7 @@ def discover_primary_key_names(
     for col in raw_cols:
         if not isinstance(col, dict):
             continue
-        if not col.get("isPrimaryKey"):
+        if not _discovered(col, "isPK", "isPrimaryKey"):
             continue
         name = col.get("name")
         if not name:
@@ -742,7 +750,8 @@ def discover_column_metadata_for_table(
     The shape of each entry matches what create_all_tables.py expects when
     using metadata-based column definitions: name, type, dataLength,
     numericPrecision, numericScale, isNullable, id and ordinalPosition, plus
-    charSet when the source publishes one.
+    charSet when the source publishes one. Discovery publishes them as
+    dataType, charMaxLength, numPrec, numScale and position.
     """
 
     configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
@@ -795,15 +804,15 @@ def discover_column_metadata_for_table(
             )
             col_id = idx
         
-        # Use ordinalPosition from API if available, otherwise use id
-        ordinal = col.get("ordinalPosition", col_id)
+        # Discovery names the ordinal position "position"; fall back to the id
+        ordinal = _discovered(col, "position", "ordinalPosition", default=col_id)
 
         meta: Dict[str, Any] = {
             "name": name,
-            "type": col.get("type"),
-            "dataLength": col.get("dataLength", 0),
-            "numericPrecision": col.get("numericPrecision", 0),
-            "numericScale": col.get("numericScale", 0),
+            "type": _discovered(col, "dataType", "type"),
+            "dataLength": _discovered(col, "charMaxLength", "dataLength", default=0),
+            "numericPrecision": _discovered(col, "numPrec", "numericPrecision", default=0),
+            "numericScale": _discovered(col, "numScale", "numericScale", default=0),
             "isNullable": col.get("isNullable", False),
             "id": col_id,
             "ordinalPosition": ordinal,
