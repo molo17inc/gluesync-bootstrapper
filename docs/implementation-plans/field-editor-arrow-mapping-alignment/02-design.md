@@ -100,7 +100,9 @@ the regression guards that keep only the keys when the mapping produces no colum
 - **MultiTable.** The matrix (`:3345-3375`) becomes `build_entries` per table pair over the source and target columns
   the entity holds, so a filtered column is in neither (BS-3); `targetOnlyColumns` of a MultiTable table get a `[]/[t]`
   entry and their `expression` if the YAML row has one, and are refused before the request on 2.3 when they have none
-  (BOP-12).
+  (BOP-12). On 2.3 each table pair of a chain goes through the same per-table assembly as a SingleTable entity, so
+  its keys follow the R12 rules and it takes every 2.3 form (BOP-16 A); the source side keeps every discovered
+  column, a filtered one in a 1:null entry (BOP-17.4).
 - **Dead entity-level matrix (C-9).** `:2811`, `:3422` and the entity-level read at
   `export_template_from_corehub.py:525-529` are deleted.
 

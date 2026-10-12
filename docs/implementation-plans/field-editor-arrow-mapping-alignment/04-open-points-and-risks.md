@@ -211,10 +211,11 @@ writer also builds no N:1, 1:N or 1:null relation.
 
 Implemented: B, the smaller change, until the maintainer answers. Recommendation A for the keys (same outcome as
 SingleTable, refused earlier with the table named), B for the forms (no MultiTable user has asked for them).
+Answered on 2026-10-12: A for the keys and A for the forms (supported, not refused).
 
 ### BOP-17 Choices made while implementing, to confirm at review
 
-Each is implemented on its recommendation; the alternative is one commit away.
+Each is implemented on its recommendation; the alternative is one commit away. Answered on 2026-10-12: all seven A.
 
 1. A key column that YAML `keys:` name but the mapping rows leave out. Today it is added back and mapped by name onto
    the target column of its name. A: keep that on 2.3 (implemented, BOP-1 asks old YAML to keep its meaning);
@@ -288,8 +289,7 @@ its "Some entities failed" message.
 
 Answered on 2026-10-12: BOP-1 A (with backward compatibility, sub-question (a)), BOP-3 A, BOP-4 A, BOP-5 A, BOP-6 A,
 BOP-12 A, and the per-table extraction of 02 §4 in this merge request, in its own commit. Found while implementing
-and written on their recommendation: BOP-15, BOP-16 (B implemented), BOP-17. BOP-18 answered A and implemented. To answer before
-implementation: none; BOP-13 A and BOP-14 A were answered the same day. BOP-15 was found while implementing and is
-written on its recommendation until the maintainer answers. BOP-2, BOP-7, BOP-8, BOP-9 and BOP-10 can
+and answered the same day: BOP-15 A, BOP-16 A for the keys and the forms, BOP-17 all A, BOP-18 A. To answer before
+implementation: none; BOP-13 A and BOP-14 A were answered the same day. BOP-2, BOP-7, BOP-8, BOP-9 and BOP-10 can
 take their recommendations at review; BOP-11 at release. PV-1 and PV-3 are checked before the merge request leaves
 Draft.

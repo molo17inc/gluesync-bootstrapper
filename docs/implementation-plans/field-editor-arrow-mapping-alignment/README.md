@@ -1,6 +1,6 @@
 ---
 title: Bootstrapper alignment with the field editor arrow mapping (Gluesync 2.3)
-status: "Implemented on feature/field-editor-arrow-mapping-alignment (2026-10-12); BOP-15 to BOP-17, PV-2, PV-3 and the live checks pending (sections 4 and 5)"
+status: "Implemented on feature/field-editor-arrow-mapping-alignment (2026-10-12); BOP-16 (answered A for the keys, 2.3 forms supported in chains) in progress; PV-2, PV-3 and the live checks pending (sections 4 and 5)"
 owner: gluesync-bootstrapper
 lastUpdated: 2026-10-12
 ---
@@ -138,13 +138,13 @@ are marked "answered"; the others keep the recommendation as the default the pla
 | BOP-12 | MultiTable `targetOnlyColumns` without a producer (P12), and the MultiTable export that drops target names | answered A: entry plus the row's `expression`, refused without one on 2.3; export the same rows as SingleTable |
 | BOP-13 | A target primary key the source does not carry (identity or default column), which B2 and P12 (OP-112 A) now require in the entity with a producer | answered A: refuse before the request, naming the column and suggesting an `expression` |
 | BOP-14 | A fixed or technical field function on a target a source feeds (P16, BS-10) | answered A: refuse before the request on 2.3, naming table, column and function, and suggesting to drop the `source` (null:1) |
-| BOP-15 | A target column name that differs from discovery only by case (B2 compares names case-sensitively) | open, found during implementation; recommendation: on 2.3 only, write the discovered spelling |
-| BOP-16 | MultiTable chains: keys and the 2.3 forms | open, found during implementation; implemented B (union keys, 2.3 forms refused in a chain); recommendation A for the keys |
-| BOP-17 | Seven choices made while implementing (left-out key columns, keyless targets, chained tables in the first loop, MultiTable filtered sources, null:1 rows on 2.2, refusals after table creation, N:1 without a function) | each implemented on its recommendation, to confirm at review |
+| BOP-15 | A target column name that differs from discovery only by case (B2 compares names case-sensitively) | answered A: on 2.3 only, write the discovered spelling (implemented) |
+| BOP-16 | MultiTable chains: keys and the 2.3 forms | answered A for both: on 2.3 the keys of each table pair follow the R12 rules, and a chain table takes every 2.3 form (N:1, 1:N, 1:null, `{target, expression}`, `targetKeys`) |
+| BOP-17 | Seven choices made while implementing (left-out key columns, keyless targets, chained tables in the first loop, MultiTable filtered sources, null:1 rows on 2.2, refusals after table creation, N:1 without a function) | answered: all seven A, as implemented |
 | BOP-18 | How the Automator reports the entities a run refuses (`create_all_entities.main` returned nothing, so every run looked successful) | answered A: `main` returns the result with each entity not created and its reason under `errors`, and the Automator marks the run failed |
 | Extraction | The per-table assembly of the first loop extracted and reused by the `@@` duplicate loop in this merge request (02 §4) | answered yes: in its own commit, with T8 and T11 comparing payloads before and after (RK-5) |
 
-BOP-15 to BOP-17 were found while implementing and are written on their recommendations; BOP-11 at release.
+BOP-15 to BOP-17 were found while implementing and answered on 2026-10-12; BOP-11 at release.
 
 Pending verifications that can change the design: PV-1 (answered: an empty set, so no design change), PV-2 (a 2.2.x runtime with a null:1 column and no entry), PV-3 (the 2.3 build used by the gs-2
 suites; no such build exists yet, the maintainer will say when it does), in [04 §2](04-open-points-and-risks.md#2-pending-verifications).
@@ -176,5 +176,5 @@ Still to do before the merge request leaves Draft: the live checks of 03 §3 aga
 `feature/field-editor-arrow-mapping` (force-pushed again on 2026-10-12: head `93a21ae11a` on `release/2.3.0.0` @
 `3c840bfbf4`, P16 included as `ae03b09d15`; since `76079558a7` it adds only plan documents and a data-comparison
 refactor, and the release only validator and Couchbase fixes, none read by the bootstrapper), PV-2, PV-3 (no 2.3
-build with !2521 yet), the answers to BOP-15 to BOP-17. Left as found on `main`: `test_object_store_table_creation` fails and is not run in CI, and the
+build with !2521 yet). Left as found on `main`: `test_object_store_table_creation` fails and is not run in CI, and the
 `@@` loop reads an undefined `groups_by_name` when a duplicate table sets `group:` (a `NameError`).
