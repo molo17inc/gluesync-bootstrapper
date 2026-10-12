@@ -1,6 +1,6 @@
 ---
 title: Bootstrapper alignment with the field editor arrow mapping (Gluesync 2.3)
-status: "Implemented on feature/field-editor-arrow-mapping-alignment (2026-10-12); PV-2, PV-3 and the live checks pending (sections 4 and 5)"
+status: "Implemented on feature/field-editor-arrow-mapping-alignment (2026-10-12); PV-2 and the live checks pending, against the 2.3 beta 2.3.0.0.de52ff041e (sections 4 and 5)"
 owner: gluesync-bootstrapper
 lastUpdated: 2026-10-12
 ---
@@ -147,8 +147,8 @@ are marked "answered"; the others keep the recommendation as the default the pla
 
 BOP-15 to BOP-17 and BOP-19 were found while implementing and answered on 2026-10-12; BOP-11 at release.
 
-Pending verifications that can change the design: PV-1 (answered: an empty set, so no design change), PV-2 (a 2.2.x runtime with a null:1 column and no entry), PV-3 (the 2.3 build used by the gs-2
-suites; no such build exists yet, the maintainer will say when it does), in [04 §2](04-open-points-and-risks.md#2-pending-verifications).
+Pending verifications that can change the design: PV-1 (answered: an empty set, so no design change), PV-2 (a 2.2.x runtime with a null:1 column and no entry), PV-3 (answered: the 2.3 beta
+`2.3.0.0.de52ff041e`, built from the backend feature branch, includes !2521), in [04 §2](04-open-points-and-risks.md#2-pending-verifications).
 
 ## 5. Implementation
 
@@ -175,8 +175,8 @@ Branch `feature/field-editor-arrow-mapping-alignment` from `main` @ `2c540dd`, o
 | feat: write each table pair of a chain as a SingleTable entity on 2.3 | BOP-16 A, BOP-19 B; the 2.3 chain export writes SingleTable rows | `test_bootstrapper_multitable_23`, `test_bootstrapper_export_mapping`, `test_bootstrapper_export_import_round_trip` |
 
 Still to do before the merge request leaves Draft: the live checks of 03 §3 against a CoreHub built from
-`feature/field-editor-arrow-mapping` (force-pushed again on 2026-10-12: head `93a21ae11a` on `release/2.3.0.0` @
-`3c840bfbf4`, P16 included as `ae03b09d15`; since `76079558a7` it adds only plan documents and a data-comparison
-refactor, and the release only validator and Couchbase fixes, none read by the bootstrapper), PV-2, PV-3 (no 2.3
-build with !2521 yet). Left as found on `main`: `test_object_store_table_creation` fails and is not run in CI, and the
+`feature/field-editor-arrow-mapping`, i.e. the 2.3 beta `2.3.0.0.de52ff041e` (built from `de52ff041e` on
+`release/2.3.0.0` @ `3c840bfbf4`, P16 included as `e3bec6bef2`; same code as `93a21ae11a`, and since `76079558a7`
+the branch adds only plan documents and a data-comparison refactor, the release only validator and Couchbase fixes,
+none read by the bootstrapper), and PV-2. Landing still waits for !2521 to be merged into `release/2.3.0.0`. Left as found on `main`: `test_object_store_table_creation` fails and is not run in CI, and the
 `@@` loop reads an undefined `groups_by_name` when a duplicate table sets `group:` (a `NameError`).
