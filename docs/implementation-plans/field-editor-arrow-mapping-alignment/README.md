@@ -93,9 +93,12 @@ In scope: `create_all_entities.py` (SingleTable, `@@` duplicate and MultiTable p
 `utils/udf_signature.py`, `mcp_server/server.py` (tool texts), `table-list-template.yaml`, `README.md`, the tests under
 `integration-tests/` and `.gitlab-ci.yml` (test job).
 
-Out of scope, with the reason: the Automator UI and its flows (`automator_app/`) need no change of their own, since they
-go through the export and `create_entities` (`automator_app/corehub.py:3440-3560`) or re-send what CoreHub returned
-(`:3711`); `create_all_tables.py` (it sends only source-discovered keys, `:394-407`, which the key rules accept);
+The Automator (`automator_app/`) goes through the export and `create_entities`, so it inherits the changes; two of its
+flows needed their own (added after the first review, see section 5): `duplicate_pipeline` created the entities before
+cloning their UDFs, which a 2.3 CoreHub refuses for an entity that relies on its UDF, and the export's null-type
+enrichment stopped at a row with a list `source`. How the Automator reports refused entities is BOP-18.
+
+Out of scope, with the reason: `create_all_tables.py` (it sends only source-discovered keys, `:394-407`, which the key rules accept);
 `dbmoto-converter/` (its UDF packages use `unlockedSchema`, `generate_udf_import_package.py:1056`, and its YAML keeps
 today's meaning); `main.py:772-803` (passes configured entities through, and the example configuration has none); the
 `gluesync-client-sdk` submodule (not initialised and not needed: no matrix code reads it); function collections
@@ -138,6 +141,7 @@ are marked "answered"; the others keep the recommendation as the default the pla
 | BOP-15 | A target column name that differs from discovery only by case (B2 compares names case-sensitively) | open, found during implementation; recommendation: on 2.3 only, write the discovered spelling |
 | BOP-16 | MultiTable chains: keys and the 2.3 forms | open, found during implementation; implemented B (union keys, 2.3 forms refused in a chain); recommendation A for the keys |
 | BOP-17 | Seven choices made while implementing (left-out key columns, keyless targets, chained tables in the first loop, MultiTable filtered sources, null:1 rows on 2.2, refusals after table creation, N:1 without a function) | each implemented on its recommendation, to confirm at review |
+| BOP-18 | How the Automator reports the entities a run refuses (`create_all_entities.main` returns nothing, so every run looks successful) | open, found while aligning the Automator; recommendation: return the result with the refused entities as errors |
 | Extraction | The per-table assembly of the first loop extracted and reused by the `@@` duplicate loop in this merge request (02 §4) | answered yes: in its own commit, with T8 and T11 comparing payloads before and after (RK-5) |
 
 BOP-15 to BOP-17 were found while implementing and are written on their recommendations; BOP-11 at release.
@@ -164,6 +168,7 @@ Branch `feature/field-editor-arrow-mapping-alignment` from `main` @ `2c540dd`, o
 | feat: write the UDF test request body for 2.3 | C-7 | T16 |
 | docs: MCP tool texts | C-8 | T17 `test_bootstrapper_mcp_texts` |
 | docs: column relations and key rules | 02 §10 | |
+| fix: clone the UDFs of a pipeline before its entities in the Automator | Automator duplicate on 2.3; null-type enrichment and N:1 rows | `DuplicatePipelineUdfTests` in `test_automator_backup_import`, `test_null_column_type_fallback` |
 
 Still to do before the merge request leaves Draft: the live checks of 03 §3 against a CoreHub built from
 `feature/field-editor-arrow-mapping` (force-pushed again on 2026-10-12: head `76079558a7` on `release/2.3.0.0` @

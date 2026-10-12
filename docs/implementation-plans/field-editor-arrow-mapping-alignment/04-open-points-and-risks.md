@@ -240,6 +240,22 @@ Each is implemented on its recommendation; the alternative is one commit away.
 7. N:1 without a custom field function or the UDF. CoreHub refuses it (P1); the bootstrapper does not check it
    first. A: leave it to CoreHub, isolated by C-6 (implemented); B: refuse before the request. Recommendation A.
 
+### BOP-18 How the Automator reports the entities a run refuses
+
+Found while aligning the Automator. `create_all_entities.main` returns nothing, so `corehub.run_create_entities` always
+reports success: a refused table (before the request, or by CoreHub entity by entity after C-6) and a failed chunk show
+only as ERROR lines in the run log, and an import, a duplicate or a run ends "completed". On 2.3 refusals are new and
+frequent (key rules, P16, BOP-13), so a partly created pipeline looks complete.
+- A. `main` returns the result of `create_entities`, which lists each refused entity and its reason under `errors`; the
+  Automator then marks the import, the duplicate or the run failed with that list, as it already does for other errors.
+  This also surfaces failed chunks on 2.2.x CoreHubs, which are hidden today, and a duplicate with one refused entity
+  then ends in its existing "Entity cloning failed" error after the other entities were created.
+- B. The same list as warnings (`refused`), success unchanged; the Automator shows it next to the result.
+- C. Keep the log lines only.
+
+Recommendation A: a failure should not read as a success, and the duplicate and import already have an error path for it.
+Not implemented until the maintainer answers.
+
 ## 2. Pending verifications
 
 | Id | Question | How | Changes |
@@ -267,7 +283,7 @@ Each is implemented on its recommendation; the alternative is one commit away.
 
 Answered on 2026-10-12: BOP-1 A (with backward compatibility, sub-question (a)), BOP-3 A, BOP-4 A, BOP-5 A, BOP-6 A,
 BOP-12 A, and the per-table extraction of 02 §4 in this merge request, in its own commit. Found while implementing
-and written on their recommendation: BOP-15, BOP-16 (B implemented), BOP-17. To answer before
+and written on their recommendation: BOP-15, BOP-16 (B implemented), BOP-17. BOP-18 is open, not implemented. To answer before
 implementation: none; BOP-13 A and BOP-14 A were answered the same day. BOP-15 was found while implementing and is
 written on its recommendation until the maintainer answers. BOP-2, BOP-7, BOP-8, BOP-9 and BOP-10 can
 take their recommendations at review; BOP-11 at release. PV-1 and PV-3 are checked before the merge request leaves
