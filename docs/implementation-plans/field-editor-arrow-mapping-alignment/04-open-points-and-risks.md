@@ -226,8 +226,8 @@ Each is implemented on its recommendation; the alternative is one commit away.
    sent. A: build it with the older payload and no 2.3 refusal (implemented); B: skip chained tables in the first
    loop altogether, which also skips their table creation and UDF compilation. Recommendation A. The entity used to
    be dropped by parsing its name, which let a chained table with a custom `entityName` through as a SingleTable
-   entity too; it is now left out by the table's `chainId` (fixed on this branch). Chains are still collected from
-   every schema of the YAML, a separate defect reported on its own.
+   entity too; it is now left out by the table's `chainId`, and chains are collected from the schema being processed
+   only (both fixed on this branch).
 4. Source columns a MultiTable YAML filters out. 02 §4 said "a filtered column is in neither"; the source side of a
    MultiTable entity has always held every discovered column. A: keep them, each in a 1:null entry (implemented,
    source payload unchanged); B: drop them from the source columns too. Recommendation A.

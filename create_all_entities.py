@@ -1608,9 +1608,10 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
     else:
         logger.info("CREATE_TABLE_IF_NOT_EXISTS is disabled - assuming all tables exist")
         
-    # First, collect all unique group names and chain IDs from the YAML configuration
+    # First, collect the group names of the whole YAML (groups belong to the pipeline) and the MultiTable
+    # chains of this source schema: create_entities runs once per schema, and a chain of another schema
+    # would otherwise be built from this schema's tables.
     group_names = set()
-    chain_ids = set()
     chained_tables = {}  # Dictionary to store tables by chainId
 
     if yaml_config:
@@ -1637,10 +1638,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     else:
                         logger.warning(f"Empty group ID found for table {schema_name}.{table_key}")
 
-                # Collect chainId information (independent of groupId)
-                if 'chainId' in table_data:
+                # Collect chainId information (independent of groupId), for this schema only
+                if 'chainId' in table_data and schema_name == source_schema:
                     chain_id = table_data['chainId']
-                    chain_ids.add(chain_id)
 
                     if chain_id not in chained_tables:
                         chained_tables[chain_id] = []
@@ -2814,8 +2814,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         mt_field_functions = []
         chain_refusals = []
 
-        # FILTER: Only include tables that are in the whitelist for the current schema
-        # This prevents tables from other schemas (collected globally) from being included
+        # FILTER: Only include the chain's tables that are in the schema's whitelist
         if whitelist:
             filtered_tables_list = [(table_key, table_data) for table_key, table_data in tables_list if table_key in whitelist]
             if not filtered_tables_list:

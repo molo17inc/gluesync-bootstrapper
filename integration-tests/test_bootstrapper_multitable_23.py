@@ -152,3 +152,56 @@ src:
             ("MultiTable", "src.ORDERS chain"),
             ("SingleTable", "src.CUSTOMERS"),
         ])
+
+
+class ChainsBelongToTheirSchemaTests(unittest.TestCase):
+    """A chain declared under one schema is not built while another schema is processed.
+
+    create_entities runs once per source schema but collected the chains of every schema of the YAML,
+    so a chain of another schema was built from the current schema's tables whenever their names
+    passed the current whitelist.
+    """
+
+    def test_a_table_named_like_a_chain_table_of_another_schema_stays_a_single_table(self):
+        yaml_text = """
+other:
+  target: tgt
+  tables:
+    custom:
+      CUSTOMERS:
+        chainId: chain_other
+src:
+  target: tgt
+  tables:
+    whitelist: [CUSTOMERS]
+    custom:
+      CUSTOMERS: {}
+"""
+        hub = FakeCoreHub(SOURCE_TABLES, {}, version="2.2.11.5")
+        run_create_entities(hub, yaml_text, _source_list("CUSTOMERS"))
+        sent = [(e["agentEntities"][0]["type"], e["entityName"]) for put in hub.puts for e in put["entities"]]
+        self.assertEqual(sent, [("SingleTable", "src.CUSTOMERS")])
+
+    def test_the_chain_of_the_current_schema_is_still_built(self):
+        yaml_text = """
+src:
+  target: tgt
+  tables:
+    whitelist: [ORDERS, PARTS]
+    custom:
+      ORDERS:
+        chainId: chain1
+      PARTS:
+        chainId: chain1
+other:
+  target: tgt
+  tables:
+    custom:
+      ORDERS:
+        chainId: chain1
+"""
+        hub = FakeCoreHub(SOURCE_TABLES, {}, version="2.2.11.5")
+        run_create_entities(hub, yaml_text, _source_list("ORDERS", "PARTS"))
+        multi = [e for put in hub.puts for e in put["entities"] if e["agentEntities"][0]["type"] == "MultiTable"]
+        self.assertEqual(len(multi), 1)
+        self.assertEqual([t["name"] for t in multi[0]["agentEntities"][0]["tables"]], ["ORDERS", "PARTS"])
