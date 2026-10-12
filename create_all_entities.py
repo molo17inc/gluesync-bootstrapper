@@ -528,7 +528,8 @@ def _assemble_source_columns(columns, custom_config, table_name, source_schema, 
                     columns_def.append(_enrich_column({
                         "id": col_id,
                         "position": col.get("position", 0),
-                        "name": source_col_name,
+                        # On 2.3 the key rules compare names case-sensitively: the spelling discovery reports (BOP-15).
+                        "name": col["name"] if grouped else source_col_name,
                         "alias": target_col_name,
                         "dataType": col.get("dataType"),
                         "isPK": _coerce_is_pk(col.get("isPK")) or _is_in_keys(source_col_name, custom_config),
@@ -2248,7 +2249,11 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 _assemble_source_columns(columns, custom_config, table_name, source_schema, grouped=table_grouped,
                                          check_forms=not custom_config.get('chainId'))
         except EntityMappingError as error:
-            refuse_table(table_name, error)
+            if custom_config.get('chainId'):
+                # Its chain is refused for the same reason by the chain loop below.
+                logger.debug(f"Table {table_name} of chain {custom_config.get('chainId')}: {error}")
+            else:
+                refuse_table(table_name, error)
             continue
 
         if not keys:
@@ -3066,10 +3071,16 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             table_has_mappings = _is_column_mappings(table_yaml_columns)
             table_has_whitelist = _is_column_whitelist(table_yaml_columns)
             
+            try:
+                table_relations = yaml_relations(table_yaml_columns, label=table_key)
+            except EntityMappingError as error:
+                chain_refusals.append(str(error))
+                table_relations = None
+
             # Build lookup from source column name -> (target_name, yaml_type)
             source_to_target_mapping = {}
             if table_has_mappings:
-                for relation in yaml_relations(table_yaml_columns, label=table_key) or []:
+                for relation in table_relations or []:
                     for source_name, target_name in _relation_pairs([relation]):
                         source_to_target_mapping[source_name.lower()] = {
                             'target_name': target_name,
@@ -3087,7 +3098,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             
             has_filter = table_has_mappings or table_has_whitelist
             # The forms of Gluesync 2.3 (N:1, 1:N, 1:null, targetKeys) are not written for a MultiTable chain (BOP-16).
-            forms = grouped_only_forms(yaml_relations(table_yaml_columns, label=table_key), table_data)
+            forms = grouped_only_forms(table_relations, table_data)
             if forms:
                 chain_refusals.append(f"table {table_key} uses column mapping forms a MultiTable chain does not take: {'; '.join(forms)}")
             

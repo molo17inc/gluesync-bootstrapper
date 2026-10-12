@@ -101,6 +101,14 @@ class MultiTableGroupedTests(unittest.TestCase):
         self.assertEqual(multi, [])
         self.assertGreaterEqual(result["failed"], 1)
 
+    def test_a_malformed_row_refuses_the_chain_instead_of_stopping_the_run(self):
+        hub = FakeCoreHub(SOURCE_TABLES, {}, version="2.3.0.0 - build test")
+        yaml_text = CHAIN.format(target_only=WITH_EXPRESSION).replace(
+            "          - {source: TOTAL, target: AMOUNT}", "          - {source: [TOTAL, NOTE]}")
+        result = run_create_entities(hub, yaml_text, _source_list("ORDERS", "PARTS"))
+        self.assertEqual([e for put in hub.puts for e in put["entities"] if e["agentEntities"][0]["type"] == "MultiTable"], [])
+        self.assertGreaterEqual(result["failed"], 1)
+
     def test_older_corehub_keeps_the_pairs_and_takes_no_field_function(self):
         _, multi = run("SYNCED_AT", version="2.2.11.5")
         target = multi[0]["agentEntities"][1]

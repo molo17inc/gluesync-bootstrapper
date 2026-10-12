@@ -157,6 +157,17 @@ class GroupedPayloadTests(unittest.TestCase):
         self.assertEqual(matrix(entities["src.NOPK"]), [(["CODE"], ["code"]), (["DESCR"], ["descr"])])
         self.assertEqual((keyed(source["columns"]), keyed(target["columns"])), (["CODE"], ["code"]))
 
+    def test_whitelist_source_names_take_the_discovered_spelling(self):
+        # BOP-15 A on the source side: B1 compares the source keys with the physical key case-sensitively.
+        yaml_text = table("""        name: customers
+        columns:
+          - {name: id, sourceName: id, type: int}
+          - {name: name, sourceName: name, type: varchar}""", "CUSTOMERS")
+        _, result, entities = run(yaml_text, "CUSTOMERS")
+        source, _ = sides(entities["src.CUSTOMERS"])
+        self.assertEqual([c["name"] for c in source["columns"]], ["ID", "NAME"])
+        self.assertEqual(keyed(source["columns"]), ["ID"])
+
     def test_target_key_of_a_udf_entity_is_produced_by_the_udf(self):
         yaml_text = table("""        name: ORDERS_T
         columns:
