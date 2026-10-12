@@ -118,3 +118,37 @@ class MultiTableGroupedTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ChainedTablesAreNotSentAsSingleTableTests(unittest.TestCase):
+    """A table of a chain goes into its MultiTable entity only, whatever its entityName.
+
+    The chained tables were filtered out of the SingleTable entities by parsing the entity name
+    (``schema.TABLE``), so a chained table with another entityName (the export writes the MultiTable
+    entity name on every table of the chain) was also sent as a SingleTable entity.
+    """
+
+    def run_yaml(self, yaml_text, *tables):
+        hub = FakeCoreHub(SOURCE_TABLES, {}, version="2.2.11.5")
+        run_create_entities(hub, yaml_text, _source_list(*tables))
+        return [(e["agentEntities"][0]["type"], e["entityName"]) for put in hub.puts for e in put["entities"]]
+
+    def test_chained_table_with_a_custom_entity_name_is_sent_once(self):
+        yaml_text = """
+src:
+  target: tgt
+  tables:
+    whitelist: [ORDERS, PARTS, CUSTOMERS]
+    custom:
+      ORDERS:
+        chainId: chain1
+        entityName: src.ORDERS chain
+      PARTS:
+        chainId: chain1
+        entityName: src.ORDERS chain
+      CUSTOMERS: {}
+"""
+        self.assertEqual(sorted(self.run_yaml(yaml_text, "ORDERS", "PARTS", "CUSTOMERS")), [
+            ("MultiTable", "src.ORDERS chain"),
+            ("SingleTable", "src.CUSTOMERS"),
+        ])

@@ -2242,7 +2242,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             logger.debug(f"Document key configuration for {table_name}: {document_key}")
 
         # A table of a MultiTable chain gets its entity from the chain loop below; the SingleTable entity built
-        # here for it is not sent (see the chained-table filter), so it keeps the payload of older CoreHubs.
+        # here for it is not sent, so it keeps the payload of older CoreHubs.
         table_grouped = grouped and not custom_config.get('chainId')
         try:
             columns_def, keys, has_column_mappings, is_column_whitelist, _discovery_type_by_source, relations = \
@@ -2481,7 +2481,12 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         if group_id and group_id != '_default':
             entity["groupId"] = group_id
         
-        entities.append(entity)
+        # A table of a MultiTable chain is written by its chain's entity (below), not as a SingleTable entity of
+        # its own; the rest of this loop (table creation, partitions, UDFs) still runs for it.
+        if custom_config.get('chainId'):
+            logger.debug(f"Table {table_name} belongs to chain {custom_config.get('chainId')}: no SingleTable entity")
+        else:
+            entities.append(entity)
 
         if partition_settings:
             pending_partition_requests.append({
@@ -3440,33 +3445,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         multi_table_entities.append(multi_table_entity)
 
     # Process standard entities in chunks
-    # Filter out entities that are part of a MultiTable (chainId)
-    filtered_entities = []
-    for entity in entities:
-        # Split only at the first dot so table names that contain dots
-        # (e.g. "my.table") are preserved intact as the table-name portion.
-        entity_name_parts = entity["entityName"].split('.', 1)
-        if len(entity_name_parts) > 1:
-            table_name = entity_name_parts[-1]
-            is_chained = False
-
-            # Check if this table is in any chain
-            for tables_list in chained_tables.values():
-                for table_key, _ in tables_list:
-                    if table_key == table_name:
-                        is_chained = True
-                        break
-                if is_chained:
-                    break
-
-            if not is_chained:
-                filtered_entities.append(entity)
-        else:
-            filtered_entities.append(entity)
-
-    # Reset entities to the filtered list
-    entities = filtered_entities
-
     # Now process MultiTable entities first
     successful_multi_tables = 0
     failed_multi_tables = 0
