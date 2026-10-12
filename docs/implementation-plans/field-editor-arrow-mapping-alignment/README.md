@@ -173,7 +173,8 @@ Branch `feature/field-editor-arrow-mapping-alignment` from `main` @ `2c540dd`, o
 | feat: report the entities a run could not create | BOP-18 A | `test_bootstrapper_run_errors` |
 
 Still to do before the merge request leaves Draft: the live checks of 03 §3 against a CoreHub built from
-`feature/field-editor-arrow-mapping` (force-pushed again on 2026-10-12: head `76079558a7` on `release/2.3.0.0` @
-`3bd6309946`, P16 included as `b1c352e912`), PV-2, PV-3 (no 2.3 build with !2521 yet), the answers to
-BOP-15 to BOP-17. Left as found on `main`: `test_object_store_table_creation` fails and is not run in CI, and the
+`feature/field-editor-arrow-mapping` (force-pushed again on 2026-10-12: head `93a21ae11a` on `release/2.3.0.0` @
+`3c840bfbf4`, P16 included as `ae03b09d15`; since `76079558a7` it adds only plan documents and a data-comparison
+refactor, and the release only validator and Couchbase fixes, none read by the bootstrapper), PV-2, PV-3 (no 2.3
+build with !2521 yet), the answers to BOP-15 to BOP-17. Left as found on `main`: `test_object_store_table_creation` fails and is not run in CI, and the
 `@@` loop reads an undefined `groups_by_name` when a duplicate table sets `group:` (a `NameError`).
