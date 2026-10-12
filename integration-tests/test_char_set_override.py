@@ -409,9 +409,10 @@ class CharSetBackupTests(unittest.TestCase):
     def test_multitable_backup_export_carries_char_set(self):
         exported = _export_backup_yaml(_multitable_backup_entity())
         columns = exported["INTTEST"]["tables"]["custom"]["CCSIDCHR"]["columns"]
-        by_name = {c["name"]: c for c in columns}
+        # MultiTable tables export the mapping rows of SingleTable ones (BOP-12 A).
+        by_source = {c["source"]: c for c in columns}
 
-        self.assertEqual(by_name["VAL"]["charSet"], "280")
+        self.assertEqual(by_source["VAL"]["charSet"], "280")
 
     def test_backup_round_trip_restores_char_set(self):
         """The exported YAML, fed back to entity creation, must win over discovery."""

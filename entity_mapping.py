@@ -673,3 +673,38 @@ def derive_keys(
         [n for n in source_order if n.lower() in source_keys and source_spelling[n.lower()] == n],
         [n for n in target_order if n.lower() in target_keys and target_spelling[n.lower()] == n],
     )
+
+
+def yaml_rows(relations: Mapping[str, List[Any]], source_order: Sequence[str], row_of) -> List[Dict[str, Any]]:
+    """The YAML ``columns:`` rows of the relations :func:`relations_of` read, in source order.
+
+    ``row_of(source_name, target_name)`` builds the metadata row of one source column onto one target
+    column (either may be None). Each source column gives, at its place: a 1:1 or 1:N row per target;
+    for the first source of an N:1 relation one row with the list of its sources (the per-source
+    metadata left out); ``target: []`` when it feeds nothing (1:null). Then one ``{target, type}`` row
+    per target no source feeds, where the export attaches the field function that produces it.
+    """
+    by_source = {}
+    for relation in relations["relations"]:
+        for source in relation["sources"]:
+            by_source[source] = relation
+    rows: List[Dict[str, Any]] = []
+    for source in source_order:
+        relation = by_source.get(source)
+        if relation is None:
+            row = row_of(source, None)
+            row["target"] = []
+            rows.append(row)
+        elif len(relation["sources"]) > 1:
+            if source != relation["sources"][0]:
+                continue
+            target = relation["targets"][0]
+            full = row_of(source, target)
+            rows.append({"source": list(relation["sources"]), "target": target, "type": full.get("type")})
+        else:
+            for target in relation["targets"]:
+                rows.append(row_of(source, target))
+    for target in relations["unlinked_targets"]:
+        row = row_of(None, target)
+        rows.append({k: v for k, v in (("target", target), ("type", row.get("type"))) if v is not None or k == "target"})
+    return rows
