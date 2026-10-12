@@ -233,6 +233,14 @@ def _is_http_url(value: str) -> bool:
     return parsed.scheme.lower() in {"http", "https"} and bool(parsed.hostname)
 
 
+# Credential fields each auth type needs, in the order CoreHub reports them.
+_AUTH_REQUIRED_FIELDS = {
+    "Basic": ("username", "password"),
+    "Bearer": ("token",),
+    "ApiKey": ("name", "value"),
+}
+
+
 def validate_collection(collection: Dict[str, Any]) -> List[str]:
     errors: List[str] = []
     if not collection.get("name"):
@@ -240,21 +248,58 @@ def validate_collection(collection: Dict[str, Any]) -> List[str]:
     if not _is_http_url(collection.get("baseUrl") or ""):
         errors.append("baseUrl must be an http:// or https:// URL")
     auth = collection.get("auth") or {"type": "None"}
-    auth_type = auth.get("type")
-    if auth_type == "Basic":
-        if not str(auth.get("username") or "").strip():
-            errors.append("auth.username is required")
-        if not str(auth.get("password") or "").strip():
-            errors.append("auth.password is required")
-    elif auth_type == "Bearer":
-        if not str(auth.get("token") or "").strip():
-            errors.append("auth.token is required")
-    elif auth_type == "ApiKey":
-        if not str(auth.get("name") or "").strip():
-            errors.append("auth.name is required")
-        if not str(auth.get("value") or "").strip():
-            errors.append("auth.value is required")
+    for field in _AUTH_REQUIRED_FIELDS.get(auth.get("type"), ()):
+        if not str(auth.get(field) or "").strip():
+            errors.append(f"auth.{field} is required")
     return [f"collection '{collection.get('name')}': {e}" for e in errors]
+
+
+def _validate_bindings(bindings: List[Dict[str, Any]]) -> List[str]:
+    errors: List[str] = []
+    for binding in bindings:
+        binding_name = binding.get("name") or ""
+        if not NAME_PATTERN.match(binding_name):
+            errors.append(f"binding name {binding_name!r} is not valid")
+        if binding.get("location") not in BINDING_LOCATIONS:
+            errors.append(f"binding {binding_name!r}: location {binding.get('location')!r} is not one of {list(BINDING_LOCATIONS)}")
+        if binding.get("type") not in BINDING_TYPES:
+            errors.append(f"binding {binding_name!r}: type {binding.get('type')!r} is not one of {list(BINDING_TYPES)}")
+    seen = set()
+    for binding in bindings:
+        binding_name = binding.get("name") or ""
+        if binding_name in seen:
+            errors.append(f"binding '{binding_name}' is declared twice")
+        seen.add(binding_name)
+    return errors
+
+
+def _validate_operation_field(operation_field: str, names: List[str]) -> List[str]:
+    errors: List[str] = []
+    if not NAME_PATTERN.match(operation_field):
+        errors.append(f"operationField {operation_field!r} is not a valid field name")
+    if operation_field in names:
+        errors.append(f"operationField {operation_field!r} is also a binding name")
+    return errors
+
+
+def _validate_path_placeholders(path_template: str, names: List[str]) -> List[str]:
+    # `__operation` is always resolvable: the HTTP Target adds it to every row (Insert/Update/Delete).
+    return [
+        f"pathTemplate placeholder '{{{placeholder}}}' has no binding"
+        for placeholder in re.findall(r"\$?\{([A-Za-z_][A-Za-z0-9_.\-]*)\}", path_template)
+        if placeholder not in names and placeholder != OPERATION_BINDING
+    ]
+
+
+def _validate_body(endpoint: Dict[str, Any], bindings: List[Dict[str, Any]]) -> List[str]:
+    sends_body = endpoint.get("httpVerb") in BODY_VERBS and endpoint.get("bodyType") != "NONE"
+    body_bindings = [b.get("name") for b in bindings if b.get("location") == "BODY"]
+    if body_bindings and not sends_body:
+        return [
+            f"BODY bindings need a body: {endpoint.get('httpVerb')} with body type {endpoint.get('bodyType')} "
+            f"sends none ({', '.join(body_bindings)})"
+        ]
+    return []
 
 
 def validate_endpoint(endpoint: Dict[str, Any]) -> List[str]:
@@ -271,42 +316,13 @@ def validate_endpoint(endpoint: Dict[str, Any]) -> List[str]:
     if path_template and not path_template.startswith("/"):
         errors.append(f"pathTemplate {path_template!r} must start with '/'")
 
-    names = [b.get("name") or "" for b in endpoint.get("bindings") or []]
-    for binding in endpoint.get("bindings") or []:
-        binding_name = binding.get("name") or ""
-        if not NAME_PATTERN.match(binding_name):
-            errors.append(f"binding name {binding_name!r} is not valid")
-        if binding.get("location") not in BINDING_LOCATIONS:
-            errors.append(f"binding {binding_name!r}: location {binding.get('location')!r} is not one of {list(BINDING_LOCATIONS)}")
-        if binding.get("type") not in BINDING_TYPES:
-            errors.append(f"binding {binding_name!r}: type {binding.get('type')!r} is not one of {list(BINDING_TYPES)}")
-    seen = set()
-    for binding_name in names:
-        if binding_name in seen:
-            errors.append(f"binding '{binding_name}' is declared twice")
-        seen.add(binding_name)
-
-    operation_field = endpoint.get("operationField") or ""
-    if not NAME_PATTERN.match(operation_field):
-        errors.append(f"operationField {operation_field!r} is not a valid field name")
-    if operation_field in names:
-        errors.append(f"operationField {operation_field!r} is also a binding name")
-
-    # `__operation` is always resolvable: the HTTP Target adds it to every row (Insert/Update/Delete).
-    for placeholder in re.findall(r"\$?\{([A-Za-z_][A-Za-z0-9_.\-]*)\}", path_template):
-        if placeholder not in names and placeholder != OPERATION_BINDING:
-            errors.append(f"pathTemplate placeholder '{{{placeholder}}}' has no binding")
-
-    sends_body = endpoint.get("httpVerb") in BODY_VERBS and endpoint.get("bodyType") != "NONE"
-    body_bindings = [b.get("name") for b in endpoint.get("bindings") or [] if b.get("location") == "BODY"]
-    if body_bindings and not sends_body:
-        errors.append(
-            f"BODY bindings need a body: {endpoint.get('httpVerb')} with body type {endpoint.get('bodyType')} "
-            f"sends none ({', '.join(body_bindings)})"
-        )
-    for header in endpoint.get("headers") or []:
-        if not str(header.get("name") or "").strip():
-            errors.append("header name is required")
+    bindings = endpoint.get("bindings") or []
+    names = [b.get("name") or "" for b in bindings]
+    errors.extend(_validate_bindings(bindings))
+    errors.extend(_validate_operation_field(endpoint.get("operationField") or "", names))
+    errors.extend(_validate_path_placeholders(path_template, names))
+    errors.extend(_validate_body(endpoint, bindings))
+    errors.extend("header name is required" for h in endpoint.get("headers") or [] if not str(h.get("name") or "").strip())
     return [f"endpoint '{endpoint.get('name')}': {e}" for e in errors]
 
 
@@ -326,6 +342,27 @@ def _by_name(items: Any) -> Dict[str, Dict[str, Any]]:
             if isinstance(item, dict) and item.get("name") is not None:
                 result[str(item["name"])] = item
     return result
+
+
+def _plan_endpoints(collection_cfg: Dict[str, Any], collection: Dict[str, Any],
+                    stored_endpoints: Dict[str, Dict[str, Any]], errors: List[str]) -> List[Dict[str, Any]]:
+    endpoints: List[Dict[str, Any]] = []
+    endpoint_names: set = set()
+    for endpoint_cfg in collection_cfg.get("endpoints") or []:
+        stored_endpoint = stored_endpoints.get(str((endpoint_cfg or {}).get("name", "")).strip())
+        endpoint = normalize_endpoint(
+            endpoint_cfg,
+            collection_id=collection["id"],
+            existing_id=stored_endpoint.get("id") if stored_endpoint else None,
+        )
+        if endpoint["name"] in endpoint_names:
+            errors.append(f"endpoint '{endpoint['name']}' of collection '{collection['name']}' is declared twice")
+        endpoint_names.add(endpoint["name"])
+        errors.extend(validate_endpoint(endpoint))
+        endpoints.append({"definition": endpoint, "exists": stored_endpoint is not None})
+    if not endpoints:
+        errors.append(f"collection '{collection['name']}' declares no endpoint")
+    return endpoints
 
 
 def plan_courier_definitions(courier_cfg: Dict[str, Any], existing_collections: Any = None,
@@ -356,23 +393,7 @@ def plan_courier_definitions(courier_cfg: Dict[str, Any], existing_collections: 
         errors.extend(validate_collection(collection))
 
         stored_endpoints = _by_name(existing_endpoints_for(collection["id"])) if (existing_endpoints_for and stored) else {}
-        endpoints: List[Dict[str, Any]] = []
-        endpoint_names: set = set()
-        for endpoint_cfg in collection_cfg.get("endpoints") or []:
-            stored_endpoint = stored_endpoints.get(str((endpoint_cfg or {}).get("name", "")).strip())
-            endpoint = normalize_endpoint(
-                endpoint_cfg,
-                collection_id=collection["id"],
-                existing_id=stored_endpoint.get("id") if stored_endpoint else None,
-            )
-            if endpoint["name"] in endpoint_names:
-                errors.append(f"endpoint '{endpoint['name']}' of collection '{collection['name']}' is declared twice")
-            endpoint_names.add(endpoint["name"])
-            errors.extend(validate_endpoint(endpoint))
-            endpoints.append({"definition": endpoint, "exists": stored_endpoint is not None})
-        if not endpoints:
-            errors.append(f"collection '{collection['name']}' declares no endpoint")
-
+        endpoints = _plan_endpoints(collection_cfg, collection, stored_endpoints, errors)
         plan.append({"collection": collection, "exists": stored is not None, "endpoints": endpoints})
 
     if errors:
