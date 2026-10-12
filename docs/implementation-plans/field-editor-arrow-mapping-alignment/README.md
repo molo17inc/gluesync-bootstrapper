@@ -96,7 +96,7 @@ In scope: `create_all_entities.py` (SingleTable, `@@` duplicate and MultiTable p
 The Automator (`automator_app/`) goes through the export and `create_entities`, so it inherits the changes; two of its
 flows needed their own (added after the first review, see section 5): `duplicate_pipeline` created the entities before
 cloning their UDFs, which a 2.3 CoreHub refuses for an entity that relies on its UDF, and the export's null-type
-enrichment stopped at a row with a list `source`. How the Automator reports refused entities is BOP-18.
+enrichment stopped at a row with a list `source`. The Automator now reports the entities a run refuses (BOP-18 A).
 
 Out of scope, with the reason: `create_all_tables.py` (it sends only source-discovered keys, `:394-407`, which the key rules accept);
 `dbmoto-converter/` (its UDF packages use `unlockedSchema`, `generate_udf_import_package.py:1056`, and its YAML keeps
@@ -141,7 +141,7 @@ are marked "answered"; the others keep the recommendation as the default the pla
 | BOP-15 | A target column name that differs from discovery only by case (B2 compares names case-sensitively) | open, found during implementation; recommendation: on 2.3 only, write the discovered spelling |
 | BOP-16 | MultiTable chains: keys and the 2.3 forms | open, found during implementation; implemented B (union keys, 2.3 forms refused in a chain); recommendation A for the keys |
 | BOP-17 | Seven choices made while implementing (left-out key columns, keyless targets, chained tables in the first loop, MultiTable filtered sources, null:1 rows on 2.2, refusals after table creation, N:1 without a function) | each implemented on its recommendation, to confirm at review |
-| BOP-18 | How the Automator reports the entities a run refuses (`create_all_entities.main` returns nothing, so every run looks successful) | open, found while aligning the Automator; recommendation: return the result with the refused entities as errors |
+| BOP-18 | How the Automator reports the entities a run refuses (`create_all_entities.main` returned nothing, so every run looked successful) | answered A: `main` returns the result with each entity not created and its reason under `errors`, and the Automator marks the run failed |
 | Extraction | The per-table assembly of the first loop extracted and reused by the `@@` duplicate loop in this merge request (02 §4) | answered yes: in its own commit, with T8 and T11 comparing payloads before and after (RK-5) |
 
 BOP-15 to BOP-17 were found while implementing and are written on their recommendations; BOP-11 at release.
@@ -170,6 +170,7 @@ Branch `feature/field-editor-arrow-mapping-alignment` from `main` @ `2c540dd`, o
 | docs: column relations and key rules | 02 §10 | |
 | fix: clone the UDFs of a pipeline before its entities in the Automator | Automator duplicate on 2.3; null-type enrichment and N:1 rows | `DuplicatePipelineUdfTests` in `test_automator_backup_import`, `test_null_column_type_fallback` |
 | fix: read discovery under its own names in the Automator templates | pre-existing defect found while aligning the Automator: template keys were always empty and types null | `test_bootstrapper_automator_templates` |
+| feat: report the entities a run could not create | BOP-18 A | `test_bootstrapper_run_errors` |
 
 Still to do before the merge request leaves Draft: the live checks of 03 §3 against a CoreHub built from
 `feature/field-editor-arrow-mapping` (force-pushed again on 2026-10-12: head `76079558a7` on `release/2.3.0.0` @

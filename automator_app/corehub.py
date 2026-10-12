@@ -527,10 +527,13 @@ def run_create_entities_for_tables(
             )
 
         logs = buffer.getvalue().splitlines()
-        success = not result or not result.get("failed")
+        errors = (result or {}).get("errors") or []
+        success = not result or not (result.get("failed") or errors)
         payload: Dict[str, Any] = {"success": success, "logs": logs, "result": result or {}}
         if not success:
             payload["error"] = f"Some entities failed: {result.get('failed')} out of {result.get('total')}"
+            if errors:
+                payload["error"] += ": " + "; ".join(errors)
         return payload
 
     except Exception as exc:  # pylint: disable=broad-except

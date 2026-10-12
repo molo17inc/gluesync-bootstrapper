@@ -50,7 +50,9 @@ class ChunkRefusalTests(unittest.TestCase):
         hub, result = run()
         self.assertEqual([len(put["entities"]) for put in hub.puts], [3, 1, 1, 1])
         self.assertEqual(sorted(e["entityName"] for e in hub.saved), ["src.CUSTOMERS", "src.PARTS"])
-        self.assertEqual(result, {"successful": 2, "failed": 1, "total": 3})
+        self.assertEqual({k: result[k] for k in ("successful", "failed", "total")}, {"successful": 2, "failed": 1, "total": 3})
+        self.assertEqual(len(result["errors"]), 1)
+        self.assertRegex(result["errors"][0], r"^src\.NOPK: .*R12\.6")
 
     def test_without_skip_errors_the_refusal_is_raised(self):
         with self.assertRaisesRegex(RuntimeError, "src.NOPK"):

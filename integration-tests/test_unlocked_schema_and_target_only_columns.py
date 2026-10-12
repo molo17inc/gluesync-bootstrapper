@@ -180,7 +180,7 @@ class UnlockedSchemaPayloadTests(unittest.TestCase):
                 chunk_size=50,
             )
 
-        self.assertEqual(result, {"successful": 1, "failed": 0, "total": 1})
+        self.assertEqual(result, {"successful": 1, "failed": 0, "total": 1, "errors": []})
         payload = captured_puts[0]
         entity = payload["entities"][0]
         target_ae = entity["agentEntities"][1]

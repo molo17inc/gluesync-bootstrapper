@@ -254,7 +254,12 @@ frequent (key rules, P16, BOP-13), so a partly created pipeline looks complete.
 - C. Keep the log lines only.
 
 Recommendation A: a failure should not read as a success, and the duplicate and import already have an error path for it.
-Not implemented until the maintainer answers.
+Answered A on 2026-10-12 and implemented. `create_entities` lists under `errors` each table refused before any
+request, each entity CoreHub refuses (entity by entity after C-6), every entity of a chunk that failed for another
+reason, and each MultiTable entity that failed; MultiTable entities now count in `successful`, `failed` and `total`,
+as their refused chains already did. An error `main` skips under `skip_errors` (no agents, no table in the schema) is
+returned as the only error instead of nothing, so it fails the Automator run too. The bulk creation adds the list to
+its "Some entities failed" message.
 
 ## 2. Pending verifications
 
@@ -283,7 +288,7 @@ Not implemented until the maintainer answers.
 
 Answered on 2026-10-12: BOP-1 A (with backward compatibility, sub-question (a)), BOP-3 A, BOP-4 A, BOP-5 A, BOP-6 A,
 BOP-12 A, and the per-table extraction of 02 §4 in this merge request, in its own commit. Found while implementing
-and written on their recommendation: BOP-15, BOP-16 (B implemented), BOP-17. BOP-18 is open, not implemented. To answer before
+and written on their recommendation: BOP-15, BOP-16 (B implemented), BOP-17. BOP-18 answered A and implemented. To answer before
 implementation: none; BOP-13 A and BOP-14 A were answered the same day. BOP-15 was found while implementing and is
 written on its recommendation until the maintainer answers. BOP-2, BOP-7, BOP-8, BOP-9 and BOP-10 can
 take their recommendations at review; BOP-11 at release. PV-1 and PV-3 are checked before the merge request leaves

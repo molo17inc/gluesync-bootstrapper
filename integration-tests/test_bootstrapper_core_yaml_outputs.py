@@ -297,7 +297,7 @@ class CreateEntitiesFromDemoKitYamlTests(unittest.TestCase):
                 chunk_size=50,
             )
 
-        self.assertEqual(result, {"successful": 2, "failed": 0, "total": 2})
+        self.assertEqual(result, {"successful": 2, "failed": 0, "total": 2, "errors": []})
         payload = captured_puts[0]
         entities_by_name = {entity["entityName"]: entity for entity in payload["entities"]}
 
@@ -371,7 +371,7 @@ class CreateSchedulesFromDemoKitYamlTests(unittest.TestCase):
                 chunk_size=50,
             )
 
-        self.assertEqual(result, {"successful": 4, "failed": 0, "total": 4})
+        self.assertEqual(result, {"successful": 4, "failed": 0, "total": 4, "errors": []})
         scheduled_table_names = [call.args[3] for call in create_entity_schedules.call_args_list]
         self.assertEqual(scheduled_table_names, ["DRIVERS", "ADDRESSES_REDO"])
         self.assertEqual(create_entity_schedules.call_args_list[1].args[4][0]["task_type"], "entity_redo")

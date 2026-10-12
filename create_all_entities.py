@@ -1710,10 +1710,13 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
     # Tables whose entity is refused before any request, with the reason logged; counted as failed.
     refused_tables = []
+    # Every entity of the run that was not created, as "<entity>: <reason>", returned to the caller (BOP-18 A).
+    errors = []
 
     def refuse_table(table_label, error):
         logger.error(f"Entity for table {table_label} not created: {error}")
         refused_tables.append(table_label)
+        errors.append(f"{table_label}: {error}")
         if not skip_errors:
             raise error
 
@@ -3502,6 +3505,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 error_msg = str(e)
                 logger.error(f"Error creating MultiTable entity {i+1}/{total_multi_tables}: {error_msg}")
                 failed_multi_tables += 1
+                errors.append(f"{multi_entity['entities'][0].get('entityName', 'unknown')}: {error_msg}")
                 if not skip_errors:
                     raise
                 logger.warning("Skipping MultiTable entity due to skip_errors=True")
@@ -3588,8 +3592,10 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         except Exception as entity_error:  # pylint: disable=broad-except
                             logger.error(f"Entity {entity_payload.get('entityName', 'unknown')} refused by CoreHub: {entity_error}")
                             failed_entities += 1
+                            errors.append(f"{entity_payload.get('entityName', 'unknown')}: {entity_error}")
                     continue
                 failed_entities += len(chunk)
+                errors.extend(f"{entity_payload.get('entityName', 'unknown')}: {error_msg}" for entity_payload in chunk)
                 logger.warning("Skipping chunk due to skip_errors=True")
 
     if refused_tables:
@@ -3606,6 +3612,14 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
     print(f"- Total MultiTable entities: {total_multi_tables}")
     print(f"- Successfully created MultiTable entities: {successful_multi_tables}")
     print(f"- Failed MultiTable entities: {failed_multi_tables}")
+
+    # MultiTable entities count with the regular ones, as their chains refused before any request already do.
+    result = {
+        "successful": successful_entities + successful_multi_tables,
+        "failed": failed_entities + failed_multi_tables,
+        "total": total_entities + total_multi_tables,
+        "errors": errors,
+    }
 
     # Assign entities to their groups if successful
     if successful_entities > 0:
@@ -3694,7 +3708,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
         if not has_schedules:
             logger.debug("No schedules defined in YAML config, skipping schedule creation")
-            return {"successful": successful_entities, "failed": failed_entities, "total": total_entities}
+            return result
             
         logger.info("Creating schedules for current schema...")
 
@@ -3705,7 +3719,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
 
             if not isinstance(response, list) or not response:
                 logger.warning(f"Unexpected response when fetching entities: {response}")
-                return {"successful": successful_entities, "failed": failed_entities, "total": total_entities}
+                return result
 
             # Process entities in the format used in main.py
             entities_map = {}
@@ -3839,13 +3853,17 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             logger.error(f"Error creating schedules: {str(e)}")
             # Don't fail the whole process just because scheduling failed
 
-    return {"successful": successful_entities, "failed": failed_entities, "total": total_entities}
+    return result
 
 
 def main(pipeline_id, source_schema, target_schema, source_type, target_type, yaml_file, token, skip_errors=True,
          chunk_size=50, chronos_token=None):
     """
-    Main function to create entities for a pipeline
+    Main function to create entities for a pipeline.
+
+    Returns the result of create_entities (successful, failed and total counts, and under ``errors`` each entity
+    not created with its reason), or, when an error is skipped, that error alone, so a caller such as the
+    Automator can tell a failed run from a successful one (BOP-18 A).
     """
     logger.info(f"Starting entity creation for pipeline {pipeline_id}")
     try:
@@ -3930,11 +3948,12 @@ def main(pipeline_id, source_schema, target_schema, source_type, target_type, ya
         if not skip_errors:
             raise
         logger.warning("Skipping error due to skip_errors=True")
-        return
+        return {"successful": 0, "failed": 0, "total": 0, "errors": [str(e)]}
 
     # Log successful completion
     log_success(logger, f"Entity creation completed successfully for pipeline {pipeline_id}")
     lockfile_complete()
+    return result
 
 
 if __name__ == "__main__":
