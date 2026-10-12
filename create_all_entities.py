@@ -30,7 +30,8 @@ from commons import get_node_info, get_table_columns, fetch_core_hub, get_pipeli
     corehub_takes_grouped_matrix
 from create_all_tables import handle_table_creation
 from create_user_defined_functions import handle_udf_function_definition
-from field_function_utils import build_field_functions_for_entity_type, produced_target_names
+from field_function_utils import build_field_functions_for_entity_type, normalize_expression_for_corehub, \
+    produced_target_names
 from entity_mapping import EntityMappingError, build_entries, derive_keys, drop_forbidden_key_links, \
     encode_entries, group_relations, grouped_only_forms, yaml_relations
 import create_user_defined_functions as udf_module
@@ -2701,7 +2702,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         except EntityMappingError as error:
             refuse_table(yaml_table_key, error)
             continue
-        columns_mapping_matrix = target_entity_type["columnsMappingMatrix"]
 
         is_target_nosql = target_type and "nosql" in target_type.lower()
         target_entity_type_name = "NoSqlEntity" if is_target_nosql else "SingleTable"
@@ -2744,7 +2744,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         entity = {
             "entityName": entity_name,
             "agentEntities": [source_entity, target_entity],
-            "columnsMappingMatrix": columns_mapping_matrix
         }
         
         if group_id and group_id != '_default':
@@ -2789,6 +2788,11 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
     for chain_id, tables_list in chained_tables.items():
         if not tables_list:
             continue
+
+        # Gluesync 2.3: the grouped entries and the field functions of each table pair, and why the chain is refused.
+        mt_entries = []
+        mt_field_functions = []
+        chain_refusals = []
 
         # FILTER: Only include tables that are in the whitelist for the current schema
         # This prevents tables from other schemas (collected globally) from being included
@@ -3072,6 +3076,10 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         }
             
             has_filter = table_has_mappings or table_has_whitelist
+            # The forms of Gluesync 2.3 (N:1, 1:N, 1:null, targetKeys) are not written for a MultiTable chain (BOP-16).
+            forms = grouped_only_forms(yaml_relations(table_yaml_columns, label=table_key), table_data)
+            if forms:
+                chain_refusals.append(f"table {table_key} uses column mapping forms a MultiTable chain does not take: {'; '.join(forms)}")
             
             # First add source columns mapped to target with their actual ordinal positions
             for col in columns["columns"]:
@@ -3184,6 +3192,39 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                     }, col))
                     logger.debug(f"Added target-only column to MultiTable: {col_name} (type: {mapped_type}, id: {max_target_col_id})")
 
+            if grouped:
+                # Every column of the pair in one entry: a mapped source onto its target column (which MultiTable
+                # targets keep under the source id), a filtered source read and never written, and each target-only
+                # column fed by no source, which needs a field function that produces it (P12, BOP-12 A).
+                pair_relations = [
+                    {"sources": [col["id"]], "targets": [col["id"]], "explicit": has_filter}
+                    for col in columns["columns"]
+                    if not has_filter or source_to_target_mapping.get(col["name"].lower())
+                ]
+                target_ids_by_name = {c["name"]: c["id"] for c in target_table_columns}
+                for target_col in table_target_only_columns:
+                    col_name = target_col if isinstance(target_col, str) else target_col.get('name')
+                    expression = normalize_expression_for_corehub(target_col.get('expression')) \
+                        if isinstance(target_col, dict) else None
+                    if not expression:
+                        chain_refusals.append(
+                            f"target-only column {col_name} of {table_key} is fed by no source column and has no "
+                            f"expression: a Gluesync 2.3 CoreHub needs a field function that produces it (P12)"
+                        )
+                        continue
+                    mt_field_functions.append({
+                        "columnId": target_ids_by_name.get(col_name),
+                        "tableOrObjectId": int(target_table_id),
+                        "expression": expression,
+                    })
+                try:
+                    mt_entries.extend(build_entries(
+                        chain_source_ids[table_key], target_table_id, pair_relations, columns["columns"],
+                        target_table_columns, grouped=True, label=table_key,
+                    ))
+                except EntityMappingError as error:
+                    chain_refusals.append(str(error))
+
             # Add columns for this table
             target_columns.append({
                 "id": int(target_table_id),
@@ -3279,7 +3320,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         
         # Create table mapping matrix for MultiTable entities
         columns_mapping_matrix = []
-        for table_key, table_data in tables_list:
+        for table_key, table_data in ([] if grouped else tables_list):
             # Use sourceTableName if present (for duplicate tables with unique YAML keys)
             actual_table_name = table_data.get('sourceTableName', table_key) if table_data else table_key
             
@@ -3308,6 +3349,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                         "targetColumnId": col_id
                     })
         
+        if grouped:
+            columns_mapping_matrix = encode_entries(mt_entries, grouped=True)
+
         target_custom_properties = {
             "ttlValue": table_data.get('customProperties', {}).get('target', {}).get('ttlValue', 0)
         }
@@ -3344,6 +3388,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             "columns": target_columns
         }
 
+        if mt_field_functions:
+            target_entity["entityType"]["fieldFunctions"] = mt_field_functions
+
         # Get group info for multi-table entity
         group_id = groupId_map.get(table_data.get('groupId', '_default'), table_data.get('groupId', '_default'))
         group_name = next((name for name, gid in groupId_map.items() if gid == group_id), group_id)
@@ -3354,7 +3401,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             "entityId": "",
             "entityName": entity_name,
             "agentEntities": [source_entity, target_entity],
-            "columnsMappingMatrix": columns_mapping_matrix  # Also add at entity level
         }
         
         # Only add groupId if it's not the default
@@ -3364,6 +3410,10 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         multi_table_entity = {
             "entities": [entity_payload]
         }
+
+        if chain_refusals:
+            refuse_table(f"MultiTable chain {chain_id}", EntityMappingError("; ".join(chain_refusals)))
+            continue
 
         # Add to multi_table_entities for separate processing
         multi_table_entities.append(multi_table_entity)

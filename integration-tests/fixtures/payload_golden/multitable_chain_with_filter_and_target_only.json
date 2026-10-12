@@ -290,44 +290,6 @@
             "type": "MultiTable"
           }
         ],
-        "columnsMappingMatrix": [
-          {
-            "sourceColumnId": 1,
-            "sourceTableObjectId": 500,
-            "targetColumnId": 1,
-            "targetTableObjectId": 2007579922
-          },
-          {
-            "sourceColumnId": 2,
-            "sourceTableObjectId": 500,
-            "targetColumnId": 2,
-            "targetTableObjectId": 2007579922
-          },
-          {
-            "sourceColumnId": 3,
-            "sourceTableObjectId": 500,
-            "targetColumnId": 3,
-            "targetTableObjectId": 2007579922
-          },
-          {
-            "sourceColumnId": 4,
-            "sourceTableObjectId": 500,
-            "targetColumnId": 4,
-            "targetTableObjectId": 2007579922
-          },
-          {
-            "sourceColumnId": 1,
-            "sourceTableObjectId": 501,
-            "targetColumnId": 1,
-            "targetTableObjectId": 1173570291
-          },
-          {
-            "sourceColumnId": 2,
-            "sourceTableObjectId": 501,
-            "targetColumnId": 2,
-            "targetTableObjectId": 1173570291
-          }
-        ],
         "entityId": "",
         "entityName": "src.ORDERS chain"
       }

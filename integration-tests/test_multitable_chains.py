@@ -175,13 +175,10 @@ class MultiTablePayloadTests(unittest.TestCase):
         # Note: MultiTable source agentEntity does not include a top-level
         # 'keys' array; keys are per-table in the target agentEntity.
 
-        # Verify columnsMappingMatrix at entity level
-        # One entry per column (2 tables x 2 columns each = 4)
-        entity_matrix = entity.get("columnsMappingMatrix", [])
-        self.assertTrue(entity_matrix, "Entity-level columnsMappingMatrix missing")
-        self.assertEqual(len(entity_matrix), 4)
+        # The matrix lives on the target entityType only: an Entity has no columnsMappingMatrix field (C-9)
+        self.assertNotIn("columnsMappingMatrix", entity)
 
-        # Verify columnsMappingMatrix in target entityType
+        # Verify columnsMappingMatrix in target entityType, one entry per column (2 tables x 2 columns each = 4)
         target_matrix = target_ae["entityType"].get("columnsMappingMatrix", [])
         self.assertTrue(target_matrix, "Target entityType columnsMappingMatrix missing")
         self.assertEqual(len(target_matrix), 4)

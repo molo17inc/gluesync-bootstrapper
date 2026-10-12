@@ -319,20 +319,6 @@
             "type": "SingleTable"
           }
         ],
-        "columnsMappingMatrix": [
-          {
-            "sourceColumnId": 1,
-            "sourceTableObjectId": 500,
-            "targetColumnId": 1,
-            "targetTableObjectId": 164927084
-          },
-          {
-            "sourceColumnId": 2,
-            "sourceTableObjectId": 500,
-            "targetColumnId": 2,
-            "targetTableObjectId": 164927084
-          }
-        ],
         "entityName": "src.CUSTOMERS copy"
       }
     ]
