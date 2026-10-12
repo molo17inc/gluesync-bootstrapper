@@ -52,6 +52,11 @@ database), gated by environment variables like `integration-tests/test_live_back
    2.3-only form is refused before any request. Answers PV-2 on the way (02 §1).
 5. **MongoDB**: a MongoDB source without `keys:` (BS-6) and a MongoDB target whose collection holds `_id`.
 6. **Missing target table at save** with `CREATE_TABLE_IF_NOT_EXISTS=false`: answers PV-1.
+7. **MultiTable chain on 2.3** (BOP-16, BOP-19): a chain into existing target tables whose names and column ids differ
+   from the source (an Oracle source into PostgreSQL), with an N:1 row, a `target: []` row and a target primary key
+   produced by a `{target, expression}` row. CoreHub saves it with target column ids from discovery (the chain used
+   the source ids before), the field editor shows the arrows the YAML describes, and the export of the chain imports
+   back into a new pipeline with the same GET.
 
 ## 4. Merge request and landing
 
