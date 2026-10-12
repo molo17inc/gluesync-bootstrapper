@@ -1,0 +1,176 @@
+[
+  {
+    "entities": [
+      {
+        "agentEntities": [
+          {
+            "agentId": "source-agent",
+            "columns": [
+              {
+                "charMaxLength": 0,
+                "dataType": "int",
+                "id": 1,
+                "isIdentity": false,
+                "isNullable": false,
+                "isPK": true,
+                "name": "ORDER_ID",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 1,
+                "tableId": 500
+              },
+              {
+                "charMaxLength": 0,
+                "dataType": "int",
+                "id": 2,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "CUSTOMER_ID",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 2,
+                "tableId": 500
+              },
+              {
+                "charMaxLength": 0,
+                "dataType": "decimal",
+                "id": 3,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "TOTAL",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 3,
+                "tableId": 500
+              }
+            ],
+            "customProperties": {},
+            "entityObject": {
+              "collection": "ORDERS",
+              "id": "500",
+              "scope": "src"
+            },
+            "entityType": {
+              "type": "Source"
+            },
+            "table": {
+              "id": "500",
+              "name": "ORDERS",
+              "schema": "src"
+            },
+            "tablesProperties": {
+              "src.ORDERS": {}
+            },
+            "type": "SingleTable"
+          },
+          {
+            "agentId": "target-agent",
+            "columns": [
+              {
+                "charMaxLength": 0,
+                "dataType": "int",
+                "id": 202,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": true,
+                "name": "ORDER_ID",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 0,
+                "tableId": 9000
+              },
+              {
+                "charMaxLength": 0,
+                "dataType": "int",
+                "id": 203,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "CUSTOMER_ID",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 0,
+                "tableId": 9000
+              },
+              {
+                "charMaxLength": 0,
+                "dataType": "decimal",
+                "id": 204,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "TOTAL",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 0,
+                "tableId": 9000
+              }
+            ],
+            "customProperties": {},
+            "entityObject": {
+              "collection": "ORDERS_T",
+              "id": "9000",
+              "scope": "tgt"
+            },
+            "entityType": {
+              "allowedOperations": [
+                "INSERT",
+                "DELETE",
+                "UPDATE",
+                "TRUNCATE"
+              ],
+              "columnsMappingMatrix": [
+                {
+                  "sourceColumnId": 1,
+                  "sourceTableObjectId": 500,
+                  "targetColumnId": 202,
+                  "targetTableObjectId": 9000
+                },
+                {
+                  "sourceColumnId": 2,
+                  "sourceTableObjectId": 500,
+                  "targetColumnId": 203,
+                  "targetTableObjectId": 9000
+                },
+                {
+                  "sourceColumnId": 3,
+                  "sourceTableObjectId": 500,
+                  "targetColumnId": 204,
+                  "targetTableObjectId": 9000
+                }
+              ],
+              "fieldFunctions": [
+                {
+                  "columnId": 204,
+                  "expression": {
+                    "type": "StaticBD",
+                    "value": "0"
+                  },
+                  "tableOrObjectId": 9000
+                }
+              ],
+              "snapshotWritingConcurrency": 1,
+              "tablesWithUnlockedDataTypes": [],
+              "tablesWithUnlockedSchema": [],
+              "type": "Target",
+              "useBulkOperationsDuringCDC": false,
+              "useBulkOperationsWhileSnapshot": false
+            },
+            "table": {
+              "id": "9000",
+              "name": "ORDERS_T",
+              "schema": "tgt"
+            },
+            "tablesProperties": {
+              "tgt.ORDERS_T": {}
+            },
+            "type": "SingleTable"
+          }
+        ],
+        "entityName": "src.ORDERS"
+      }
+    ]
+  }
+]
