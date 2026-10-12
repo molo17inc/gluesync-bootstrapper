@@ -133,6 +133,8 @@ class EnrichNullColumnTypesTests(unittest.TestCase):
                         table: {
                             "name": table.lower(),
                             "entityName": f"{schema}.{table}",
+                            # Neither side declares a primary key: without keys every CoreHub refuses the entity.
+                            "keys": [cols[0]["source"]],
                             "columns": cols,
                             "customProperties": {},
                         }
@@ -306,6 +308,8 @@ class NullTypeImportFallbackTests(unittest.TestCase):
                         table: {
                             "name": table.lower(),
                             "entityName": f"{schema}.{table}",
+                            # Neither side declares a primary key: without keys every CoreHub refuses the entity.
+                            "keys": [cols[0]["source"]],
                             "columns": cols,
                             "customProperties": {
                                 "source": {},

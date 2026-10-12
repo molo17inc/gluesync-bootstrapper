@@ -661,6 +661,12 @@ def derive_keys(
                         )
         target_keys = inherited | target_requested
 
+    if not target_keys:
+        raise EntityMappingError(
+            f"the target table{where} has no key: no source key column feeds a target column and targetKeys names none. "
+            f"Map a source key column onto a target column, or name the target key column(s) in targetKeys:"
+        )
+
     source_order = [n for n in dict.fromkeys(list(source_names) + physical_source)]
     target_order = [n for n in dict.fromkeys(list(target_names) + physical_target)]
     return (

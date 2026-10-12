@@ -252,8 +252,10 @@ def get_agent_tables(token, pipeline_id, agent_id, schema_name):
         return []
 
 
-# CoreHub base URL -> what its GET /version answered (None when unreadable). Read once per CoreHub and run.
-_COREHUB_VERSION_BY_URL: Dict[str, Any] = {}
+# (CoreHub base URL, request function) -> what its GET /version answered (None when unreadable). Read once
+# per CoreHub and run: every caller passes the same fetch_core_hub in production, while each test's fake
+# CoreHub is a request function of its own and so never sees another test's answer.
+_COREHUB_VERSION_BY_URL: Dict[Any, Any] = {}
 
 # The first release whose entity upsert takes the grouped column mapping matrix (lists of column ids).
 GROUPED_MATRIX_MIN_COREHUB_VERSION = (2, 3)
@@ -270,16 +272,17 @@ def corehub_version(token, fetch=None):
     ``fetch`` is the request function to use (``fetch_core_hub`` of this module by default), so a
     caller keeps going through its own client. None when the version cannot be read.
     """
-    base_url = getattr(core_hub_client, "base_url", CORE_HUB_URL)
-    if base_url not in _COREHUB_VERSION_BY_URL:
+    fetch = fetch or fetch_core_hub
+    key = (getattr(core_hub_client, "base_url", CORE_HUB_URL), fetch)
+    if key not in _COREHUB_VERSION_BY_URL:
         try:
-            version = (fetch or fetch_core_hub)("/version", token=token)
+            version = fetch("/version", token=token)
         except Exception as e:  # pylint: disable=broad-except
             logger.warning(f"Could not read the CoreHub version ({e}); assuming a current CoreHub (Gluesync 2.3+)")
             version = None
         logger.info(f"CoreHub version: {version!r}")
-        _COREHUB_VERSION_BY_URL[base_url] = version
-    return _COREHUB_VERSION_BY_URL[base_url]
+        _COREHUB_VERSION_BY_URL[key] = version
+    return _COREHUB_VERSION_BY_URL[key]
 
 
 def corehub_takes_grouped_matrix(token, fetch=None):

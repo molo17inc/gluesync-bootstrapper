@@ -25,8 +25,8 @@ def rel(sources, targets, explicit=True):
 
 def keys(relations, *, ph_s=(), ph_t=(), yaml_keys=(), yaml_target_keys=(), sources=None, targets=None,
          produced=(), source_is_nosql=False):
-    all_sources = sources or sorted({s for r in relations for s in r["sources"]} | set(ph_s) | set(yaml_keys))
-    all_targets = targets or sorted({t for r in relations for t in r["targets"]} | set(ph_t))
+    all_sources = sources or sorted({s for r in relations for s in r["sources"]}.union(ph_s, yaml_keys))
+    all_targets = targets or sorted({t for r in relations for t in r["targets"]}.union(ph_t))
     return derive_keys(
         relations=relations,
         source_names=all_sources,
@@ -107,6 +107,11 @@ class TargetKeyTests(unittest.TestCase):
     def test_b2_target_keys_that_differ_from_its_primary_key_are_refused(self):
         with self.assertRaisesRegex(EntityMappingError, r"R12\.2"):
             keys([rel(["ID"], ["id"]), rel(["NAME"], ["name"])], ph_s={"ID"}, ph_t={"id"}, yaml_target_keys=["name"])
+
+    def test_a_target_with_no_key_is_refused(self):
+        # CoreHub refuses an agent entity without keys (checkEntity), the target one included.
+        with self.assertRaisesRegex(EntityMappingError, "target table of src.T has no key"):
+            keys([rel(["ID"], []), rel(["NAME"], ["name"])], yaml_keys=["ID"])
 
     def test_bop13_target_primary_key_no_source_feeds_is_refused_with_the_expression_hint(self):
         with self.assertRaisesRegex(EntityMappingError, "ROW_ID.*expression"):

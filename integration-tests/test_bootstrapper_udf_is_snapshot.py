@@ -448,7 +448,8 @@ class CompileAndTestRequestTests(unittest.TestCase):
         corehub = FakeCoreHub("2.2.6.0")
         with mock.patch.object(self.udf, "fetch_core_hub", side_effect=corehub):
             self.assertFalse(self.udf.corehub_udfs_take_is_snapshot("tok"))
-            self.assertFalse(self.commons.corehub_takes_grouped_matrix("tok", fetch=corehub))
+            # Both modules import commons.fetch_core_hub by name, so they pass the same request function.
+            self.assertFalse(self.commons.corehub_takes_grouped_matrix("tok", fetch=self.udf.fetch_core_hub))
         self.assertEqual(1, sum(1 for path, _, _ in corehub.calls if path == "/version"))
 
     def test_grouped_matrix_is_chosen_by_release(self):

@@ -14,6 +14,20 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 
+from entity_mapping import EntityMappingError
+
+# Field functions that give a column a value of their own, whatever its source brings: the fixed values and the
+# technical ones (gluesync-kotlin FieldFunction.kt, isTechnicalField true but CustomFn and ScalarFn). Gluesync 2.3
+# refuses them on a target column a source column feeds (P16) and accepts them on one no source feeds (null:1).
+FIXED_VALUE_EXPRESSION_TYPES = frozenset({
+    "StaticShort", "StaticInt", "StaticLong", "StaticFloat", "StaticDouble", "StaticBD", "StaticStr",
+    "LocalTs", "LocalDate", "TsOff", "RecordID",
+})
+
+# Field functions that produce a column no source feeds (the producer rows of Gluesync 2.3, P7-P12): the fixed and
+# technical values, a custom field function and a target scalar function.
+PRODUCING_EXPRESSION_TYPES = FIXED_VALUE_EXPRESSION_TYPES.union({"CustomFn", "ScalarFn"})
+
 # UI / kotlinx noise that must not round-trip into YAML or create payloads.
 _EXPRESSION_DROP_KEYS = frozenset(
     {
@@ -197,18 +211,43 @@ def iter_yaml_column_expressions(
         yield str(target_name), expr
 
 
+def produced_target_names(yaml_columns: Optional[Sequence[Any]]) -> List[str]:
+    """Target column names whose YAML ``expression`` produces a value (see ``PRODUCING_EXPRESSION_TYPES``)."""
+    return [
+        target_name
+        for target_name, expr in iter_yaml_column_expressions(yaml_columns)
+        if expr.get("type") in PRODUCING_EXPRESSION_TYPES
+    ]
+
+
 def build_field_functions_for_entity_type(
     yaml_columns: Optional[Sequence[Any]],
     target_columns: Sequence[Mapping[str, Any]],
     table_or_object_id: Any,
+    *,
+    fed_target_names: Optional[Iterable[str]] = None,
+    label: str = "",
 ) -> List[Dict[str, Any]]:
     """Rebuild CoreHub ``fieldFunctions`` from YAML column expressions.
 
     ``target_columns`` must carry real target column ``id`` / ``name`` values
     (discovery or the assembled target columns_def).
+
+    ``fed_target_names``: on a Gluesync 2.3 CoreHub, the target columns a source column feeds. A fixed or
+    technical value on one of them is refused (P16, BOP-14 A), raising ``EntityMappingError``: the runtime
+    would write it over the value the source brings.
     """
     if table_or_object_id is None:
         return []
+    if fed_target_names is not None:
+        fed = {str(name).lower() for name in fed_target_names}
+        for target_name, expr in iter_yaml_column_expressions(yaml_columns):
+            if expr.get("type") in FIXED_VALUE_EXPRESSION_TYPES and target_name.lower() in fed:
+                raise EntityMappingError(
+                    f"Table {label}: the {expr.get('type')} field function on target column {target_name} gives it a "
+                    f"value of its own while a source column feeds it, which a Gluesync 2.3 CoreHub refuses (P16): "
+                    f"remove the source from that row, so that no source column feeds the column (null:1)"
+                )
 
     by_name: Dict[str, Mapping[str, Any]] = {}
     for col in target_columns or []:

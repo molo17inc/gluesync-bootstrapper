@@ -132,7 +132,25 @@ src:
 """,
         tables=("NOPK",),
     ),
-    "repeated_source_and_unknown_source": dict(
+    "unknown_source": dict(
+        yaml="""
+src:
+  target: tgt
+  tables:
+    whitelist: [CUSTOMERS]
+    custom:
+      CUSTOMERS:
+        name: customers
+        columns:
+          - ID: id
+          - EMAIL: email_address
+          - MISSING_COL: created
+""",
+        tables=("CUSTOMERS",),
+    ),
+    # A source repeated over rows (1:N) is a Gluesync 2.3 form: refused before any request on an older CoreHub,
+    # where it used to send two source columns with one id.
+    "repeated_source_refused": dict(
         yaml="""
 src:
   target: tgt
@@ -145,7 +163,6 @@ src:
           - ID: id
           - EMAIL: email_address
           - EMAIL: name
-          - MISSING_COL: created
 """,
         tables=("CUSTOMERS",),
     ),

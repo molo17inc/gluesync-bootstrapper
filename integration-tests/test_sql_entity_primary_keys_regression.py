@@ -67,7 +67,7 @@ def _pgsql_drivers_columns():
 
 
 class SqlEntityPrimaryKeysRegressionTests(unittest.TestCase):
-    def _run_create(self, yaml_text, tables=None, columns_by_table=None):
+    def _run_create(self, yaml_text, tables=None, columns_by_table=None, version=None):
         import create_all_entities as cae
 
         yaml_config = yaml.safe_load(yaml_text)
@@ -76,6 +76,8 @@ class SqlEntityPrimaryKeysRegressionTests(unittest.TestCase):
         captured = []
 
         def fake_fetch(path, method="GET", token=None, body=None, **kwargs):
+            if path == "/version":
+                return version
             if path.endswith("/config/entities") and method == "PUT":
                 captured.append(copy.deepcopy(body))
                 return {"ok": True}
@@ -180,23 +182,66 @@ public:
         # (ingested_at may not be in discovery — FF attach requires target column id)
         self.assertTrue(any(c.get("isPK") for c in source_ae["columns"]))
 
-    def test_extract_mapping_pairs_skips_target_only_ff(self):
-        import create_all_entities as cae
+    def test_yaml_relations_read_target_only_ff_as_a_column_no_source_feeds(self):
+        from entity_mapping import yaml_relations
 
+        relations = yaml_relations([{"target": "ingested_at", "type": "varchar", "expression": {"type": "LocalTs"}}])
+        self.assertEqual([(r["sources"], r["targets"]) for r in relations], [([], ["ingested_at"])])
+        self.assertEqual([(r["sources"], r["targets"]) for r in yaml_relations([{"ID": "id"}])], [(["ID"], ["id"])])
         self.assertEqual(
-            cae._extract_mapping_pairs(
-                {"target": "ingested_at", "type": "varchar", "expression": {"type": "LocalTs"}}
-            ),
-            [],
+            [(r["sources"], r["targets"]) for r in yaml_relations([{"source": "id", "target": "id", "type": "int4"}])],
+            [(["id"], ["id"])],
         )
-        self.assertEqual(
-            cae._extract_mapping_pairs({"ID": "id"}),
-            [("ID", "id")],
-        )
-        self.assertEqual(
-            cae._extract_mapping_pairs({"source": "id", "target": "id", "type": "int4"}),
-            [("id", "id")],
-        )
+
+    def test_target_only_ff_row_creates_its_column_on_a_2_3_corehub(self):
+        """T12: the {target, expression} row is a column fed by no source, with its entry and field function."""
+        yaml_text = """
+public:
+  target: public
+  tables:
+    whitelist: ["drivers"]
+    blacklist: []
+    custom:
+      drivers:
+        columns:
+          - id: id
+          - target: ingested_at
+            type: timestamp
+            expression:
+              type: LocalTs
+"""
+        payload = self._run_create(yaml_text, version="2.3.0.0 - build test")
+        source_ae, target_ae = payload["entities"][0]["agentEntities"]
+        ingested = next(c for c in target_ae["columns"] if c["name"] == "ingested_at")
+        self.assertEqual(ingested["dataType"], "timestamp")
+        self.assertIn({"sourceTableObjectId": 10, "targetTableObjectId": target_ae["entityType"]["columnsMappingMatrix"][0]["targetTableObjectId"],
+                       "sourceColumnIds": [], "targetColumnIds": [ingested["id"]]},
+                      target_ae["entityType"]["columnsMappingMatrix"])
+        self.assertEqual([ff["columnId"] for ff in target_ae["entityType"]["fieldFunctions"]], [ingested["id"]])
+        self.assertEqual([c["name"] for c in source_ae["columns"] if c.get("isPK")], ["id"])
+        self.assertEqual([c["name"] for c in target_ae["columns"] if c.get("isPK")], ["id"])
+
+    def test_target_only_ff_row_is_left_out_on_an_older_corehub(self):
+        """Older CoreHubs keep today's payload: no column for the row (PV-2 pending)."""
+        yaml_text = """
+public:
+  target: public
+  tables:
+    whitelist: ["drivers"]
+    blacklist: []
+    custom:
+      drivers:
+        columns:
+          - id: id
+          - target: ingested_at
+            type: timestamp
+            expression:
+              type: LocalTs
+"""
+        payload = self._run_create(yaml_text, version="2.2.11.5")
+        _, target_ae = payload["entities"][0]["agentEntities"]
+        self.assertNotIn("ingested_at", [c["name"] for c in target_ae["columns"]])
+        self.assertNotIn("fieldFunctions", target_ae["entityType"])
 
     def test_pgsql_it_style_id_shorthand_mapping_keeps_pk(self):
         """IT tables-list uses ``{id: ID}`` — must not skip ``id`` as export metadata."""
@@ -227,17 +272,15 @@ public:
         tgt_pks = [c["name"] for c in target_ae["columns"] if c.get("isPK")]
         self.assertEqual(tgt_pks, ["ID"], f"target columns={target_ae['columns']}")
 
-    def test_extract_mapping_pairs_keeps_id_shorthand(self):
-        import create_all_entities as cae
+    def test_yaml_relations_keep_id_shorthand(self):
+        from entity_mapping import yaml_relations
 
         # Regression: ``id`` is in _EXPORT_METADATA_FIELDS but is also a column name.
-        self.assertEqual(cae._extract_mapping_pairs({"id": "ID"}), [("id", "ID")])
+        self.assertEqual([(r["sources"], r["targets"]) for r in yaml_relations([{"id": "ID"}])], [(["id"], ["ID"])])
         # Export rows still use the source/target branch (id metadata ignored there).
         self.assertEqual(
-            cae._extract_mapping_pairs(
-                {"source": "id", "target": "ID", "id": 1, "type": "int4"}
-            ),
-            [("id", "ID")],
+            [(r["sources"], r["targets"]) for r in yaml_relations([{"source": "id", "target": "ID", "id": 1, "type": "int4"}])],
+            [(["id"], ["ID"])],
         )
 
     def test_yaml_keys_survive_when_pk_omitted_from_column_mappings(self):
