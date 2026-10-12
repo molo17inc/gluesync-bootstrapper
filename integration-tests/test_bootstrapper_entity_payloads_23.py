@@ -217,6 +217,16 @@ class RefusedBeforeTheRequestTests(unittest.TestCase):
             expression: {type: StaticStr, value: "x"}""", "CUSTOMERS")
         self.assert_refused(yaml_text, "CUSTOMERS", r"StaticStr.*name.*source")
 
+    def test_target_scalar_function_on_a_fed_target(self):
+        # Refused at every save by rule (f), and named by P16 since gluesync-kotlin 2063e42c63.
+        yaml_text = table("""        name: customers
+        columns:
+          - ID: id
+          - source: NAME
+            target: name
+            expression: {type: ScalarFn, functionName: upper}""", "CUSTOMERS")
+        self.assert_refused(yaml_text, "CUSTOMERS", r"ScalarFn.*name.*source")
+
     def test_yaml_keys_that_are_not_the_primary_key(self):
         yaml_text = table("""        name: customers
         keys: [ID, NAME]

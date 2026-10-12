@@ -24,6 +24,10 @@ FIXED_VALUE_EXPRESSION_TYPES = frozenset({
     "LocalTs", "LocalDate", "TsOff", "RecordID",
 })
 
+# Field functions refused on a target column a source column feeds (P16): the fixed and technical values, and the
+# target scalar function, which rule (f) of the scalar function validation already refuses there at every save.
+REFUSED_ON_FED_TARGET_TYPES = FIXED_VALUE_EXPRESSION_TYPES.union({"ScalarFn"})
+
 # Field functions that produce a column no source feeds (the producer rows of Gluesync 2.3, P7-P12): the fixed and
 # technical values, a custom field function and a target scalar function.
 PRODUCING_EXPRESSION_TYPES = FIXED_VALUE_EXPRESSION_TYPES.union({"CustomFn", "ScalarFn"})
@@ -234,15 +238,15 @@ def build_field_functions_for_entity_type(
     (discovery or the assembled target columns_def).
 
     ``fed_target_names``: on a Gluesync 2.3 CoreHub, the target columns a source column feeds. A fixed or
-    technical value on one of them is refused (P16, BOP-14 A), raising ``EntityMappingError``: the runtime
-    would write it over the value the source brings.
+    technical value, or a target scalar function, on one of them is refused (P16, BOP-14 A), raising
+    ``EntityMappingError``: the runtime would write it over the value the source brings.
     """
     if table_or_object_id is None:
         return []
     if fed_target_names is not None:
         fed = {str(name).lower() for name in fed_target_names}
         for target_name, expr in iter_yaml_column_expressions(yaml_columns):
-            if expr.get("type") in FIXED_VALUE_EXPRESSION_TYPES and target_name.lower() in fed:
+            if expr.get("type") in REFUSED_ON_FED_TARGET_TYPES and target_name.lower() in fed:
                 raise EntityMappingError(
                     f"Table {label}: the {expr.get('type')} field function on target column {target_name} gives it a "
                     f"value of its own while a source column feeds it, which a Gluesync 2.3 CoreHub refuses (P16): "
