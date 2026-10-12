@@ -188,7 +188,9 @@ class CourierPlanTests(unittest.TestCase):
         self.assertEqual(by_name["orders"]["definition"]["id"], stable_id("endpoint", "orders", "col-1"))
 
     def test_stable_ids_do_not_change_between_runs(self):
-        self.assertEqual(stable_id("collection", "demo-api"), stable_id("collection", "demo-api"))
+        first_run = stable_id("collection", "demo-api")
+        second_run = stable_id("collection", "demo-api")
+        self.assertEqual(first_run, second_run)
         self.assertNotEqual(stable_id("collection", "demo-api"), stable_id("collection", "other"))
         self.assertNotEqual(stable_id("endpoint", "customers", "a"), stable_id("endpoint", "customers", "b"))
 
