@@ -3600,12 +3600,11 @@ def duplicate_pipeline(
                     if udf_root is not None:
                         shutil.rmtree(udf_root, ignore_errors=True)
 
-                # Every entity that referred to a UDF in the original pipeline refers to it in the clone.
-                if udf_clone_status == "failed":
-                    pass
-                elif not original_udfs:
+                # Every entity that referred to a UDF in the original pipeline refers to it in the clone
+                # (a failed UDF read keeps its "failed" status).
+                if udf_clone_status != "failed" and not original_udfs:
                     udf_clone_status = "none"
-                else:
+                elif udf_clone_status != "failed":
                     cloned_udfs = _entity_udf_names(fetch_pipeline_entities(token, new_pipeline_id))
                     for entity_name, udf_name in sorted(original_udfs.items()):
                         if cloned_udfs.get(entity_name) != udf_name:
