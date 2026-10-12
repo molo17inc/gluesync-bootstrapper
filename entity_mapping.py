@@ -457,3 +457,213 @@ def grouped_only_forms(relations: Optional[Sequence[Mapping[str, Any]]], table_c
     if table_config and table_config.get("targetKeys"):
         forms.append("targetKeys")
     return forms
+
+
+# ---------------------------------------------------------------------------
+# Keys (R12, the key rules B1-B7 of the backend plan)
+# ---------------------------------------------------------------------------
+
+def _canonical(names: Iterable[str], candidates: Iterable[str]) -> Dict[str, str]:
+    """``{name.lower(): spelling}`` of ``names`` as ``candidates`` spell them (the first match wins)."""
+    by_lower: Dict[str, str] = {}
+    for candidate in candidates:
+        by_lower.setdefault(str(candidate).lower(), str(candidate))
+    return {str(name).lower(): by_lower.get(str(name).lower(), str(name)) for name in names}
+
+
+def _joined(names: Iterable[str]) -> str:
+    return ", ".join(names)
+
+
+def drop_forbidden_key_links(
+    relations: Sequence[Mapping[str, Any]],
+    *,
+    physical_source: Iterable[str],
+    physical_target: Iterable[str],
+    label: str = "",
+) -> Tuple[List[Dict[str, Any]], List[str], List[str]]:
+    """The relations without the links R12.8 forbids, the target columns they fed, and a warning each.
+
+    While the target table has its own primary key, a column of the source primary key feeds only
+    target key columns (B3). A link the bootstrapper guessed by matching names is dropped, so the
+    source key is read and never written (1:null), as the MCP draft does (backend OP-26 A, BOP-4 A);
+    one a YAML row states is refused. Returns ``(relations, dropped_targets, warnings)``: a target
+    no relation feeds any more leaves the entity, or it would be a checked column nothing writes.
+    """
+    physical_source_lower = {str(n).lower() for n in physical_source}
+    physical_target_lower = {str(n).lower() for n in physical_target}
+    where = f" of {label}" if label else ""
+    if not physical_target_lower:
+        return [dict(r, sources=list(r["sources"]), targets=list(r["targets"])) for r in relations], [], []
+
+    kept: List[Dict[str, Any]] = []
+    dropped: List[str] = []
+    warnings: List[str] = []
+    target_key_text = _joined(sorted(physical_target, key=str.lower))
+    for relation in relations:
+        sources, targets = list(relation["sources"]), list(relation["targets"])
+        keyed_sources = [s for s in sources if s.lower() in physical_source_lower]
+        forbidden = [t for t in targets if t.lower() not in physical_target_lower] if keyed_sources else []
+        if forbidden and relation.get("explicit", True):
+            raise EntityMappingError(
+                f"R12.8: the YAML links the source key {_joined(keyed_sources)}{where} to the target column(s) "
+                f"{_joined(forbidden)}, which are not keys, while the target's primary key is {target_key_text}. A source "
+                f"key feeds only a target key: link it to {target_key_text}, or unlink it with target: []"
+            )
+        if forbidden:
+            for target in forbidden:
+                warnings.append(
+                    f"R12.8: source key {_joined(keyed_sources)}{where} is not linked to target column {target}, which is "
+                    f"not a key while the target's primary key is {target_key_text}: it is read but never written"
+                )
+            dropped.extend(forbidden)
+            targets = [t for t in targets if t not in forbidden]
+        kept.append(dict(relation, sources=sources, targets=targets))
+    still_fed = {t.lower() for r in kept for t in r["targets"]}
+    return kept, [t for t in dropped if t.lower() not in still_fed], warnings
+
+
+def derive_keys(
+    *,
+    relations: Sequence[Mapping[str, Any]],
+    source_names: Sequence[str],
+    target_names: Sequence[str],
+    physical_source: Iterable[str],
+    physical_target: Iterable[str],
+    yaml_keys: Sequence[str],
+    yaml_target_keys: Sequence[str],
+    produced_targets: Iterable[str],
+    label: str = "",
+    source_is_nosql: bool = False,
+) -> Tuple[List[str], List[str]]:
+    """The source and target key columns of a Gluesync 2.3 entity with a SQL target, by name.
+
+    ``relations`` are by column name, after :func:`drop_forbidden_key_links`; ``source_names`` the
+    source columns a key may name (discovery and the entity), ``target_names`` the target columns of
+    the entity; ``physical_*`` the primary key discovery reports (empty for a table without one, a
+    table that does not exist yet, or a side whose key flags are no primary key); ``produced_targets``
+    the target columns a field function or the entity's UDF writes. As the MCP draft derives them:
+
+    1. Source keys: the source primary key (B1); else, on a target with a primary key, the single
+       source of each relation onto it (K2b, B6); else the YAML ``keys:``. YAML keys that differ from
+       the first two are refused with the rule (BOP-3 A); a source with no key at all is refused, with
+       ``_id`` named for a NoSQL source (BOP-6 A).
+    2. Target keys: the target primary key (B2), each of its columns fed by a relation or produced
+       (BOP-13 A); else the targets of the relations with a source key (B4, B5) plus ``targetKeys:``,
+       none of them next to keys inherited from a source primary key (B7), and none fed by a single
+       source that is not a key (B5).
+
+    Returns ``(source_keys, target_keys)`` spelt as the columns are, in column order.
+    """
+    where = f" of {label}" if label else ""
+    physical_source = [str(n) for n in physical_source]
+    physical_target = [str(n) for n in physical_target]
+    ph_s = {n.lower() for n in physical_source}
+    ph_t = {n.lower() for n in physical_target}
+    source_spelling = _canonical(list(source_names) + physical_source, list(source_names) + physical_source)
+    target_spelling = _canonical(list(target_names) + physical_target, list(target_names) + physical_target)
+    produced = {str(n).lower() for n in produced_targets}
+
+    unknown = [k for k in yaml_keys if str(k).lower() not in source_spelling]
+    if unknown:
+        raise EntityMappingError(
+            f"the keys{where} name {_joined(map(str, unknown))}, which are not columns of the source table"
+        )
+    requested = {str(k).lower() for k in yaml_keys}
+
+    # Single source of each relation onto the target primary key, on a source without one (K2b).
+    k2b = set()
+    if not ph_s and ph_t:
+        for relation in relations:
+            if len(relation["sources"]) == 1 and any(t.lower() in ph_t for t in relation["targets"]):
+                k2b.add(relation["sources"][0].lower())
+
+    if ph_s:
+        if requested and requested != ph_s:
+            raise EntityMappingError(
+                f"R12.1: the keys{where} ({_joined(source_spelling[k] for k in sorted(requested))}) are not the source "
+                f"table's primary key ({_joined(sorted(physical_source))}); leave keys: out, or name exactly that key"
+            )
+        source_keys = ph_s
+    elif k2b:
+        missing, manual = k2b - requested, (requested - k2b) if requested else set()
+        if requested and (missing or manual):
+            problems = []
+            if missing:
+                problems.append(
+                    f"K2b: {_joined(source_spelling[k] for k in sorted(missing))} must be a key, being the only source of "
+                    f"a target primary key column while the source table has no primary key"
+                )
+            if manual:
+                problems.append(
+                    f"K9: {_joined(source_spelling[k] for k in sorted(manual))} cannot be a key next to the keys the "
+                    f"target primary key gives the source ({_joined(source_spelling[k] for k in sorted(k2b))})"
+                )
+            raise EntityMappingError(
+                "; ".join(problems) + f"{where}. Leave keys: out to key the entity on "
+                f"{_joined(source_spelling[k] for k in sorted(k2b))}"
+            )
+        source_keys = k2b
+    else:
+        source_keys = requested
+
+    if not source_keys:
+        hint = (
+            " A NoSQL source declares no primary key: name the key column(s) in keys:, usually _id (the document id)."
+            if source_is_nosql else " Name the key column(s) in keys:."
+        )
+        raise EntityMappingError(f"the source table{where} has no key: it has no primary key and keys: names none.{hint}")
+
+    target_requested = {str(k).lower() for k in yaml_target_keys}
+    unknown_targets = [k for k in yaml_target_keys if str(k).lower() not in target_spelling]
+    if unknown_targets:
+        raise EntityMappingError(f"targetKeys{where} names {_joined(map(str, unknown_targets))}, which are not target columns of the entity")
+
+    fed = {t.lower() for r in relations if r["sources"] for t in r["targets"]}
+    if ph_t:
+        if target_requested and target_requested != ph_t:
+            raise EntityMappingError(
+                f"R12.2: targetKeys{where} ({_joined(target_spelling[k] for k in sorted(target_requested))}) is not the "
+                f"target table's primary key ({_joined(sorted(physical_target))}); leave targetKeys out"
+            )
+        in_entity = {str(n).lower() for n in target_names}
+        for key in sorted(ph_t):
+            if key not in in_entity or (key not in fed and key not in produced):
+                raise EntityMappingError(
+                    f"target primary key {target_spelling[key]}{where} is fed by no source column: a new entity needs a "
+                    f"value for it (an identity or a default is not used), so add a row {{target: {target_spelling[key]}, "
+                    f"expression: ...}} with a field function that produces it, link a source column to it, or give the "
+                    f"entity a UDF"
+                )
+        target_keys = ph_t
+    else:
+        inherited = set()
+        for relation in relations:
+            if any(s.lower() in source_keys for s in relation["sources"]):
+                inherited.update(t.lower() for t in relation["targets"])
+        if ph_s:
+            manual = target_requested - inherited
+            if manual:
+                raise EntityMappingError(
+                    f"K9: targetKeys{where} names {_joined(target_spelling[k] for k in sorted(manual))} next to the keys "
+                    f"the target inherits from the source primary key ({_joined(target_spelling[k] for k in sorted(inherited))}); "
+                    f"leave targetKeys out"
+                )
+        else:
+            for relation in relations:
+                if len(relation["sources"]) == 1 and relation["sources"][0].lower() not in source_keys:
+                    keyed = [t for t in relation["targets"] if t.lower() in target_requested]
+                    if keyed:
+                        raise EntityMappingError(
+                            f"R12.6: targetKeys{where} names {_joined(keyed)}, fed by {relation['sources'][0]} alone, which "
+                            f"is not a key: with no primary key on either table the single source of a target key is a "
+                            f"key; add {relation['sources'][0]} to keys:"
+                        )
+        target_keys = inherited | target_requested
+
+    source_order = [n for n in dict.fromkeys(list(source_names) + physical_source)]
+    target_order = [n for n in dict.fromkeys(list(target_names) + physical_target)]
+    return (
+        [n for n in source_order if n.lower() in source_keys and source_spelling[n.lower()] == n],
+        [n for n in target_order if n.lower() in target_keys and target_spelling[n.lower()] == n],
+    )
