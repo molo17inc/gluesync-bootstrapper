@@ -1,6 +1,6 @@
 ---
 title: Bootstrapper alignment with the field editor arrow mapping (Gluesync 2.3)
-status: "Plan for review: nothing implemented; all decisions before implementation answered on 2026-10-12; PV-1 in progress, PV-2 and PV-3 pending (section 4)"
+status: "Implemented on feature/field-editor-arrow-mapping-alignment (2026-10-12); BOP-15 to BOP-17, PV-2, PV-3 and the live checks pending (sections 4 and 5)"
 owner: gluesync-bootstrapper
 lastUpdated: 2026-10-12
 ---
@@ -136,10 +136,36 @@ are marked "answered"; the others keep the recommendation as the default the pla
 | BOP-13 | A target primary key the source does not carry (identity or default column), which B2 and P12 (OP-112 A) now require in the entity with a producer | answered A: refuse before the request, naming the column and suggesting an `expression` |
 | BOP-14 | A fixed or technical field function on a target a source feeds (P16, BS-10) | answered A: refuse before the request on 2.3, naming table, column and function, and suggesting to drop the `source` (null:1) |
 | BOP-15 | A target column name that differs from discovery only by case (B2 compares names case-sensitively) | open, found during implementation; recommendation: on 2.3 only, write the discovered spelling |
+| BOP-16 | MultiTable chains: keys and the 2.3 forms | open, found during implementation; implemented B (union keys, 2.3 forms refused in a chain); recommendation A for the keys |
+| BOP-17 | Seven choices made while implementing (left-out key columns, keyless targets, chained tables in the first loop, MultiTable filtered sources, null:1 rows on 2.2, refusals after table creation, N:1 without a function) | each implemented on its recommendation, to confirm at review |
 | Extraction | The per-table assembly of the first loop extracted and reused by the `@@` duplicate loop in this merge request (02 §4) | answered yes: in its own commit, with T8 and T11 comparing payloads before and after (RK-5) |
 
-Nothing is left to answer before implementation; BOP-11 at release.
+BOP-15 to BOP-17 were found while implementing and are written on their recommendations; BOP-11 at release.
 
-Pending verifications that can change the design: PV-1 (what the save-time key read answers for a target table that
-does not exist), PV-2 (a 2.2.x runtime with a null:1 column and no entry), PV-3 (the 2.3 build used by the gs-2
+Pending verifications that can change the design: PV-1 (answered: an empty set, so no design change), PV-2 (a 2.2.x runtime with a null:1 column and no entry), PV-3 (the 2.3 build used by the gs-2
 suites; no such build exists yet, the maintainer will say when it does), in [04 §2](04-open-points-and-risks.md#2-pending-verifications).
+
+## 5. Implementation
+
+Branch `feature/field-editor-arrow-mapping-alignment` from `main` @ `2c540dd`, one commit per change:
+
+| Commit | Change | Tests |
+|---|---|---|
+| test: pin the entity payloads sent to a CoreHub older than 2.3 | golden payloads of nine YAML shapes on a fake 2.2 CoreHub (RK-2); the three unrun matrix modules join CI (RK-8) | `test_bootstrapper_payload_golden` |
+| refactor: share the per-table assembly with the @@ loop | 02 §4, BS-3 for `@@` tables | T11 `test_bootstrapper_duplicate_tables` |
+| feat: read the CoreHub version once | C-2 | T16 part, `test_bootstrapper_udf_is_snapshot` |
+| feat: add entity_mapping | C-1 | T1-T4 `test_bootstrapper_entity_mapping` |
+| feat: read the 2.3 column relations from the YAML | C-4 grammar | T5 `test_bootstrapper_entity_mapping_yaml` |
+| feat: derive the keys by the R12 rules | C-3 | T7 `test_bootstrapper_entity_keys` |
+| feat: write SingleTable entities for the 2.3 mapping stage | writers, BOP-10, BOP-14, BOP-15 | T8 `test_bootstrapper_entity_payloads_23`, T9, T12, T18 (in T8) |
+| feat: write MultiTable entities for the 2.3 mapping stage | BOP-12, C-9 | T10 `test_bootstrapper_multitable_23` |
+| feat: export the 2.3 column relations | C-5 | T13 `test_bootstrapper_export_mapping`, T14 `test_bootstrapper_export_import_round_trip` |
+| feat: send a refused chunk again one entity at a time | C-6 | T15 `test_bootstrapper_chunk_refusal` |
+| feat: write the UDF test request body for 2.3 | C-7 | T16 |
+| docs: MCP tool texts | C-8 | T17 `test_bootstrapper_mcp_texts` |
+| docs: column relations and key rules | 02 §10 | |
+
+Still to do before the merge request leaves Draft: the live checks of 03 §3 against a CoreHub built from
+`feature/field-editor-arrow-mapping` (its remote head moved to `014e2d0225` on 2026-10-12, five commits past the
+references of this plan, without changes to the key read), PV-2, PV-3 (no 2.3 build with !2521 yet), the answers to
+BOP-15 to BOP-17. `test_object_store_table_creation` fails on `main` already and is not run in CI.

@@ -198,11 +198,50 @@ a YAML `id:` against a physical primary key `ID` is refused by B2.
 Recommendation A: it removes a refusal 2.3 introduces without changing any 2.2.x payload (RK-2). B is a separate
 behaviour change for 2.2.x users, for the maintainer to decide on its own. The plan is written on A.
 
+### BOP-16 MultiTable chains: keys and the forms of Gluesync 2.3
+
+Found while implementing. The 2.3 key rules run per table pair on a MultiTable target too (`entityKeyIssues` returns
+early only for a NoSQL target), and the plan applies `derive_keys` to SingleTable entities only; the MultiTable
+writer also builds no N:1, 1:N or 1:null relation.
+- A. Apply `derive_keys` per table pair of a chain, and build the 2.3 forms in the MultiTable writer.
+- B. Keep the union of discovery and YAML keys for MultiTable, refuse the 2.3 forms in a chain, and let CoreHub
+  refuse a chain whose keys break the rules (one 400 per chain).
+
+Implemented: B, the smaller change, until the maintainer answers. Recommendation A for the keys (same outcome as
+SingleTable, refused earlier with the table named), B for the forms (no MultiTable user has asked for them).
+
+### BOP-17 Choices made while implementing, to confirm at review
+
+Each is implemented on its recommendation; the alternative is one commit away.
+
+1. A key column that YAML `keys:` name but the mapping rows leave out. Today it is added back and mapped by name onto
+   the target column of its name. A: keep that on 2.3 (implemented, BOP-1 asks old YAML to keep its meaning);
+   B: leave it unlinked (1:null), as the MCP draft does for an unmapped key. Recommendation A.
+2. A target left with no key column. CoreHub refuses every agent entity without keys (`checkEntity`, the target
+   included). A: refuse before the request with a message naming what to add (implemented, as BOP-6 for the
+   source); B: send it and let CoreHub refuse. Recommendation A.
+3. Tables of a MultiTable chain in the first loop. The first loop builds a SingleTable entity for them that is not
+   sent (it is filtered out by name). A: build it with the older payload and no 2.3 refusal (implemented); B: skip
+   chained tables in the first loop, which also skips their table creation and UDF compilation. Recommendation A;
+   the filter by entity name has a defect of its own (a chained table with a custom `entityName` is also sent as a
+   SingleTable entity), reported separately.
+4. Source columns a MultiTable YAML filters out. 02 §4 said "a filtered column is in neither"; the source side of a
+   MultiTable entity has always held every discovered column. A: keep them, each in a 1:null entry (implemented,
+   source payload unchanged); B: drop them from the source columns too. Recommendation A.
+5. `{target, expression}` rows on a CoreHub older than 2.3. BOP-10 makes them a column on 2.3; on an older CoreHub
+   the column would have no matrix row, which PV-2 has not verified. A: leave them out there, as today, with a
+   warning (implemented); B: send the column. Recommendation A until PV-2 is checked.
+6. When the key rules refuse a table. They need the target's physical keys, which are read after the table is
+   created (`CREATE_TABLE_IF_NOT_EXISTS`), so a refused table may already have been created. A: accept it
+   (implemented); B: read the target keys first and create the table after the checks. Recommendation A.
+7. N:1 without a custom field function or the UDF. CoreHub refuses it (P1); the bootstrapper does not check it
+   first. A: leave it to CoreHub, isolated by C-6 (implemented); B: refuse before the request. Recommendation A.
+
 ## 2. Pending verifications
 
 | Id | Question | How | Changes |
 |---|---|---|---|
-| PV-1 | What the save-time key read (`ORCH:2926-2947`) answers for a target table that does not exist yet: an empty set (no physical key) or `null` (refused, fail-closed). It happens when `CREATE_TABLE_IF_NOT_EXISTS` is false or creation is skipped for source→target mappings (`create_all_tables.py:538-541`) | live check 6 (03 §3), on PostgreSQL, SQL Server and Oracle | if `null`: the bootstrapper must create the table first or refuse with a clear message |
+| PV-1 | What the save-time key read (`ORCH:2926-2947`) answers for a target table that does not exist yet | answered 2026-10-12: an empty set, not `null`, for PostgreSQL, SQL Server and Oracle with the agent loaded (the catalog queries return no row, `BaseAgentService.getTableColumns` throws only when the database is not initialized or the query fails); the queries were run against missing tables on PostgreSQL and SQL Server, the full PUT was not (live check 6 still to run) | none: a missing target table has no physical key and the rules of a table without one apply |
 | PV-2 | Whether a 2.2.x runtime writes a target column produced by a technical function that has no matrix row (what BOP-10 sends to an older CoreHub) | live check 4 | if not: refuse `{target, expression}` rows on 2.2.x, as today's result is a lost function anyway |
 | PV-3 | Which 2.3 builds the gs-2 suites and the release candidates use when this merge request lands | no such build yet (maintainer, 2026-10-12); the maintainer says when it exists; then `GET /version` with the build id | the landing date of 03 §4 |
 | PV-4 | That the 400 bodies of the stage carry the entity name in a form the bootstrapper's log shows (`ConfigurationRoutes.kt:430`) | live check 3 | message formatting in C-6 only |
@@ -223,7 +262,8 @@ behaviour change for 2.2.x users, for the maintainer to decide on its own. The p
 ## 4. Summary for the maintainer
 
 Answered on 2026-10-12: BOP-1 A (with backward compatibility, sub-question (a)), BOP-3 A, BOP-4 A, BOP-5 A, BOP-6 A,
-BOP-12 A, and the per-table extraction of 02 §4 in this merge request, in its own commit. To answer before
+BOP-12 A, and the per-table extraction of 02 §4 in this merge request, in its own commit. Found while implementing
+and written on their recommendation: BOP-15, BOP-16 (B implemented), BOP-17. To answer before
 implementation: none; BOP-13 A and BOP-14 A were answered the same day. BOP-15 was found while implementing and is
 written on its recommendation until the maintainer answers. BOP-2, BOP-7, BOP-8, BOP-9 and BOP-10 can
 take their recommendations at review; BOP-11 at release. PV-1 and PV-3 are checked before the merge request leaves
