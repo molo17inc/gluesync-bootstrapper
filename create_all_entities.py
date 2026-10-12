@@ -375,6 +375,1051 @@ def _paint_is_pk_on_columns(columns_def, key_column_dicts):
             col["isPK"] = True
 
 
+def _assemble_source_columns(columns, custom_config, table_name, source_schema):
+    """The source columns and keys of a SingleTable entity, from discovery and the YAML ``columns:`` and ``keys:``.
+
+    Shared by the first loop of :func:`create_entities` and the ``@@`` duplicate loop, so both read the YAML the
+    same way. Returns ``(columns_def, keys, has_column_mappings, is_column_whitelist, discovery_type_by_source)``:
+    ``keys`` also feeds the target table creation, and the last value resolves null types of legacy backups.
+    """
+    # Build columns definition with IDs
+    columns_def = []
+
+    # ---------------------------------------------------------------
+    # Detect legacy backup YAML where all column types are null.
+    # This is caused by an old Gluesync version that stored Column with
+    # a DataTypeInterface field that was not registered for serialisation,
+    # resulting in null being written to SQLite and propagated to exports.
+    # Build a discovery-based type lookup so we can resolve types during
+    # entity creation without relying on the (broken) YAML type field.
+    # ---------------------------------------------------------------
+    _yaml_cols = custom_config.get('columns') or []
+    _null_type_cols = [
+        c for c in _yaml_cols
+        if isinstance(c, dict) and "source" in c and c.get("type") is None
+    ]
+    _discovery_type_by_source: Dict[str, str] = {}
+    if _null_type_cols and len(_null_type_cols) == len(_yaml_cols) and _yaml_cols:
+        logger.warning(
+            f"Table {table_name}: all {len(_yaml_cols)} YAML column type fields are null – "
+            f"this backup was exported from a Gluesync instance with legacy entity storage. "
+            f"Falling back to live CoreHub discovery for column type resolution."
+        )
+        for disc_col in (columns.get("columns") or []):
+            _disc_name = disc_col.get("name") or ""
+            _disc_dt = disc_col.get("dataType") or disc_col.get("type")
+            if _disc_name and _disc_dt:
+                _discovery_type_by_source[_disc_name] = _disc_dt
+        if _discovery_type_by_source:
+            logger.info(
+                f"Table {table_name}: resolved {len(_discovery_type_by_source)} column types "
+                f"from live source discovery (will be used as fallback for null YAML types)"
+            )
+
+    has_column_mappings = _is_column_mappings(custom_config.get('columns', []))
+    is_column_whitelist = _is_column_whitelist(custom_config.get('columns', []))
+    
+    if has_column_mappings:
+        # Custom column mappings (source→target)
+        yaml_columns = custom_config.get('columns', [])
+        for idx, column_map in enumerate(yaml_columns, 1):
+            # Extract source:target pairs, ignoring metadata fields
+            mapping_pairs = _extract_mapping_pairs(column_map)
+            for source_name, target_name in mapping_pairs:
+                # Find the matching column from discovered columns
+                matched_col = next((c for c in columns["columns"] if str(c.get("name","")).lower() == str(source_name).lower()), None)
+                
+                if matched_col:
+                    col_id = matched_col.get('id')
+                    if col_id is None:
+                        error_msg = f"CRITICAL ERROR: Column '{matched_col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response."
+                        logger.error(error_msg)
+                        raise ValueError(error_msg)
+
+                    columns_def.append(_enrich_column({
+                        "id": col_id,  # Use actual ordinal position from database
+                        "position": matched_col.get("position", 0),
+                        "name": matched_col["name"],
+                        "alias": target_name,
+                        "dataType": matched_col.get("dataType"),
+                        "isPK": _coerce_is_pk(matched_col.get("isPK")) or _is_in_keys(matched_col["name"], custom_config), 
+                        "isIdentity": matched_col.get("isIdentity", False), 
+                        "isNullable": matched_col.get("isNullable", False)
+                    }, matched_col))
+                else:
+                    logger.warning(f"Warning: Column '{source_name}' from YAML mapping not found in discovery for table {table_name}. Using YAML metadata.")
+                    # Fallback for when discovery didn't find the column
+                    # (e.g. table creation pending or discovery glitch)
+                    columns_def.append({
+                        "id": get_table_id(source_schema, source_name), # Generated ID
+                        "position": idx,
+                        "name": source_name,
+                        "alias": target_name,
+                        "dataType": "VARCHAR", # Fallback type
+                        "isPK": _is_in_keys(source_name, custom_config),
+                        "isIdentity": False,
+                        "isNullable": True
+                    })
+    elif is_column_whitelist:
+        # Column whitelist format: only use specified columns, not all discovered
+        # Format: [{name: "col", type: "VARCHAR", sourceName: "SOURCE_COL"}, ...]
+        yaml_columns = custom_config.get('columns', [])
+        for yaml_col in yaml_columns:
+            # sourceName is the source column name; name is the target column name
+            source_col_name = yaml_col.get('sourceName') or yaml_col.get('name')
+            target_col_name = yaml_col.get('name')
+            
+            # Find the matching column from discovered columns
+            for col in columns["columns"]:
+                if str(col["name"]).lower() == str(source_col_name).lower():
+                    col_id = col.get('id')
+                    if col_id is None:
+                        error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response."
+                        logger.error(error_msg)
+                        raise ValueError(error_msg)
+                    
+                    # Source columns MUST reflect the discovered native type from the
+                    # source database. The YAML `type:` / `targetDataType:` keys describe
+                    # the TARGET column and must never bleed into the source payload.
+                    # Discovered columns expose their native type under `dataType`.
+                    columns_def.append(_enrich_column({
+                        "id": col_id,
+                        "position": col.get("position", 0),
+                        "name": source_col_name,
+                        "alias": target_col_name,
+                        "dataType": col.get("dataType"),
+                        "isPK": _coerce_is_pk(col.get("isPK")) or _is_in_keys(source_col_name, custom_config),
+                        "isIdentity": col.get("isIdentity", False),
+                        "isNullable": col.get("isNullable", True),
+                    }, col))
+                    break
+            else:
+                logger.warning(f"Column '{source_col_name}' from YAML whitelist not found in discovered columns for table {table_name}")
+        
+        logger.info(f"Using column whitelist for {table_name}: {len(columns_def)} of {len(yaml_columns)} specified columns matched")
+
+    # If there are no column mappings or whitelist, fall back to
+    # using discovery columns as-is (one-to-one source→target mapping).
+    # IMPORTANT: Only fall back when NO filter was specified. If a whitelist
+    # or mapping was explicitly specified but columns_def is empty, do NOT
+    # fall back to all columns - that would silently include unwanted columns.
+    if not has_column_mappings and not is_column_whitelist:
+        columns_def = []
+        for col in columns["columns"]:
+            # Use the id field from CoreHub API as the column ID
+            col_id = col.get('id')
+            if col_id is None:
+                error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
+                logger.error(error_msg)
+                raise ValueError(error_msg)
+
+            columns_def.append(_enrich_column({
+                "id": col_id,  # Use actual ordinal position from database
+                "position": col.get("position", 0),
+                "name": col["name"],
+                "alias": col["name"],
+                "dataType": col.get("dataType"),
+                "isPK": _coerce_is_pk(col.get("isPK")) or _is_in_keys(col["name"], custom_config), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
+            }, col))
+
+    # GSSD-1355 regression guard: target-only Field Function entries make
+    # _is_column_mappings() true but _extract_mapping_pairs() returns []. Without
+    # a discovery fallback, columns_def (and therefore CoreHub tablesKeys via
+    # isPK) stay empty → "Missing entity primary keys" on plain SQL tables.
+    if has_column_mappings and not columns_def:
+        logger.warning(
+            f"Table {table_name}: column mappings produced no source columns "
+            f"(likely target-only Field Function entries). Falling back to discovery."
+        )
+        for col in columns["columns"]:
+            col_id = col.get('id')
+            if col_id is None:
+                error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
+                logger.error(error_msg)
+                raise ValueError(error_msg)
+            columns_def.append(_enrich_column({
+                "id": col_id,
+                "position": col.get("position", 0),
+                "name": col["name"],
+                "alias": col["name"],
+                "dataType": col.get("dataType"),
+                "isPK": _coerce_is_pk(col.get("isPK")) or _is_in_keys(col["name"], custom_config),
+                "isIdentity": col.get("isIdentity", False),
+                "isNullable": col.get("isNullable", False)
+            }, col))
+
+    logger.debug(f"Columns definition for {table_name}: {columns_def}")
+
+    # Process keys and other configurations as before...
+    if custom_config and 'keys' in custom_config and custom_config['keys'] is not None:
+        logger.info(f"Processing keys for table {table_name}. Requested keys: {custom_config['keys']}")
+        logger.info(f"Has columns section: {bool(custom_config.get('columns'))}")
+        keys = []
+        
+        has_column_mappings = _is_column_mappings(custom_config.get('columns', []))
+        
+        if has_column_mappings:
+            # Use column mappings for keys
+            logger.info(f"Key extraction via column mappings for {table_name}. Keys to find: {custom_config['keys']}")
+            for col in columns["columns"]:
+                # Use the id field from CoreHub API as the column ID
+                col_id = col.get('id')
+                if col_id is None:
+                    error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
+                    
+                for column_map in custom_config['columns']:
+                    # Extract source:target pairs, ignoring metadata fields
+                    mapping_pairs = _extract_mapping_pairs(column_map)
+                    for source_name, target_name in mapping_pairs:
+                        name_match = col["name"].lower() == str(source_name).lower()
+                        in_keys = _is_in_keys(col["name"], custom_config)
+                        if name_match and in_keys:
+                            keys.append(_enrich_column({
+                                "id": col_id,  # Use actual ordinal position from database
+                                "position": col.get("position", 0),
+                                "name": col["name"],
+                                "alias": target_name,
+                                "dataType": col.get("dataType")
+                            }, col))
+                            logger.info(f"Key matched: col={col['name']!r}, source_name={source_name!r}, target_name={target_name!r}")
+                        elif _is_in_keys(col["name"], custom_config):
+                            logger.warning(f"Key col={col['name']!r} is in keys list but source_name={source_name!r} did not match (name_match={name_match}, in_keys={in_keys})")
+            # If YAML keys: were not paired via mappings (e.g. historical id-as-metadata
+            # skip, or key omitted from columns:), resolve remaining keys from discovery.
+            found_key_names = {
+                str(k.get("name")).lower()
+                for k in keys
+                if isinstance(k, dict) and k.get("name") is not None
+            }
+            for key_name in custom_config["keys"]:
+                if isinstance(key_name, dict):
+                    key_name = key_name.get("name") or (next(iter(key_name)) if key_name else None)
+                if key_name is None:
+                    continue
+                if str(key_name).lower() in found_key_names:
+                    continue
+                matched = next(
+                    (c for c in columns["columns"] if str(c.get("name", "")).lower() == str(key_name).lower()),
+                    None,
+                )
+                if not matched:
+                    matched_def = next(
+                        (c for c in columns_def if str(c.get("name", "")).lower() == str(key_name).lower()),
+                        None,
+                    )
+                    if matched_def:
+                        keys.append(copy.deepcopy(matched_def))
+                        found_key_names.add(str(key_name).lower())
+                        logger.info(
+                            f"Key {key_name!r} resolved from columns_def after mapping miss for {table_name}"
+                        )
+                        continue
+                    error_msg = (
+                        f"CRITICAL ERROR: Key '{key_name}' not found in discovery or columns_def "
+                        f"for table '{table_name}' in schema '{source_schema}'. This key is required "
+                        f"by the YAML configuration but does not exist in the source database discovery."
+                    )
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
+                col_id = matched.get("id")
+                if col_id is None:
+                    error_msg = (
+                        f"CRITICAL ERROR: Column '{key_name}' in table {table_name} is missing "
+                        f"'id' field in CoreHub API response. This indicates a serious issue "
+                        f"with the discovery API."
+                    )
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
+                keys.append(_enrich_column({
+                    "id": col_id,
+                    "position": matched.get("position", 0),
+                    "name": matched["name"],
+                    "alias": matched["name"],
+                    "dataType": matched.get("dataType"),
+                }, matched))
+                found_key_names.add(str(matched["name"]).lower())
+                logger.info(
+                    f"Key {key_name!r} resolved from discovery after mapping miss for {table_name}"
+                )
+                # Ensure the PK column is present on columns_def (mapping may have dropped it)
+                if not any(str(c.get("name", "")).lower() == str(matched["name"]).lower() for c in columns_def):
+                    columns_def.append(_enrich_column({
+                        "id": col_id,
+                        "position": matched.get("position", 0),
+                        "name": matched["name"],
+                        "alias": matched["name"],
+                        "dataType": matched.get("dataType"),
+                        "isPK": True,
+                        "isIdentity": matched.get("isIdentity", False),
+                        "isNullable": matched.get("isNullable", False),
+                    }, matched))
+                    logger.info(
+                        f"Re-added key column {matched['name']!r} to columns_def for {table_name}"
+                    )
+        else:
+            # No column mappings, use keys directly from source columns
+            logger.debug(f"Processing keys for {table_name}: {custom_config['keys']}")
+            logger.debug(f"Available columns: {[col['name'] for col in columns['columns']]}")
+            for key_name in custom_config['keys']:
+                # Find the column and its index (case-insensitive to handle cross-db scenarios like pgsql→oracle)
+                found = False
+                for col in columns["columns"]:
+                    if col["name"].lower() == key_name.lower():
+                        # Use the id field from CoreHub API as the column ID
+                        col_id = col.get('id')
+                        if col_id is None:
+                            error_msg = f"CRITICAL ERROR: Column '{key_name}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
+                            logger.error(error_msg)
+                            raise ValueError(error_msg)
+
+                        keys.append(_enrich_column({
+                            "id": col_id,  # Use actual ordinal position from database
+                            "position": col.get("position", 0),
+                            "name": col["name"],
+                            "alias": col["name"],
+                            "dataType": col.get("dataType")
+                        }, col))
+                        found = True
+                        logger.debug(f"Found key '{key_name}' in columns with id={col_id}")
+                        break
+                if not found:
+                    logger.warning(f"Warning: Key '{key_name}' not found in columns for table '{table_name}'. Searching in columns_def...")
+                    # Try to find it in the already built columns_def (which might have come from YAML metadata)
+                    for col_def in columns_def:
+                        if col_def.get('name', '').lower() == key_name.lower():
+                            keys.append(copy.deepcopy(col_def))
+                            found = True
+                            logger.info(f"Found key '{key_name}' in columns_def")
+                            break
+                
+                if not found:
+                    error_msg = f"CRITICAL ERROR: Key '{key_name}' not found in discovery or columns_def for table '{table_name}' in schema '{source_schema}'. This key is required by the YAML configuration but does not exist in the source database discovery."
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
+
+        
+        logger.info(f"Final keys array for {table_name}: {keys} (count: {len(keys)})")
+    else:
+        keys = []
+        for col in columns["columns"]:
+            if _coerce_is_pk(col.get("isPK")):
+                # Use the id field from CoreHub API as the column ID
+                col_id = col.get('id')
+                if col_id is None:
+                    error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
+                    
+                keys.append(_enrich_column({
+                    "id": col_id,  # Use actual ordinal position from database
+                    "position": col.get("position", 0),
+                    "name": col["name"],
+                    "alias": col["name"],
+                    "dataType": col.get("dataType")
+                }, col))
+        logger.debug(f"Using primary keys for {table_name}: {keys}")
+
+    # Keep column isPK flags aligned with the resolved keys list (CoreHub reads isPK).
+    _paint_is_pk_on_columns(columns_def, keys)
+
+    # Apply the charSet declared in the YAML on the source columns. Done here, on the
+    # already built list, so it covers every shape it can be built from: explicit
+    # mappings, whitelist or plain discovery. Only the source entity's columns are
+    # patched: `keys` feeds the target table creation below, where a source-side
+    # character set has no business.
+    char_set_overrides = _build_char_set_overrides((custom_config or {}).get('columns', []))
+    _apply_char_set_overrides(columns_def, char_set_overrides, table_name)
+
+    return columns_def, keys, has_column_mappings, is_column_whitelist, _discovery_type_by_source
+
+
+def _assemble_target_side(token, pipeline_id, target_agent_id, yaml_target_schema, target_table_name, table_name,
+                          columns, columns_def, custom_config, has_column_mappings, is_column_whitelist,
+                          _discovery_type_by_source, is_unlocked_schema, source_table_id, target_table_id,
+                          target_entity_type, source_node_info, target_node_info, source_agent_tag, target_agent_tag,
+                          skip_errors):
+    """The target columns, target keys, column mapping matrix and field functions of a SingleTable entity.
+
+    Shared by the first loop of :func:`create_entities` and the ``@@`` duplicate loop. Discovers the target table,
+    writes ``columnsMappingMatrix``, the unlocked schema arrays and ``fieldFunctions`` on ``target_entity_type`` and
+    returns ``(target_columns_def, target_keys)``.
+    """
+    # Discover target columns first (needed for columnsMappingMatrix)
+    target_discovered_columns = None
+    target_discovered_columns_by_name = {}
+    try:
+        target_discovered_columns = get_table_columns(token, pipeline_id, target_agent_id, yaml_target_schema, target_table_name)
+        if target_discovered_columns and isinstance(target_discovered_columns.get('columns'), list):
+            target_discovered_columns_by_name = {
+                c.get('name').lower(): c
+                for c in target_discovered_columns['columns']
+                if c.get('name')
+            }
+            logger.debug(
+                f"Found {len(target_discovered_columns_by_name)} existing columns in target table {yaml_target_schema}.{target_table_name}"
+            )
+    except Exception as e:
+        logger.debug(f"Could not get target columns for {yaml_target_schema}.{target_table_name}: {str(e)}")
+
+    # Build set of dataTypes already present in the target table for type-mapping fallback
+    target_table_column_types = extract_target_column_types(target_discovered_columns)
+
+    # Generate columnsMappingMatrix
+    columns_mapping_matrix = []
+    
+    if is_unlocked_schema:
+        # For unlocked schema, add single entry with column IDs as 0
+        columns_mapping_matrix.append({
+            "sourceTableObjectId": source_table_id,
+            "targetTableObjectId": target_table_id,
+            "sourceColumnId": 0,
+            "targetColumnId": 0
+        })
+        
+        # Add tablesWithUnlockedSchema array with target table ID
+        target_entity_type["tablesWithUnlockedSchema"] = [target_table_id]
+        target_entity_type["tablesWithUnlockedDataTypes"] = []
+        
+        logger.info(f"Table {table_name} configured with unlocked schema. Target table ID: {target_table_id}")
+    else:
+        # For locked schema, create mapping for each column
+        # IMPORTANT: When a whitelist or mapping is specified, only include
+        # columns from columns_def, NOT all discovered source columns.
+        # Otherwise, Gluesync would flag all source columns for syncing.
+        has_filter = has_column_mappings or is_column_whitelist
+        
+        # Build a lookup of discovered source columns by name (case-insensitive)
+        source_columns_by_name = {
+            c.get('name', '').lower(): c
+            for c in columns.get('columns', [])
+            if c.get('name')
+        }
+        
+        max_target_col_id = 0
+        
+        if has_filter:
+            # Only iterate over the filtered columns_def
+            for col_def in columns_def:
+                source_col_name = col_def.get('name')
+                target_col_name = col_def.get('alias', source_col_name)
+                source_col_id = col_def.get('id')
+                
+                if source_col_id is None or not source_col_name:
+                    logger.warning(f"Skipping mapping matrix entry with missing id/name: {col_def}")
+                    continue
+                
+                # Find the target column ID from discovered target columns
+                target_col_id = source_col_id  # Default to source ID
+                target_col = target_discovered_columns_by_name.get(target_col_name.lower())
+                if target_col and target_col.get('id') is not None:
+                    target_col_id = target_col.get('id')
+                    logger.debug(f"Mapped column: {source_col_name} (ID={source_col_id}) -> {target_col_name} (ID={target_col_id})")
+                else:
+                    logger.debug(f"No target column found for {target_col_name}, using source ID {source_col_id}")
+                
+                columns_mapping_matrix.append({
+                    "sourceTableObjectId": source_table_id,
+                    "targetTableObjectId": target_table_id,
+                    "sourceColumnId": source_col_id,
+                    "targetColumnId": target_col_id
+                })
+                max_target_col_id = max(max_target_col_id, target_col_id)
+            
+            logger.info(f"columnsMappingMatrix for {table_name}: using filtered columns ({len(columns_mapping_matrix)} entries from {len(columns.get('columns', []))} discovered)")
+        else:
+            # No filter defined - map all discovered source columns
+            if 'columns' in columns and isinstance(columns['columns'], list):
+                for col in columns['columns']:
+                    # Use the id field from CoreHub API as the column ID
+                    source_col_id = col.get('id')
+                    if source_col_id is None:
+                        error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
+                        logger.error(error_msg)
+                        raise ValueError(error_msg)
+                    
+                    source_col_name = col.get('name')
+                    target_col_name = source_col_name
+                    
+                    # Find the target column ID from discovered target columns
+                    target_col_id = source_col_id  # Default to source ID
+                    target_col = target_discovered_columns_by_name.get(target_col_name.lower())
+                    if target_col and target_col.get('id') is not None:
+                        target_col_id = target_col.get('id')
+                        logger.debug(f"Mapped column: {source_col_name} (ID={source_col_id}) -> {target_col_name} (ID={target_col_id})")
+                    else:
+                        logger.debug(f"No target column found for {target_col_name}, using source ID {source_col_id}")
+                    
+                    columns_mapping_matrix.append({
+                        "sourceTableObjectId": source_table_id,
+                        "targetTableObjectId": target_table_id,
+                        "sourceColumnId": source_col_id,
+                        "targetColumnId": target_col_id
+                    })
+                    max_target_col_id = max(max_target_col_id, target_col_id)
+        
+        # Add empty arrays for locked schema
+        target_entity_type["tablesWithUnlockedSchema"] = []
+        target_entity_type["tablesWithUnlockedDataTypes"] = []
+        
+        logger.info(f"Table {table_name} using locked schema with {len(columns_mapping_matrix)} column mappings")
+    
+    # Add mappings for target-only columns if they exist (sourceColumnId = 0)
+    target_only_columns = custom_config.get('targetOnlyColumns', [])
+    if target_only_columns and not is_unlocked_schema:
+        pass
+
+    # Add columnsMappingMatrix to entityType
+    target_entity_type["columnsMappingMatrix"] = columns_mapping_matrix
+
+    # Build target columns definition with IDs
+    target_columns_def = []
+    max_target_col_id = 0
+    
+    has_column_mappings_target = _is_column_mappings(custom_config.get('columns', []))
+    is_column_whitelist_target = _is_column_whitelist(custom_config.get('columns', []))
+
+    # User-declared per-column target dataType overrides (by source column name, lower-cased)
+    target_data_type_overrides = _build_target_data_type_overrides(custom_config.get('columns', []))
+    if target_data_type_overrides:
+        logger.info(
+            f"Table {table_name}: applying {len(target_data_type_overrides)} user-declared targetDataType overrides"
+        )
+    
+    if has_column_mappings_target:
+        # Custom column mappings for target
+        for col in columns["columns"]:
+            # Use the id field from CoreHub API as the source column ID
+            source_col_id = col.get('id')
+            if source_col_id is None:
+                error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
+                logger.error(error_msg)
+                raise ValueError(error_msg)
+            
+            for column_map in custom_config.get('columns', []):
+                # Extract source:target pairs, ignoring metadata fields
+                mapping_pairs = _extract_mapping_pairs(column_map)
+                for source_name, target_name in mapping_pairs:
+                    if str(col["name"]).lower() == str(source_name).lower():
+                        discovered_target_col = target_discovered_columns_by_name.get(target_name.lower())
+                        resolved_target_type = None
+                        target_col_id = source_col_id  # Default to source ID
+                        
+                        if discovered_target_col:
+                            if discovered_target_col.get('dataType'):
+                                resolved_target_type = discovered_target_col.get('dataType')
+                            if discovered_target_col.get('id') is not None:
+                                target_col_id = discovered_target_col.get('id')
+                        else:
+                            resolved_target_type = map_data_type(col.get("dataType"), source_node_info, target_node_info,
+                                                                 source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
+                                                                 target_table_column_types=target_table_column_types)
+
+                        # User-declared targetDataType override takes highest priority
+                        _override = target_data_type_overrides.get(col["name"].lower())
+                        if _override:
+                            resolved_target_type = _override
+
+                        # Fallback for legacy null-type backups: if we still have no
+                        # resolved type, use the live discovery type for this source column
+                        if not resolved_target_type and _discovery_type_by_source:
+                            _fallback_src_type = _discovery_type_by_source.get(col.get("name", ""))
+                            if _fallback_src_type:
+                                resolved_target_type = map_data_type(
+                                    _fallback_src_type, source_node_info, target_node_info,
+                                    source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
+                                    target_table_column_types=target_table_column_types,
+                                )
+                                logger.debug(
+                                    f"Table {table_name}, column {col.get('name')}: resolved target type "
+                                    f"via discovery fallback ({_fallback_src_type} → {resolved_target_type})"
+                                )
+
+                        max_target_col_id = max(max_target_col_id, target_col_id)
+                        # Get isPrimaryKey from discovered target column or fall back to source column
+                        target_is_primary_key = (discovered_target_col.get("isPK") if discovered_target_col else False) or _coerce_is_pk(col.get("isPK")) or _is_in_keys(col["name"], custom_config)
+                        target_columns_def.append(_enrich_column({
+                            "id": target_col_id,  # Use target column ID
+                            "position": 0,
+                            "name": target_name,
+                            "alias": target_name,
+                            "dataType": resolved_target_type,
+                            "isPK": target_is_primary_key, "isIdentity": (discovered_target_col.get("isIdentity") if discovered_target_col else None) or col.get("isIdentity", False), "isNullable": discovered_target_col.get("isNullable") if discovered_target_col and "isNullable" in discovered_target_col else col.get("isNullable", False)
+                        }, discovered_target_col if 'discovered_target_col' in locals() and discovered_target_col else col))
+                        break
+    elif is_column_whitelist_target:
+        # Column whitelist format: only use specified columns
+        yaml_columns = custom_config.get('columns', [])
+        for yaml_col in yaml_columns:
+            source_col_name = yaml_col.get('sourceName') or yaml_col.get('name')
+            target_col_name = yaml_col.get('name')
+            
+            # Find the matching column from discovered source columns
+            for col in columns["columns"]:
+                if str(col["name"]).lower() == str(source_col_name).lower():
+                    source_col_id = col.get('id')
+                    if source_col_id is None:
+                        error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response."
+                        logger.error(error_msg)
+                        raise ValueError(error_msg)
+                    
+                    # Look up target column info
+                    discovered_target_col = target_discovered_columns_by_name.get(target_col_name.lower())
+                    target_col_id = source_col_id  # Default to source ID
+                    if discovered_target_col and discovered_target_col.get('id') is not None:
+                        target_col_id = discovered_target_col.get('id')
+
+                    # Target dataType resolution order:
+                    # 1. `targetDataType:` override from YAML (highest priority, verbatim).
+                    # 2. map_data_type(<discovered source dataType>) when its result
+                    #    is a type the target actually advertises (defaultType or
+                    #    supportedType in the target dataTypesMatrix).
+                    # 3. YAML `type:` as a target-side hint — used only when the auto
+                    #    mapping fell back to a value the target does not advertise.
+                    # 4. Discovered target column's dataType (last-resort, if available).
+                    # 5. The mapped value as-is (preserves observable behavior).
+                    _source_dt = col.get("dataType")
+                    _override = yaml_col.get('targetDataType') or target_data_type_overrides.get(col["name"].lower())
+                    if _override:
+                        resolved_target_type = _override
+                    else:
+                        _mapped = map_data_type(_source_dt, source_node_info, target_node_info,
+                                                source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
+                                                target_table_column_types=target_table_column_types)
+                        _canonical = _canonicalize_target_type(_mapped, target_node_info) if _mapped else None
+                        if _canonical:
+                            # Prefer YAML `type:` when it is also a known target type
+                            # (gives the user authoritative control over target casing/variant).
+                            _yaml_type = yaml_col.get('type')
+                            _yaml_canonical = _canonicalize_target_type(_yaml_type, target_node_info) if _yaml_type else None
+                            resolved_target_type = _yaml_canonical or _canonical
+                        elif yaml_col.get('type'):
+                            resolved_target_type = yaml_col.get('type')
+                        elif discovered_target_col and discovered_target_col.get('dataType'):
+                            resolved_target_type = discovered_target_col.get('dataType')
+                        else:
+                            resolved_target_type = _mapped or _source_dt
+                    
+                    max_target_col_id = max(max_target_col_id, target_col_id)
+                    # Target columns are serialised with `dataType` (not `type`) in the
+                    # UpsertEntitiesDto contract. Align with the mapping/default branches.
+                    target_is_primary_key = (discovered_target_col.get("isPK") if discovered_target_col else False) or _coerce_is_pk(col.get("isPK")) or _is_in_keys(col["name"], custom_config)
+                    target_columns_def.append(_enrich_column({
+                        "id": target_col_id,
+                        "position": col.get("position", 0),
+                        "name": target_col_name,
+                        "alias": target_col_name,
+                        "dataType": resolved_target_type,
+                        "isPK": target_is_primary_key,
+                        "isIdentity": (discovered_target_col.get("isIdentity") if discovered_target_col else None) or col.get("isIdentity", False),
+                        "isNullable": discovered_target_col.get("isNullable") if discovered_target_col and "isNullable" in discovered_target_col else col.get("isNullable", False),
+                    }, discovered_target_col if discovered_target_col else col))
+                    break
+            else:
+                logger.warning(f"Column '{source_col_name}' from YAML whitelist not found in discovered columns for table {table_name}")
+        
+        logger.info(f"Using column whitelist for target {table_name}: {len(target_columns_def)} of {len(yaml_columns)} specified columns matched")
+    
+    if not has_column_mappings_target and not is_column_whitelist_target:
+        # No column mappings - use columns as-is with mapped types
+        for col in columns["columns"]:
+            # Use the id field from CoreHub API as the source column ID
+            source_col_id = col.get('id')
+            if source_col_id is None:
+                error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
+                logger.error(error_msg)
+                raise ValueError(error_msg)
+
+            discovered_target_col = target_discovered_columns_by_name.get(col["name"].lower())
+            resolved_target_type = None
+            target_col_id = source_col_id  # Default to source ID
+            
+            if discovered_target_col:
+                if discovered_target_col.get('dataType'):
+                    resolved_target_type = discovered_target_col.get('dataType')
+                if discovered_target_col.get('id') is not None:
+                    target_col_id = discovered_target_col.get('id')
+            else:
+                resolved_target_type = map_data_type(col.get("dataType"), source_node_info, target_node_info,
+                                                     source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
+                                                     target_table_column_types=target_table_column_types)
+
+            # User-declared targetDataType override takes highest priority
+            _override = target_data_type_overrides.get(col["name"].lower())
+            if _override:
+                resolved_target_type = _override
+
+            max_target_col_id = max(max_target_col_id, target_col_id)
+            
+            # Use the target-discovered column name (preserves original case from target DB)
+            # Fall back to source column name if target column not found
+            target_col_name = discovered_target_col.get('name') if discovered_target_col else col["name"]
+            # Get isPrimaryKey from discovered target column or fall back to source column
+            target_is_primary_key = (discovered_target_col.get("isPK") if discovered_target_col else False) or _coerce_is_pk(col.get("isPK")) or _is_in_keys(col["name"], custom_config)
+            target_columns_def.append(_enrich_column({
+                "id": target_col_id,  # Use target column ID
+                "position": 0,
+                "name": target_col_name,
+                "alias": target_col_name,
+                "dataType": resolved_target_type,
+                "isPK": target_is_primary_key, "isIdentity": (discovered_target_col.get("isIdentity") if discovered_target_col else None) or col.get("isIdentity", False), "isNullable": discovered_target_col.get("isNullable") if discovered_target_col and "isNullable" in discovered_target_col else col.get("isNullable", False)
+            }, discovered_target_col if 'discovered_target_col' in locals() and discovered_target_col else col))
+    
+    if has_column_mappings_target and not target_columns_def:
+        logger.warning(
+            f"Table {table_name}: target column mappings produced no columns "
+            f"(likely target-only Field Function entries). Falling back to discovery."
+        )
+        for col in columns["columns"]:
+            source_col_id = col.get('id')
+            if source_col_id is None:
+                error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
+                logger.error(error_msg)
+                raise ValueError(error_msg)
+            discovered_target_col = target_discovered_columns_by_name.get(col["name"].lower())
+            resolved_target_type = None
+            target_col_id = source_col_id
+            if discovered_target_col:
+                if discovered_target_col.get('dataType'):
+                    resolved_target_type = discovered_target_col.get('dataType')
+                if discovered_target_col.get('id') is not None:
+                    target_col_id = discovered_target_col.get('id')
+            else:
+                resolved_target_type = map_data_type(col.get("dataType"), source_node_info, target_node_info,
+                                                     source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
+                                                     target_table_column_types=target_table_column_types)
+            max_target_col_id = max(max_target_col_id, target_col_id)
+            target_col_name = discovered_target_col.get('name') if discovered_target_col else col["name"]
+            target_is_primary_key = _coerce_is_pk(discovered_target_col.get("isPK") if discovered_target_col else False) or _coerce_is_pk(col.get("isPK")) or _is_in_keys(col["name"], custom_config)
+            target_columns_def.append(_enrich_column({
+                "id": target_col_id,
+                "position": 0,
+                "name": target_col_name,
+                "alias": target_col_name,
+                "dataType": resolved_target_type,
+                "isPK": target_is_primary_key,
+                "isIdentity": (discovered_target_col.get("isIdentity") if discovered_target_col else None) or col.get("isIdentity", False),
+                "isNullable": discovered_target_col.get("isNullable") if discovered_target_col and "isNullable" in discovered_target_col else col.get("isNullable", False)
+            }, discovered_target_col if discovered_target_col else col))
+
+    # Add target-only columns if specified (only supported with unlocked schema)
+    target_only_columns = custom_config.get('targetOnlyColumns', [])
+    if target_only_columns:
+        if not is_unlocked_schema:
+            logger.warning(f"Target-only columns are specified for table {table_name} but unlockedSchema is not true. Skipping target-only columns.")
+            logger.warning(f"To use target-only columns, set 'unlockedSchema: true' for table {table_name}")
+        elif is_unlocked_schema:
+            logger.info(f"Adding {len(target_only_columns)} target-only columns for table {table_name}")
+
+            # Try to get target columns if the target table exists
+            target_columns = None
+            try:
+                target_columns = get_table_columns(token, pipeline_id, target_agent_id, yaml_target_schema, target_table_name)
+                logger.debug(f"Found {len(target_columns.get('columns', []))} existing columns in target table {yaml_target_schema}.{target_table_name}")
+            except Exception as e:
+                logger.debug(f"Could not get target columns for {yaml_target_schema}.{target_table_name}: {str(e)}")
+
+            for target_col in target_only_columns:
+                # Increment from the maximum target column ID
+                max_target_col_id += 1
+
+                # Support both string format and object format
+                if isinstance(target_col, str):
+                    # Simple string format: just the column name
+                    col_name = target_col
+                    col_type = 'varchar'  # Default type
+                    col_data_length = 1024  # Default data length
+                    col_numeric_precision = 0  # Default numeric precision
+                    col_numeric_scale = 0  # Default numeric scale
+                    col_is_nullable = False  # Default nullable
+                else:
+                    # Object format with user-defined properties
+                    col_name = target_col.get('name')
+                    col_type = target_col.get('dataType') or target_col.get('type') or 'varchar'  # null-safe: treat explicit null as missing
+                    col_data_length = target_col.get('dataLength', 1024)  # Default data length
+                    col_numeric_precision = target_col.get('numPrec', 0)  # Default numeric precision
+                    col_numeric_scale = target_col.get('numScale', 0)  # Default numeric scale
+                    col_is_nullable = target_col.get('isNullable', False)  # Default nullable
+
+                # Check if this column already exists in the target table
+                discovered_column = None
+                if target_columns and 'columns' in target_columns:
+                    discovered_column = next(
+                        (col for col in target_columns['columns'] if col.get('name') == col_name),
+                        None
+                    )
+
+                if discovered_column:
+                    # Use discovered column properties (priority over user-defined)
+                    logger.info(f"Using discovered properties for target-only column '{col_name}' from target table")
+                    col_type = discovered_column.get('dataType', discovered_column.get('type', col_type))
+                    col_data_length = discovered_column.get('charMaxLength', col_data_length)
+                    col_numeric_precision = discovered_column.get('numPrec', col_numeric_precision)
+                    col_numeric_scale = discovered_column.get('numScale', col_numeric_scale)
+                    col_is_nullable = discovered_column.get('isNullable', col_is_nullable)
+                else:
+                    # Column doesn't exist in target table, use user-defined properties
+                    logger.debug(f"Using user-defined properties for target-only column '{col_name}' (not found in target table)")
+
+                    # Validate that required properties are provided for user-defined target-only columns
+                    if isinstance(target_col, dict):
+                        required_props = ['name', 'type', 'dataLength', 'numericPrecision', 'numericScale', 'isNullable']
+                        missing_props = [prop for prop in required_props if prop not in target_col or target_col.get(prop) is None]
+                        if missing_props:
+                            error_msg = f"Target-only column '{col_name}' is missing required properties: {missing_props}. All properties (name, type, dataLength, numericPrecision, numericScale, isNullable) must be specified when the column doesn't exist in the target table."
+                            logger.error(error_msg)
+                            if not skip_errors:
+                                raise ValueError(error_msg)
+
+                # Map the column type to target node type
+                mapped_type = map_data_type(col_type, source_node_info, target_node_info,
+                                           source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
+                                           target_table_column_types=target_table_column_types)
+
+                target_columns_def.append(_enrich_column({
+                    "id": max_target_col_id,  # Continue from last target column ID
+                    "position": 0,
+                    "name": col_name,
+                    "alias": col_name,
+                    "dataType": mapped_type,
+                    "charMaxLength": col_data_length,
+                    "numPrec": col_numeric_precision,
+                    "numScale": col_numeric_scale,
+                    "isNullable": col_is_nullable, "isIdentity": False,
+                    "isPK": False  # Target-only columns are not primary keys
+                }, discovered_target_col if 'discovered_target_col' in locals() and discovered_target_col else col))
+                logger.debug(f"Added target-only column: {col_name} (type: {mapped_type}, id: {max_target_col_id})")
+
+    print(f"Columns definition for {table_name}: {columns_def}")
+
+    # Process target keys with proper IDs
+    target_keys = []
+    if custom_config and 'keys' in custom_config and custom_config['keys'] is not None:
+        has_column_mappings = _is_column_mappings(custom_config.get('columns', []))
+        
+        if has_column_mappings:
+            # Use column mappings for keys - map source key names to target key names
+            for col in columns["columns"]:
+                # Use the id field from CoreHub API as the column ID
+                source_col_id = col.get('id')
+                if source_col_id is None:
+                    error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
+
+                for column_map in custom_config.get('columns', []):
+                    # Extract source:target pairs, ignoring metadata fields
+                    mapping_pairs = _extract_mapping_pairs(column_map)
+                    for source_name, target_name in mapping_pairs:
+                        if col["name"].lower() == str(source_name).lower() and _is_in_keys(col["name"], custom_config):
+                            discovered_target_col = target_discovered_columns_by_name.get(target_name.lower())
+                            resolved_target_type = None
+                            target_col_id = source_col_id  # Default to source ID
+                            
+                            if discovered_target_col:
+                                if discovered_target_col.get('dataType'):
+                                    resolved_target_type = discovered_target_col.get('dataType')
+                                if discovered_target_col.get('id') is not None:
+                                    target_col_id = discovered_target_col.get('id')
+                            else:
+                                resolved_target_type = map_data_type(col.get("dataType"), source_node_info, target_node_info,
+                                                                     source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
+                                                                     target_table_column_types=target_table_column_types)
+
+                            # User-declared targetDataType override takes highest priority
+                            _override = target_data_type_overrides.get(col["name"].lower())
+                            if _override:
+                                resolved_target_type = _override
+
+                            target_keys.append(_enrich_column({
+                                "id": target_col_id,  # Use target column ID
+                                "position": 0,
+                                "name": target_name,
+                                "alias": target_name,
+                                "dataType": resolved_target_type
+                            }, discovered_target_col if 'discovered_target_col' in locals() and discovered_target_col else col))
+                            logger.debug(f"Target key: {source_name} -> {target_name} (source ID={source_col_id}, target ID={target_col_id})")
+                            break
+            # Resolve YAML keys: missed by mapping pairs (same defense as source path).
+            found_target_key_names = {
+                str(k.get("name")).lower()
+                for k in target_keys
+                if isinstance(k, dict) and k.get("name") is not None
+            }
+            for key_name in custom_config["keys"]:
+                if isinstance(key_name, dict):
+                    key_name = key_name.get("name") or (next(iter(key_name)) if key_name else None)
+                if key_name is None:
+                    continue
+                if str(key_name).lower() in found_target_key_names:
+                    continue
+                matched = next(
+                    (c for c in columns["columns"] if str(c.get("name", "")).lower() == str(key_name).lower()),
+                    None,
+                )
+                if not matched:
+                    error_msg = (
+                        f"CRITICAL ERROR: Target key '{key_name}' not found in discovery for table "
+                        f"'{table_name}' in schema '{yaml_target_schema}'."
+                    )
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
+                source_col_id = matched.get("id")
+                if source_col_id is None:
+                    error_msg = (
+                        f"CRITICAL ERROR: Column '{key_name}' in table {table_name} is missing "
+                        f"'id' field in CoreHub API response."
+                    )
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
+                # Prefer mapped target alias if present on source columns_def; else source name.
+                src_def = next(
+                    (c for c in columns_def if str(c.get("name", "")).lower() == str(matched["name"]).lower()),
+                    None,
+                )
+                target_name = (src_def.get("alias") if src_def and src_def.get("alias") else matched["name"])
+                discovered_target_col = target_discovered_columns_by_name.get(str(target_name).lower())
+                resolved_target_type = None
+                target_col_id = source_col_id
+                if discovered_target_col:
+                    if discovered_target_col.get("dataType"):
+                        resolved_target_type = discovered_target_col.get("dataType")
+                    if discovered_target_col.get("id") is not None:
+                        target_col_id = discovered_target_col.get("id")
+                else:
+                    resolved_target_type = map_data_type(
+                        matched.get("dataType"), source_node_info, target_node_info,
+                        source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
+                        target_table_column_types=target_table_column_types,
+                    )
+                _override = target_data_type_overrides.get(matched["name"].lower())
+                if _override:
+                    resolved_target_type = _override
+                target_keys.append(_enrich_column({
+                    "id": target_col_id,
+                    "position": 0,
+                    "name": target_name,
+                    "alias": target_name,
+                    "dataType": resolved_target_type,
+                }, discovered_target_col if discovered_target_col else matched))
+                found_target_key_names.add(str(target_name).lower())
+                if not any(str(c.get("name", "")).lower() == str(target_name).lower() for c in target_columns_def):
+                    target_columns_def.append(_enrich_column({
+                        "id": target_col_id,
+                        "position": 0,
+                        "name": target_name,
+                        "alias": target_name,
+                        "dataType": resolved_target_type,
+                        "isPK": True,
+                        "isIdentity": matched.get("isIdentity", False),
+                        "isNullable": matched.get("isNullable", False),
+                    }, discovered_target_col if discovered_target_col else matched))
+                logger.info(
+                    f"Target key {key_name!r} -> {target_name!r} resolved from discovery after mapping miss"
+                )
+        else:
+            # No column mappings, use keys directly from source columns
+            for key_name in custom_config['keys']:
+                # Find the column and its ID (case-insensitive)
+                for col in columns["columns"]:
+                    if col["name"].lower() == key_name.lower():
+                        # Use the id field from CoreHub API as the column ID
+                        source_col_id = col.get('id')
+                        if source_col_id is None:
+                            error_msg = f"CRITICAL ERROR: Column '{key_name}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
+                            logger.error(error_msg)
+                            raise ValueError(error_msg)
+
+                        discovered_target_col = target_discovered_columns_by_name.get(key_name.lower())
+                        resolved_target_type = None
+                        target_col_id = source_col_id  # Default to source ID
+                        
+                        if discovered_target_col:
+                            if discovered_target_col.get('dataType'):
+                                resolved_target_type = discovered_target_col.get('dataType')
+                            if discovered_target_col.get('id') is not None:
+                                target_col_id = discovered_target_col.get('id')
+                        else:
+                            resolved_target_type = map_data_type(col.get("dataType"), source_node_info, target_node_info,
+                                                                 source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
+                                                                 target_table_column_types=target_table_column_types)
+
+                        # User-declared targetDataType override takes highest priority
+                        _override = target_data_type_overrides.get(col["name"].lower())
+                        if _override:
+                            resolved_target_type = _override
+
+                        target_key_name = discovered_target_col.get('name') if discovered_target_col else col["name"]
+                        target_keys.append(_enrich_column({
+                            "id": target_col_id,  # Use target column ID
+                            "name": target_key_name,
+                            "alias": target_key_name,
+                            "dataType": resolved_target_type
+                        }, discovered_target_col if 'discovered_target_col' in locals() and discovered_target_col else col))
+                        found = True
+                        logger.debug(f"Target key: {key_name} (source ID={source_col_id}, target ID={target_col_id})")
+                        break
+                if not found:
+                    logger.warning(f"Warning: Target key '{key_name}' not found in columns for table '{table_name}'. Searching in target_columns_def...")
+                    for col_def in target_columns_def:
+                        if col_def.get('name', '').lower() == key_name.lower():
+                            target_keys.append(copy.deepcopy(col_def))
+                            found = True
+                            logger.info(f"Found target key '{key_name}' in target_columns_def")
+                            break
+                
+                if not found:
+                    error_msg = f"CRITICAL ERROR: Target key '{key_name}' not found in discovery or target_columns_def for table '{table_name}' in schema '{yaml_target_schema}'. This key is required by the YAML configuration but does not exist in the target database discovery."
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
+
+    else:
+        target_keys = []
+        for col in columns["columns"]:
+            if _coerce_is_pk(col.get("isPK")):
+                # Use the id field from CoreHub API as the column ID
+                col_id = col.get('id')
+                if col_id is None:
+                    error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
+                    
+                _resolved_dt = target_discovered_columns_by_name.get(col["name"].lower(), {}).get('type') or map_data_type(
+                    col.get("dataType"), source_node_info, target_node_info,
+                    source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
+                    target_table_column_types=target_table_column_types)
+                # User-declared targetDataType override takes highest priority
+                _override = target_data_type_overrides.get(col["name"].lower())
+                if _override:
+                    _resolved_dt = _override
+                target_keys.append(_enrich_column({
+                    "id": col_id,  # Use actual ordinal position from database
+                    "position": col.get("position", 0),
+                    "name": col["name"],
+                    "alias": col["name"],
+                    "dataType": _resolved_dt
+                }, discovered_target_col if 'discovered_target_col' in locals() and discovered_target_col else col))
+        logger.debug(f"Using primary target keys for {table_name}: {target_keys}")
+
+    _paint_is_pk_on_columns(target_columns_def, target_keys)
+
+
+    # Field Functions from YAML columns[].expression → entityType.fieldFunctions (GSSD-1355)
+    _ff = build_field_functions_for_entity_type(
+        custom_config.get("columns"),
+        target_columns_def,
+        target_table_id,
+    )
+    if _ff:
+        target_entity_type["fieldFunctions"] = _ff
+        logger.info(
+            f"Table {table_name}: attaching {len(_ff)} field function(s) on target entityType"
+        )
+
+    return target_columns_def, target_keys
+
+
 # Initialize logger
 log_file = create_log_file()
 logger = get_logger(log_file)
@@ -1073,355 +2118,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             }
             logger.debug(f"Document key configuration for {table_name}: {document_key}")
 
-        # Build columns definition with IDs
-        columns_def = []
-
-        # ---------------------------------------------------------------
-        # Detect legacy backup YAML where all column types are null.
-        # This is caused by an old Gluesync version that stored Column with
-        # a DataTypeInterface field that was not registered for serialisation,
-        # resulting in null being written to SQLite and propagated to exports.
-        # Build a discovery-based type lookup so we can resolve types during
-        # entity creation without relying on the (broken) YAML type field.
-        # ---------------------------------------------------------------
-        _yaml_cols = custom_config.get('columns') or []
-        _null_type_cols = [
-            c for c in _yaml_cols
-            if isinstance(c, dict) and "source" in c and c.get("type") is None
-        ]
-        _discovery_type_by_source: Dict[str, str] = {}
-        if _null_type_cols and len(_null_type_cols) == len(_yaml_cols) and _yaml_cols:
-            logger.warning(
-                f"Table {table_name}: all {len(_yaml_cols)} YAML column type fields are null – "
-                f"this backup was exported from a Gluesync instance with legacy entity storage. "
-                f"Falling back to live CoreHub discovery for column type resolution."
-            )
-            for disc_col in (columns.get("columns") or []):
-                _disc_name = disc_col.get("name") or ""
-                _disc_dt = disc_col.get("dataType") or disc_col.get("type")
-                if _disc_name and _disc_dt:
-                    _discovery_type_by_source[_disc_name] = _disc_dt
-            if _discovery_type_by_source:
-                logger.info(
-                    f"Table {table_name}: resolved {len(_discovery_type_by_source)} column types "
-                    f"from live source discovery (will be used as fallback for null YAML types)"
-                )
-
-        has_column_mappings = _is_column_mappings(custom_config.get('columns', []))
-        is_column_whitelist = _is_column_whitelist(custom_config.get('columns', []))
-        
-        if has_column_mappings:
-            # Custom column mappings (source→target)
-            yaml_columns = custom_config.get('columns', [])
-            for idx, column_map in enumerate(yaml_columns, 1):
-                # Extract source:target pairs, ignoring metadata fields
-                mapping_pairs = _extract_mapping_pairs(column_map)
-                for source_name, target_name in mapping_pairs:
-                    # Find the matching column from discovered columns
-                    matched_col = next((c for c in columns["columns"] if str(c.get("name","")).lower() == str(source_name).lower()), None)
-                    
-                    if matched_col:
-                        col_id = matched_col.get('id')
-                        if col_id is None:
-                            error_msg = f"CRITICAL ERROR: Column '{matched_col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response."
-                            logger.error(error_msg)
-                            raise ValueError(error_msg)
-
-                        columns_def.append(_enrich_column({
-                            "id": col_id,  # Use actual ordinal position from database
-                            "position": matched_col.get("position", 0),
-                            "name": matched_col["name"],
-                            "alias": target_name,
-                            "dataType": matched_col.get("dataType"),
-                            "isPK": _coerce_is_pk(matched_col.get("isPK")) or _is_in_keys(matched_col["name"], custom_config), 
-                            "isIdentity": matched_col.get("isIdentity", False), 
-                            "isNullable": matched_col.get("isNullable", False)
-                        }, matched_col))
-                    else:
-                        logger.warning(f"Warning: Column '{source_name}' from YAML mapping not found in discovery for table {table_name}. Using YAML metadata.")
-                        # Fallback for when discovery didn't find the column
-                        # (e.g. table creation pending or discovery glitch)
-                        columns_def.append({
-                            "id": get_table_id(source_schema, source_name), # Generated ID
-                            "position": idx,
-                            "name": source_name,
-                            "alias": target_name,
-                            "dataType": "VARCHAR", # Fallback type
-                            "isPK": _is_in_keys(source_name, custom_config),
-                            "isIdentity": False,
-                            "isNullable": True
-                        })
-        elif is_column_whitelist:
-            # Column whitelist format: only use specified columns, not all discovered
-            # Format: [{name: "col", type: "VARCHAR", sourceName: "SOURCE_COL"}, ...]
-            yaml_columns = custom_config.get('columns', [])
-            for yaml_col in yaml_columns:
-                # sourceName is the source column name; name is the target column name
-                source_col_name = yaml_col.get('sourceName') or yaml_col.get('name')
-                target_col_name = yaml_col.get('name')
-                
-                # Find the matching column from discovered columns
-                for col in columns["columns"]:
-                    if str(col["name"]).lower() == str(source_col_name).lower():
-                        col_id = col.get('id')
-                        if col_id is None:
-                            error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response."
-                            logger.error(error_msg)
-                            raise ValueError(error_msg)
-                        
-                        # Source columns MUST reflect the discovered native type from the
-                        # source database. The YAML `type:` / `targetDataType:` keys describe
-                        # the TARGET column and must never bleed into the source payload.
-                        # Discovered columns expose their native type under `dataType`.
-                        columns_def.append(_enrich_column({
-                            "id": col_id,
-                            "position": col.get("position", 0),
-                            "name": source_col_name,
-                            "alias": target_col_name,
-                            "dataType": col.get("dataType"),
-                            "isPK": _coerce_is_pk(col.get("isPK")) or _is_in_keys(source_col_name, custom_config),
-                            "isIdentity": col.get("isIdentity", False),
-                            "isNullable": col.get("isNullable", True),
-                        }, col))
-                        break
-                else:
-                    logger.warning(f"Column '{source_col_name}' from YAML whitelist not found in discovered columns for table {table_name}")
-            
-            logger.info(f"Using column whitelist for {table_name}: {len(columns_def)} of {len(yaml_columns)} specified columns matched")
-
-        # If there are no column mappings or whitelist, fall back to
-        # using discovery columns as-is (one-to-one source→target mapping).
-        # IMPORTANT: Only fall back when NO filter was specified. If a whitelist
-        # or mapping was explicitly specified but columns_def is empty, do NOT
-        # fall back to all columns - that would silently include unwanted columns.
-        if not has_column_mappings and not is_column_whitelist:
-            columns_def = []
-            for col in columns["columns"]:
-                # Use the id field from CoreHub API as the column ID
-                col_id = col.get('id')
-                if col_id is None:
-                    error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
-                    logger.error(error_msg)
-                    raise ValueError(error_msg)
-
-                columns_def.append(_enrich_column({
-                    "id": col_id,  # Use actual ordinal position from database
-                    "position": col.get("position", 0),
-                    "name": col["name"],
-                    "alias": col["name"],
-                    "dataType": col.get("dataType"),
-                    "isPK": _coerce_is_pk(col.get("isPK")) or _is_in_keys(col["name"], custom_config), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
-                }, col))
-
-        # GSSD-1355 regression guard: target-only Field Function entries make
-        # _is_column_mappings() true but _extract_mapping_pairs() returns []. Without
-        # a discovery fallback, columns_def (and therefore CoreHub tablesKeys via
-        # isPK) stay empty → "Missing entity primary keys" on plain SQL tables.
-        if has_column_mappings and not columns_def:
-            logger.warning(
-                f"Table {table_name}: column mappings produced no source columns "
-                f"(likely target-only Field Function entries). Falling back to discovery."
-            )
-            for col in columns["columns"]:
-                col_id = col.get('id')
-                if col_id is None:
-                    error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
-                    logger.error(error_msg)
-                    raise ValueError(error_msg)
-                columns_def.append(_enrich_column({
-                    "id": col_id,
-                    "position": col.get("position", 0),
-                    "name": col["name"],
-                    "alias": col["name"],
-                    "dataType": col.get("dataType"),
-                    "isPK": _coerce_is_pk(col.get("isPK")) or _is_in_keys(col["name"], custom_config),
-                    "isIdentity": col.get("isIdentity", False),
-                    "isNullable": col.get("isNullable", False)
-                }, col))
-
-        logger.debug(f"Columns definition for {table_name}: {columns_def}")
-
-        # Process keys and other configurations as before...
-        if custom_config and 'keys' in custom_config and custom_config['keys'] is not None:
-            logger.info(f"Processing keys for table {table_name}. Requested keys: {custom_config['keys']}")
-            logger.info(f"Has columns section: {bool(custom_config.get('columns'))}")
-            keys = []
-            
-            has_column_mappings = _is_column_mappings(custom_config.get('columns', []))
-            
-            if has_column_mappings:
-                # Use column mappings for keys
-                logger.info(f"Key extraction via column mappings for {table_name}. Keys to find: {custom_config['keys']}")
-                for col in columns["columns"]:
-                    # Use the id field from CoreHub API as the column ID
-                    col_id = col.get('id')
-                    if col_id is None:
-                        error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
-                        logger.error(error_msg)
-                        raise ValueError(error_msg)
-                        
-                    for column_map in custom_config['columns']:
-                        # Extract source:target pairs, ignoring metadata fields
-                        mapping_pairs = _extract_mapping_pairs(column_map)
-                        for source_name, target_name in mapping_pairs:
-                            name_match = col["name"].lower() == str(source_name).lower()
-                            in_keys = _is_in_keys(col["name"], custom_config)
-                            if name_match and in_keys:
-                                keys.append(_enrich_column({
-                                    "id": col_id,  # Use actual ordinal position from database
-                                    "position": col.get("position", 0),
-                                    "name": col["name"],
-                                    "alias": target_name,
-                                    "dataType": col.get("dataType")
-                                }, col))
-                                logger.info(f"Key matched: col={col['name']!r}, source_name={source_name!r}, target_name={target_name!r}")
-                            elif _is_in_keys(col["name"], custom_config):
-                                logger.warning(f"Key col={col['name']!r} is in keys list but source_name={source_name!r} did not match (name_match={name_match}, in_keys={in_keys})")
-                # If YAML keys: were not paired via mappings (e.g. historical id-as-metadata
-                # skip, or key omitted from columns:), resolve remaining keys from discovery.
-                found_key_names = {
-                    str(k.get("name")).lower()
-                    for k in keys
-                    if isinstance(k, dict) and k.get("name") is not None
-                }
-                for key_name in custom_config["keys"]:
-                    if isinstance(key_name, dict):
-                        key_name = key_name.get("name") or (next(iter(key_name)) if key_name else None)
-                    if key_name is None:
-                        continue
-                    if str(key_name).lower() in found_key_names:
-                        continue
-                    matched = next(
-                        (c for c in columns["columns"] if str(c.get("name", "")).lower() == str(key_name).lower()),
-                        None,
-                    )
-                    if not matched:
-                        matched_def = next(
-                            (c for c in columns_def if str(c.get("name", "")).lower() == str(key_name).lower()),
-                            None,
-                        )
-                        if matched_def:
-                            keys.append(copy.deepcopy(matched_def))
-                            found_key_names.add(str(key_name).lower())
-                            logger.info(
-                                f"Key {key_name!r} resolved from columns_def after mapping miss for {table_name}"
-                            )
-                            continue
-                        error_msg = (
-                            f"CRITICAL ERROR: Key '{key_name}' not found in discovery or columns_def "
-                            f"for table '{table_name}' in schema '{source_schema}'. This key is required "
-                            f"by the YAML configuration but does not exist in the source database discovery."
-                        )
-                        logger.error(error_msg)
-                        raise ValueError(error_msg)
-                    col_id = matched.get("id")
-                    if col_id is None:
-                        error_msg = (
-                            f"CRITICAL ERROR: Column '{key_name}' in table {table_name} is missing "
-                            f"'id' field in CoreHub API response. This indicates a serious issue "
-                            f"with the discovery API."
-                        )
-                        logger.error(error_msg)
-                        raise ValueError(error_msg)
-                    keys.append(_enrich_column({
-                        "id": col_id,
-                        "position": matched.get("position", 0),
-                        "name": matched["name"],
-                        "alias": matched["name"],
-                        "dataType": matched.get("dataType"),
-                    }, matched))
-                    found_key_names.add(str(matched["name"]).lower())
-                    logger.info(
-                        f"Key {key_name!r} resolved from discovery after mapping miss for {table_name}"
-                    )
-                    # Ensure the PK column is present on columns_def (mapping may have dropped it)
-                    if not any(str(c.get("name", "")).lower() == str(matched["name"]).lower() for c in columns_def):
-                        columns_def.append(_enrich_column({
-                            "id": col_id,
-                            "position": matched.get("position", 0),
-                            "name": matched["name"],
-                            "alias": matched["name"],
-                            "dataType": matched.get("dataType"),
-                            "isPK": True,
-                            "isIdentity": matched.get("isIdentity", False),
-                            "isNullable": matched.get("isNullable", False),
-                        }, matched))
-                        logger.info(
-                            f"Re-added key column {matched['name']!r} to columns_def for {table_name}"
-                        )
-            else:
-                # No column mappings, use keys directly from source columns
-                logger.debug(f"Processing keys for {table_name}: {custom_config['keys']}")
-                logger.debug(f"Available columns: {[col['name'] for col in columns['columns']]}")
-                for key_name in custom_config['keys']:
-                    # Find the column and its index (case-insensitive to handle cross-db scenarios like pgsql→oracle)
-                    found = False
-                    for col in columns["columns"]:
-                        if col["name"].lower() == key_name.lower():
-                            # Use the id field from CoreHub API as the column ID
-                            col_id = col.get('id')
-                            if col_id is None:
-                                error_msg = f"CRITICAL ERROR: Column '{key_name}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
-                                logger.error(error_msg)
-                                raise ValueError(error_msg)
-
-                            keys.append(_enrich_column({
-                                "id": col_id,  # Use actual ordinal position from database
-                                "position": col.get("position", 0),
-                                "name": col["name"],
-                                "alias": col["name"],
-                                "dataType": col.get("dataType")
-                            }, col))
-                            found = True
-                            logger.debug(f"Found key '{key_name}' in columns with id={col_id}")
-                            break
-                    if not found:
-                        logger.warning(f"Warning: Key '{key_name}' not found in columns for table '{table_name}'. Searching in columns_def...")
-                        # Try to find it in the already built columns_def (which might have come from YAML metadata)
-                        for col_def in columns_def:
-                            if col_def.get('name', '').lower() == key_name.lower():
-                                keys.append(copy.deepcopy(col_def))
-                                found = True
-                                logger.info(f"Found key '{key_name}' in columns_def")
-                                break
-                    
-                    if not found:
-                        error_msg = f"CRITICAL ERROR: Key '{key_name}' not found in discovery or columns_def for table '{table_name}' in schema '{source_schema}'. This key is required by the YAML configuration but does not exist in the source database discovery."
-                        logger.error(error_msg)
-                        raise ValueError(error_msg)
-
-            
-            logger.info(f"Final keys array for {table_name}: {keys} (count: {len(keys)})")
-        else:
-            keys = []
-            for col in columns["columns"]:
-                if _coerce_is_pk(col.get("isPK")):
-                    # Use the id field from CoreHub API as the column ID
-                    col_id = col.get('id')
-                    if col_id is None:
-                        error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
-                        logger.error(error_msg)
-                        raise ValueError(error_msg)
-                        
-                    keys.append(_enrich_column({
-                        "id": col_id,  # Use actual ordinal position from database
-                        "position": col.get("position", 0),
-                        "name": col["name"],
-                        "alias": col["name"],
-                        "dataType": col.get("dataType")
-                    }, col))
-            logger.debug(f"Using primary keys for {table_name}: {keys}")
-
-        # Keep column isPK flags aligned with the resolved keys list (CoreHub reads isPK).
-        _paint_is_pk_on_columns(columns_def, keys)
-
-        # Apply the charSet declared in the YAML on the source columns. Done here, on the
-        # already built list, so it covers every shape it can be built from: explicit
-        # mappings, whitelist or plain discovery. Only the source entity's columns are
-        # patched: `keys` feeds the target table creation below, where a source-side
-        # character set has no business.
-        char_set_overrides = _build_char_set_overrides((custom_config or {}).get('columns', []))
-        _apply_char_set_overrides(columns_def, char_set_overrides, table_name)
+        columns_def, keys, has_column_mappings, is_column_whitelist, _discovery_type_by_source = _assemble_source_columns(
+            columns, custom_config, table_name, source_schema
+        )
 
         if not keys:
             logger.warning(f"Warning: No keys specified for {table_name}. Table will have no keys.")
@@ -1563,682 +2262,20 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             # Also add mappingFunctionInfo for the first UDF
             target_entity_type["mappingFunctionInfo"] = udf_config[0]
         
-        # Discover target columns first (needed for columnsMappingMatrix)
-        target_discovered_columns = None
-        target_discovered_columns_by_name = {}
-        try:
-            target_discovered_columns = get_table_columns(token, pipeline_id, target_agent_id, yaml_target_schema, target_table_name)
-            if target_discovered_columns and isinstance(target_discovered_columns.get('columns'), list):
-                target_discovered_columns_by_name = {
-                    c.get('name').lower(): c
-                    for c in target_discovered_columns['columns']
-                    if c.get('name')
-                }
-                logger.debug(
-                    f"Found {len(target_discovered_columns_by_name)} existing columns in target table {yaml_target_schema}.{target_table_name}"
-                )
-        except Exception as e:
-            logger.debug(f"Could not get target columns for {yaml_target_schema}.{target_table_name}: {str(e)}")
+        target_columns_def, target_keys = _assemble_target_side(
+            token, pipeline_id, target_agent_id, yaml_target_schema, target_table_name, table_name,
+            columns, columns_def, custom_config, has_column_mappings, is_column_whitelist,
+            _discovery_type_by_source, is_unlocked_schema, source_table_id, target_table_id,
+            target_entity_type, source_node_info, target_node_info, source_agent_tag, target_agent_tag,
+            skip_errors,
+        )
 
-        # Build set of dataTypes already present in the target table for type-mapping fallback
-        target_table_column_types = extract_target_column_types(target_discovered_columns)
-
-        # Generate columnsMappingMatrix
-        columns_mapping_matrix = []
-        
-        if is_unlocked_schema:
-            # For unlocked schema, add single entry with column IDs as 0
-            columns_mapping_matrix.append({
-                "sourceTableObjectId": source_table_id,
-                "targetTableObjectId": target_table_id,
-                "sourceColumnId": 0,
-                "targetColumnId": 0
-            })
-            
-            # Add tablesWithUnlockedSchema array with target table ID
-            target_entity_type["tablesWithUnlockedSchema"] = [target_table_id]
-            target_entity_type["tablesWithUnlockedDataTypes"] = []
-            
-            logger.info(f"Table {table_name} configured with unlocked schema. Target table ID: {target_table_id}")
-        else:
-            # For locked schema, create mapping for each column
-            # IMPORTANT: When a whitelist or mapping is specified, only include
-            # columns from columns_def, NOT all discovered source columns.
-            # Otherwise, Gluesync would flag all source columns for syncing.
-            has_filter = has_column_mappings or is_column_whitelist
-            
-            # Build a lookup of discovered source columns by name (case-insensitive)
-            source_columns_by_name = {
-                c.get('name', '').lower(): c
-                for c in columns.get('columns', [])
-                if c.get('name')
-            }
-            
-            max_target_col_id = 0
-            
-            if has_filter:
-                # Only iterate over the filtered columns_def
-                for col_def in columns_def:
-                    source_col_name = col_def.get('name')
-                    target_col_name = col_def.get('alias', source_col_name)
-                    source_col_id = col_def.get('id')
-                    
-                    if source_col_id is None or not source_col_name:
-                        logger.warning(f"Skipping mapping matrix entry with missing id/name: {col_def}")
-                        continue
-                    
-                    # Find the target column ID from discovered target columns
-                    target_col_id = source_col_id  # Default to source ID
-                    target_col = target_discovered_columns_by_name.get(target_col_name.lower())
-                    if target_col and target_col.get('id') is not None:
-                        target_col_id = target_col.get('id')
-                        logger.debug(f"Mapped column: {source_col_name} (ID={source_col_id}) -> {target_col_name} (ID={target_col_id})")
-                    else:
-                        logger.debug(f"No target column found for {target_col_name}, using source ID {source_col_id}")
-                    
-                    columns_mapping_matrix.append({
-                        "sourceTableObjectId": source_table_id,
-                        "targetTableObjectId": target_table_id,
-                        "sourceColumnId": source_col_id,
-                        "targetColumnId": target_col_id
-                    })
-                    max_target_col_id = max(max_target_col_id, target_col_id)
-                
-                logger.info(f"columnsMappingMatrix for {table_name}: using filtered columns ({len(columns_mapping_matrix)} entries from {len(columns.get('columns', []))} discovered)")
-            else:
-                # No filter defined - map all discovered source columns
-                if 'columns' in columns and isinstance(columns['columns'], list):
-                    for col in columns['columns']:
-                        # Use the id field from CoreHub API as the column ID
-                        source_col_id = col.get('id')
-                        if source_col_id is None:
-                            error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
-                            logger.error(error_msg)
-                            raise ValueError(error_msg)
-                        
-                        source_col_name = col.get('name')
-                        target_col_name = source_col_name
-                        
-                        # Find the target column ID from discovered target columns
-                        target_col_id = source_col_id  # Default to source ID
-                        target_col = target_discovered_columns_by_name.get(target_col_name.lower())
-                        if target_col and target_col.get('id') is not None:
-                            target_col_id = target_col.get('id')
-                            logger.debug(f"Mapped column: {source_col_name} (ID={source_col_id}) -> {target_col_name} (ID={target_col_id})")
-                        else:
-                            logger.debug(f"No target column found for {target_col_name}, using source ID {source_col_id}")
-                        
-                        columns_mapping_matrix.append({
-                            "sourceTableObjectId": source_table_id,
-                            "targetTableObjectId": target_table_id,
-                            "sourceColumnId": source_col_id,
-                            "targetColumnId": target_col_id
-                        })
-                        max_target_col_id = max(max_target_col_id, target_col_id)
-            
-            # Add empty arrays for locked schema
-            target_entity_type["tablesWithUnlockedSchema"] = []
-            target_entity_type["tablesWithUnlockedDataTypes"] = []
-            
-            logger.info(f"Table {table_name} using locked schema with {len(columns_mapping_matrix)} column mappings")
-        
-        # Add mappings for target-only columns if they exist (sourceColumnId = 0)
-        target_only_columns = custom_config.get('targetOnlyColumns', [])
-        if target_only_columns and not is_unlocked_schema:
-            pass
-
-        # Add columnsMappingMatrix to entityType
-        target_entity_type["columnsMappingMatrix"] = columns_mapping_matrix
-
-        # Build target columns definition with IDs
-        target_columns_def = []
-        max_target_col_id = 0
-        
-        has_column_mappings_target = _is_column_mappings(custom_config.get('columns', []))
-        is_column_whitelist_target = _is_column_whitelist(custom_config.get('columns', []))
-
-        # User-declared per-column target dataType overrides (by source column name, lower-cased)
-        target_data_type_overrides = _build_target_data_type_overrides(custom_config.get('columns', []))
-        if target_data_type_overrides:
-            logger.info(
-                f"Table {table_name}: applying {len(target_data_type_overrides)} user-declared targetDataType overrides"
-            )
-        
-        if has_column_mappings_target:
-            # Custom column mappings for target
-            for col in columns["columns"]:
-                # Use the id field from CoreHub API as the source column ID
-                source_col_id = col.get('id')
-                if source_col_id is None:
-                    error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
-                    logger.error(error_msg)
-                    raise ValueError(error_msg)
-                
-                for column_map in custom_config.get('columns', []):
-                    # Extract source:target pairs, ignoring metadata fields
-                    mapping_pairs = _extract_mapping_pairs(column_map)
-                    for source_name, target_name in mapping_pairs:
-                        if str(col["name"]).lower() == str(source_name).lower():
-                            discovered_target_col = target_discovered_columns_by_name.get(target_name.lower())
-                            resolved_target_type = None
-                            target_col_id = source_col_id  # Default to source ID
-                            
-                            if discovered_target_col:
-                                if discovered_target_col.get('dataType'):
-                                    resolved_target_type = discovered_target_col.get('dataType')
-                                if discovered_target_col.get('id') is not None:
-                                    target_col_id = discovered_target_col.get('id')
-                            else:
-                                resolved_target_type = map_data_type(col.get("dataType"), source_node_info, target_node_info,
-                                                                     source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
-                                                                     target_table_column_types=target_table_column_types)
-
-                            # User-declared targetDataType override takes highest priority
-                            _override = target_data_type_overrides.get(col["name"].lower())
-                            if _override:
-                                resolved_target_type = _override
-
-                            # Fallback for legacy null-type backups: if we still have no
-                            # resolved type, use the live discovery type for this source column
-                            if not resolved_target_type and _discovery_type_by_source:
-                                _fallback_src_type = _discovery_type_by_source.get(col.get("name", ""))
-                                if _fallback_src_type:
-                                    resolved_target_type = map_data_type(
-                                        _fallback_src_type, source_node_info, target_node_info,
-                                        source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
-                                        target_table_column_types=target_table_column_types,
-                                    )
-                                    logger.debug(
-                                        f"Table {table_name}, column {col.get('name')}: resolved target type "
-                                        f"via discovery fallback ({_fallback_src_type} → {resolved_target_type})"
-                                    )
-
-                            max_target_col_id = max(max_target_col_id, target_col_id)
-                            # Get isPrimaryKey from discovered target column or fall back to source column
-                            target_is_primary_key = (discovered_target_col.get("isPK") if discovered_target_col else False) or _coerce_is_pk(col.get("isPK")) or _is_in_keys(col["name"], custom_config)
-                            target_columns_def.append(_enrich_column({
-                                "id": target_col_id,  # Use target column ID
-                                "position": 0,
-                                "name": target_name,
-                                "alias": target_name,
-                                "dataType": resolved_target_type,
-                                "isPK": target_is_primary_key, "isIdentity": (discovered_target_col.get("isIdentity") if discovered_target_col else None) or col.get("isIdentity", False), "isNullable": discovered_target_col.get("isNullable") if discovered_target_col and "isNullable" in discovered_target_col else col.get("isNullable", False)
-                            }, discovered_target_col if 'discovered_target_col' in locals() and discovered_target_col else col))
-                            break
-        elif is_column_whitelist_target:
-            # Column whitelist format: only use specified columns
-            yaml_columns = custom_config.get('columns', [])
-            for yaml_col in yaml_columns:
-                source_col_name = yaml_col.get('sourceName') or yaml_col.get('name')
-                target_col_name = yaml_col.get('name')
-                
-                # Find the matching column from discovered source columns
-                for col in columns["columns"]:
-                    if str(col["name"]).lower() == str(source_col_name).lower():
-                        source_col_id = col.get('id')
-                        if source_col_id is None:
-                            error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response."
-                            logger.error(error_msg)
-                            raise ValueError(error_msg)
-                        
-                        # Look up target column info
-                        discovered_target_col = target_discovered_columns_by_name.get(target_col_name.lower())
-                        target_col_id = source_col_id  # Default to source ID
-                        if discovered_target_col and discovered_target_col.get('id') is not None:
-                            target_col_id = discovered_target_col.get('id')
-
-                        # Target dataType resolution order:
-                        # 1. `targetDataType:` override from YAML (highest priority, verbatim).
-                        # 2. map_data_type(<discovered source dataType>) when its result
-                        #    is a type the target actually advertises (defaultType or
-                        #    supportedType in the target dataTypesMatrix).
-                        # 3. YAML `type:` as a target-side hint — used only when the auto
-                        #    mapping fell back to a value the target does not advertise.
-                        # 4. Discovered target column's dataType (last-resort, if available).
-                        # 5. The mapped value as-is (preserves observable behavior).
-                        _source_dt = col.get("dataType")
-                        _override = yaml_col.get('targetDataType') or target_data_type_overrides.get(col["name"].lower())
-                        if _override:
-                            resolved_target_type = _override
-                        else:
-                            _mapped = map_data_type(_source_dt, source_node_info, target_node_info,
-                                                    source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
-                                                    target_table_column_types=target_table_column_types)
-                            _canonical = _canonicalize_target_type(_mapped, target_node_info) if _mapped else None
-                            if _canonical:
-                                # Prefer YAML `type:` when it is also a known target type
-                                # (gives the user authoritative control over target casing/variant).
-                                _yaml_type = yaml_col.get('type')
-                                _yaml_canonical = _canonicalize_target_type(_yaml_type, target_node_info) if _yaml_type else None
-                                resolved_target_type = _yaml_canonical or _canonical
-                            elif yaml_col.get('type'):
-                                resolved_target_type = yaml_col.get('type')
-                            elif discovered_target_col and discovered_target_col.get('dataType'):
-                                resolved_target_type = discovered_target_col.get('dataType')
-                            else:
-                                resolved_target_type = _mapped or _source_dt
-                        
-                        max_target_col_id = max(max_target_col_id, target_col_id)
-                        # Target columns are serialised with `dataType` (not `type`) in the
-                        # UpsertEntitiesDto contract. Align with the mapping/default branches.
-                        target_is_primary_key = (discovered_target_col.get("isPK") if discovered_target_col else False) or _coerce_is_pk(col.get("isPK")) or _is_in_keys(col["name"], custom_config)
-                        target_columns_def.append(_enrich_column({
-                            "id": target_col_id,
-                            "position": col.get("position", 0),
-                            "name": target_col_name,
-                            "alias": target_col_name,
-                            "dataType": resolved_target_type,
-                            "isPK": target_is_primary_key,
-                            "isIdentity": (discovered_target_col.get("isIdentity") if discovered_target_col else None) or col.get("isIdentity", False),
-                            "isNullable": discovered_target_col.get("isNullable") if discovered_target_col and "isNullable" in discovered_target_col else col.get("isNullable", False),
-                        }, discovered_target_col if discovered_target_col else col))
-                        break
-                else:
-                    logger.warning(f"Column '{source_col_name}' from YAML whitelist not found in discovered columns for table {table_name}")
-            
-            logger.info(f"Using column whitelist for target {table_name}: {len(target_columns_def)} of {len(yaml_columns)} specified columns matched")
-        
-        if not has_column_mappings_target and not is_column_whitelist_target:
-            # No column mappings - use columns as-is with mapped types
-            for col in columns["columns"]:
-                # Use the id field from CoreHub API as the source column ID
-                source_col_id = col.get('id')
-                if source_col_id is None:
-                    error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
-                    logger.error(error_msg)
-                    raise ValueError(error_msg)
-
-                discovered_target_col = target_discovered_columns_by_name.get(col["name"].lower())
-                resolved_target_type = None
-                target_col_id = source_col_id  # Default to source ID
-                
-                if discovered_target_col:
-                    if discovered_target_col.get('dataType'):
-                        resolved_target_type = discovered_target_col.get('dataType')
-                    if discovered_target_col.get('id') is not None:
-                        target_col_id = discovered_target_col.get('id')
-                else:
-                    resolved_target_type = map_data_type(col.get("dataType"), source_node_info, target_node_info,
-                                                         source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
-                                                         target_table_column_types=target_table_column_types)
-
-                # User-declared targetDataType override takes highest priority
-                _override = target_data_type_overrides.get(col["name"].lower())
-                if _override:
-                    resolved_target_type = _override
-
-                max_target_col_id = max(max_target_col_id, target_col_id)
-                
-                # Use the target-discovered column name (preserves original case from target DB)
-                # Fall back to source column name if target column not found
-                target_col_name = discovered_target_col.get('name') if discovered_target_col else col["name"]
-                # Get isPrimaryKey from discovered target column or fall back to source column
-                target_is_primary_key = (discovered_target_col.get("isPK") if discovered_target_col else False) or _coerce_is_pk(col.get("isPK")) or _is_in_keys(col["name"], custom_config)
-                target_columns_def.append(_enrich_column({
-                    "id": target_col_id,  # Use target column ID
-                    "position": 0,
-                    "name": target_col_name,
-                    "alias": target_col_name,
-                    "dataType": resolved_target_type,
-                    "isPK": target_is_primary_key, "isIdentity": (discovered_target_col.get("isIdentity") if discovered_target_col else None) or col.get("isIdentity", False), "isNullable": discovered_target_col.get("isNullable") if discovered_target_col and "isNullable" in discovered_target_col else col.get("isNullable", False)
-                }, discovered_target_col if 'discovered_target_col' in locals() and discovered_target_col else col))
-        
-        if has_column_mappings_target and not target_columns_def:
-            logger.warning(
-                f"Table {table_name}: target column mappings produced no columns "
-                f"(likely target-only Field Function entries). Falling back to discovery."
-            )
-            for col in columns["columns"]:
-                source_col_id = col.get('id')
-                if source_col_id is None:
-                    error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
-                    logger.error(error_msg)
-                    raise ValueError(error_msg)
-                discovered_target_col = target_discovered_columns_by_name.get(col["name"].lower())
-                resolved_target_type = None
-                target_col_id = source_col_id
-                if discovered_target_col:
-                    if discovered_target_col.get('dataType'):
-                        resolved_target_type = discovered_target_col.get('dataType')
-                    if discovered_target_col.get('id') is not None:
-                        target_col_id = discovered_target_col.get('id')
-                else:
-                    resolved_target_type = map_data_type(col.get("dataType"), source_node_info, target_node_info,
-                                                         source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
-                                                         target_table_column_types=target_table_column_types)
-                max_target_col_id = max(max_target_col_id, target_col_id)
-                target_col_name = discovered_target_col.get('name') if discovered_target_col else col["name"]
-                target_is_primary_key = _coerce_is_pk(discovered_target_col.get("isPK") if discovered_target_col else False) or _coerce_is_pk(col.get("isPK")) or _is_in_keys(col["name"], custom_config)
-                target_columns_def.append(_enrich_column({
-                    "id": target_col_id,
-                    "position": 0,
-                    "name": target_col_name,
-                    "alias": target_col_name,
-                    "dataType": resolved_target_type,
-                    "isPK": target_is_primary_key,
-                    "isIdentity": (discovered_target_col.get("isIdentity") if discovered_target_col else None) or col.get("isIdentity", False),
-                    "isNullable": discovered_target_col.get("isNullable") if discovered_target_col and "isNullable" in discovered_target_col else col.get("isNullable", False)
-                }, discovered_target_col if discovered_target_col else col))
-
-        # Add target-only columns if specified (only supported with unlocked schema)
-        target_only_columns = custom_config.get('targetOnlyColumns', [])
-        if target_only_columns:
-            if not is_unlocked_schema:
-                logger.warning(f"Target-only columns are specified for table {table_name} but unlockedSchema is not true. Skipping target-only columns.")
-                logger.warning(f"To use target-only columns, set 'unlockedSchema: true' for table {table_name}")
-            elif is_unlocked_schema:
-                logger.info(f"Adding {len(target_only_columns)} target-only columns for table {table_name}")
-
-                # Try to get target columns if the target table exists
-                target_columns = None
-                try:
-                    target_columns = get_table_columns(token, pipeline_id, target_agent_id, yaml_target_schema, target_table_name)
-                    logger.debug(f"Found {len(target_columns.get('columns', []))} existing columns in target table {yaml_target_schema}.{target_table_name}")
-                except Exception as e:
-                    logger.debug(f"Could not get target columns for {yaml_target_schema}.{target_table_name}: {str(e)}")
-
-                for target_col in target_only_columns:
-                    # Increment from the maximum target column ID
-                    max_target_col_id += 1
-
-                    # Support both string format and object format
-                    if isinstance(target_col, str):
-                        # Simple string format: just the column name
-                        col_name = target_col
-                        col_type = 'varchar'  # Default type
-                        col_data_length = 1024  # Default data length
-                        col_numeric_precision = 0  # Default numeric precision
-                        col_numeric_scale = 0  # Default numeric scale
-                        col_is_nullable = False  # Default nullable
-                    else:
-                        # Object format with user-defined properties
-                        col_name = target_col.get('name')
-                        col_type = target_col.get('dataType') or target_col.get('type') or 'varchar'  # null-safe: treat explicit null as missing
-                        col_data_length = target_col.get('dataLength', 1024)  # Default data length
-                        col_numeric_precision = target_col.get('numPrec', 0)  # Default numeric precision
-                        col_numeric_scale = target_col.get('numScale', 0)  # Default numeric scale
-                        col_is_nullable = target_col.get('isNullable', False)  # Default nullable
-
-                    # Check if this column already exists in the target table
-                    discovered_column = None
-                    if target_columns and 'columns' in target_columns:
-                        discovered_column = next(
-                            (col for col in target_columns['columns'] if col.get('name') == col_name),
-                            None
-                        )
-
-                    if discovered_column:
-                        # Use discovered column properties (priority over user-defined)
-                        logger.info(f"Using discovered properties for target-only column '{col_name}' from target table")
-                        col_type = discovered_column.get('dataType', discovered_column.get('type', col_type))
-                        col_data_length = discovered_column.get('charMaxLength', col_data_length)
-                        col_numeric_precision = discovered_column.get('numPrec', col_numeric_precision)
-                        col_numeric_scale = discovered_column.get('numScale', col_numeric_scale)
-                        col_is_nullable = discovered_column.get('isNullable', col_is_nullable)
-                    else:
-                        # Column doesn't exist in target table, use user-defined properties
-                        logger.debug(f"Using user-defined properties for target-only column '{col_name}' (not found in target table)")
-
-                        # Validate that required properties are provided for user-defined target-only columns
-                        if isinstance(target_col, dict):
-                            required_props = ['name', 'type', 'dataLength', 'numericPrecision', 'numericScale', 'isNullable']
-                            missing_props = [prop for prop in required_props if prop not in target_col or target_col.get(prop) is None]
-                            if missing_props:
-                                error_msg = f"Target-only column '{col_name}' is missing required properties: {missing_props}. All properties (name, type, dataLength, numericPrecision, numericScale, isNullable) must be specified when the column doesn't exist in the target table."
-                                logger.error(error_msg)
-                                if not skip_errors:
-                                    raise ValueError(error_msg)
-
-                    # Map the column type to target node type
-                    mapped_type = map_data_type(col_type, source_node_info, target_node_info,
-                                               source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
-                                               target_table_column_types=target_table_column_types)
-
-                    target_columns_def.append(_enrich_column({
-                        "id": max_target_col_id,  # Continue from last target column ID
-                        "position": 0,
-                        "name": col_name,
-                        "alias": col_name,
-                        "dataType": mapped_type,
-                        "charMaxLength": col_data_length,
-                        "numPrec": col_numeric_precision,
-                        "numScale": col_numeric_scale,
-                        "isNullable": col_is_nullable, "isIdentity": False,
-                        "isPK": False  # Target-only columns are not primary keys
-                    }, discovered_target_col if 'discovered_target_col' in locals() and discovered_target_col else col))
-                    logger.debug(f"Added target-only column: {col_name} (type: {mapped_type}, id: {max_target_col_id})")
-
-        print(f"Columns definition for {table_name}: {columns_def}")
-
-        # Process target keys with proper IDs
-        target_keys = []
-        if custom_config and 'keys' in custom_config and custom_config['keys'] is not None:
-            has_column_mappings = _is_column_mappings(custom_config.get('columns', []))
-            
-            if has_column_mappings:
-                # Use column mappings for keys - map source key names to target key names
-                for col in columns["columns"]:
-                    # Use the id field from CoreHub API as the column ID
-                    source_col_id = col.get('id')
-                    if source_col_id is None:
-                        error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
-                        logger.error(error_msg)
-                        raise ValueError(error_msg)
-
-                    for column_map in custom_config.get('columns', []):
-                        # Extract source:target pairs, ignoring metadata fields
-                        mapping_pairs = _extract_mapping_pairs(column_map)
-                        for source_name, target_name in mapping_pairs:
-                            if col["name"].lower() == str(source_name).lower() and _is_in_keys(col["name"], custom_config):
-                                discovered_target_col = target_discovered_columns_by_name.get(target_name.lower())
-                                resolved_target_type = None
-                                target_col_id = source_col_id  # Default to source ID
-                                
-                                if discovered_target_col:
-                                    if discovered_target_col.get('dataType'):
-                                        resolved_target_type = discovered_target_col.get('dataType')
-                                    if discovered_target_col.get('id') is not None:
-                                        target_col_id = discovered_target_col.get('id')
-                                else:
-                                    resolved_target_type = map_data_type(col.get("dataType"), source_node_info, target_node_info,
-                                                                         source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
-                                                                         target_table_column_types=target_table_column_types)
-
-                                # User-declared targetDataType override takes highest priority
-                                _override = target_data_type_overrides.get(col["name"].lower())
-                                if _override:
-                                    resolved_target_type = _override
-
-                                target_keys.append(_enrich_column({
-                                    "id": target_col_id,  # Use target column ID
-                                    "position": 0,
-                                    "name": target_name,
-                                    "alias": target_name,
-                                    "dataType": resolved_target_type
-                                }, discovered_target_col if 'discovered_target_col' in locals() and discovered_target_col else col))
-                                logger.debug(f"Target key: {source_name} -> {target_name} (source ID={source_col_id}, target ID={target_col_id})")
-                                break
-                # Resolve YAML keys: missed by mapping pairs (same defense as source path).
-                found_target_key_names = {
-                    str(k.get("name")).lower()
-                    for k in target_keys
-                    if isinstance(k, dict) and k.get("name") is not None
-                }
-                for key_name in custom_config["keys"]:
-                    if isinstance(key_name, dict):
-                        key_name = key_name.get("name") or (next(iter(key_name)) if key_name else None)
-                    if key_name is None:
-                        continue
-                    if str(key_name).lower() in found_target_key_names:
-                        continue
-                    matched = next(
-                        (c for c in columns["columns"] if str(c.get("name", "")).lower() == str(key_name).lower()),
-                        None,
-                    )
-                    if not matched:
-                        error_msg = (
-                            f"CRITICAL ERROR: Target key '{key_name}' not found in discovery for table "
-                            f"'{table_name}' in schema '{yaml_target_schema}'."
-                        )
-                        logger.error(error_msg)
-                        raise ValueError(error_msg)
-                    source_col_id = matched.get("id")
-                    if source_col_id is None:
-                        error_msg = (
-                            f"CRITICAL ERROR: Column '{key_name}' in table {table_name} is missing "
-                            f"'id' field in CoreHub API response."
-                        )
-                        logger.error(error_msg)
-                        raise ValueError(error_msg)
-                    # Prefer mapped target alias if present on source columns_def; else source name.
-                    src_def = next(
-                        (c for c in columns_def if str(c.get("name", "")).lower() == str(matched["name"]).lower()),
-                        None,
-                    )
-                    target_name = (src_def.get("alias") if src_def and src_def.get("alias") else matched["name"])
-                    discovered_target_col = target_discovered_columns_by_name.get(str(target_name).lower())
-                    resolved_target_type = None
-                    target_col_id = source_col_id
-                    if discovered_target_col:
-                        if discovered_target_col.get("dataType"):
-                            resolved_target_type = discovered_target_col.get("dataType")
-                        if discovered_target_col.get("id") is not None:
-                            target_col_id = discovered_target_col.get("id")
-                    else:
-                        resolved_target_type = map_data_type(
-                            matched.get("dataType"), source_node_info, target_node_info,
-                            source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
-                            target_table_column_types=target_table_column_types,
-                        )
-                    _override = target_data_type_overrides.get(matched["name"].lower())
-                    if _override:
-                        resolved_target_type = _override
-                    target_keys.append(_enrich_column({
-                        "id": target_col_id,
-                        "position": 0,
-                        "name": target_name,
-                        "alias": target_name,
-                        "dataType": resolved_target_type,
-                    }, discovered_target_col if discovered_target_col else matched))
-                    found_target_key_names.add(str(target_name).lower())
-                    if not any(str(c.get("name", "")).lower() == str(target_name).lower() for c in target_columns_def):
-                        target_columns_def.append(_enrich_column({
-                            "id": target_col_id,
-                            "position": 0,
-                            "name": target_name,
-                            "alias": target_name,
-                            "dataType": resolved_target_type,
-                            "isPK": True,
-                            "isIdentity": matched.get("isIdentity", False),
-                            "isNullable": matched.get("isNullable", False),
-                        }, discovered_target_col if discovered_target_col else matched))
-                    logger.info(
-                        f"Target key {key_name!r} -> {target_name!r} resolved from discovery after mapping miss"
-                    )
-            else:
-                # No column mappings, use keys directly from source columns
-                for key_name in custom_config['keys']:
-                    # Find the column and its ID (case-insensitive)
-                    for col in columns["columns"]:
-                        if col["name"].lower() == key_name.lower():
-                            # Use the id field from CoreHub API as the column ID
-                            source_col_id = col.get('id')
-                            if source_col_id is None:
-                                error_msg = f"CRITICAL ERROR: Column '{key_name}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
-                                logger.error(error_msg)
-                                raise ValueError(error_msg)
-
-                            discovered_target_col = target_discovered_columns_by_name.get(key_name.lower())
-                            resolved_target_type = None
-                            target_col_id = source_col_id  # Default to source ID
-                            
-                            if discovered_target_col:
-                                if discovered_target_col.get('dataType'):
-                                    resolved_target_type = discovered_target_col.get('dataType')
-                                if discovered_target_col.get('id') is not None:
-                                    target_col_id = discovered_target_col.get('id')
-                            else:
-                                resolved_target_type = map_data_type(col.get("dataType"), source_node_info, target_node_info,
-                                                                     source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
-                                                                     target_table_column_types=target_table_column_types)
-
-                            # User-declared targetDataType override takes highest priority
-                            _override = target_data_type_overrides.get(col["name"].lower())
-                            if _override:
-                                resolved_target_type = _override
-
-                            target_key_name = discovered_target_col.get('name') if discovered_target_col else col["name"]
-                            target_keys.append(_enrich_column({
-                                "id": target_col_id,  # Use target column ID
-                                "name": target_key_name,
-                                "alias": target_key_name,
-                                "dataType": resolved_target_type
-                            }, discovered_target_col if 'discovered_target_col' in locals() and discovered_target_col else col))
-                            found = True
-                            logger.debug(f"Target key: {key_name} (source ID={source_col_id}, target ID={target_col_id})")
-                            break
-                    if not found:
-                        logger.warning(f"Warning: Target key '{key_name}' not found in columns for table '{table_name}'. Searching in target_columns_def...")
-                        for col_def in target_columns_def:
-                            if col_def.get('name', '').lower() == key_name.lower():
-                                target_keys.append(copy.deepcopy(col_def))
-                                found = True
-                                logger.info(f"Found target key '{key_name}' in target_columns_def")
-                                break
-                    
-                    if not found:
-                        error_msg = f"CRITICAL ERROR: Target key '{key_name}' not found in discovery or target_columns_def for table '{table_name}' in schema '{yaml_target_schema}'. This key is required by the YAML configuration but does not exist in the target database discovery."
-                        logger.error(error_msg)
-                        raise ValueError(error_msg)
-
-        else:
-            target_keys = []
-            for col in columns["columns"]:
-                if _coerce_is_pk(col.get("isPK")):
-                    # Use the id field from CoreHub API as the column ID
-                    col_id = col.get('id')
-                    if col_id is None:
-                        error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
-                        logger.error(error_msg)
-                        raise ValueError(error_msg)
-                        
-                    _resolved_dt = target_discovered_columns_by_name.get(col["name"].lower(), {}).get('type') or map_data_type(
-                        col.get("dataType"), source_node_info, target_node_info,
-                        source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
-                        target_table_column_types=target_table_column_types)
-                    # User-declared targetDataType override takes highest priority
-                    _override = target_data_type_overrides.get(col["name"].lower())
-                    if _override:
-                        _resolved_dt = _override
-                    target_keys.append(_enrich_column({
-                        "id": col_id,  # Use actual ordinal position from database
-                        "position": col.get("position", 0),
-                        "name": col["name"],
-                        "alias": col["name"],
-                        "dataType": _resolved_dt
-                    }, discovered_target_col if 'discovered_target_col' in locals() and discovered_target_col else col))
-            logger.debug(f"Using primary target keys for {table_name}: {target_keys}")
-
-        _paint_is_pk_on_columns(target_columns_def, target_keys)
 
         # Determine target entity type based on target_type
         # Check if target_type indicates NoSQL (case-insensitive)
         is_target_nosql = target_type and "nosql" in target_type.lower()
         target_entity_type_name = "NoSqlEntity" if is_target_nosql else "SingleTable"
         logger.debug(f"Target entity type determination: target_type='{target_type}', is_target_nosql={is_target_nosql}, selected type='{target_entity_type_name}'")
-
-
-        # Field Functions from YAML columns[].expression → entityType.fieldFunctions (GSSD-1355)
-        _ff = build_field_functions_for_entity_type(
-            custom_config.get("columns"),
-            target_columns_def,
-            target_table_id,
-        )
-        if _ff:
-            target_entity_type["fieldFunctions"] = _ff
-            logger.info(
-                f"Table {table_name}: attaching {len(_ff)} field function(s) on target entityType"
-            )
 
         target_entity = {
             "type": target_entity_type_name,
@@ -2437,128 +2474,10 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 "keys": key_ids
             }
 
-        # Build columns definition
-        columns_def = []
-        has_column_mappings = _is_column_mappings(custom_config.get('columns', []))
-        
-        if has_column_mappings:
-            yaml_columns = custom_config.get('columns', [])
-            for idx, column_map in enumerate(yaml_columns, 1):
-                # Extract source:target pairs, ignoring metadata fields
-                mapping_pairs = _extract_mapping_pairs(column_map)
-                for source_name, target_name in mapping_pairs:
-                    matched_col = next((c for c in columns["columns"] if str(c.get("name","")).lower() == str(source_name).lower()), None)
-                    
-                    if matched_col:
-                        col_id = matched_col.get('id')
-                        if col_id is None:
-                            raise ValueError(f"Column '{matched_col.get('name')}' in {yaml_table_key} missing 'id' field")
+        columns_def, keys, has_column_mappings, is_column_whitelist, _discovery_type_by_source = _assemble_source_columns(
+            columns, custom_config, yaml_table_key, source_schema
+        )
 
-                        columns_def.append(_enrich_column({
-                            "id": col_id,
-                            "position": matched_col.get("position", 0),
-                            "name": matched_col["name"],
-                            "alias": target_name,
-                            "dataType": matched_col.get("dataType"),
-                            "isPK": _coerce_is_pk(matched_col.get("isPK")) or _is_in_keys(matched_col["name"], custom_config), 
-                            "isIdentity": matched_col.get("isIdentity", False), 
-                            "isNullable": matched_col.get("isNullable", False)
-                        }, matched_col))
-                    else:
-                        logger.warning(f"Warning: Column '{source_name}' from YAML mapping not found in discovery for duplicate table {yaml_table_key}. Using YAML metadata.")
-                        columns_def.append({
-                            "id": get_table_id(source_schema, source_name),
-                            "position": idx,
-                            "name": source_name,
-                            "alias": target_name,
-                            "dataType": "VARCHAR",
-                            "isPK": _is_in_keys(source_name, custom_config),
-                            "isIdentity": False,
-                            "isNullable": True
-                        })
-        
-        if not has_column_mappings or not columns_def:
-            for col in columns["columns"]:
-                col_id = col.get('id')
-                if col_id is None:
-                    raise ValueError(f"Column '{col.get('name')}' in {yaml_table_key} missing 'id' field")
-                columns_def.append(_enrich_column({
-                    "id": col_id,
-                    "position": col.get("position", 0),
-                    "name": col["name"],
-                    "alias": col["name"],
-                    "dataType": col.get("dataType"),
-                    "isPK": _coerce_is_pk(col.get("isPK")) or _is_in_keys(col["name"], custom_config), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
-                }, col))
-
-        # Process keys
-        if custom_config and 'keys' in custom_config and custom_config['keys'] is not None:
-            keys = []
-            if has_column_mappings:
-                for col in columns["columns"]:
-                    col_id = col.get('id')
-                    if col_id is None:
-                        raise ValueError(f"Column '{col.get('name')}' in {yaml_table_key} missing 'id' field")
-                    for column_map in custom_config['columns']:
-                        # Extract source:target pairs, ignoring metadata fields
-                        mapping_pairs = _extract_mapping_pairs(column_map)
-                        for source_name, target_name in mapping_pairs:
-                            if col["name"].lower() == str(source_name).lower() and _is_in_keys(col["name"], custom_config):
-                                keys.append(_enrich_column({
-                                    "id": col_id,
-                                    "position": col.get("position", 0),
-                                    "name": col["name"],
-                                    "alias": target_name,
-                                    "dataType": col.get("dataType")
-                                }, col))
-            else:
-                for key_name in custom_config['keys']:
-                    found = False
-                    for col in columns["columns"]:
-                        if col["name"].lower() == key_name.lower():
-                            col_id = col.get('id')
-                            if col_id is None:
-                                raise ValueError(f"Key '{key_name}' in {yaml_table_key} missing 'id' field")
-                            keys.append(_enrich_column({
-                                "id": col_id,
-                                "position": col.get("position", 0),
-                                "name": col["name"],
-                                "alias": col["name"],
-                                "dataType": col.get("dataType")
-                            }, col))
-                            found = True
-                            break
-                    if not found:
-                        logger.warning(f"Warning: Key '{key_name}' not found in columns for duplicate table '{yaml_table_key}'. Searching in columns_def...")
-                        for col_def in columns_def:
-                            if col_def.get('name', '').lower() == key_name.lower():
-                                keys.append(copy.deepcopy(col_def))
-                                found = True
-                                break
-                    if not found:
-                        error_msg = f"CRITICAL ERROR: Key '{key_name}' not found in discovery or columns_def for duplicate table entry '{yaml_table_key}' (source: {table_name}, schema: {source_schema})."
-                        logger.error(error_msg)
-                        raise ValueError(error_msg)
-
-        else:
-            keys = []
-            for col in columns["columns"]:
-                if _coerce_is_pk(col.get("isPK")):
-                    col_id = col.get('id')
-                    if col_id is None:
-                        raise ValueError(f"Primary key column '{col.get('name')}' in {yaml_table_key} missing 'id' field")
-                    keys.append(_enrich_column({
-                        "id": col_id,
-                        "position": col.get("position", 0),
-                        "name": col["name"],
-                        "alias": col["name"],
-                        "dataType": col.get("dataType")
-                    }, col))
-
-        _paint_is_pk_on_columns(columns_def, keys)
-
-        char_set_overrides = _build_char_set_overrides((custom_config or {}).get('columns', []))
-        _apply_char_set_overrides(columns_def, char_set_overrides, yaml_table_key)
 
         if not keys:
             logger.warning(f"No keys specified for duplicate table {yaml_table_key}")
@@ -2644,115 +2563,14 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
             target_entity_type["udf"] = udf_config
             target_entity_type["mappingFunctionInfo"] = udf_config[0]
         
-        # Generate columnsMappingMatrix
-        columns_mapping_matrix = []
-        
-        if is_unlocked_schema:
-            columns_mapping_matrix.append({
-                "sourceTableObjectId": source_table_id,
-                "targetTableObjectId": target_table_id,
-                "sourceColumnId": 0,
-                "targetColumnId": 0
-            })
-            target_entity_type["tablesWithUnlockedSchema"] = [target_table_id]
-            target_entity_type["tablesWithUnlockedDataTypes"] = []
-        else:
-            if 'columns' in columns and isinstance(columns['columns'], list):
-                for col in columns['columns']:
-                    source_col_id = col.get('id')
-                    if source_col_id is None:
-                        raise ValueError(f"Column '{col.get('name')}' in {yaml_table_key} missing 'id' field")
-                    target_col_id = source_col_id
-                    columns_mapping_matrix.append({
-                        "sourceTableObjectId": source_table_id,
-                        "targetTableObjectId": target_table_id,
-                        "sourceColumnId": source_col_id,
-                        "targetColumnId": target_col_id
-                    })
-            target_entity_type["tablesWithUnlockedSchema"] = []
-            target_entity_type["tablesWithUnlockedDataTypes"] = []
-
-        target_entity_type["columnsMappingMatrix"] = columns_mapping_matrix
-
-        # Discover target columns to enable type-mapping fallback against existing target table
-        try:
-            _dup_target_discovered = get_table_columns(token, pipeline_id, target_agent_id, yaml_target_schema, target_table_name)
-        except Exception as e:
-            logger.debug(f"Could not get target columns for duplicate table {yaml_target_schema}.{target_table_name}: {str(e)}")
-            _dup_target_discovered = None
-        target_table_column_types = extract_target_column_types(_dup_target_discovered)
-
-        # Build target columns (simplified - using source columns with type mapping)
-        target_columns_def = []
-        for col in columns["columns"]:
-            col_id = col.get('id')
-            if col_id is None:
-                raise ValueError(f"Column '{col.get('name')}' in {yaml_table_key} missing 'id' field")
-            
-            resolved_target_type = map_data_type(col.get("dataType"), source_node_info, target_node_info,
-                                                 source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
-                                                 target_table_column_types=target_table_column_types)
-            target_columns_def.append(_enrich_column({
-                "id": col_id,
-                "position": col.get("position", 0),
-                "name": col["name"],
-                "alias": col["name"],
-                "dataType": resolved_target_type,
-                "isPK": _coerce_is_pk(col.get("isPK")) or _is_in_keys(col["name"], custom_config), "isIdentity": (discovered_target_col.get("isIdentity") if discovered_target_col else None) or col.get("isIdentity", False), "isNullable": discovered_target_col.get("isNullable") if discovered_target_col and "isNullable" in discovered_target_col else col.get("isNullable", False)
-            }, discovered_target_col if 'discovered_target_col' in locals() and discovered_target_col else col))
-
-        # Build target keys
-        target_keys = []
-        if custom_config and 'keys' in custom_config and custom_config['keys'] is not None:
-            for key_name in custom_config['keys']:
-                found = False
-                for col in columns["columns"]:
-                    if col["name"].lower() == key_name.lower():
-                        col_id = col.get('id')
-                        if col_id is None:
-                            raise ValueError(f"Key '{key_name}' in {yaml_table_key} missing 'id' field")
-                        
-                        resolved_target_type = map_data_type(col.get("dataType"), source_node_info, target_node_info,
-                                                             source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
-                                                             target_table_column_types=target_table_column_types)
-                        target_keys.append(_enrich_column({
-                            "id": col_id,
-                            "position": col.get("position", 0),
-                            "name": col["name"],
-                            "alias": col["name"],
-                            "dataType": resolved_target_type
-                        }, discovered_target_col if 'discovered_target_col' in locals() and discovered_target_col else col))
-                        found = True
-                        break
-                if not found:
-                    logger.warning(f"Warning: Target key '{key_name}' not found in columns for duplicate table '{yaml_table_key}'. Searching in target_columns_def...")
-                    for col_def in target_columns_def:
-                        if col_def.get('name', '').lower() == key_name.lower():
-                            target_keys.append(copy.deepcopy(col_def))
-                            found = True
-                            break
-                if not found:
-                    error_msg = f"CRITICAL ERROR: Target key '{key_name}' not found in discovery or target_columns_def for duplicate table entry '{yaml_table_key}' (target: {target_table_name}, schema: {yaml_target_schema})."
-                    logger.error(error_msg)
-                    raise ValueError(error_msg)
-
-        else:
-            for col in columns["columns"]:
-                if _coerce_is_pk(col.get("isPK")):
-                    col_id = col.get('id')
-                    if col_id is None:
-                        raise ValueError(f"Primary key '{col.get('name')}' in {yaml_table_key} missing 'id' field")
-                    
-                    resolved_target_type = map_data_type(col.get("dataType"), source_node_info, target_node_info,
-                                                         source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
-                                                         target_table_column_types=target_table_column_types)
-                    target_keys.append(_enrich_column({
-                        "id": col_id,
-                        "position": col.get("position", 0),
-                        "name": col["name"],
-                        "alias": col["name"],
-                        "dataType": resolved_target_type
-                    }, discovered_target_col if 'discovered_target_col' in locals() and discovered_target_col else col))
+        target_columns_def, target_keys = _assemble_target_side(
+            token, pipeline_id, target_agent_id, yaml_target_schema, target_table_name, yaml_table_key,
+            columns, columns_def, custom_config, has_column_mappings, is_column_whitelist,
+            _discovery_type_by_source, is_unlocked_schema, source_table_id, target_table_id,
+            target_entity_type, source_node_info, target_node_info, source_agent_tag, target_agent_tag,
+            skip_errors,
+        )
+        columns_mapping_matrix = target_entity_type["columnsMappingMatrix"]
 
         is_target_nosql = target_type and "nosql" in target_type.lower()
         target_entity_type_name = "NoSqlEntity" if is_target_nosql else "SingleTable"
@@ -2761,19 +2579,6 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         if document_key:
             target_table_properties["documentKey"] = document_key
 
-        _paint_is_pk_on_columns(target_columns_def, target_keys)
-
-        # Field Functions from YAML columns[].expression → entityType.fieldFunctions (GSSD-1355)
-        _ff = build_field_functions_for_entity_type(
-            custom_config.get("columns"),
-            target_columns_def,
-            target_table_id,
-        )
-        if _ff:
-            target_entity_type["fieldFunctions"] = _ff
-            logger.info(
-                f"Table {yaml_table_key}: attaching {len(_ff)} field function(s) on target entityType"
-            )
 
         target_entity = {
             "type": target_entity_type_name,
@@ -3335,7 +3140,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 "id": str(target_table_id),
                 "name": table_key,
                 "schema": target_schema
-            }, discovered_target_col if 'discovered_target_col' in locals() and discovered_target_col else col))
+            }, col))
             target_keys.append(keys)
 
         # Get allowed operations and other target settings

@@ -252,51 +252,25 @@
                 "dataType": "int",
                 "id": 1,
                 "isIdentity": false,
-                "isNullable": true,
+                "isNullable": false,
                 "isPK": true,
                 "name": "ID",
                 "numPrec": 0,
                 "numScale": 0,
-                "position": 1,
+                "position": 0,
                 "tableId": 164927084
               },
               {
-                "charMaxLength": 0,
+                "charMaxLength": 255,
                 "dataType": "varchar",
                 "id": 2,
                 "isIdentity": false,
                 "isNullable": true,
                 "isPK": false,
-                "name": "NAME",
+                "name": "FULL_NAME",
                 "numPrec": 0,
                 "numScale": 0,
-                "position": 2,
-                "tableId": 164927084
-              },
-              {
-                "charMaxLength": 0,
-                "dataType": "varchar",
-                "id": 3,
-                "isIdentity": false,
-                "isNullable": true,
-                "isPK": false,
-                "name": "EMAIL",
-                "numPrec": 0,
-                "numScale": 0,
-                "position": 3,
-                "tableId": 164927084
-              },
-              {
-                "charMaxLength": 0,
-                "dataType": "datetime",
-                "id": 4,
-                "isIdentity": false,
-                "isNullable": true,
-                "isPK": false,
-                "name": "CREATED",
-                "numPrec": 0,
-                "numScale": 0,
-                "position": 4,
+                "position": 0,
                 "tableId": 164927084
               }
             ],
@@ -324,18 +298,6 @@
                   "sourceColumnId": 2,
                   "sourceTableObjectId": 500,
                   "targetColumnId": 2,
-                  "targetTableObjectId": 164927084
-                },
-                {
-                  "sourceColumnId": 3,
-                  "sourceTableObjectId": 500,
-                  "targetColumnId": 3,
-                  "targetTableObjectId": 164927084
-                },
-                {
-                  "sourceColumnId": 4,
-                  "sourceTableObjectId": 500,
-                  "targetColumnId": 4,
                   "targetTableObjectId": 164927084
                 }
               ],
@@ -368,18 +330,6 @@
             "sourceColumnId": 2,
             "sourceTableObjectId": 500,
             "targetColumnId": 2,
-            "targetTableObjectId": 164927084
-          },
-          {
-            "sourceColumnId": 3,
-            "sourceTableObjectId": 500,
-            "targetColumnId": 3,
-            "targetTableObjectId": 164927084
-          },
-          {
-            "sourceColumnId": 4,
-            "sourceTableObjectId": 500,
-            "targetColumnId": 4,
             "targetTableObjectId": 164927084
           }
         ],
