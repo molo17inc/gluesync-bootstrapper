@@ -285,7 +285,7 @@ not create, and on 2.3 the key rules of the pair would run against one table whi
 - C. B on every CoreHub: also fixes 2.2.x, and changes the 2.2.x chain payload of a table with a different `name`.
 
 Recommendation B: the key rules need the table the entity names, and 2.2.x payloads stay pinned (RK-2); C is a fix
-for 2.2.x users for the maintainer to decide on its own. Implemented: B, until the maintainer answers.
+for 2.2.x users for the maintainer to decide on its own. Answered B on 2026-10-12 and implemented.
 
 ## 2. Pending verifications
 
@@ -315,7 +315,7 @@ for 2.2.x users for the maintainer to decide on its own. Implemented: B, until t
 Answered on 2026-10-12: BOP-1 A (with backward compatibility, sub-question (a)), BOP-3 A, BOP-4 A, BOP-5 A, BOP-6 A,
 BOP-12 A, and the per-table extraction of 02 §4 in this merge request, in its own commit. Found while implementing
 and answered the same day: BOP-15 A, BOP-16 A for the keys and the forms, BOP-17 all A, BOP-18 A. BOP-19, found
-while implementing BOP-16, is written on its recommendation B until the maintainer answers. To answer before
+while implementing BOP-16, answered B. To answer before
 implementation: none; BOP-13 A and BOP-14 A were answered the same day. BOP-2, BOP-7, BOP-8, BOP-9 and BOP-10 can
 take their recommendations at review; BOP-11 at release. PV-1 and PV-3 are checked before the merge request leaves
 Draft.
