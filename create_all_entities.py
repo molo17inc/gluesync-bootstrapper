@@ -306,27 +306,45 @@ def _name_relations(relations, columns_def, table_name):
     return by_name + group_relations([r for r in relations or [] if not r["sources"]], label=table_name)
 
 
+def _id_resolver(columns):
+    """``resolve(name)``: the id of the column spelt ``name``, else of the one column spelt so case-insensitively.
+
+    A NoSQL source may hold columns that differ by case only (Cosmos DB's ``id`` next to a document field ``ID``):
+    the exact spelling wins, so they stay two columns. Returns None for no column, or for several case-insensitive
+    matches and no exact one.
+    """
+    exact, folded = {}, {}
+    for col in columns:
+        name = str(col.get("name", ""))
+        exact.setdefault(name, col.get("id"))
+        ids = folded.setdefault(name.lower(), [])
+        if col.get("id") not in ids:
+            ids.append(col.get("id"))
+
+    def resolve(name):
+        if name in exact:
+            return exact[name]
+        ids = folded.get(str(name).lower(), [])
+        return ids[0] if len(ids) == 1 else None
+    return resolve
+
+
 def _relations_by_id(name_relations, columns_def, target_columns_def, table_name):
-    """``name_relations`` over the column ids of the entity, names compared case-insensitively."""
-    source_ids, target_ids = {}, {}
-    for col in columns_def:
-        source_ids.setdefault(str(col.get("name", "")).lower(), col.get("id"))
-    for col in target_columns_def:
-        target_ids.setdefault(str(col.get("name", "")).lower(), col.get("id"))
+    """``name_relations`` over the column ids of the entity: the exact spelling first, then case-insensitively."""
+    source_id, target_id = _id_resolver(columns_def), _id_resolver(target_columns_def)
     by_id = []
     for relation in name_relations:
-        for side, names, ids in (("source", relation["sources"], source_ids), ("target", relation["targets"], target_ids)):
-            missing = [n for n in names if n.lower() not in ids]
+        resolved = {}
+        for side, names, resolve in (("source", relation["sources"], source_id), ("target", relation["targets"], target_id)):
+            ids = [resolve(n) for n in names]
+            missing = [n for n, i in zip(names, ids) if i is None]
             if missing:
                 raise EntityMappingError(
                     f"Table {table_name}: the column mapping names the {side} column(s) {', '.join(missing)}, which "
-                    f"the entity does not hold"
+                    f"the entity does not hold, or holds under several spellings that differ by case only"
                 )
-        by_id.append({
-            "sources": [source_ids[n.lower()] for n in relation["sources"]],
-            "targets": [target_ids[n.lower()] for n in relation["targets"]],
-            "explicit": relation.get("explicit", True),
-        })
+            resolved[side] = ids
+        by_id.append({"sources": resolved["source"], "targets": resolved["target"], "explicit": relation.get("explicit", True)})
     return by_id
 
 
@@ -530,6 +548,7 @@ def _assemble_source_columns(columns, custom_config, table_name, source_schema, 
         # Column whitelist format: only use specified columns, not all discovered
         # Format: [{name: "col", type: "VARCHAR", sourceName: "SOURCE_COL"}, ...]
         yaml_columns = custom_config.get('columns', [])
+        unmatched_rows = set()
         for yaml_col in yaml_columns:
             # sourceName is the source column name; name is the target column name
             source_col_name = yaml_col.get('sourceName') or yaml_col.get('name')
@@ -562,8 +581,13 @@ def _assemble_source_columns(columns, custom_config, table_name, source_schema, 
                     break
             else:
                 logger.warning(f"Column '{source_col_name}' from YAML whitelist not found in discovered columns for table {table_name}")
+                unmatched_rows.add(id(yaml_col))
         
         logger.info(f"Using column whitelist for {table_name}: {len(columns_def)} of {len(yaml_columns)} specified columns matched")
+        # A whitelist row the source does not hold is left out of the entity (it may still define a column of the
+        # target table created from the YAML), so it states no relation either, as before Gluesync 2.3.
+        if relations is not None and unmatched_rows:
+            relations = [r for r in relations if id(r.get("row")) not in unmatched_rows]
 
     # If there are no column mappings or whitelist, fall back to
     # using discovery columns as-is (one-to-one source→target mapping).
@@ -835,6 +859,18 @@ def _assemble_target_side(token, pipeline_id, target_agent_id, yaml_target_schem
     except Exception as e:
         logger.debug(f"Could not get target columns for {yaml_target_schema}.{target_table_name}: {str(e)}")
 
+    target_discovered_columns_exact = {
+        c.get('name'): c for c in reversed((target_discovered_columns or {}).get('columns') or []) if c.get('name')
+    }
+
+    def _target_col(name, default=None):
+        """The discovered target column spelt ``name``, else the one spelt so case-insensitively (``default`` if none)."""
+        found = target_discovered_columns_exact.get(str(name))
+        if found is None:
+            matches = [c for c in target_discovered_columns_exact.values() if c['name'].lower() == str(name).lower()]
+            found = matches[0] if len(matches) == 1 else None
+        return found if found is not None else default
+
     # Build set of dataTypes already present in the target table for type-mapping fallback
     target_table_column_types = extract_target_column_types(target_discovered_columns)
 
@@ -878,7 +914,7 @@ def _assemble_target_side(token, pipeline_id, target_agent_id, yaml_target_schem
                     if not column_map["targets"]:
                         break  # read, never written (1:null): no target column
                     if str(col["name"]).lower() == str(source_name).lower():
-                        discovered_target_col = target_discovered_columns_by_name.get(target_name.lower())
+                        discovered_target_col = _target_col(target_name)
                         if grouped:
                             # The key rules compare names case-sensitively: take the spelling discovery reports (BOP-15).
                             if discovered_target_col and discovered_target_col.get('name'):
@@ -947,7 +983,7 @@ def _assemble_target_side(token, pipeline_id, target_agent_id, yaml_target_schem
                         raise ValueError(error_msg)
                     
                     # Look up target column info
-                    discovered_target_col = target_discovered_columns_by_name.get(target_col_name.lower())
+                    discovered_target_col = _target_col(target_col_name)
                     if grouped and discovered_target_col and discovered_target_col.get('name'):
                         target_col_name = discovered_target_col['name']  # BOP-15, as for mapping rows
                     target_col_id = source_col_id  # Default to source ID
@@ -1015,7 +1051,7 @@ def _assemble_target_side(token, pipeline_id, target_agent_id, yaml_target_schem
                 logger.error(error_msg)
                 raise ValueError(error_msg)
 
-            discovered_target_col = target_discovered_columns_by_name.get(col["name"].lower())
+            discovered_target_col = _target_col(col["name"])
             resolved_target_type = None
             target_col_id = source_col_id  # Default to source ID
             
@@ -1061,7 +1097,7 @@ def _assemble_target_side(token, pipeline_id, target_agent_id, yaml_target_schem
                 error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
                 logger.error(error_msg)
                 raise ValueError(error_msg)
-            discovered_target_col = target_discovered_columns_by_name.get(col["name"].lower())
+            discovered_target_col = _target_col(col["name"])
             resolved_target_type = None
             target_col_id = source_col_id
             if discovered_target_col:
@@ -1100,7 +1136,7 @@ def _assemble_target_side(token, pipeline_id, target_agent_id, yaml_target_schem
             if any(str(c.get("name", "")).lower() == target_name.lower() for c in target_columns_def):
                 continue
             row = relation["row"] or {}
-            discovered_target_col = target_discovered_columns_by_name.get(target_name.lower())
+            discovered_target_col = _target_col(target_name)
             used_ids = [c.get("id") for c in target_columns_def if isinstance(c.get("id"), int)]
             produced_col = {
                 "id": discovered_target_col.get("id") if discovered_target_col and discovered_target_col.get("id") is not None
@@ -1219,7 +1255,7 @@ def _assemble_target_side(token, pipeline_id, target_agent_id, yaml_target_schem
         if any(str(c.get("name", "")).lower() == target_name.lower() for c in target_columns_def):
             continue
         col = next(c for c in columns_def if c["name"] == relation["sources"][0])
-        discovered_target_col = target_discovered_columns_by_name.get(target_name.lower())
+        discovered_target_col = _target_col(target_name)
         resolved_target_type = discovered_target_col.get('dataType') if discovered_target_col else None
         if not discovered_target_col:
             resolved_target_type = map_data_type(col.get("dataType"), source_node_info, target_node_info,
@@ -1258,7 +1294,7 @@ def _assemble_target_side(token, pipeline_id, target_agent_id, yaml_target_schem
             # The UDF writes every target column, a target primary key no source feeds included.
             for key_name in physical_target:
                 if not any(str(c.get("name", "")).lower() == key_name.lower() for c in target_columns_def):
-                    key_col = target_discovered_columns_by_name[key_name.lower()]
+                    key_col = _target_col(key_name)
                     target_columns_def.append(_enrich_column({
                         "id": key_col.get("id"), "position": 0, "name": key_col["name"], "alias": key_col["name"],
                         "dataType": key_col.get("dataType"), "isPK": True, "isIdentity": key_col.get("isIdentity", False),
@@ -1311,7 +1347,7 @@ def _assemble_target_side(token, pipeline_id, target_agent_id, yaml_target_schem
                     for column_map in relations or []:
                         for source_name, target_name in _relation_pairs([column_map]):
                             if col["name"].lower() == str(source_name).lower() and _is_in_keys(col["name"], custom_config):
-                                discovered_target_col = target_discovered_columns_by_name.get(target_name.lower())
+                                discovered_target_col = _target_col(target_name)
                                 resolved_target_type = None
                                 target_col_id = source_col_id  # Default to source ID
                             
@@ -1377,7 +1413,7 @@ def _assemble_target_side(token, pipeline_id, target_agent_id, yaml_target_schem
                         None,
                     )
                     target_name = (src_def.get("alias") if src_def and src_def.get("alias") else matched["name"])
-                    discovered_target_col = target_discovered_columns_by_name.get(str(target_name).lower())
+                    discovered_target_col = _target_col(str(target_name))
                     resolved_target_type = None
                     target_col_id = source_col_id
                     if discovered_target_col:
@@ -1429,7 +1465,7 @@ def _assemble_target_side(token, pipeline_id, target_agent_id, yaml_target_schem
                                 logger.error(error_msg)
                                 raise ValueError(error_msg)
 
-                            discovered_target_col = target_discovered_columns_by_name.get(key_name.lower())
+                            discovered_target_col = _target_col(key_name)
                             resolved_target_type = None
                             target_col_id = source_col_id  # Default to source ID
                         
@@ -1483,7 +1519,7 @@ def _assemble_target_side(token, pipeline_id, target_agent_id, yaml_target_schem
                         logger.error(error_msg)
                         raise ValueError(error_msg)
                     
-                    _resolved_dt = target_discovered_columns_by_name.get(col["name"].lower(), {}).get('type') or map_data_type(
+                    _resolved_dt = _target_col(col["name"], {}).get('type') or map_data_type(
                         col.get("dataType"), source_node_info, target_node_info,
                         source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
                         target_table_column_types=target_table_column_types)
@@ -1519,7 +1555,7 @@ def _assemble_target_side(token, pipeline_id, target_agent_id, yaml_target_schem
                 logger.error(error_msg)
                 raise ValueError(error_msg)
             target_col_name = col_def.get('alias', source_col_name) if has_filter else source_col_name
-            target_col = target_discovered_columns_by_name.get(str(target_col_name).lower())
+            target_col = _target_col(str(target_col_name))
             target_col_id = target_col.get('id') if target_col and target_col.get('id') is not None else source_col_id
             legacy_relations.append({"sources": [source_col_id], "targets": [target_col_id], "explicit": has_filter})
         entries = build_entries(source_table_id, target_table_id, legacy_relations, columns_def, target_columns_def,
