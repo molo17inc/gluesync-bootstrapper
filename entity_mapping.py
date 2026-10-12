@@ -35,6 +35,21 @@ class EntityMappingError(ValueError):
 # Wire shapes
 # ---------------------------------------------------------------------------
 
+def _read_side(entry: Mapping[str, Any], side: str, scalar_key: str, list_key: str) -> List[Any]:
+    """One side of a stored matrix entry, by CoreHub's decoding rules (see :func:`read_entry`)."""
+    scalar = entry.get(scalar_key)
+    ids = entry.get(list_key)
+    if ids is None:
+        if scalar is None:
+            raise EntityMappingError(f"the matrix entry {dict(entry)} has no {side} column ({scalar_key} or {list_key})")
+        return [scalar] if scalar != 0 else []
+    if not isinstance(ids, list):
+        raise EntityMappingError(f"{list_key} must be a list of column ids, not {ids!r}")
+    if scalar is not None and list(ids) != ([scalar] if scalar != 0 else []):
+        raise EntityMappingError(f"{scalar_key} {scalar} disagrees with {list_key} {ids}; send one shape")
+    return list(ids)
+
+
 def read_entry(entry: Mapping[str, Any]) -> Entry:
     """``(source_table_id, target_table_id, source_ids, target_ids)`` of a stored matrix entry.
 
@@ -42,21 +57,8 @@ def read_entry(entry: Mapping[str, Any]) -> Entry:
     (``[v]`` with ``v``, ``[]`` with ``0``); a scalar alone gives ``[]`` for ``0`` and ``[v]``
     otherwise; a ``null`` list or scalar counts as absent, and a side with neither is refused.
     """
-    sides = []
-    for side, scalar_key, list_key in _SIDES:
-        scalar = entry.get(scalar_key)
-        ids = entry.get(list_key)
-        if ids is not None:
-            if not isinstance(ids, list):
-                raise EntityMappingError(f"{list_key} must be a list of column ids, not {ids!r}")
-            if scalar is not None and list(ids) != ([scalar] if scalar != 0 else []):
-                raise EntityMappingError(f"{scalar_key} {scalar} disagrees with {list_key} {ids}; send one shape")
-            sides.append(list(ids))
-        elif scalar is not None:
-            sides.append([scalar] if scalar != 0 else [])
-        else:
-            raise EntityMappingError(f"the matrix entry {dict(entry)} has no {side} column ({scalar_key} or {list_key})")
-    return entry.get("sourceTableObjectId"), entry.get("targetTableObjectId"), sides[0], sides[1]
+    source_ids, target_ids = (_read_side(entry, *side) for side in _SIDES)
+    return entry.get("sourceTableObjectId"), entry.get("targetTableObjectId"), source_ids, target_ids
 
 
 def encode_entries(entries: Sequence[Entry], grouped: bool) -> List[Dict[str, Any]]:
@@ -117,6 +119,42 @@ def _names(ids: Iterable[Any], by_id: Mapping[Any, Mapping[str, Any]]) -> str:
     return ", ".join(str(by_id[i].get("name")) if i in by_id else f"id {i}" for i in ids)
 
 
+def _ordered(ids: Iterable[Any], by_id: Mapping[Any, Mapping[str, Any]]) -> List[Any]:
+    return sorted(ids, key=lambda i: _order_key(by_id[i]))
+
+
+def _pair_entries(source_table_id, target_table_id, relations, where) -> List[Entry]:
+    """The relations as single pairs, for a CoreHub older than Gluesync 2.3 (see :func:`build_entries`)."""
+    entries = []
+    for relation in relations:
+        sources, targets = list(relation["sources"]), list(relation["targets"])
+        if len(sources) != 1 or len(targets) != 1:
+            raise EntityMappingError(
+                f"the column mapping{where} relates {sources or 'no source'} to {targets or 'no target'}, which a "
+                f"CoreHub older than Gluesync 2.3 cannot store: only one source column onto one target column"
+            )
+        entries.append((source_table_id, target_table_id, sources, targets))
+    return entries
+
+
+def _check_side(side, ids, by_id, index, owner, described, where) -> None:
+    """M5 and M7 on one side of relation ``index``: every id a column of the entity, listed once, in one relation."""
+    unknown = [i for i in ids if i not in by_id]
+    if unknown:
+        raise EntityMappingError(
+            f"the column mapping{where} ({described}) names the {side} column id(s) "
+            f"{', '.join(str(i) for i in unknown)}, which are no {side} column of the entity"
+        )
+    if len(set(ids)) != len(ids):
+        raise EntityMappingError(f"the column mapping{where} ({described}) names a {side} column more than once")
+    for column_id in ids:
+        if owner.setdefault((side, column_id), index) != index:
+            raise EntityMappingError(
+                f"{side} column {by_id[column_id].get('name')}{where} is related twice; a column belongs to one "
+                f"relation (N:1: list its sources in one row; 1:N: one row per target with the same source)"
+            )
+
+
 def build_entries(
     source_table_id: Any,
     target_table_id: Any,
@@ -145,66 +183,35 @@ def build_entries(
     if unlocked:
         return [(source_table_id, target_table_id, [], [])]
     where = f" of {label}" if label else ""
-
     if not grouped:
-        entries = []
-        for relation in relations:
-            sources, targets = list(relation["sources"]), list(relation["targets"])
-            if len(sources) != 1 or len(targets) != 1:
-                raise EntityMappingError(
-                    f"the column mapping{where} relates {sources or 'no source'} to {targets or 'no target'}, which a "
-                    f"CoreHub older than Gluesync 2.3 cannot store: only one source column onto one target column"
-                )
-            entries.append((source_table_id, target_table_id, sources, targets))
-        return entries
+        return _pair_entries(source_table_id, target_table_id, relations, where)
 
     sources_by_id = _columns_by_id(source_columns)
     targets_by_id = _columns_by_id(target_columns)
     owner: Dict[Tuple[str, Any], int] = {}
     linked: List[Tuple[List[Any], List[Any]]] = []
-    one_sided_sources, one_sided_targets = set(), set()
-
     for index, relation in enumerate(relations):
         sources, targets = list(relation["sources"]), list(relation["targets"])
         described = f"{_names(sources, sources_by_id) or 'no source'} -> {_names(targets, targets_by_id) or 'no target'}"
-        for side, ids, by_id in (("source", sources, sources_by_id), ("target", targets, targets_by_id)):
-            unknown = [i for i in ids if i not in by_id]
-            if unknown:
-                raise EntityMappingError(
-                    f"the column mapping{where} ({described}) names the {side} column id(s) "
-                    f"{', '.join(str(i) for i in unknown)}, which are no {side} column of the entity"
-                )
-            if len(set(ids)) != len(ids):
-                raise EntityMappingError(f"the column mapping{where} ({described}) names a {side} column more than once")
-            for column_id in ids:
-                previous = owner.setdefault((side, column_id), index)
-                if previous != index:
-                    raise EntityMappingError(
-                        f"{side} column {by_id[column_id].get('name')}{where} is related twice; a column belongs to one "
-                        f"relation (N:1: list its sources in one row; 1:N: one row per target with the same source)"
-                    )
+        _check_side("source", sources, sources_by_id, index, owner, described, where)
+        _check_side("target", targets, targets_by_id, index, owner, described, where)
         if len(sources) > 1 and len(targets) > 1:
             raise EntityMappingError(
                 f"the column mapping{where} relates the source columns {_names(sources, sources_by_id)} to the target "
                 f"columns {_names(targets, targets_by_id)} (M:N), which is not supported"
             )
         if sources and targets:
-            linked.append((sorted(sources, key=lambda i: _order_key(sources_by_id[i])),
-                           sorted(targets, key=lambda i: _order_key(targets_by_id[i]))))
-        else:
-            one_sided_sources.update(sources)
-            one_sided_targets.update(targets)
+            linked.append((_ordered(sources, sources_by_id), _ordered(targets, targets_by_id)))
 
     linked.sort(key=lambda pair: _order_key(sources_by_id[pair[0][0]]))
     linked_sources = {i for sources, _ in linked for i in sources}
     linked_targets = {i for _, targets in linked for i in targets}
-    unlinked_sources = sorted((i for i in sources_by_id if i not in linked_sources), key=lambda i: _order_key(sources_by_id[i]))
-    unlinked_targets = sorted((i for i in targets_by_id if i not in linked_targets), key=lambda i: _order_key(targets_by_id[i]))
-
     return (
         [(source_table_id, target_table_id, sources, targets) for sources, targets in linked]
-        + [(source_table_id, target_table_id, [i], []) for i in unlinked_sources]
-        + [(source_table_id, target_table_id, [], [i]) for i in unlinked_targets]
+        + [(source_table_id, target_table_id, [i], [])
+           for i in _ordered((i for i in sources_by_id if i not in linked_sources), sources_by_id)]
+        + [(source_table_id, target_table_id, [], [i])
+           for i in _ordered((i for i in targets_by_id if i not in linked_targets), targets_by_id)]
     )
 
 
@@ -305,6 +312,55 @@ def _relation(sources, targets, row) -> Dict[str, Any]:
     return {"sources": list(sources), "targets": list(targets), "explicit": True, "row": row}
 
 
+def _whitelist_relations(rows: Sequence[Any]) -> List[Dict[str, Any]]:
+    return [
+        _relation([str(row.get("sourceName") or row.get("name"))], [str(row["name"])], row)
+        for row in rows
+        if isinstance(row, Mapping) and row.get("name") is not None
+    ]
+
+
+def _explicit_targets(sources: List[str], target: Any, where: str) -> List[str]:
+    """The targets of an explicit row: a list (``[]`` is 1:null), the row's target, or the source name."""
+    if isinstance(target, list):
+        if len(target) > 1:
+            raise EntityMappingError(
+                f"the column row{where} for {', '.join(sources)} lists the targets {', '.join(map(str, target))}: "
+                f"write one row per target with the same source"
+            )
+        return [str(t) for t in target]
+    if target is not None:
+        return [str(target)]
+    if len(sources) > 1:
+        raise EntityMappingError(
+            f"the column row{where} with the sources {', '.join(sources)} names no target: several sources "
+            f"feed one target column (N:1), which the row has to name"
+        )
+    return sources
+
+
+def _is_produced_row(row: Mapping[str, Any]) -> bool:
+    """A column fed by no source, ``{target, expression | type, ...}``, as the export writes it."""
+    return "target" in row and "name" not in row and ("expression" in row or "type" in row)
+
+
+def _mapping_row_relations(row: Mapping[str, Any], where: str) -> List[Dict[str, Any]]:
+    """The relations of one mapping row: explicit, a column fed by no source, or shorthand pairs."""
+    if "source" in row:
+        source = row.get("source")
+        if source is None or source == []:
+            return []
+        sources = _names_of(source)
+        return [_relation(sources, _explicit_targets(sources, row.get("target"), where), row)]
+    if _is_produced_row(row):
+        return [_relation([], [str(row["target"])], row)] if row.get("target") is not None else []
+    return [
+        _relation([str(key)], [value if isinstance(value, str) else str(value)], row)
+        for key, value in row.items()
+        if value is not None and not isinstance(value, (dict, list, bool))
+    ]
+
+
 def yaml_relations(rows: Optional[Sequence[Any]], label: str = "") -> Optional[List[Dict[str, Any]]]:
     """The relations a YAML ``columns:`` list states, one per row and pair, by column name.
 
@@ -326,53 +382,45 @@ def yaml_relations(rows: Optional[Sequence[Any]], label: str = "") -> Optional[L
     """
     if not rows or not isinstance(rows, list):
         return None
-    where = f" of {label}" if label else ""
-    relations: List[Dict[str, Any]] = []
-
     if _is_whitelist(rows):
-        for row in rows:
-            if isinstance(row, Mapping) and row.get("name") is not None:
-                relations.append(_relation([str(row.get("sourceName") or row.get("name"))], [str(row["name"])], row))
-        return relations
+        return _whitelist_relations(rows)
     if not _is_mapping(rows):
         return None
+    where = f" of {label}" if label else ""
+    return [relation for row in rows if isinstance(row, Mapping) for relation in _mapping_row_relations(row, where)]
 
-    for row in rows:
-        if not isinstance(row, Mapping):
+
+def _claim_targets(target_owner, relation, targets, sources_text, where) -> None:
+    """Make ``relation`` the one relation of each of ``targets``, refusing a target another row names."""
+    for target in targets:
+        owner = target_owner.get(target.lower())
+        if owner is None:
+            target_owner[target.lower()] = relation
             continue
-        if "source" in row:
-            source = row.get("source")
-            if source is None or source == []:
-                continue
-            sources = _names_of(source)
-            target = row.get("target")
-            if isinstance(target, list):
-                if len(target) > 1:
-                    raise EntityMappingError(
-                        f"the column row{where} for {', '.join(sources)} lists the targets {', '.join(map(str, target))}: "
-                        f"write one row per target with the same source"
-                    )
-                targets = [str(t) for t in target]
-            elif target is None:
-                if len(sources) > 1:
-                    raise EntityMappingError(
-                        f"the column row{where} with the sources {', '.join(sources)} names no target: several sources "
-                        f"feed one target column (N:1), which the row has to name"
-                    )
-                targets = sources
-            else:
-                targets = [str(target)]
-            relations.append(_relation(sources, targets, row))
-            continue
-        if "target" in row and "name" not in row and ("expression" in row or "type" in row):
-            if row.get("target") is not None:
-                relations.append(_relation([], [str(row["target"])], row))
-            continue
-        for key, value in row.items():
-            if value is None or isinstance(value, (dict, list, bool)):
-                continue
-            relations.append(_relation([str(key)], [value if isinstance(value, str) else str(value)], row))
-    return relations
+        if owner is relation:
+            raise EntityMappingError(f"the column row {sources_text} -> {target}{where} is listed twice")
+        known = {o.lower() for o in owner["sources"]}
+        all_sources = owner["sources"] + [s for s in relation["sources"] if s.lower() not in known]
+        raise EntityMappingError(
+            f"target column {target}{where} is named by several rows ({', '.join(owner['sources']) or 'no source'}; "
+            f"{sources_text or 'no source'}); a column belongs to one relation: for several sources onto one target "
+            f"write one row with source: [{', '.join(all_sources)}] and a custom field function, or the entity's UDF"
+        )
+
+
+def _check_one_to_n(existing, source, targets, sources_text, where) -> None:
+    """A row on the single source of an earlier relation: it may only add targets to a 1:1 or 1:N relation."""
+    if len(existing["sources"]) > 1:
+        raise EntityMappingError(
+            f"source column {source}{where} is in the N:1 row of {', '.join(existing['targets'])} and in "
+            f"another row: merged they would relate several sources to several targets (M:N), which is not supported"
+        )
+    if not existing["targets"] or not targets:
+        raise EntityMappingError(
+            f"source column {source}{where} is unlinked (target: []) in one row and linked in another; keep one of the two"
+        )
+    if any(t.lower() in {e.lower() for e in existing["targets"]} for t in targets):
+        raise EntityMappingError(f"the column row {sources_text} -> {', '.join(targets)}{where} is listed twice")
 
 
 def group_relations(relations: Sequence[Mapping[str, Any]], label: str = "") -> List[Dict[str, Any]]:
@@ -387,54 +435,25 @@ def group_relations(relations: Sequence[Mapping[str, Any]], label: str = "") -> 
     grouped: List[Dict[str, Any]] = []
     by_source: Dict[str, Dict[str, Any]] = {}
     target_owner: Dict[str, Dict[str, Any]] = {}
-
-    def claim_targets(relation, targets, sources_text):
-        for target in targets:
-            owner = target_owner.get(target.lower())
-            if owner is None:
-                target_owner[target.lower()] = relation
-                continue
-            if owner is relation:
-                raise EntityMappingError(f"the column row {sources_text} -> {target}{where} is listed twice")
-            all_sources = owner["sources"] + [s for s in relation["sources"] if s.lower() not in {o.lower() for o in owner["sources"]}]
-            raise EntityMappingError(
-                f"target column {target}{where} is named by several rows ({', '.join(owner['sources']) or 'no source'}; "
-                f"{sources_text or 'no source'}); a column belongs to one relation: for several sources onto one target "
-                f"write one row with source: [{', '.join(all_sources)}] and a custom field function, or the entity's UDF"
-            )
-
     for relation in relations:
         sources, targets = list(relation["sources"]), list(relation["targets"])
         sources_text = ", ".join(sources)
         if len(sources) == 1 and sources[0].lower() in by_source:
             existing = by_source[sources[0].lower()]
-            if len(existing["sources"]) > 1:
-                raise EntityMappingError(
-                    f"source column {sources[0]}{where} is in the N:1 row of {', '.join(existing['targets'])} and in "
-                    f"another row: merged they would relate several sources to several targets (M:N), which is not supported"
-                )
-            if not existing["targets"] or not targets:
-                raise EntityMappingError(
-                    f"source column {sources[0]}{where} is unlinked (target: []) in one row and linked in another; "
-                    f"keep one of the two"
-                )
-            if any(t.lower() in {e.lower() for e in existing["targets"]} for t in targets):
-                raise EntityMappingError(f"the column row {sources_text} -> {', '.join(targets)}{where} is listed twice")
-            claim_targets(existing, targets, sources_text)
+            _check_one_to_n(existing, sources[0], targets, sources_text, where)
+            _claim_targets(target_owner, existing, targets, sources_text, where)
             existing["targets"].extend(targets)
             continue
-        for source in sources:
-            existing = by_source.get(source.lower())
-            if existing is not None:
-                raise EntityMappingError(
-                    f"source column {source}{where} is named by the N:1 row of {', '.join(targets) or 'no target'} and by "
-                    f"another row: merged they would relate several sources to several targets (M:N), which is not supported"
-                )
+        named = next((source for source in sources if source.lower() in by_source), None)
+        if named is not None:
+            raise EntityMappingError(
+                f"source column {named}{where} is named by the N:1 row of {', '.join(targets) or 'no target'} and by "
+                f"another row: merged they would relate several sources to several targets (M:N), which is not supported"
+            )
         merged = {"sources": sources, "targets": [], "explicit": relation.get("explicit", True), "row": relation.get("row")}
-        claim_targets(merged, targets, sources_text)
+        _claim_targets(target_owner, merged, targets, sources_text, where)
         merged["targets"].extend(targets)
-        for source in sources:
-            by_source[source.lower()] = merged
+        by_source.update((source.lower(), merged) for source in sources)
         grouped.append(merged)
     return grouped
 
@@ -523,6 +542,122 @@ def drop_forbidden_key_links(
     return kept, [t for t in dropped if t.lower() not in still_fed], warnings
 
 
+def _k2b_keys(relations, ph_s, ph_t) -> set:
+    """On a source without a primary key, the single source of each relation onto the target primary key (K2b)."""
+    if ph_s or not ph_t:
+        return set()
+    return {
+        relation["sources"][0].lower()
+        for relation in relations
+        if len(relation["sources"]) == 1 and any(t.lower() in ph_t for t in relation["targets"])
+    }
+
+
+def _check_k2b_keys(requested, k2b, spelling, where) -> None:
+    """B6 and B7 (K2b, K9): YAML keys on a source keyed by the target primary key are exactly the K2b keys."""
+    missing, manual = k2b - requested, requested - k2b
+    if not requested or not (missing or manual):
+        return
+    problems = []
+    if missing:
+        problems.append(
+            f"K2b: {_joined(spelling[k] for k in sorted(missing))} must be a key, being the only source of "
+            f"a target primary key column while the source table has no primary key"
+        )
+    if manual:
+        problems.append(
+            f"K9: {_joined(spelling[k] for k in sorted(manual))} cannot be a key next to the keys the "
+            f"target primary key gives the source ({_joined(spelling[k] for k in sorted(k2b))})"
+        )
+    raise EntityMappingError(
+        "; ".join(problems) + f"{where}. Leave keys: out to key the entity on {_joined(spelling[k] for k in sorted(k2b))}"
+    )
+
+
+def _source_keys(requested, ph_s, k2b, physical_source, spelling, where, source_is_nosql) -> set:
+    """Step 1 of :func:`derive_keys`: the source keys, lower-cased."""
+    if ph_s:
+        if requested and requested != ph_s:
+            raise EntityMappingError(
+                f"R12.1: the keys{where} ({_joined(spelling[k] for k in sorted(requested))}) are not the source "
+                f"table's primary key ({_joined(sorted(physical_source))}); leave keys: out, or name exactly that key"
+            )
+        return ph_s
+    if k2b:
+        _check_k2b_keys(requested, k2b, spelling, where)
+        return k2b
+    if not requested:
+        hint = (
+            " A NoSQL source declares no primary key: name the key column(s) in keys:, usually _id (the document id)."
+            if source_is_nosql else " Name the key column(s) in keys:."
+        )
+        raise EntityMappingError(f"the source table{where} has no key: it has no primary key and keys: names none.{hint}")
+    return requested
+
+
+def _primary_target_keys(ph_t, requested, target_names, fed, produced, physical_target, spelling, where) -> set:
+    """B2 and BOP-13: a target with a primary key is keyed on it, each of its columns fed or produced."""
+    if requested and requested != ph_t:
+        raise EntityMappingError(
+            f"R12.2: targetKeys{where} ({_joined(spelling[k] for k in sorted(requested))}) is not the "
+            f"target table's primary key ({_joined(sorted(physical_target))}); leave targetKeys out"
+        )
+    in_entity = {str(n).lower() for n in target_names}
+    for key in sorted(ph_t):
+        if key not in in_entity or (key not in fed and key not in produced):
+            raise EntityMappingError(
+                f"target primary key {spelling[key]}{where} is fed by no source column: a new entity needs a "
+                f"value for it (an identity or a default is not used), so add a row {{target: {spelling[key]}, "
+                f"expression: ...}} with a field function that produces it, link a source column to it, or give the "
+                f"entity a UDF"
+            )
+    return ph_t
+
+
+def _check_single_non_key_sources(relations, source_keys, requested, where) -> None:
+    """B5 reverse: with no primary key on either table, a target key fed by one source makes that source a key."""
+    for relation in relations:
+        if len(relation["sources"]) != 1 or relation["sources"][0].lower() in source_keys:
+            continue
+        keyed = [t for t in relation["targets"] if t.lower() in requested]
+        if keyed:
+            raise EntityMappingError(
+                f"R12.6: targetKeys{where} names {_joined(keyed)}, fed by {relation['sources'][0]} alone, which "
+                f"is not a key: with no primary key on either table the single source of a target key is a "
+                f"key; add {relation['sources'][0]} to keys:"
+            )
+
+
+def _inherited_target_keys(relations, source_keys, ph_s, requested, spelling, where) -> set:
+    """B4, B5 and B7 on a target without a primary key: the targets of the source keys, plus ``targetKeys:``."""
+    inherited = {
+        t.lower() for relation in relations
+        if any(s.lower() in source_keys for s in relation["sources"])
+        for t in relation["targets"]
+    }
+    if ph_s and requested - inherited:
+        raise EntityMappingError(
+            f"K9: targetKeys{where} names {_joined(spelling[k] for k in sorted(requested - inherited))} next to the keys "
+            f"the target inherits from the source primary key ({_joined(spelling[k] for k in sorted(inherited))}); "
+            f"leave targetKeys out"
+        )
+    if not ph_s:
+        _check_single_non_key_sources(relations, source_keys, requested, where)
+    return inherited | requested
+
+
+def _refuse_unknown(names, spelling, message) -> None:
+    """Refuse the ``names`` no column is spelt as: ``message`` is formatted with the unknown names."""
+    unknown = [n for n in names if str(n).lower() not in spelling]
+    if unknown:
+        raise EntityMappingError(message.format(_joined(map(str, unknown))))
+
+
+def _spelt(order, keys, spelling) -> List[str]:
+    """``keys`` (lower-cased) spelt as ``order`` spells them, in that order."""
+    return [n for n in dict.fromkeys(order) if n.lower() in keys and spelling[n.lower()] == n]
+
+
 def derive_keys(
     *,
     relations: Sequence[Mapping[str, Any]],
@@ -551,128 +686,56 @@ def derive_keys(
     2. Target keys: the target primary key (B2), each of its columns fed by a relation or produced
        (BOP-13 A); else the targets of the relations with a source key (B4, B5) plus ``targetKeys:``,
        none of them next to keys inherited from a source primary key (B7), and none fed by a single
-       source that is not a key (B5).
+       source that is not a key (B5). A target left without a key is refused, as CoreHub refuses every
+       agent entity without keys.
 
     Returns ``(source_keys, target_keys)`` spelt as the columns are, in column order.
     """
     where = f" of {label}" if label else ""
-    physical_source = [str(n) for n in physical_source]
-    physical_target = [str(n) for n in physical_target]
+    source_order = list(source_names) + [str(n) for n in physical_source]
+    target_order = list(target_names) + [str(n) for n in physical_target]
+    physical_source = source_order[len(source_names):]
+    physical_target = target_order[len(target_names):]
     ph_s = {n.lower() for n in physical_source}
     ph_t = {n.lower() for n in physical_target}
-    source_spelling = _canonical(list(source_names) + physical_source, list(source_names) + physical_source)
-    target_spelling = _canonical(list(target_names) + physical_target, list(target_names) + physical_target)
-    produced = {str(n).lower() for n in produced_targets}
+    source_spelling = _canonical(source_order, source_order)
+    target_spelling = _canonical(target_order, target_order)
 
-    unknown = [k for k in yaml_keys if str(k).lower() not in source_spelling]
-    if unknown:
-        raise EntityMappingError(
-            f"the keys{where} name {_joined(map(str, unknown))}, which are not columns of the source table"
-        )
+    _refuse_unknown(yaml_keys, source_spelling, f"the keys{where} name {{}}, which are not columns of the source table")
     requested = {str(k).lower() for k in yaml_keys}
+    source_keys = _source_keys(requested, ph_s, _k2b_keys(relations, ph_s, ph_t), physical_source,
+                               source_spelling, where, source_is_nosql)
 
-    # Single source of each relation onto the target primary key, on a source without one (K2b).
-    k2b = set()
-    if not ph_s and ph_t:
-        for relation in relations:
-            if len(relation["sources"]) == 1 and any(t.lower() in ph_t for t in relation["targets"]):
-                k2b.add(relation["sources"][0].lower())
-
-    if ph_s:
-        if requested and requested != ph_s:
-            raise EntityMappingError(
-                f"R12.1: the keys{where} ({_joined(source_spelling[k] for k in sorted(requested))}) are not the source "
-                f"table's primary key ({_joined(sorted(physical_source))}); leave keys: out, or name exactly that key"
-            )
-        source_keys = ph_s
-    elif k2b:
-        missing, manual = k2b - requested, (requested - k2b) if requested else set()
-        if requested and (missing or manual):
-            problems = []
-            if missing:
-                problems.append(
-                    f"K2b: {_joined(source_spelling[k] for k in sorted(missing))} must be a key, being the only source of "
-                    f"a target primary key column while the source table has no primary key"
-                )
-            if manual:
-                problems.append(
-                    f"K9: {_joined(source_spelling[k] for k in sorted(manual))} cannot be a key next to the keys the "
-                    f"target primary key gives the source ({_joined(source_spelling[k] for k in sorted(k2b))})"
-                )
-            raise EntityMappingError(
-                "; ".join(problems) + f"{where}. Leave keys: out to key the entity on "
-                f"{_joined(source_spelling[k] for k in sorted(k2b))}"
-            )
-        source_keys = k2b
-    else:
-        source_keys = requested
-
-    if not source_keys:
-        hint = (
-            " A NoSQL source declares no primary key: name the key column(s) in keys:, usually _id (the document id)."
-            if source_is_nosql else " Name the key column(s) in keys:."
-        )
-        raise EntityMappingError(f"the source table{where} has no key: it has no primary key and keys: names none.{hint}")
-
+    _refuse_unknown(yaml_target_keys, target_spelling,
+                    f"targetKeys{where} names {{}}, which are not target columns of the entity")
     target_requested = {str(k).lower() for k in yaml_target_keys}
-    unknown_targets = [k for k in yaml_target_keys if str(k).lower() not in target_spelling]
-    if unknown_targets:
-        raise EntityMappingError(f"targetKeys{where} names {_joined(map(str, unknown_targets))}, which are not target columns of the entity")
-
-    fed = {t.lower() for r in relations if r["sources"] for t in r["targets"]}
     if ph_t:
-        if target_requested and target_requested != ph_t:
-            raise EntityMappingError(
-                f"R12.2: targetKeys{where} ({_joined(target_spelling[k] for k in sorted(target_requested))}) is not the "
-                f"target table's primary key ({_joined(sorted(physical_target))}); leave targetKeys out"
-            )
-        in_entity = {str(n).lower() for n in target_names}
-        for key in sorted(ph_t):
-            if key not in in_entity or (key not in fed and key not in produced):
-                raise EntityMappingError(
-                    f"target primary key {target_spelling[key]}{where} is fed by no source column: a new entity needs a "
-                    f"value for it (an identity or a default is not used), so add a row {{target: {target_spelling[key]}, "
-                    f"expression: ...}} with a field function that produces it, link a source column to it, or give the "
-                    f"entity a UDF"
-                )
-        target_keys = ph_t
+        fed = {t.lower() for r in relations if r["sources"] for t in r["targets"]}
+        produced = {str(n).lower() for n in produced_targets}
+        target_keys = _primary_target_keys(ph_t, target_requested, target_names, fed, produced, physical_target,
+                                           target_spelling, where)
     else:
-        inherited = set()
-        for relation in relations:
-            if any(s.lower() in source_keys for s in relation["sources"]):
-                inherited.update(t.lower() for t in relation["targets"])
-        if ph_s:
-            manual = target_requested - inherited
-            if manual:
-                raise EntityMappingError(
-                    f"K9: targetKeys{where} names {_joined(target_spelling[k] for k in sorted(manual))} next to the keys "
-                    f"the target inherits from the source primary key ({_joined(target_spelling[k] for k in sorted(inherited))}); "
-                    f"leave targetKeys out"
-                )
-        else:
-            for relation in relations:
-                if len(relation["sources"]) == 1 and relation["sources"][0].lower() not in source_keys:
-                    keyed = [t for t in relation["targets"] if t.lower() in target_requested]
-                    if keyed:
-                        raise EntityMappingError(
-                            f"R12.6: targetKeys{where} names {_joined(keyed)}, fed by {relation['sources'][0]} alone, which "
-                            f"is not a key: with no primary key on either table the single source of a target key is a "
-                            f"key; add {relation['sources'][0]} to keys:"
-                        )
-        target_keys = inherited | target_requested
-
+        target_keys = _inherited_target_keys(relations, source_keys, ph_s, target_requested, target_spelling, where)
     if not target_keys:
         raise EntityMappingError(
             f"the target table{where} has no key: no source key column feeds a target column and targetKeys names none. "
             f"Map a source key column onto a target column, or name the target key column(s) in targetKeys:"
         )
+    return _spelt(source_order, source_keys, source_spelling), _spelt(target_order, target_keys, target_spelling)
 
-    source_order = [n for n in dict.fromkeys(list(source_names) + physical_source)]
-    target_order = [n for n in dict.fromkeys(list(target_names) + physical_target)]
-    return (
-        [n for n in source_order if n.lower() in source_keys and source_spelling[n.lower()] == n],
-        [n for n in target_order if n.lower() in target_keys and target_spelling[n.lower()] == n],
-    )
+
+def _source_rows(source, relation, row_of) -> List[Dict[str, Any]]:
+    """The rows one source column gives at its place (see :func:`yaml_rows`)."""
+    if relation is None:
+        row = row_of(source, None)
+        row["target"] = []
+        return [row]
+    if len(relation["sources"]) == 1:
+        return [row_of(source, target) for target in relation["targets"]]
+    if source != relation["sources"][0]:
+        return []
+    target = relation["targets"][0]
+    return [{"source": list(relation["sources"]), "target": target, "type": row_of(source, target).get("type")}]
 
 
 def yaml_rows(relations: Mapping[str, List[Any]], source_order: Sequence[str], row_of) -> List[Dict[str, Any]]:
@@ -684,27 +747,11 @@ def yaml_rows(relations: Mapping[str, List[Any]], source_order: Sequence[str], r
     metadata left out); ``target: []`` when it feeds nothing (1:null). Then one ``{target, type}`` row
     per target no source feeds, where the export attaches the field function that produces it.
     """
-    by_source = {}
-    for relation in relations["relations"]:
-        for source in relation["sources"]:
-            by_source[source] = relation
-    rows: List[Dict[str, Any]] = []
-    for source in source_order:
-        relation = by_source.get(source)
-        if relation is None:
-            row = row_of(source, None)
-            row["target"] = []
-            rows.append(row)
-        elif len(relation["sources"]) > 1:
-            if source != relation["sources"][0]:
-                continue
-            target = relation["targets"][0]
-            full = row_of(source, target)
-            rows.append({"source": list(relation["sources"]), "target": target, "type": full.get("type")})
-        else:
-            for target in relation["targets"]:
-                rows.append(row_of(source, target))
+    by_source = {source: relation for relation in relations["relations"] for source in relation["sources"]}
+    rows = [row for source in source_order for row in _source_rows(source, by_source.get(source), row_of)]
     for target in relations["unlinked_targets"]:
-        row = row_of(None, target)
-        rows.append({k: v for k, v in (("target", target), ("type", row.get("type"))) if v is not None or k == "target"})
+        target_type = row_of(None, target).get("type")
+        rows.append({"target": target, "type": target_type} if target_type is not None else {"target": target})
     return rows
+
+
