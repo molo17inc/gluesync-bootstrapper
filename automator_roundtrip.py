@@ -240,10 +240,36 @@ def compare_keyed(
     return check
 
 
+def align_source_custom_properties(original: Dict[str, Any], restored: Dict[str, Any]) -> None:
+    """Accept the effective source settings that a restore writes out explicitly.
+
+    The export carries the source entityType (what CoreHub runs with) and the
+    import stores that same dict as the source agent entity's customProperties,
+    which CoreHub only keeps (it reads customProperties on the target side
+    alone). So a restored source customProperties may hold more keys than the
+    original: each extra key is accepted only when it equals the restored
+    entityType value of that key. Anything else still shows as a difference.
+    """
+    pairs = zip(original.get("agentEntities") or [], restored.get("agentEntities") or [])
+    for left_ae, right_ae in pairs:
+        if not isinstance(left_ae, dict) or not isinstance(right_ae, dict):
+            continue
+        if (right_ae.get("entityType") or {}).get("type") != "Source":
+            continue
+        left_cp = left_ae.get("customProperties") or {}
+        right_cp = right_ae.get("customProperties") or {}
+        effective = right_ae.get("entityType") or {}
+        extra = {k: v for k, v in right_cp.items() if k not in left_cp}
+        if all(effective.get(k) == v for k, v in extra.items()):
+            right_ae["customProperties"] = {k: v for k, v in right_cp.items() if k in left_cp}
+
+
 def check_entities(original: Dict[str, Any], restored: Dict[str, Any]) -> Check:
     check = Check("restored-entities-match", "Every entity is restored with the same configuration")
     left = {k: normalize(v, original["idMap"]) for k, v in key_by_name(original["entities"], "entityName").items()}
     right = {k: normalize(v, restored["idMap"]) for k, v in key_by_name(restored["entities"], "entityName").items()}
+    for name in set(left) & set(right):
+        align_source_custom_properties(left[name], right[name])
     if not left:
         check.fail("the original pipeline has no entities, so the round trip proves nothing")
         return check

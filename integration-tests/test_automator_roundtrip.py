@@ -126,6 +126,32 @@ class RunChecksTests(unittest.TestCase):
         self.assertIn("configured differently: DRIVERS", check.message)
         self.assertTrue(any('"ttlValue": 10' in line for line in check.diff))
 
+    def test_effective_source_settings_written_out_on_restore_pass(self):
+        original = _side("a5d110b3", "a")
+        restored = _side("c0ffee00", "b")
+        for side in (original, restored):
+            side["entities"][0]["agentEntities"][0]["entityType"] = {"type": "Source", "snapshotOnly": False}
+        restored["entities"][0]["agentEntities"][0]["customProperties"]["snapshotOnly"] = False
+        self.assertTrue(rt.check_entities(original, restored).passed)
+
+    def test_extra_source_property_that_is_not_effective_fails(self):
+        original = _side("a5d110b3", "a")
+        restored = _side("c0ffee00", "b")
+        for side in (original, restored):
+            side["entities"][0]["agentEntities"][0]["entityType"] = {"type": "Source", "snapshotOnly": False}
+        restored["entities"][0]["agentEntities"][0]["customProperties"]["snapshotOnly"] = True
+        self.assertFalse(rt.check_entities(original, restored).passed)
+
+    def test_lost_source_property_fails(self):
+        restored = _side("c0ffee00", "b")
+        del restored["entities"][0]["agentEntities"][0]["customProperties"]["pollingIntervalMilliseconds"]
+        self.assertFalse(rt.check_entities(_side("a5d110b3", "a"), restored).passed)
+
+    def test_extra_target_property_fails(self):
+        restored = _side("c0ffee00", "b")
+        restored["entities"][0]["agentEntities"][1]["customProperties"]["preSnapshotCommand"] = "TRUNCATE x"
+        self.assertFalse(rt.check_entities(_side("a5d110b3", "a"), restored).passed)
+
     def test_lost_group_membership_fails(self):
         restored = _side("c0ffee00", "b")
         del restored["entities"][0]["groupId"]
