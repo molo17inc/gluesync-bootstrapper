@@ -57,6 +57,9 @@ from .version import get_version
 
 logger = logging.getLogger(__name__)
 
+AUTH_REQUIRED = "Authentication required"
+ZIP_MEDIA_TYPE = "application/zip"
+
 CHANGELOG_API_BASE_URL = "https://api.backoffice.molo17.com"
 
 # File stems that should be skipped when scanning a backup ZIP for pipeline YAMLs
@@ -481,6 +484,125 @@ def _has_masked_password(value: Any) -> bool:
     return False
 
 
+_ERROR_RESPONSES: Dict[Any, Dict[str, Any]] = {
+    400: {"description": "The request or the bundle is refused (passphrase, format, references)"},
+    401: {"description": AUTH_REQUIRED},
+    409: {"description": "The Core Hub has no AI settings backup (older than 2.3.0.1)"},
+    500: {"description": "Core Hub or the Automator failed"},
+}
+
+
+def _summarize_restore(results: Dict[str, Any]) -> str:
+    """One part per restored domain of a full backup, with the AI settings summary when there is one."""
+    parts: list[str] = []
+    for domain, result in results.items():
+        status = result.get("status", "unknown") if isinstance(result, dict) else "unknown"
+        if status == "restored":
+            parts.append(f"{domain}: {result.get('summary') or 'restored'}")
+        elif status == "skipped":
+            parts.append(f"{domain}: skipped ({result.get('reason', '')})")
+        elif status == "pending":
+            parts.append(f"{domain}: pending (requires manual pipeline import)")
+        else:
+            parts.append(f"{domain}: {status}")
+    return "; ".join(parts)
+
+
+def _register_ai_settings_routes(app: FastAPI) -> None:
+    """The AI settings backup routes, and the full backup with the passphrase that seals their secrets."""
+
+    @app.post("/api/export/full-backup", responses=_ERROR_RESPONSES)
+    async def export_full_backup_with_options(request: FullBackupRequest):
+        """Like GET /api/export/full-backup, with the passphrase that seals the AI settings secrets."""
+        if not state.token or not state.base_url:
+            raise HTTPException(status_code=401, detail=AUTH_REQUIRED)
+        if request.include_secrets and request.ai_settings_passphrase:
+            try:
+                ai_settings.check_passphrase(request.ai_settings_passphrase)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        try:
+            zip_data = corehub.export_full_corehub_backup(
+                token=state.token,
+                base_url=state.base_url,
+                use_ssl=state.use_ssl,
+                skip_verify=state.skip_verify,
+                include_secrets=request.include_secrets,
+                chronos_token=state.chronos_token,
+                ai_settings_passphrase=request.ai_settings_passphrase,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Failed to export full CoreHub backup")
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return StreamingResponse(
+            io.BytesIO(zip_data),
+            media_type=ZIP_MEDIA_TYPE,
+            headers={"Content-Disposition": f'attachment; filename="corehub_full_backup_{timestamp}.zip"'},
+        )
+
+    @app.post("/api/export/ai-settings", responses=_ERROR_RESPONSES)
+    async def export_ai_settings(request: AiSettingsExportRequest):
+        """Download the AI settings bundle of the connected Core Hub (2.3.0.1+)."""
+        if not state.token or not state.base_url:
+            raise HTTPException(status_code=401, detail=AUTH_REQUIRED)
+        corehub.configure_core_hub(state.base_url, use_ssl=state.use_ssl, skip_verify=state.skip_verify)
+        try:
+            bundle = ai_settings.export_ai_settings(
+                state.token,
+                include_secrets=request.include_secrets,
+                passphrase=request.passphrase,
+            )
+        except ai_settings.AiSettingsUnsupported as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except (ai_settings.AiSettingsError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Failed to export AI settings")
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return Response(
+            content=json.dumps(bundle, indent=2, ensure_ascii=False).encode("utf-8"),
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="ai_settings_{timestamp}.json"'},
+        )
+
+    @app.post("/api/import/ai-settings", responses=_ERROR_RESPONSES)
+    async def import_ai_settings(
+        file: UploadFile = File(...),
+        passphrase: Optional[str] = Form(None),
+        dry_run: bool = Form(False),
+    ) -> ApiMessage:
+        """Restore an AI settings bundle; dry_run only reports what would change."""
+        if not state.token or not state.base_url:
+            raise HTTPException(status_code=401, detail=AUTH_REQUIRED)
+        try:
+            bundle = json.loads((await file.read()).decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=400, detail="The file is not an AI settings bundle (JSON)") from exc
+
+        corehub.configure_core_hub(state.base_url, use_ssl=state.use_ssl, skip_verify=state.skip_verify)
+        try:
+            result = corehub.restore_ai_settings(
+                token=state.token,
+                bundle=bundle,
+                passphrase=passphrase or None,
+                dry_run=dry_run,
+            )
+        except (ai_settings.AiSettingsError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Failed to import AI settings")
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        if result.get("status") == "skipped":
+            raise HTTPException(status_code=409, detail=result.get("reason"))
+        return ApiMessage(message=result.get("summary"), logs=result.get("warnings") or None)
+
+
 def create_app() -> FastAPI:
     _ensure_static_assets()
     asset_rewrites = _fingerprint_static_assets()
@@ -667,7 +789,7 @@ def create_app() -> FastAPI:
     @app.get("/api/pipelines", response_model=PipelinesResponse)
     async def list_pipelines() -> PipelinesResponse:
         if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
+            raise HTTPException(status_code=401, detail=AUTH_REQUIRED)
 
         try:
             pipelines = corehub.list_pipelines(
@@ -685,7 +807,7 @@ def create_app() -> FastAPI:
     @app.get("/api/bulk/schemas", response_model=BulkSchemasResponse)
     async def bulk_list_schemas(pipelineId: str) -> BulkSchemasResponse:  # pylint: disable=invalid-name
         if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
+            raise HTTPException(status_code=401, detail=AUTH_REQUIRED)
 
         try:
             schemas = corehub.list_source_schemas(
@@ -712,7 +834,7 @@ def create_app() -> FastAPI:
     @app.get("/api/bulk/tables", response_model=BulkTablesResponse)
     async def bulk_list_tables(pipelineId: str, schema: str) -> BulkTablesResponse:  # pylint: disable=invalid-name
         if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
+            raise HTTPException(status_code=401, detail=AUTH_REQUIRED)
 
         try:
             tables = corehub.list_source_tables(
@@ -732,7 +854,7 @@ def create_app() -> FastAPI:
     @app.post("/api/bulk/create", response_model=ApiMessage)
     async def bulk_create_entities(request: BulkCreateRequest) -> ApiMessage:
         if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
+            raise HTTPException(status_code=401, detail=AUTH_REQUIRED)
 
         prefs = state.preferences()
         enable_scheduling = request.enable_scheduling
@@ -819,7 +941,7 @@ def create_app() -> FastAPI:
         """
 
         if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
+            raise HTTPException(status_code=401, detail=AUTH_REQUIRED)
 
         pipeline_id = request.pipeline_id
         source_schema = request.source_schema
@@ -954,7 +1076,7 @@ def create_app() -> FastAPI:
         """
 
         if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
+            raise HTTPException(status_code=401, detail=AUTH_REQUIRED)
 
         try:
             payload, media_type, filename = corehub.export_pipeline_entities_package(
@@ -986,7 +1108,7 @@ def create_app() -> FastAPI:
         """Export a full backup (YAML + agents-config + UDFs) for a single pipeline."""
 
         if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
+            raise HTTPException(status_code=401, detail=AUTH_REQUIRED)
 
         try:
             zip_data = corehub.export_pipeline_full_backup(
@@ -1024,7 +1146,7 @@ def create_app() -> FastAPI:
         filename = f"backup_{safe_name}_{pipeline_id}_{timestamp}.zip"
         return StreamingResponse(
             io.BytesIO(zip_data),
-            media_type="application/zip",
+            media_type=ZIP_MEDIA_TYPE,
             headers={
                 "Content-Disposition": f'attachment; filename="{filename}"',
             },
@@ -1039,7 +1161,7 @@ def create_app() -> FastAPI:
         """
 
         if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
+            raise HTTPException(status_code=401, detail=AUTH_REQUIRED)
 
         if not request.source_agent_tag:
             raise HTTPException(status_code=400, detail="sourceAgentTag is required")
@@ -1106,7 +1228,7 @@ def create_app() -> FastAPI:
         """Request cancellation of an in-flight duplicate pipeline operation."""
 
         if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
+            raise HTTPException(status_code=401, detail=AUTH_REQUIRED)
 
         requested = state.request_duplicate_cancel()
         if not requested:
@@ -1116,7 +1238,7 @@ def create_app() -> FastAPI:
     @app.get("/api/corehub/overview")
     async def get_corehub_overview() -> dict:
         if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
+            raise HTTPException(status_code=401, detail=AUTH_REQUIRED)
 
         try:
             summary = corehub.get_environment_summary(
@@ -1147,7 +1269,7 @@ def create_app() -> FastAPI:
         """Get pipeline agent details for auto-populating duplicate form."""
 
         if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
+            raise HTTPException(status_code=401, detail=AUTH_REQUIRED)
 
         try:
             pipeline_config = corehub.fetch_core_hub(f"/pipelines/{pipeline_id}/config", token=state.token)
@@ -1190,7 +1312,7 @@ def create_app() -> FastAPI:
         """
 
         if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
+            raise HTTPException(status_code=401, detail=AUTH_REQUIRED)
 
         contents = await file.read()
         if not contents:
@@ -1791,7 +1913,7 @@ def create_app() -> FastAPI:
         """
 
         if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
+            raise HTTPException(status_code=401, detail=AUTH_REQUIRED)
 
         contents = await file.read()
         if not contents:
@@ -1979,7 +2101,7 @@ def create_app() -> FastAPI:
         """
 
         if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
+            raise HTTPException(status_code=401, detail=AUTH_REQUIRED)
 
         contents = await file.read()
         if not contents:
@@ -1999,30 +2121,13 @@ def create_app() -> FastAPI:
             logger.exception("Failed to import full CoreHub backup")
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-        # Build summary
-        summary_parts: list[str] = []
-        for domain, result in results.items():
-            status = result.get("status", "unknown") if isinstance(result, dict) else "unknown"
-            if status == "restored" and result.get("summary"):
-                summary_parts.append(f"{domain}: {result['summary']}")
-            elif status == "restored":
-                summary_parts.append(f"{domain}: restored")
-            elif status == "skipped":
-                reason = result.get("reason", "")
-                summary_parts.append(f"{domain}: skipped ({reason})")
-            elif status == "pending":
-                summary_parts.append(f"{domain}: pending (requires manual pipeline import)")
-            else:
-                summary_parts.append(f"{domain}: {status}")
-
-        message = "Full backup restore completed. " + "; ".join(summary_parts)
-        return ApiMessage(message=message)
+        return ApiMessage(message="Full backup restore completed. " + _summarize_restore(results))
 
     @app.post("/api/import/users", response_model=ApiMessage)
     async def import_users(file: UploadFile = File(...)) -> ApiMessage:
         """Restore user management configuration from a YAML backup."""
         if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
+            raise HTTPException(status_code=401, detail=AUTH_REQUIRED)
 
         contents = await file.read()
         if not contents:
@@ -2052,7 +2157,7 @@ def create_app() -> FastAPI:
     async def import_oidc(file: UploadFile = File(...)) -> ApiMessage:
         """Restore OIDC configuration from a YAML backup."""
         if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
+            raise HTTPException(status_code=401, detail=AUTH_REQUIRED)
 
         contents = await file.read()
         if not contents:
@@ -2084,7 +2189,7 @@ def create_app() -> FastAPI:
     @app.get("/api/export/all-pipelines")
     async def export_all_pipelines(include_secrets: bool = False):
         if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
+            raise HTTPException(status_code=401, detail=AUTH_REQUIRED)
 
         try:
             zip_data = corehub.export_all_pipelines_yaml(
@@ -2103,7 +2208,7 @@ def create_app() -> FastAPI:
         filename = f"pipeline_backups_{timestamp}.zip"
         return StreamingResponse(
             io.BytesIO(zip_data),
-            media_type="application/zip",
+            media_type=ZIP_MEDIA_TYPE,
             headers={
                 "Content-Disposition": f'attachment; filename="{filename}"',
             },
@@ -2113,7 +2218,7 @@ def create_app() -> FastAPI:
     async def export_global_configs():
         """Export all global CoreHub configuration settings."""
         if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
+            raise HTTPException(status_code=401, detail=AUTH_REQUIRED)
 
         try:
             configs = corehub.export_global_configs(
@@ -2132,7 +2237,7 @@ def create_app() -> FastAPI:
     async def export_smtp():
         """Export SMTP configuration from CoreHub."""
         if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
+            raise HTTPException(status_code=401, detail=AUTH_REQUIRED)
 
         try:
             smtp_config = corehub.export_smtp_settings(
@@ -2151,7 +2256,7 @@ def create_app() -> FastAPI:
     async def export_webhooks():
         """Export webhooks configuration from CoreHub."""
         if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
+            raise HTTPException(status_code=401, detail=AUTH_REQUIRED)
 
         try:
             webhooks_config = corehub.export_webhooks_config(
@@ -2170,7 +2275,7 @@ def create_app() -> FastAPI:
     async def export_thresholds():
         """Export thresholds configuration from CoreHub."""
         if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
+            raise HTTPException(status_code=401, detail=AUTH_REQUIRED)
 
         try:
             thresholds_config = corehub.export_thresholds(
@@ -2189,7 +2294,7 @@ def create_app() -> FastAPI:
     async def export_schedules():
         """Export Chronos scheduler jobs and settings from CoreHub."""
         if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
+            raise HTTPException(status_code=401, detail=AUTH_REQUIRED)
 
         try:
             schedules_config = corehub.export_schedules(
@@ -2209,7 +2314,7 @@ def create_app() -> FastAPI:
     async def export_users():
         """Export user management configuration from CoreHub."""
         if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
+            raise HTTPException(status_code=401, detail=AUTH_REQUIRED)
 
         try:
             users_config = corehub.export_users(
@@ -2228,7 +2333,7 @@ def create_app() -> FastAPI:
     async def export_oidc():
         """Export OIDC configuration from CoreHub."""
         if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
+            raise HTTPException(status_code=401, detail=AUTH_REQUIRED)
 
         try:
             oidc_config = corehub.export_oidc_config(
@@ -2247,7 +2352,7 @@ def create_app() -> FastAPI:
     async def export_full_backup(include_secrets: bool = False):
         """Export a complete CoreHub backup including pipelines, global configs, SMTP, webhooks, thresholds, and schedules."""
         if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
+            raise HTTPException(status_code=401, detail=AUTH_REQUIRED)
 
         try:
             zip_data = corehub.export_full_corehub_backup(
@@ -2266,108 +2371,17 @@ def create_app() -> FastAPI:
         filename = f"corehub_full_backup_{timestamp}.zip"
         return StreamingResponse(
             io.BytesIO(zip_data),
-            media_type="application/zip",
+            media_type=ZIP_MEDIA_TYPE,
             headers={
                 "Content-Disposition": f'attachment; filename="{filename}"',
             },
         )
 
-    @app.post("/api/export/full-backup")
-    async def export_full_backup_with_options(request: FullBackupRequest):
-        """Like GET /api/export/full-backup, with the passphrase that seals the AI settings secrets."""
-        if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
-        if request.include_secrets and request.ai_settings_passphrase:
-            try:
-                ai_settings.check_passphrase(request.ai_settings_passphrase)
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-        try:
-            zip_data = corehub.export_full_corehub_backup(
-                token=state.token,
-                base_url=state.base_url,
-                use_ssl=state.use_ssl,
-                skip_verify=state.skip_verify,
-                include_secrets=request.include_secrets,
-                chronos_token=state.chronos_token,
-                ai_settings_passphrase=request.ai_settings_passphrase,
-            )
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.exception("Failed to export full CoreHub backup")
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        return StreamingResponse(
-            io.BytesIO(zip_data),
-            media_type="application/zip",
-            headers={"Content-Disposition": f'attachment; filename="corehub_full_backup_{timestamp}.zip"'},
-        )
-
-    @app.post("/api/export/ai-settings")
-    async def export_ai_settings(request: AiSettingsExportRequest):
-        """Download the AI settings bundle of the connected Core Hub (2.3.0.1+)."""
-        if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
-        corehub.configure_core_hub(state.base_url, use_ssl=state.use_ssl, skip_verify=state.skip_verify)
-        try:
-            bundle = ai_settings.export_ai_settings(
-                state.token,
-                include_secrets=request.include_secrets,
-                passphrase=request.passphrase,
-            )
-        except ai_settings.AiSettingsUnsupported as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        except (ai_settings.AiSettingsError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.exception("Failed to export AI settings")
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        return Response(
-            content=json.dumps(bundle, indent=2, ensure_ascii=False).encode("utf-8"),
-            media_type="application/json",
-            headers={"Content-Disposition": f'attachment; filename="ai_settings_{timestamp}.json"'},
-        )
-
-    @app.post("/api/import/ai-settings", response_model=ApiMessage)
-    async def import_ai_settings(
-        file: UploadFile = File(...),
-        passphrase: Optional[str] = Form(None),
-        dry_run: bool = Form(False),
-    ) -> ApiMessage:
-        """Restore an AI settings bundle; dry_run only reports what would change."""
-        if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
-        try:
-            bundle = json.loads((await file.read()).decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise HTTPException(status_code=400, detail="The file is not an AI settings bundle (JSON)") from exc
-
-        corehub.configure_core_hub(state.base_url, use_ssl=state.use_ssl, skip_verify=state.skip_verify)
-        try:
-            result = corehub.restore_ai_settings(
-                token=state.token,
-                bundle=bundle,
-                passphrase=passphrase or None,
-                dry_run=dry_run,
-            )
-        except (ai_settings.AiSettingsError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.exception("Failed to import AI settings")
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-        if result.get("status") == "skipped":
-            raise HTTPException(status_code=409, detail=result.get("reason"))
-        return ApiMessage(message=result.get("summary"), logs=result.get("warnings") or None)
-
     async def _execute_run(run_id: str, request: RunRequest) -> None:
         token = state.token
         base_url = state.base_url
         if not token or not base_url:
-            state.finalize_run(run_id, "failed", "Authentication required")
+            state.finalize_run(run_id, "failed", AUTH_REQUIRED)
             return
 
         prefs = state.preferences()
@@ -2483,7 +2497,7 @@ def create_app() -> FastAPI:
     @app.post("/api/run", response_model=ApiMessage)
     async def start_run(request: RunRequest) -> ApiMessage:
         if not state.token:
-            raise HTTPException(status_code=401, detail="Authentication required")
+            raise HTTPException(status_code=401, detail=AUTH_REQUIRED)
 
         try:
             run_status = state.start_run()
@@ -2512,7 +2526,7 @@ def create_app() -> FastAPI:
             ApiMessage with success status
         """
         if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
+            raise HTTPException(status_code=401, detail=AUTH_REQUIRED)
 
         if not file.filename:
             raise HTTPException(status_code=400, detail="No file provided")
@@ -2683,6 +2697,8 @@ def create_app() -> FastAPI:
         )
     except Exception as _mcp_exc:  # pylint: disable=broad-except
         logger.warning("Failed to mount MCP server: %s", _mcp_exc)
+
+    _register_ai_settings_routes(app)
 
     return app
 
