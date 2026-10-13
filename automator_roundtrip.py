@@ -285,7 +285,7 @@ def check_groups(original: Dict[str, Any], restored: Dict[str, Any]) -> Check:
 
 def check_schedules(original: Dict[str, Any], restored: Dict[str, Any]) -> Check:
     check = Check("restored-schedules-match", "Chronos schedules are restored for the new pipeline")
-    drop = VOLATILE_KEYS | JOB_IDENTITY_KEYS
+    drop = VOLATILE_KEYS.union(JOB_IDENTITY_KEYS)
     left = {k: normalize(v, original["idMap"], drop) for k, v in key_by_name(original["jobs"], "name").items()}
     right = {k: normalize(v, restored["idMap"], drop) for k, v in key_by_name(restored["jobs"], "name").items()}
     return compare_keyed(check, left, right, "schedules")
