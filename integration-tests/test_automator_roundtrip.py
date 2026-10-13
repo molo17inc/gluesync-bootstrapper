@@ -98,6 +98,12 @@ class NormalizeTests(unittest.TestCase):
         self.assertEqual(id_map["76e5ee55"], "<agentEntity:T:SOURCE>")
         self.assertEqual(id_map["aaaa1111"], "<agentEntity:T:TARGET>")
 
+    def test_missing_ids_never_become_placeholders(self):
+        id_map = rt.build_id_map("", [{"agentType": "SOURCE"}, {"agentId": "", "agentType": "TARGET"}],
+                                 [{"entityName": "T"}], [{"name": "g"}])
+        self.assertEqual(id_map, {})
+        self.assertEqual(rt.normalize({"note": ""}, id_map), {"note": ""})
+
     def test_key_by_name_keeps_duplicates(self):
         keyed = rt.key_by_name([{"n": "a"}, {"n": "a"}, {"n": "b"}], "n")
         self.assertEqual(sorted(keyed), ["a", "a#2", "b"])

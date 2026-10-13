@@ -87,6 +87,29 @@ MAX_DIFF_LINES = 400
 # Normalisation (pure functions, unit tested offline)
 # ---------------------------------------------------------------------------
 
+def _agent_sides(agents: List[Dict[str, Any]]) -> Dict[str, str]:
+    """agent id -> SOURCE / TARGET, for the agents that have an id."""
+    sides: Dict[str, str] = {}
+    for agent in agents:
+        agent_id = agent.get("agentId") or agent.get("id")
+        if agent_id:
+            sides[str(agent_id)] = str(agent.get("agentType") or "?").upper()
+    return sides
+
+
+def _entity_ids(entity: Dict[str, Any], agent_sides: Dict[str, str]) -> Dict[str, str]:
+    """Placeholders for an entity id and the ids of its agent entities."""
+    name = entity.get("entityName")
+    ids: Dict[str, str] = {}
+    if entity.get("entityId"):
+        ids[str(entity["entityId"])] = f"<entity:{name}>"
+    for agent_entity in entity.get("agentEntities") or []:
+        if isinstance(agent_entity, dict) and agent_entity.get("agentEntityId"):
+            side = agent_sides.get(str(agent_entity.get("agentId")), str(agent_entity.get("type") or "?").upper())
+            ids[str(agent_entity["agentEntityId"])] = f"<agentEntity:{name}:{side}>"
+    return ids
+
+
 def build_id_map(
     pipeline_id: str,
     agents: List[Dict[str, Any]],
@@ -94,27 +117,13 @@ def build_id_map(
     groups: List[Dict[str, Any]],
 ) -> Dict[str, str]:
     """Map every pipeline-specific id to a stable, name-based placeholder."""
-    id_map: Dict[str, str] = {}
+    agent_sides = _agent_sides(agents)
+    id_map: Dict[str, str] = {k: f"<agent:{side}>" for k, side in agent_sides.items()}
+    for entity in entities:
+        id_map.update(_entity_ids(entity, agent_sides))
+    id_map.update({str(g["groupId"]): f"<group:{g.get('name')}>" for g in groups if g.get("groupId")})
     if pipeline_id:
         id_map[str(pipeline_id)] = "<pipeline>"
-    for agent in agents:
-        agent_id = agent.get("agentId") or agent.get("id")
-        if agent_id:
-            id_map[str(agent_id)] = f"<agent:{str(agent.get('agentType') or '?').upper()}>"
-    agent_types = {str(a.get("agentId") or a.get("id")): str(a.get("agentType") or "?").upper() for a in agents}
-    for entity in entities:
-        entity_id = entity.get("entityId")
-        if entity_id:
-            id_map[str(entity_id)] = f"<entity:{entity.get('entityName')}>"
-        for agent_entity in entity.get("agentEntities") or []:
-            agent_entity_id = agent_entity.get("agentEntityId") if isinstance(agent_entity, dict) else None
-            if agent_entity_id:
-                side = agent_types.get(str(agent_entity.get("agentId")), str(agent_entity.get("type") or "?").upper())
-                id_map[str(agent_entity_id)] = f"<agentEntity:{entity.get('entityName')}:{side}>"
-    for group in groups:
-        group_id = group.get("groupId")
-        if group_id:
-            id_map[str(group_id)] = f"<group:{group.get('name')}>"
     return id_map
 
 
@@ -435,59 +444,70 @@ def write_json(path: Path, value: Any) -> None:
     path.write_text(json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
+class RoundTripError(Exception):
+    """The pipeline could not be exported, restored or exported again."""
+
+
+def capture(token: str, pipeline_id: str, out_dir: Path, label: str) -> Dict[str, Any]:
+    """Snapshot and export one pipeline, keeping both as ``<label>-*`` files."""
+    side = snapshot_pipeline(token, pipeline_id)
+    side["export"] = render_pipeline_export(token, pipeline_id)
+    (out_dir / f"{label}-export.yaml").write_text(side["export"], encoding="utf-8")
+    write_json(out_dir / f"{label}-snapshot.json", {k: v for k, v in side.items() if k != "export"})
+    return side
+
+
+def export_and_restore(
+    pipeline_id: str, out_dir: Path, token_file: str, timeout: int,
+) -> Tuple[Dict[str, Any], Dict[str, Any], str]:
+    """Return the original side, the restored side and what happened."""
+    try:
+        token = authenticate(token_file)
+        original = capture(token, pipeline_id, out_dir, "original")
+    except Exception as exc:  # pylint: disable=broad-except
+        raise RoundTripError(f"export of pipeline {pipeline_id} failed: {exc}") from exc
+
+    pipeline = original["pipeline"] if isinstance(original["pipeline"], dict) else {}
+    restore_name = f"{pipeline.get('name') or pipeline_id}{ROUND_TRIP_SUFFIX}"
+    restored_id, error = restore_export(out_dir / "original-export.yaml", restore_name, out_dir, timeout)
+    if error:
+        raise RoundTripError(error)
+
+    try:
+        restored = capture(token, restored_id, out_dir, "restored")
+    except Exception as exc:  # pylint: disable=broad-except
+        raise RoundTripError(f"export of restored pipeline {restored_id} failed: {exc}") from exc
+    return original, restored, f"pipeline {pipeline_id} exported and restored as {restored_id}"
+
+
+def write_results(out_dir: Path, pipeline_id: str, suite_name: str, checks: List[Check], duration: float) -> int:
+    """Write the diffs, report.json and junit.xml; return the exit code."""
+    passed = all(c.passed for c in checks)
+    for c in checks:
+        if c.diff:
+            (out_dir / f"{c.name}.diff").write_text("\n".join(c.diff) + "\n", encoding="utf-8")
+        logger.info(f"[{'PASS' if c.passed else 'FAIL'}] {c.name}: {c.message}")
+    write_json(out_dir / "report.json", {
+        "pipelineId": pipeline_id,
+        "passed": passed,
+        "durationSeconds": round(duration, 1),
+        "checks": [c.to_dict() for c in checks],
+    })
+    (out_dir / "junit.xml").write_text(junit_xml(suite_name, checks, duration), encoding="utf-8")
+    return 0 if passed else 1
+
+
 def run(pipeline_id: str, out_dir: Path, token_file: str, timeout: int, suite_name: str) -> int:
     started = time.time()
     out_dir.mkdir(parents=True, exist_ok=True)
-    checks: List[Check] = []
-
-    def finish() -> int:
-        duration = time.time() - started
-        for c in checks:
-            if c.diff:
-                (out_dir / f"{c.name}.diff").write_text("\n".join(c.diff) + "\n", encoding="utf-8")
-        write_json(out_dir / "report.json", {
-            "pipelineId": pipeline_id,
-            "passed": all(c.passed for c in checks),
-            "durationSeconds": round(duration, 1),
-            "checks": [c.to_dict() for c in checks],
-        })
-        (out_dir / "junit.xml").write_text(junit_xml(suite_name, checks, duration), encoding="utf-8")
-        for c in checks:
-            logger.info(f"[{'PASS' if c.passed else 'FAIL'}] {c.name}: {c.message}")
-        return 0 if all(c.passed for c in checks) else 1
-
     step = Check("export-and-restore", "The pipeline exports and the export restores as a new pipeline")
-    checks.append(step)
+    checks = [step]
     try:
-        token = authenticate(token_file)
-        original = snapshot_pipeline(token, pipeline_id)
-        original["export"] = render_pipeline_export(token, pipeline_id)
-    except Exception as exc:  # pylint: disable=broad-except
-        step.fail(f"export of pipeline {pipeline_id} failed: {exc}")
-        return finish()
-
-    export_path = out_dir / "original-export.yaml"
-    export_path.write_text(original["export"], encoding="utf-8")
-    write_json(out_dir / "original-snapshot.json", {k: v for k, v in original.items() if k != "export"})
-
-    name = (original["pipeline"] or {}).get("name") if isinstance(original["pipeline"], dict) else None
-    restored_id, error = restore_export(export_path, f"{name or pipeline_id}{ROUND_TRIP_SUFFIX}", out_dir, timeout)
-    if error:
-        step.fail(error)
-        return finish()
-
-    try:
-        restored = snapshot_pipeline(token, restored_id)
-        restored["export"] = render_pipeline_export(token, restored_id)
-    except Exception as exc:  # pylint: disable=broad-except
-        step.fail(f"export of restored pipeline {restored_id} failed: {exc}")
-        return finish()
-    (out_dir / "restored-export.yaml").write_text(restored["export"], encoding="utf-8")
-    write_json(out_dir / "restored-snapshot.json", {k: v for k, v in restored.items() if k != "export"})
-    step.message = f"pipeline {pipeline_id} exported and restored as {restored_id}"
-
-    checks.extend(run_checks(original, restored))
-    return finish()
+        original, restored, step.message = export_and_restore(pipeline_id, out_dir, token_file, timeout)
+        checks.extend(run_checks(original, restored))
+    except RoundTripError as exc:
+        step.fail(str(exc))
+    return write_results(out_dir, pipeline_id, suite_name, checks, time.time() - started)
 
 
 def main(argv: Optional[List[str]] = None) -> int:

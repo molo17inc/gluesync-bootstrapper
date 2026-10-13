@@ -509,6 +509,45 @@ def _legacy_mapping_rows(
     return column_mappings
 
 
+def _column_position(col: Dict[str, Any], stored_index: int) -> int:
+    """Where a column sits in its table.
+
+    Discovered columns carry "position"; "id" is a hash of the column, so it is
+    no order at all: without a position the stored order is kept.
+    """
+    raw_position = col.get("ordinalPosition")
+    if raw_position is None:
+        raw_position = col.get("position")
+    try:
+        return int(raw_position)
+    except (TypeError, ValueError):
+        return stored_index
+
+
+def _columns_in_table_order(columns: List[Dict[str, Any]]) -> List[Tuple[int, Dict[str, Any]]]:
+    """``(1-based stored index, column)`` pairs sorted by position in the table."""
+    return sorted(enumerate(columns, start=1), key=lambda pair: _column_position(pair[1], pair[0]))
+
+
+# "type" is implied by the side, and partitions are recomputed on import.
+_SOURCE_EXCLUDED_SETTINGS = frozenset({"type", "partitionSettings"})
+
+
+def _source_custom_properties(source_ae: Dict[str, Any]) -> Dict[str, Any]:
+    """``customProperties.source`` of a table: the settings its source runs with.
+
+    The source entityType holds what CoreHub runs with (the import writes
+    customProperties.source there). Keys found only in the agent entity's own
+    customProperties are kept too, so nothing the user wrote is lost.
+    """
+    source_et = source_ae.get("entityType", {}) or {}
+    user_only = {
+        k: v for k, v in (source_ae.get("customProperties") or {}).items() if k not in source_et
+    }
+    settings = {**user_only, **source_et}
+    return {k: v for k, v in settings.items() if k not in _SOURCE_EXCLUDED_SETTINGS}
+
+
 def _process_single_entity(
     ent: Dict[str, Any],
     source_ae: Dict[str, Any],
@@ -631,26 +670,9 @@ def _process_single_entity(
     target_columns = target_ae.get("columns", []) or []
     
     if source_columns and target_columns:
-        def _column_sort_key(col: Dict[str, Any], idx: int) -> int:
-            # Discovered columns carry "position"; "id" is a hash of the
-            # column, so it is no order at all: fall back to the stored order.
-            raw_position = col.get("ordinalPosition")
-            if raw_position is None:
-                raw_position = col.get("position")
-            try:
-                return int(raw_position)
-            except (TypeError, ValueError):
-                return idx
-
         # Sort both source and target columns by their position in the table
-        ordered_source = sorted(
-            enumerate(source_columns, start=1),
-            key=lambda pair: _column_sort_key(pair[1], pair[0]),
-        )
-        ordered_target = sorted(
-            enumerate(target_columns, start=1),
-            key=lambda pair: _column_sort_key(pair[1], pair[0]),
-        )
+        ordered_source = _columns_in_table_order(source_columns)
+        ordered_target = _columns_in_table_order(target_columns)
         
         # The matrix of the target entity type: lists of column ids on Gluesync 2.3, single pairs before.
         columns_mapping_matrix = target_ae.get("entityType", {}).get("columnsMappingMatrix", []) or []
@@ -755,23 +777,7 @@ def _process_single_entity(
             }
 
     # Custom properties
-    source_et = source_ae.get("entityType", {}) or {}
-
-    # The source entityType holds the settings CoreHub runs with (the import
-    # writes customProperties.source there). "type" is implied and partitions
-    # are recomputed on import. Keys only found in the agent entity's own
-    # customProperties are kept too, so nothing the user wrote is lost.
-    source_excluded = {"type", "partitionSettings"}
-    source_cp = {
-        k: v
-        for k, v in (source_ae.get("customProperties") or {}).items()
-        if k not in source_excluded and k not in source_et
-    }
-    source_cp.update({
-        k: v
-        for k, v in source_et.items()
-        if k not in source_excluded
-    })
+    source_cp = _source_custom_properties(source_ae)
 
     target_cp = (target_ae.get("customProperties") or {}).copy()
 
