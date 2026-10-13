@@ -159,6 +159,68 @@ The column configuration supports:
 - Column type via the `type` property
 - Automatic type mapping between different database systems
 
+#### Column relations and keys (Gluesync 2.3)
+
+Gluesync 2.3 maps columns with arrows: a source column can feed several target columns, several source
+columns can feed one target column, and a column can be read and never written, or written and never
+read. The explicit column form expresses each of them; every form the bootstrapper accepted before keeps
+its meaning (an absent or `null` `target` is the source name, `- SRC: tgt` is one to one).
+
+```yaml
+CUSTOMERS:
+  name: customers
+  keys: [ID]                       # source keys: leave out when the source table has a primary key
+  # targetKeys: [...]              # target keys that are not the ones the target inherits (rarely needed)
+  columns:
+    - ID: id                                   # 1:1
+    - source: [FIRST_NAME, LAST_NAME]          # N:1, needs a custom field function or the entity's UDF
+      target: full_name
+      expression:
+        type: CustomFn
+        functionName: concat
+        arguments:
+          - {type: SourceColumnArg, name: FIRST_NAME}
+          - {type: SourceColumnArg, name: LAST_NAME}
+    - source: PHONE                            # 1:N: one row per target with the same source;
+      target: phone_home                       # each target gets a copy of the source value
+    - source: PHONE                            # unless a custom field function writes it
+      target: phone_work
+    - source: INTERNAL_NOTE                    # 1:null: read, never written
+      target: []
+    - target: ingest_ts                        # null:1: produced by its field function (or the UDF);
+      type: timestamp                          # the column has to exist on the target table
+      expression:
+        type: LocalTs
+```
+
+On a Gluesync 2.3 CoreHub every entity the bootstrapper saves is checked by its mapping rules before it is
+stored, and the bootstrapper applies the same rules first, so that a table they refuse is skipped with the
+table and the rule in the log while the other entities are created:
+
+- A table with a primary key is keyed on it: `keys:` may be left out, and `keys:` that name other columns
+  are refused. A source without a primary key whose target has one takes as keys the source columns that
+  feed the target's primary key. Otherwise `keys:` names the source keys, and the targets they feed are the
+  target keys. A MongoDB (or other NoSQL) source declares no primary key: name the key column, usually
+  `_id`, in `keys:`.
+- While the target table has its own primary key, a source key column feeds only target key columns: one
+  matched by name onto another column is left unlinked (with a warning), one a row links there is refused.
+- A target primary key that no source column feeds (an identity or a default column) needs a row
+  `{target: <column>, expression: ...}` with a field function that produces its value, or the entity's UDF.
+- A fixed or technical field function (`Static*`, `LocalTs`, `LocalDate`, `TsOff`, `RecordID`) gives its
+  column a value of its own, so it belongs on a `{target, expression}` row, not on a row with a `source`.
+- A target column is named by one row only (several sources onto it are written as one `source: [...]` row),
+  and several sources onto several targets is not supported.
+
+A CoreHub older than 2.3 stores only one source column per target column: the forms above that need more
+(`source: [...]`, a source repeated over rows, `target: []`, `targetKeys`) are refused for it before any
+request, and the other forms are sent as they always were. The export writes these forms only for entities
+of a 2.3 CoreHub.
+
+On a 2.3 CoreHub each table of a MultiTable chain (`chainId`) follows the same rules and takes the same forms
+as a table of its own, and its target table is the one `name` gives. A chain is refused as a whole, naming the
+table and the rule. The source of a chain keeps every column of its tables: a column no row names is read and
+never written.
+
 ### Entity Naming
 
 Entities created in CoreHub from this YAML are named automatically:
@@ -951,7 +1013,7 @@ ARTICLES:
 
 When unlocked schema is enabled:
 
-- The `columnsMappingMatrix` contains a single entry with `sourceColumnId: 0` and `targetColumnId: 0`
+- The `columnsMappingMatrix` contains a single entry that pairs the tables and names no column (`sourceColumnId: 0` and `targetColumnId: 0` before Gluesync 2.3, empty `sourceColumnIds` and `targetColumnIds` from 2.3)
 - The `tablesWithUnlockedSchema` array includes the target table ID
 - Column and data type validation is bypassed, delegating all transformation logic to the UDF
 
@@ -1061,7 +1123,7 @@ ARTICLES:
 ### Technical Details
 
 - **Column IDs**: Target-only columns receive sequential IDs following the mapped source columns
-- **Column Mapping**: In `columnsMappingMatrix`, target-only columns have `sourceColumnId: 0` indicating no source mapping
+- **Column Mapping**: In `columnsMappingMatrix`, target-only columns have no entry of their own with an unlocked schema (its single entry pairs the tables); in a MultiTable chain on Gluesync 2.3 each one has an entry with no source column and needs an `expression` (a field function that produces its value), or the chain is refused. A `{target, expression}` row in the table's `columns:` does the same and is what the export writes; use it for a target primary key no source feeds, which the key rules check before the target-only columns are added
 - **Discovery Priority**: If a target-only column exists in the target table, discovered properties are used over user-defined ones
 - **Required Fields**: When using object format, you must specify: `name`, `type`, `dataLength`, `numericPrecision`, `numericScale`, `isNullable`
 - **Default Values**: When using simple string format, defaults are: `varchar` type, `dataLength: 1024`, `numericPrecision: 0`, `numericScale: 0`, `isNullable: false`
@@ -1075,7 +1137,7 @@ ARTICLES:
 4. **Required Fields for Object Format**: When using object format, you must specify: `name`, `type`, `dataLength`, `numericPrecision`, `numericScale`, `isNullable`
 5. **Discovery Priority**: If a target-only column exists in the target table, the system uses discovered column properties over user-defined ones
 6. **These columns can be populated through UDF transformations**
-7. **In `columnsMappingMatrix`, target-only columns have `sourceColumnId: 0` to indicate no source mapping**
+7. **In a MultiTable chain on Gluesync 2.3, give each target-only column an `expression`: no source column feeds it, so CoreHub needs a field function that produces it**
 
 ## Logical Partitions
 

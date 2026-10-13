@@ -1,0 +1,298 @@
+[
+  {
+    "entities": [
+      {
+        "agentEntities": [
+          {
+            "agentEntityId": "",
+            "agentId": "source-agent",
+            "columns": [
+              {
+                "id": 500,
+                "name": "ORDERS",
+                "schema": "src"
+              },
+              [
+                {
+                  "charMaxLength": 0,
+                  "dataType": "int",
+                  "id": 1,
+                  "isIdentity": false,
+                  "isNullable": false,
+                  "isPK": true,
+                  "name": "ORDER_ID",
+                  "numPrec": 0,
+                  "numScale": 0,
+                  "position": 1,
+                  "tableId": 500
+                },
+                {
+                  "charMaxLength": 0,
+                  "dataType": "int",
+                  "id": 2,
+                  "isIdentity": false,
+                  "isNullable": true,
+                  "isPK": false,
+                  "name": "CUSTOMER_ID",
+                  "numPrec": 0,
+                  "numScale": 0,
+                  "position": 2,
+                  "tableId": 500
+                },
+                {
+                  "charMaxLength": 0,
+                  "dataType": "decimal",
+                  "id": 3,
+                  "isIdentity": false,
+                  "isNullable": true,
+                  "isPK": false,
+                  "name": "TOTAL",
+                  "numPrec": 0,
+                  "numScale": 0,
+                  "position": 3,
+                  "tableId": 500
+                },
+                {
+                  "charMaxLength": 255,
+                  "dataType": "varchar",
+                  "id": 4,
+                  "isIdentity": false,
+                  "isNullable": true,
+                  "isPK": false,
+                  "name": "NOTE",
+                  "numPrec": 0,
+                  "numScale": 0,
+                  "position": 4,
+                  "tableId": 500
+                }
+              ],
+              {
+                "id": 501,
+                "name": "PARTS",
+                "schema": "src"
+              },
+              [
+                {
+                  "charMaxLength": 0,
+                  "dataType": "int",
+                  "id": 1,
+                  "isIdentity": false,
+                  "isNullable": false,
+                  "isPK": true,
+                  "name": "PART_ID",
+                  "numPrec": 0,
+                  "numScale": 0,
+                  "position": 1,
+                  "tableId": 501
+                },
+                {
+                  "charMaxLength": 255,
+                  "dataType": "varchar",
+                  "id": 2,
+                  "isIdentity": false,
+                  "isNullable": true,
+                  "isPK": false,
+                  "name": "LABEL",
+                  "numPrec": 0,
+                  "numScale": 0,
+                  "position": 2,
+                  "tableId": 501
+                }
+              ]
+            ],
+            "customProperties": {},
+            "entityId": "",
+            "entityName": "src.ORDERS chain",
+            "entityType": {
+              "maxFetchItemsCountPerIteration": 1000,
+              "maxTransactionMessageKbSize": 1024,
+              "pollingIntervalMilliseconds": 100,
+              "type": "Source",
+              "unchangedDataFilterType": "ENTIRE_ROW"
+            },
+            "orderIndex": 0,
+            "tables": [
+              {
+                "id": 500,
+                "name": "ORDERS",
+                "schema": "src"
+              },
+              {
+                "id": 501,
+                "name": "PARTS",
+                "schema": "src"
+              }
+            ],
+            "tablesProperties": {
+              "src.ORDERS": {},
+              "src.PARTS": {}
+            },
+            "type": "MultiTable"
+          },
+          {
+            "agentEntityId": "",
+            "agentId": "target-agent",
+            "columns": [
+              {
+                "id": 2007579922,
+                "name": "ORDERS",
+                "schema": "tgt"
+              },
+              [
+                {
+                  "charMaxLength": 0,
+                  "dataType": "int",
+                  "id": 1,
+                  "isIdentity": false,
+                  "isNullable": false,
+                  "isPK": true,
+                  "name": "ORDER_ID",
+                  "numPrec": 0,
+                  "numScale": 0,
+                  "position": 1,
+                  "tableId": 2007579922
+                },
+                {
+                  "charMaxLength": 0,
+                  "dataType": "decimal",
+                  "id": 3,
+                  "isIdentity": false,
+                  "isNullable": true,
+                  "isPK": false,
+                  "name": "AMOUNT",
+                  "numPrec": 0,
+                  "numScale": 0,
+                  "position": 3,
+                  "tableId": 2007579922
+                },
+                {
+                  "charMaxLength": 255,
+                  "id": 4,
+                  "isIdentity": false,
+                  "isNullable": false,
+                  "isPK": false,
+                  "name": "SYNCED_AT",
+                  "numPrec": 0,
+                  "numScale": 0,
+                  "position": 0,
+                  "tableId": 2007579922,
+                  "type": "varchar"
+                }
+              ],
+              {
+                "id": 1173570291,
+                "name": "PARTS",
+                "schema": "tgt"
+              },
+              [
+                {
+                  "charMaxLength": 0,
+                  "dataType": "int",
+                  "id": 1,
+                  "isIdentity": false,
+                  "isNullable": false,
+                  "isPK": true,
+                  "name": "PART_ID",
+                  "numPrec": 0,
+                  "numScale": 0,
+                  "position": 1,
+                  "tableId": 1173570291
+                },
+                {
+                  "charMaxLength": 255,
+                  "dataType": "varchar",
+                  "id": 2,
+                  "isIdentity": false,
+                  "isNullable": true,
+                  "isPK": false,
+                  "name": "LABEL",
+                  "numPrec": 0,
+                  "numScale": 0,
+                  "position": 2,
+                  "tableId": 1173570291
+                }
+              ]
+            ],
+            "customProperties": {
+              "ttlValue": 0
+            },
+            "entityId": "",
+            "entityName": "src.ORDERS chain",
+            "entityType": {
+              "allowedOperations": [
+                "INSERT",
+                "DELETE",
+                "UPDATE",
+                "TRUNCATE"
+              ],
+              "columnsMappingMatrix": [
+                {
+                  "sourceColumnId": 1,
+                  "sourceTableObjectId": 500,
+                  "targetColumnId": 1,
+                  "targetTableObjectId": 2007579922
+                },
+                {
+                  "sourceColumnId": 2,
+                  "sourceTableObjectId": 500,
+                  "targetColumnId": 2,
+                  "targetTableObjectId": 2007579922
+                },
+                {
+                  "sourceColumnId": 3,
+                  "sourceTableObjectId": 500,
+                  "targetColumnId": 3,
+                  "targetTableObjectId": 2007579922
+                },
+                {
+                  "sourceColumnId": 4,
+                  "sourceTableObjectId": 500,
+                  "targetColumnId": 4,
+                  "targetTableObjectId": 2007579922
+                },
+                {
+                  "sourceColumnId": 1,
+                  "sourceTableObjectId": 501,
+                  "targetColumnId": 1,
+                  "targetTableObjectId": 1173570291
+                },
+                {
+                  "sourceColumnId": 2,
+                  "sourceTableObjectId": 501,
+                  "targetColumnId": 2,
+                  "targetTableObjectId": 1173570291
+                }
+              ],
+              "snapshotWritingConcurrency": 1,
+              "tablesWithUnlockedDataTypes": [],
+              "tablesWithUnlockedSchema": [],
+              "type": "Target",
+              "useBulkOperationsDuringCDC": false,
+              "useBulkOperationsWhileSnapshot": false
+            },
+            "orderIndex": 0,
+            "tables": [
+              {
+                "id": 2007579922,
+                "name": "ORDERS",
+                "schema": "tgt"
+              },
+              {
+                "id": 1173570291,
+                "name": "PARTS",
+                "schema": "tgt"
+              }
+            ],
+            "tablesProperties": {
+              "tgt.ORDERS": {},
+              "tgt.PARTS": {}
+            },
+            "type": "MultiTable"
+          }
+        ],
+        "entityId": "",
+        "entityName": "src.ORDERS chain"
+      }
+    ]
+  }
+]

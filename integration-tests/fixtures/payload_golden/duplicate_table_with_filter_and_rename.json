@@ -1,0 +1,326 @@
+[
+  {
+    "entities": [
+      {
+        "agentEntities": [
+          {
+            "agentId": "source-agent",
+            "columns": [
+              {
+                "charMaxLength": 0,
+                "dataType": "int",
+                "id": 1,
+                "isIdentity": false,
+                "isNullable": false,
+                "isPK": true,
+                "name": "ID",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 1,
+                "tableId": 500
+              },
+              {
+                "charMaxLength": 255,
+                "dataType": "varchar",
+                "id": 2,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "NAME",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 2,
+                "tableId": 500
+              },
+              {
+                "charMaxLength": 255,
+                "dataType": "varchar",
+                "id": 3,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "EMAIL",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 3,
+                "tableId": 500
+              },
+              {
+                "charMaxLength": 0,
+                "dataType": "datetime",
+                "id": 4,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "CREATED",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 4,
+                "tableId": 500
+              }
+            ],
+            "customProperties": {},
+            "entityObject": {
+              "collection": "CUSTOMERS",
+              "id": "500",
+              "scope": "src"
+            },
+            "entityType": {
+              "type": "Source"
+            },
+            "table": {
+              "id": "500",
+              "name": "CUSTOMERS",
+              "schema": "src"
+            },
+            "tablesProperties": {
+              "src.CUSTOMERS": {}
+            },
+            "type": "SingleTable"
+          },
+          {
+            "agentId": "target-agent",
+            "columns": [
+              {
+                "charMaxLength": 0,
+                "dataType": "int",
+                "id": 101,
+                "isIdentity": false,
+                "isNullable": false,
+                "isPK": true,
+                "name": "id",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 0,
+                "tableId": 9001
+              },
+              {
+                "charMaxLength": 255,
+                "dataType": "varchar",
+                "id": 102,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "name",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 0,
+                "tableId": 9001
+              },
+              {
+                "charMaxLength": 255,
+                "dataType": "varchar",
+                "id": 3,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "EMAIL",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 0,
+                "tableId": 9001
+              },
+              {
+                "charMaxLength": 0,
+                "dataType": "timestamp",
+                "id": 104,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "created",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 0,
+                "tableId": 9001
+              }
+            ],
+            "customProperties": {},
+            "entityObject": {
+              "collection": "customers",
+              "id": "9001",
+              "scope": "tgt"
+            },
+            "entityType": {
+              "allowedOperations": [
+                "INSERT",
+                "DELETE",
+                "UPDATE",
+                "TRUNCATE"
+              ],
+              "columnsMappingMatrix": [
+                {
+                  "sourceColumnId": 1,
+                  "sourceTableObjectId": 500,
+                  "targetColumnId": 101,
+                  "targetTableObjectId": 9001
+                },
+                {
+                  "sourceColumnId": 2,
+                  "sourceTableObjectId": 500,
+                  "targetColumnId": 102,
+                  "targetTableObjectId": 9001
+                },
+                {
+                  "sourceColumnId": 3,
+                  "sourceTableObjectId": 500,
+                  "targetColumnId": 3,
+                  "targetTableObjectId": 9001
+                },
+                {
+                  "sourceColumnId": 4,
+                  "sourceTableObjectId": 500,
+                  "targetColumnId": 104,
+                  "targetTableObjectId": 9001
+                }
+              ],
+              "snapshotWritingConcurrency": 1,
+              "tablesWithUnlockedDataTypes": [],
+              "tablesWithUnlockedSchema": [],
+              "type": "Target",
+              "useBulkOperationsDuringCDC": false,
+              "useBulkOperationsWhileSnapshot": false
+            },
+            "table": {
+              "id": "9001",
+              "name": "customers",
+              "schema": "tgt"
+            },
+            "tablesProperties": {
+              "tgt.customers": {}
+            },
+            "type": "SingleTable"
+          }
+        ],
+        "entityName": "src.CUSTOMERS"
+      },
+      {
+        "agentEntities": [
+          {
+            "agentId": "source-agent",
+            "columns": [
+              {
+                "charMaxLength": 0,
+                "dataType": "int",
+                "id": 1,
+                "isIdentity": false,
+                "isNullable": false,
+                "isPK": true,
+                "name": "ID",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 1,
+                "tableId": 500
+              },
+              {
+                "charMaxLength": 255,
+                "dataType": "varchar",
+                "id": 2,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "NAME",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 2,
+                "tableId": 500
+              }
+            ],
+            "customProperties": {},
+            "entityObject": {
+              "collection": "CUSTOMERS",
+              "id": "500",
+              "scope": "src"
+            },
+            "entityType": {
+              "type": "Source"
+            },
+            "table": {
+              "id": "500",
+              "name": "CUSTOMERS",
+              "schema": "src"
+            },
+            "tablesProperties": {
+              "src.CUSTOMERS": {}
+            },
+            "type": "SingleTable"
+          },
+          {
+            "agentId": "target-agent",
+            "columns": [
+              {
+                "charMaxLength": 0,
+                "dataType": "int",
+                "id": 1,
+                "isIdentity": false,
+                "isNullable": false,
+                "isPK": true,
+                "name": "ID",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 0,
+                "tableId": 164927084
+              },
+              {
+                "charMaxLength": 255,
+                "dataType": "varchar",
+                "id": 2,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "FULL_NAME",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 0,
+                "tableId": 164927084
+              }
+            ],
+            "customProperties": {},
+            "entityObject": {
+              "collection": "CUSTOMERS_COPY",
+              "id": "164927084",
+              "scope": "tgt"
+            },
+            "entityType": {
+              "allowedOperations": [
+                "INSERT",
+                "DELETE",
+                "UPDATE",
+                "TRUNCATE"
+              ],
+              "columnsMappingMatrix": [
+                {
+                  "sourceColumnId": 1,
+                  "sourceTableObjectId": 500,
+                  "targetColumnId": 1,
+                  "targetTableObjectId": 164927084
+                },
+                {
+                  "sourceColumnId": 2,
+                  "sourceTableObjectId": 500,
+                  "targetColumnId": 2,
+                  "targetTableObjectId": 164927084
+                }
+              ],
+              "snapshotWritingConcurrency": 1,
+              "tablesWithUnlockedDataTypes": [],
+              "tablesWithUnlockedSchema": [],
+              "type": "Target",
+              "useBulkOperationsDuringCDC": false,
+              "useBulkOperationsWhileSnapshot": false
+            },
+            "table": {
+              "id": "164927084",
+              "name": "CUSTOMERS_COPY",
+              "schema": "tgt"
+            },
+            "tablesProperties": {
+              "tgt.CUSTOMERS_COPY": {}
+            },
+            "type": "SingleTable"
+          }
+        ],
+        "entityName": "src.CUSTOMERS copy"
+      }
+    ]
+  }
+]

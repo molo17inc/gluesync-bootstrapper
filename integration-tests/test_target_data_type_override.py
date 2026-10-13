@@ -77,6 +77,9 @@ dbo:
       VEHICLES:
         keys: [VEHICLE_ID]
         columns:
+          - name: VEHICLE_ID
+            sourceName: VEHICLE_ID
+            type: int
           - name: registrationDate
             sourceName: REGISTRATION_DATE
             type: timestamp

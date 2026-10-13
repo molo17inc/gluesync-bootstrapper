@@ -30,7 +30,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import yaml
 
 from commons import fetch_core_hub, get_table_columns
-from field_function_utils import apply_field_functions_to_column_mappings
+from field_function_utils import apply_field_functions_to_column_mappings, normalize_expression_for_yaml
+from entity_mapping import read_entry, relations_of, yaml_rows
 from utils.chronos_client import ChronosClient
 from utils.log import create_log_file, get_logger, log_failure, log_success
 
@@ -382,6 +383,132 @@ def build_schemas_from_entities(
     return schemas
 
 
+def _is_grouped_matrix(matrix: List[Dict[str, Any]]) -> bool:
+    """Whether a stored matrix holds the column id lists of Gluesync 2.3 (an older CoreHub stores single pairs)."""
+    return any(isinstance(entry, dict) and ("sourceColumnIds" in entry or "targetColumnIds" in entry) for entry in matrix)
+
+
+def _mapping_row(scol: Optional[Dict[str, Any]], tcol: Optional[Dict[str, Any]], ordinal: Optional[int]) -> Dict[str, Any]:
+    """The YAML row of source column ``scol`` onto target column ``tcol``, with the metadata of both."""
+    source_name = scol.get("name") if scol else None
+    row: Dict[str, Any] = {"source": source_name, "target": tcol.get("name", source_name) if tcol else source_name}
+    row["type"] = (_column_data_type(tcol) if tcol else None) or (_column_data_type(scol) if scol else None)
+    if scol is None:
+        return row
+    if row["type"] is None:
+        logger.warning(
+            f"Column '{source_name}' has no data type in stored entity data (legacy entity with unserialised "
+            f"DataTypeInterface). The type field will be null in the export; use a recent version of Gluesync "
+            f"or re-create the entity to populate the type."
+        )
+    row.update({
+        "dataLength": _column_attr(scol, "charMaxLength", "dataLength", 0),
+        "numericPrecision": _column_attr(scol, "numPrec", "numericPrecision", 0),
+        "numericScale": _column_attr(scol, "numScale", "numericScale", 0),
+        "isNullable": scol.get("isNullable", False),
+        "isPK": bool(scol.get("isPK") or scol.get("isPrimaryKey")),
+        "id": scol.get("id"),
+        "ordinalPosition": ordinal,
+        # The character set the column is read with, which the user may have
+        # overridden (an AS400 per-column CCSID, for one). Always written, null
+        # included: on import an absent key keeps whatever discovery publishes,
+        # so leaving it out would silently restore a column the source's way
+        # instead of the way it was backed up.
+        "charSet": scol.get("charSet"),
+    })
+    return row
+
+
+def _grouped_mapping_rows(
+    matrix: List[Dict[str, Any]],
+    ordered_source: List[Tuple[int, Dict[str, Any]]],
+    target_columns: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """The YAML rows of a Gluesync 2.3 matrix, and the relations they come from (C-5)."""
+    source_columns = [col for _, col in ordered_source]
+    relations = relations_of([read_entry(entry) for entry in matrix], source_columns, target_columns)
+    sources_by_name = {col.get("name"): (index, col) for index, col in ordered_source}
+    targets_by_name = {col.get("name"): col for col in target_columns}
+
+    def row_of(source_name, target_name):
+        index, scol = sources_by_name.get(source_name, (None, None))
+        return _mapping_row(scol, targets_by_name.get(target_name), index)
+
+    order = [col.get("name") for _, col in ordered_source if col.get("name")]
+    return yaml_rows(relations, order, row_of), relations
+
+
+def _target_keys_to_export(relations: Dict[str, Any], source_columns: List[Dict[str, Any]],
+                           target_columns: List[Dict[str, Any]]) -> List[str]:
+    """``targetKeys`` of a Gluesync 2.3 entity: its stored target keys when they are not the ones it inherits.
+
+    The keys a target inherits are the targets of the relations of a source key column; any other stored set
+    (the target's own primary key, a key produced by a function) is written so the import keeps it.
+    """
+    source_keys = {col.get("name") for col in source_columns if col.get("isPK") or col.get("isPrimaryKey")}
+    inherited = {t for rel in relations["relations"] if source_keys.intersection(rel["sources"]) for t in rel["targets"]}
+    stored = [col.get("name") for col in target_columns if col.get("isPK") or col.get("isPrimaryKey")]
+    return stored if set(stored) != inherited and stored else []
+
+
+def _legacy_mapping_rows(
+    columns_mapping_matrix: List[Dict[str, Any]],
+    ordered_source: List[Tuple[int, Dict[str, Any]]],
+    ordered_target: List[Tuple[int, Dict[str, Any]]],
+    source_table_name: str,
+) -> List[Dict[str, Any]]:
+    """The YAML rows of a matrix of single pairs (a CoreHub older than Gluesync 2.3), as they have always been.
+
+    Each source column goes to the target of the first pair that names it, else to its own name; with no
+    matrix at all, source and target columns are paired by position.
+    """
+    has_mapping_matrix = len(columns_mapping_matrix) > 0
+    target_by_id = {}
+    for idx, (_, tcol) in enumerate(ordered_target):
+        tid = tcol.get("id")
+        tname = tcol.get("name")
+        if tid is not None:
+            target_by_id[tid] = tcol
+            if idx < 3:  # Log only first 3 to avoid spam
+                logger.info(f"Target column: id={tid}, name={tname}")
+
+    column_mappings = []
+    # Use index in sorted array as ordinalPosition (1-based)
+    for col_index, scol in ordered_source:
+        source_name = scol.get("name")
+        source_id = scol.get("id")
+        if not source_name or source_id is None:
+            continue
+
+        # Find corresponding target column ID from mapping matrix
+        target_col_id = None
+        if has_mapping_matrix:
+            for mapping in columns_mapping_matrix:
+                if mapping.get("sourceColumnId") == source_id:
+                    target_col_id = mapping.get("targetColumnId")
+                    break
+
+        target_col = None
+        if target_col_id is not None and target_col_id in target_by_id:
+            target_col = target_by_id[target_col_id]
+            if target_col.get("name", source_name) != source_name:
+                logger.info(f"Column mapping: {source_name} -> {target_col.get('name')}")
+        elif not has_mapping_matrix:
+            # Fallback: pair source/target columns by order when mapping matrix missing
+            target_idx = col_index - 1
+            if target_idx < len(ordered_target):
+                _, target_col = ordered_target[target_idx]
+                if target_col.get("name", source_name) != source_name:
+                    logger.info(f"Fallback column mapping by position: {source_name} -> {target_col.get('name')}")
+            if col_index == 1:
+                logger.info(f"No columnsMappingMatrix for {source_table_name}; using positional fallback")
+        elif col_index == 1:  # Log only once when matrix exists but id missing
+            logger.info(f"No target mapping found for {source_name} (using same name)")
+
+        column_mappings.append(_mapping_row(scol, target_col, col_index))
+    return column_mappings
+
+
 def _process_single_entity(
     ent: Dict[str, Any],
     source_ae: Dict[str, Any],
@@ -521,103 +648,24 @@ def _process_single_entity(
             key=lambda pair: _column_sort_key(pair[1], pair[0]),
         )
         
-        # Build mapping by matching column IDs from columnsMappingMatrix
-        columns_mapping_matrix = ent.get("columnsMappingMatrix", []) or []
-        if not columns_mapping_matrix:
-            columns_mapping_matrix = (
-                target_ae.get("entityType", {}).get("columnsMappingMatrix", []) or []
-            )
-        has_mapping_matrix = len(columns_mapping_matrix) > 0
+        # The matrix of the target entity type: lists of column ids on Gluesync 2.3, single pairs before.
+        columns_mapping_matrix = target_ae.get("entityType", {}).get("columnsMappingMatrix", []) or []
         logger.info(
             f"Table {source_table_name}: columnsMappingMatrix has {len(columns_mapping_matrix)} entries"
         )
-        
-        # Create ID-based lookup for target columns
-        target_by_id = {}
-        for idx, (_, tcol) in enumerate(ordered_target):
-            tid = tcol.get("id")
-            tname = tcol.get("name")
-            if tid is not None:
-                target_by_id[tid] = tcol
-                if idx < 3:  # Log only first 3 to avoid spam
-                    logger.info(f"Target column: id={tid}, name={tname}")
-        
-        # Build column mappings with full metadata: [{source_name: target_name, type, dataLength, ...}]
-        column_mappings = []
-        
-        # Use index in sorted array as ordinalPosition (1-based)
-        for col_index, scol in ordered_source:
-            source_name = scol.get("name")
-            source_id = scol.get("id")
-            if not source_name or source_id is None:
-                continue
-            
-            # Find corresponding target column ID from mapping matrix
-            target_col_id = None
-            if has_mapping_matrix:
-                for mapping in columns_mapping_matrix:
-                    if mapping.get("sourceColumnId") == source_id:
-                        target_col_id = mapping.get("targetColumnId")
-                        break
+        unlocked_tables = (target_ae.get("entityType", {}) or {}).get("tablesWithUnlockedSchema") or []
 
-            # Get target column and its metadata
-            target_name = source_name  # Default to same name
-            target_type = _column_data_type(scol)
-            if target_col_id is not None and target_col_id in target_by_id:
-                target_col = target_by_id[target_col_id]
-                target_name = target_col.get("name", source_name)
-                target_type = _column_data_type(target_col) or _column_data_type(scol)
-                if target_name != source_name:
-                    logger.info(f"Column mapping: {source_name} -> {target_name}")
-            else:
-                # Fallback: pair source/target columns by order when mapping matrix missing
-                if not has_mapping_matrix:
-                    target_idx = col_index - 1
-                    if target_idx < len(ordered_target):
-                        _, fallback_target_col = ordered_target[target_idx]
-                        target_name = fallback_target_col.get("name", source_name)
-                        target_type = _column_data_type(fallback_target_col) or _column_data_type(scol)
-                        if target_name != source_name:
-                            logger.info(
-                                f"Fallback column mapping by position: {source_name} -> {target_name}"
-                            )
-                    if col_index == 1:
-                        logger.info(
-                            f"No columnsMappingMatrix for {source_table_name}; using positional fallback"
-                        )
-                elif col_index == 1:  # Log only once when matrix exists but id missing
-                    logger.info(
-                        f"No target mapping found for {source_name} (using same name)"
-                    )
-            
-            # Build column mapping with metadata using explicit source/target keys
-            # Use column index in sorted array as ordinalPosition (1-based)
-            if target_type is None:
-                logger.warning(
-                    f"Column '{source_name}' in table '{source_table_name}' has no data type "
-                    f"in stored entity data (legacy entity with unserialised DataTypeInterface). "
-                    f"The type field will be null in the export; use a recent version of Gluesync "
-                    f"or re-create the entity to populate the type."
-                )
-            col_mapping = {
-                "source": source_name,
-                "target": target_name,
-                "type": target_type,
-                "dataLength": _column_attr(scol, "charMaxLength", "dataLength", 0),
-                "numericPrecision": _column_attr(scol, "numPrec", "numericPrecision", 0),
-                "numericScale": _column_attr(scol, "numScale", "numericScale", 0),
-                "isNullable": scol.get("isNullable", False),
-                "isPK": bool(scol.get("isPK") or scol.get("isPrimaryKey")),
-                "id": source_id,
-                "ordinalPosition": col_index,  # Use 1-based index from sorted array
-                # The character set the column is read with, which the user may have
-                # overridden (an AS400 per-column CCSID, for one). Always written, null
-                # included: on import an absent key keeps whatever discovery publishes,
-                # so leaving it out would silently restore a column the source's way
-                # instead of the way it was backed up.
-                "charSet": scol.get("charSet"),
-            }
-            column_mappings.append(col_mapping)
+        if _is_grouped_matrix(columns_mapping_matrix) and not unlocked_tables:
+            column_mappings, relations = _grouped_mapping_rows(
+                columns_mapping_matrix, ordered_source, [col for _, col in ordered_target]
+            )
+            target_keys = _target_keys_to_export(relations, source_columns, target_columns)
+            if target_keys:
+                table_cfg["targetKeys"] = target_keys
+        else:
+            column_mappings = _legacy_mapping_rows(
+                columns_mapping_matrix, ordered_source, ordered_target, source_table_name
+            )
         
         # Always export column mappings with full metadata
         if column_mappings:
@@ -833,6 +881,10 @@ def _process_multitable_entity(
 
     column_groups = _group_entries(source_ae.get("columns"))
     key_groups = _group_entries(source_ae.get("keys"))
+    target_column_groups = _group_entries(target_ae.get("columns"))
+    target_type = target_ae.get("entityType", {}) or {}
+    matrix = target_type.get("columnsMappingMatrix", []) or []
+    field_functions = target_type.get("fieldFunctions") or []
 
     # In 2.2.6.0 the 'keys' array is removed from MultiTable agent entities; the
     # primary-key information is encoded as isPK on each column. Derive a
@@ -875,6 +927,40 @@ def _process_multitable_entity(
         table_cfg["chainId"] = chain_id
         if group_name:
             table_cfg["groupId"] = group_name
+
+        # Mapping rows, as for a SingleTable entity, so renames and target-only columns survive (BOP-12 A).
+        source_table_id = tbl.get("id")
+        paired_target = next(
+            (t for t in target_tables if str(t.get("name")) == str(target_table_name)), None
+        )
+        target_cols = target_column_groups.get(str(target_table_name))
+        if table_name in column_groups and target_cols is not None and "columns" not in table_cfg:
+            pair_matrix = [
+                entry for entry in matrix
+                if isinstance(entry, dict) and str(entry.get("sourceTableObjectId")) == str(source_table_id)
+            ]
+            ordered_source = list(enumerate(column_groups[table_name], start=1))
+            if _is_grouped_matrix(pair_matrix):
+                # The rows, target keys and field functions of a SingleTable entity, so every 2.3 form comes back
+                # (BOP-16 A): a column fed by no source is a {target, expression} row, which the import checks with
+                # the key rules, instead of a targetOnlyColumns entry. The source of a MultiTable entity holds every
+                # column, so a column read and never written needs no target: [] row unless it is a source key,
+                # which the import would otherwise map by name; without one, a 1:1 chain still imports into 2.2.x.
+                rows, relations = _grouped_mapping_rows(pair_matrix, ordered_source, target_cols)
+                source_keys = set(_keys_from_columns(column_groups[table_name]))
+                rows = [row for row in rows if row.get("target") != [] or row.get("source") in source_keys]
+                pair_functions = [
+                    ff for ff in field_functions
+                    if paired_target is None or str(ff.get("tableOrObjectId")) == str(paired_target.get("id"))
+                ]
+                table_cfg["columns"] = apply_field_functions_to_column_mappings(rows, target_cols, pair_functions)
+                target_keys = _target_keys_to_export(relations, column_groups[table_name], target_cols)
+                if target_keys:
+                    table_cfg["targetKeys"] = target_keys
+            else:
+                table_cfg["columns"] = _legacy_mapping_rows(
+                    pair_matrix, ordered_source, list(enumerate(target_cols, start=1)), table_name
+                )
 
         # Restore column metadata with full details including id and ordinalPosition
         if table_name in column_groups and "columns" not in table_cfg:
@@ -1243,6 +1329,8 @@ def enrich_null_column_types_from_discovery(
                     if not (isinstance(col_mapping, dict) and col_mapping.get("type") is None and "source" in col_mapping):
                         continue
                     source_col_name = col_mapping["source"]
+                    if not isinstance(source_col_name, str):
+                        continue  # an N:1 row (a list of sources): its type is the target column's
                     disc_col = disc_by_name.get(source_col_name)
                     if disc_col:
                         resolved = disc_col.get("dataType") or disc_col.get("type")

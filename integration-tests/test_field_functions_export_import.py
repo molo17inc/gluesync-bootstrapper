@@ -120,10 +120,6 @@ class ExportTemplateIntegrationTests(unittest.TestCase):
         entity = {
             "entityName": "drivers_entity",
             "groupId": "_default",
-            "columnsMappingMatrix": [
-                {"sourceColumnId": 1, "targetColumnId": 11},
-                {"sourceColumnId": 2, "targetColumnId": 12},
-            ],
         }
         source_ae = {
             "type": "SingleTable",
@@ -140,6 +136,11 @@ class ExportTemplateIntegrationTests(unittest.TestCase):
             "type": "SingleTable",
             "entityType": {
                 "type": "Target",
+                # CoreHub keeps the matrix on the target entity type only (an Entity has no such field).
+                "columnsMappingMatrix": [
+                    {"sourceColumnId": 1, "targetColumnId": 11},
+                    {"sourceColumnId": 2, "targetColumnId": 12},
+                ],
                 "fieldFunctions": [
                     {
                         "columnId": 12,

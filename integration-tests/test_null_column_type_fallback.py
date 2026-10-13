@@ -180,6 +180,20 @@ class EnrichNullColumnTypesTests(unittest.TestCase):
         self.assertEqual(cols[0]["type"], "VARCHAR2")
         self.assertEqual(cols[1]["type"], "NUMBER")
 
+    def test_n_to_one_row_does_not_stop_the_other_columns(self):
+        """A Gluesync 2.3 export can hold a row with a list ``source`` (N:1): the others are still enriched."""
+        n_to_one = _null_type_yaml_col("COL_A", "ab", 1)
+        n_to_one["source"] = ["COL_A", "COL_B"]
+        schemas = self._make_schemas_with_null_types(cols=[n_to_one, _null_type_yaml_col("COL_C", "col_c", 3)])
+        discovery_resp = {"columns": [_make_oracle_col("COL_A", 1, "VARCHAR2"), _make_oracle_col("COL_B", 2, "NUMBER"),
+                                      _make_oracle_col("COL_C", 3, "DATE")]}
+        with mock.patch("export_template_from_corehub.get_table_columns", return_value=discovery_resp):
+            enriched = self.enrich(schemas, self._make_entity_with_source_agent(), "token", "pipeline-1")
+        cols = schemas["SYSADM"]["tables"]["custom"]["MY_TABLE"]["columns"]
+        self.assertEqual(enriched, 1)
+        self.assertIsNone(cols[0]["type"])
+        self.assertEqual(cols[1]["type"], "DATE")
+
     def test_skips_tables_with_partial_types(self):
         """If only *some* types are null the table is left unchanged (mixed format)."""
         cols = [
@@ -306,6 +320,8 @@ class NullTypeImportFallbackTests(unittest.TestCase):
                         table: {
                             "name": table.lower(),
                             "entityName": f"{schema}.{table}",
+                            # Neither side declares a primary key: without keys every CoreHub refuses the entity.
+                            "keys": [cols[0]["source"]],
                             "columns": cols,
                             "customProperties": {
                                 "source": {},

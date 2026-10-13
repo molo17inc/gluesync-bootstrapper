@@ -32,6 +32,7 @@ import argparse
 from utils.log import get_logger, create_log_file, log_success, log_failure, lockfile_failure, lockfile_complete
 from utils.core_hub_client import CoreHubClient
 from utils.udf_signature import adapt_udf_signature, corehub_supports_is_snapshot
+from entity_mapping import encode_entries, read_entry
 import commons
 from commons import get_node_info, get_table_columns, fetch_core_hub, get_pipeline_config, get_pipeline_agents, \
     get_agent_tables, create_entity_schedules, create_pipeline_schedules, map_data_type, load_yaml_config, process_filter_clauses
@@ -99,6 +100,11 @@ class UdfFunctionTestRequest(BaseModel):
     ``isSnapshot`` tells the UDF under test whether the row comes from the snapshot
     (true) or from CDC (false, the CoreHub default). CoreHubs before 2.3 do not know the
     field, so it is left out of the body for them (see :func:`test_udf_function`).
+
+    Gluesync 2.3 also takes the entity's ``fieldFunctions``, ``tablesWithUnlockedSchema`` and,
+    when known, ``entityUsesArrowOnlyShapes``, and requires ``isPrimaryKey`` on every column;
+    ``columnsMappingMatrix`` may be given in either shape and is written for the CoreHub in use.
+    ``isSchemaLocked`` stays: older CoreHubs require it, 2.3 ignores it.
     """
     model_config = ConfigDict(use_enum_values=True)
     data: dict
@@ -112,30 +118,24 @@ class UdfFunctionTestRequest(BaseModel):
     columnsMappingMatrix: list[dict] = []
     isSchemaLocked: bool = True
     isSnapshot: bool = False
-
-# CoreHub base URL -> whether its UDFs take isSnapshot. Read once per CoreHub and run.
-_IS_SNAPSHOT_SUPPORT_BY_COREHUB: dict[str, bool] = {}
+    fieldFunctions: list[dict] = []
+    tablesWithUnlockedSchema: list[int] = []
+    entityUsesArrowOnlyShapes: Optional[bool] = None
 
 def corehub_udfs_take_is_snapshot(token: str) -> bool:
     """Whether the CoreHub in use expects the Gluesync 2.3 ``onChange`` signature (with ``isSnapshot``).
 
-    Decided on ``GET /version``: 2.3 and later take ``isSnapshot``, older releases do not.
-    When the version cannot be read the current signature is assumed.
+    Decided on ``GET /version`` (read once per CoreHub by :func:`commons.corehub_version`): 2.3 and
+    later take ``isSnapshot``, older releases do not. When the version cannot be read the current
+    signature is assumed.
     """
-    base_url = getattr(commons.core_hub_client, "base_url", CORE_HUB_URL)
-    if base_url not in _IS_SNAPSHOT_SUPPORT_BY_COREHUB:
-        try:
-            version = fetch_core_hub("/version", token=token)
-        except Exception as e:  # pylint: disable=broad-except
-            logger.warning(f"Could not read the CoreHub version ({e}); assuming UDFs take isSnapshot (Gluesync 2.3+)")
-            version = None
-        supported = corehub_supports_is_snapshot(version)
-        logger.info(
-            f"CoreHub version {version!r}: UDF onChange signature "
-            f"{'with' if supported else 'without'} isSnapshot"
-        )
-        _IS_SNAPSHOT_SUPPORT_BY_COREHUB[base_url] = supported
-    return _IS_SNAPSHOT_SUPPORT_BY_COREHUB[base_url]
+    version = commons.corehub_version(token, fetch=fetch_core_hub)
+    supported = corehub_supports_is_snapshot(version)
+    logger.debug(
+        f"CoreHub version {version!r}: UDF onChange signature "
+        f"{'with' if supported else 'without'} isSnapshot"
+    )
+    return supported
 
 def adapt_udf_code_for_corehub(code: str, udf_type, udf_name: str, token: str) -> str:
     """``code`` with the ``onChange`` signature the CoreHub in use compiles.
@@ -225,6 +225,14 @@ def test_udf_function(pipeline_id: str, token: str, udf_test_request: UdfFunctio
             f"isSnapshot: {udf_test_request.isSnapshot})"
         )
         body = udf_test_request.model_dump()
+        if body.get("entityUsesArrowOnlyShapes") is None:
+            body.pop("entityUsesArrowOnlyShapes", None)
+        body["columnsMappingMatrix"] = encode_entries(
+            [read_entry(entry) for entry in body["columnsMappingMatrix"]],
+            grouped=commons.corehub_takes_grouped_matrix(token, fetch=fetch_core_hub),
+        )
+        for column in body["sourceColumns"] + body["targetColumns"]:
+            column.setdefault("isPrimaryKey", bool(column.get("isPK")))
         if not corehub_udfs_take_is_snapshot(token):
             if udf_test_request.isSnapshot:
                 logger.warning(

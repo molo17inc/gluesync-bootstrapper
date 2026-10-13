@@ -1,0 +1,342 @@
+[
+  {
+    "entities": [
+      {
+        "agentEntities": [
+          {
+            "agentId": "source-agent",
+            "columns": [
+              {
+                "charMaxLength": 0,
+                "dataType": "int",
+                "id": 1,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": true,
+                "name": "ID",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 1,
+                "tableId": 100
+              },
+              {
+                "charMaxLength": 255,
+                "dataType": "varchar",
+                "id": 2,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "LAST_NAME",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 2,
+                "tableId": 100
+              },
+              {
+                "charMaxLength": 255,
+                "dataType": "varchar",
+                "id": 3,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "GENDER",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 3,
+                "tableId": 100
+              }
+            ],
+            "customProperties": {
+              "maxItemsCountPerIteration": 1000,
+              "maxMigrationItemsCountPerIteration": 1000
+            },
+            "entityObject": {
+              "collection": "DRIVERS",
+              "id": "100",
+              "scope": "dbo"
+            },
+            "entityType": {
+              "maxItemsCountPerIteration": 1000,
+              "maxMigrationItemsCountPerIteration": 1000,
+              "type": "Source"
+            },
+            "table": {
+              "id": "100",
+              "name": "DRIVERS",
+              "schema": "dbo"
+            },
+            "tablesProperties": {
+              "dbo.DRIVERS": {}
+            },
+            "type": "SingleTable"
+          },
+          {
+            "agentId": "target-agent",
+            "columns": [
+              {
+                "charMaxLength": 0,
+                "dataType": "int",
+                "id": 1,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": true,
+                "name": "ID",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 0,
+                "tableId": 9000
+              },
+              {
+                "charMaxLength": 255,
+                "dataType": "varchar",
+                "id": 2,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "LAST_NAME",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 0,
+                "tableId": 9000
+              },
+              {
+                "charMaxLength": 255,
+                "dataType": "varchar",
+                "id": 3,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "GENDER",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 0,
+                "tableId": 9000
+              }
+            ],
+            "customProperties": {
+              "ttlValue": 0
+            },
+            "entityObject": {
+              "collection": "DRIVERS",
+              "id": "9000",
+              "scope": "dbo"
+            },
+            "entityType": {
+              "allowedOperations": [
+                "INSERT",
+                "DELETE",
+                "UPDATE",
+                "TRUNCATE"
+              ],
+              "columnsMappingMatrix": [
+                {
+                  "sourceColumnId": 1,
+                  "sourceTableObjectId": 100,
+                  "targetColumnId": 1,
+                  "targetTableObjectId": 9000
+                },
+                {
+                  "sourceColumnId": 2,
+                  "sourceTableObjectId": 100,
+                  "targetColumnId": 2,
+                  "targetTableObjectId": 9000
+                },
+                {
+                  "sourceColumnId": 3,
+                  "sourceTableObjectId": 100,
+                  "targetColumnId": 3,
+                  "targetTableObjectId": 9000
+                }
+              ],
+              "snapshotWritingConcurrency": 1,
+              "tablesWithUnlockedDataTypes": [],
+              "tablesWithUnlockedSchema": [],
+              "ttlValue": 0,
+              "type": "Target",
+              "useBulkOperationsDuringCDC": false,
+              "useBulkOperationsWhileSnapshot": false
+            },
+            "keyMapping": {
+              "keys": [
+                1,
+                2
+              ],
+              "prefix": "TESTPREFIX",
+              "separator": "-",
+              "suffix": "TESTSUFFIX"
+            },
+            "table": {
+              "id": "9000",
+              "name": "DRIVERS",
+              "schema": "dbo"
+            },
+            "tablesProperties": {
+              "dbo.DRIVERS": {}
+            },
+            "type": "NoSqlEntity"
+          }
+        ],
+        "entityName": "dbo.DRIVERS"
+      },
+      {
+        "agentEntities": [
+          {
+            "agentId": "source-agent",
+            "columns": [
+              {
+                "charMaxLength": 0,
+                "dataType": "int",
+                "id": 1,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": true,
+                "name": "ID",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 1,
+                "tableId": 101
+              },
+              {
+                "charMaxLength": 255,
+                "dataType": "varchar",
+                "id": 2,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "GENDER",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 2,
+                "tableId": 101
+              }
+            ],
+            "customProperties": {
+              "maxItemsCountPerIteration": 1000,
+              "maxMigrationItemsCountPerIteration": 1000
+            },
+            "entityObject": {
+              "collection": "DRIVERS_FILTER",
+              "id": "101",
+              "scope": "dbo"
+            },
+            "entityType": {
+              "maxItemsCountPerIteration": 1000,
+              "maxMigrationItemsCountPerIteration": 1000,
+              "type": "Source"
+            },
+            "table": {
+              "id": "101",
+              "name": "DRIVERS_FILTER",
+              "schema": "dbo"
+            },
+            "tablesProperties": {
+              "dbo.DRIVERS_FILTER": {}
+            },
+            "type": "SingleTable"
+          },
+          {
+            "agentId": "target-agent",
+            "columns": [
+              {
+                "charMaxLength": 0,
+                "dataType": "int",
+                "id": 1,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": true,
+                "name": "ID",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 0,
+                "tableId": 9001
+              },
+              {
+                "charMaxLength": 255,
+                "dataType": "varchar",
+                "id": 2,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "GENDER",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 0,
+                "tableId": 9001
+              }
+            ],
+            "customProperties": {
+              "ttlValue": 0
+            },
+            "entityObject": {
+              "collection": "DRIVERS_FILTER",
+              "id": "9001",
+              "scope": "dbo"
+            },
+            "entityType": {
+              "allowedOperations": [
+                "INSERT",
+                "DELETE",
+                "UPDATE",
+                "TRUNCATE"
+              ],
+              "columnsMappingMatrix": [
+                {
+                  "sourceColumnId": 1,
+                  "sourceTableObjectId": 101,
+                  "targetColumnId": 1,
+                  "targetTableObjectId": 9001
+                },
+                {
+                  "sourceColumnId": 2,
+                  "sourceTableObjectId": 101,
+                  "targetColumnId": 2,
+                  "targetTableObjectId": 9001
+                }
+              ],
+              "filter": {
+                "clauses": [
+                  {
+                    "column": {
+                      "charMaxLength": 255,
+                      "dataType": "varchar",
+                      "id": 2,
+                      "isIdentity": false,
+                      "isNullable": true,
+                      "isPK": false,
+                      "name": "GENDER",
+                      "numPrec": 0,
+                      "numScale": 0,
+                      "position": 2,
+                      "tableId": 9001
+                    },
+                    "operation": {
+                      "filterValue": "Female",
+                      "type": "Equal"
+                    }
+                  }
+                ]
+              },
+              "snapshotWritingConcurrency": 1,
+              "tablesWithUnlockedDataTypes": [],
+              "tablesWithUnlockedSchema": [],
+              "ttlValue": 0,
+              "type": "Target",
+              "useBulkOperationsDuringCDC": false,
+              "useBulkOperationsWhileSnapshot": false
+            },
+            "table": {
+              "id": "9001",
+              "name": "DRIVERS_FILTER",
+              "schema": "dbo"
+            },
+            "tablesProperties": {
+              "dbo.DRIVERS_FILTER": {}
+            },
+            "type": "NoSqlEntity"
+          }
+        ],
+        "entityName": "dbo.DRIVERS_FILTER"
+      }
+    ]
+  }
+]

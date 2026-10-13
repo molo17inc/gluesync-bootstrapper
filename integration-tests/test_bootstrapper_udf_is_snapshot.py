@@ -374,8 +374,11 @@ class CompileAndTestRequestTests(unittest.TestCase):
         import create_user_defined_functions as udf
 
         self.udf = udf
-        udf._IS_SNAPSHOT_SUPPORT_BY_COREHUB.clear()
-        self.addCleanup(udf._IS_SNAPSHOT_SUPPORT_BY_COREHUB.clear)
+        import commons
+
+        self.commons = commons
+        commons.reset_corehub_version_cache()
+        self.addCleanup(commons.reset_corehub_version_cache)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         patcher = mock.patch.object(udf, "UDF_PATH", self.tmp.name)
@@ -441,6 +444,33 @@ class CompileAndTestRequestTests(unittest.TestCase):
         self.assertEqual(1, sum(1 for path, _, _ in corehub.calls if path == "/version"))
         self.assertEqual(2, len(corehub.bodies("/compile-mapping-function")))
 
+    def test_udf_signature_and_matrix_encoding_share_one_version_read(self):
+        corehub = FakeCoreHub("2.2.6.0")
+        with mock.patch.object(self.udf, "fetch_core_hub", side_effect=corehub):
+            self.assertFalse(self.udf.corehub_udfs_take_is_snapshot("tok"))
+            # Both modules import commons.fetch_core_hub by name, so they pass the same request function.
+            self.assertFalse(self.commons.corehub_takes_grouped_matrix("tok", fetch=self.udf.fetch_core_hub))
+        self.assertEqual(1, sum(1 for path, _, _ in corehub.calls if path == "/version"))
+
+    def test_grouped_matrix_is_chosen_by_release(self):
+        for version, grouped in (
+            ("2.3.0.0 - build 7a328c2", True),
+            ("2.4.1.0", True),
+            ("2.2.11.5 - build abc", False),
+            ("2.2.6.0", False),
+            ("NA", True),
+            (None, True),
+        ):
+            self.commons.reset_corehub_version_cache()
+            with self.subTest(version=version):
+                self.assertEqual(grouped, self.commons.corehub_takes_grouped_matrix("tok", fetch=FakeCoreHub(version)))
+
+    def test_unreachable_version_counts_as_a_current_corehub_for_the_matrix(self):
+        import requests
+
+        corehub = FakeCoreHub(requests.exceptions.ConnectionError("down"))
+        self.assertTrue(self.commons.corehub_takes_grouped_matrix("tok", fetch=corehub))
+
     def make_test_request(self, **overrides):
         fields = dict(
             data={"ID": 1},
@@ -472,6 +502,38 @@ class CompileAndTestRequestTests(unittest.TestCase):
     def test_test_request_omits_is_snapshot_for_an_older_corehub(self):
         body = self.run_test_request("2.2.6.0", self.make_test_request(isSnapshot=True))
         self.assertNotIn("isSnapshot", body)
+
+    def make_mapping_request(self):
+        return self.make_test_request(
+            sourceColumns=[{"id": 1, "name": "ID", "isPK": True}, {"id": 2, "name": "NAME"}],
+            targetColumns=[{"id": 11, "name": "id", "isPK": True}, {"id": 12, "name": "name"}],
+            columnsMappingMatrix=[
+                {"sourceTableObjectId": 7, "targetTableObjectId": 8, "sourceColumnId": 1, "targetColumnId": 11},
+                {"sourceTableObjectId": 7, "targetTableObjectId": 8, "sourceColumnIds": [2], "targetColumnIds": [12]},
+            ],
+            fieldFunctions=[{"columnId": 12, "tableOrObjectId": 8, "expression": {"type": "TrimStr"}}],
+        )
+
+    def test_test_request_carries_the_2_3_mapping_fields(self):
+        """T16: lists, field functions, unlocked tables and isPrimaryKey for a 2.3 CoreHub (C-7)."""
+        body = self.run_test_request("2.3.0.0", self.make_mapping_request())
+        self.assertEqual(body["columnsMappingMatrix"], [
+            {"sourceTableObjectId": 7, "targetTableObjectId": 8, "sourceColumnIds": [1], "targetColumnIds": [11]},
+            {"sourceTableObjectId": 7, "targetTableObjectId": 8, "sourceColumnIds": [2], "targetColumnIds": [12]},
+        ])
+        self.assertEqual(body["fieldFunctions"][0]["columnId"], 12)
+        self.assertEqual(body["tablesWithUnlockedSchema"], [])
+        self.assertNotIn("entityUsesArrowOnlyShapes", body)
+        self.assertEqual([c["isPrimaryKey"] for c in body["sourceColumns"]], [True, False])
+        self.assertEqual([c["isPrimaryKey"] for c in body["targetColumns"]], [True, False])
+        self.assertIs(True, body["isSchemaLocked"])
+
+    def test_test_request_sends_pairs_to_an_older_corehub(self):
+        body = self.run_test_request("2.2.6.0", self.make_mapping_request())
+        self.assertEqual(body["columnsMappingMatrix"], [
+            {"sourceTableObjectId": 7, "targetTableObjectId": 8, "sourceColumnId": 1, "targetColumnId": 11},
+            {"sourceTableObjectId": 7, "targetTableObjectId": 8, "sourceColumnId": 2, "targetColumnId": 12},
+        ])
 
 
 class GeneratedAndShippedUdfTests(unittest.TestCase):

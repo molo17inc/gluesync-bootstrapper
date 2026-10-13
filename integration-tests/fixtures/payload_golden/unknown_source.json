@@ -1,0 +1,150 @@
+[
+  {
+    "entities": [
+      {
+        "agentEntities": [
+          {
+            "agentId": "source-agent",
+            "columns": [
+              {
+                "charMaxLength": 0,
+                "dataType": "int",
+                "id": 1,
+                "isIdentity": false,
+                "isNullable": false,
+                "isPK": true,
+                "name": "ID",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 1,
+                "tableId": 500
+              },
+              {
+                "charMaxLength": 255,
+                "dataType": "varchar",
+                "id": 3,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "EMAIL",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 3,
+                "tableId": 500
+              },
+              {
+                "dataType": "VARCHAR",
+                "id": 1638788573,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "MISSING_COL",
+                "position": 3,
+                "tableId": 500
+              }
+            ],
+            "customProperties": {},
+            "entityObject": {
+              "collection": "CUSTOMERS",
+              "id": "500",
+              "scope": "src"
+            },
+            "entityType": {
+              "type": "Source"
+            },
+            "table": {
+              "id": "500",
+              "name": "CUSTOMERS",
+              "schema": "src"
+            },
+            "tablesProperties": {
+              "src.CUSTOMERS": {}
+            },
+            "type": "SingleTable"
+          },
+          {
+            "agentId": "target-agent",
+            "columns": [
+              {
+                "charMaxLength": 0,
+                "dataType": "int",
+                "id": 101,
+                "isIdentity": false,
+                "isNullable": false,
+                "isPK": true,
+                "name": "id",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 0,
+                "tableId": 9001
+              },
+              {
+                "charMaxLength": 255,
+                "dataType": "varchar",
+                "id": 103,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "email_address",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 0,
+                "tableId": 9001
+              }
+            ],
+            "customProperties": {},
+            "entityObject": {
+              "collection": "customers",
+              "id": "9001",
+              "scope": "tgt"
+            },
+            "entityType": {
+              "allowedOperations": [
+                "INSERT",
+                "DELETE",
+                "UPDATE",
+                "TRUNCATE"
+              ],
+              "columnsMappingMatrix": [
+                {
+                  "sourceColumnId": 1,
+                  "sourceTableObjectId": 500,
+                  "targetColumnId": 101,
+                  "targetTableObjectId": 9001
+                },
+                {
+                  "sourceColumnId": 3,
+                  "sourceTableObjectId": 500,
+                  "targetColumnId": 103,
+                  "targetTableObjectId": 9001
+                },
+                {
+                  "sourceColumnId": 1638788573,
+                  "sourceTableObjectId": 500,
+                  "targetColumnId": 104,
+                  "targetTableObjectId": 9001
+                }
+              ],
+              "snapshotWritingConcurrency": 1,
+              "tablesWithUnlockedDataTypes": [],
+              "tablesWithUnlockedSchema": [],
+              "type": "Target",
+              "useBulkOperationsDuringCDC": false,
+              "useBulkOperationsWhileSnapshot": false
+            },
+            "table": {
+              "id": "9001",
+              "name": "customers",
+              "schema": "tgt"
+            },
+            "tablesProperties": {
+              "tgt.customers": {}
+            },
+            "type": "SingleTable"
+          }
+        ],
+        "entityName": "src.CUSTOMERS"
+      }
+    ]
+  }
+]

@@ -1,0 +1,166 @@
+[
+  {
+    "entities": [
+      {
+        "agentEntities": [
+          {
+            "agentId": "source-agent",
+            "columns": [
+              {
+                "charMaxLength": 0,
+                "dataType": "int",
+                "id": 1,
+                "isIdentity": false,
+                "isNullable": false,
+                "isPK": true,
+                "name": "PART_ID",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 1,
+                "tableId": 500
+              },
+              {
+                "charMaxLength": 255,
+                "dataType": "varchar",
+                "id": 2,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "LABEL",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 2,
+                "tableId": 500
+              }
+            ],
+            "customProperties": {},
+            "entityObject": {
+              "collection": "PARTS",
+              "id": "500",
+              "scope": "src"
+            },
+            "entityType": {
+              "type": "Source"
+            },
+            "table": {
+              "id": "500",
+              "name": "PARTS",
+              "schema": "src"
+            },
+            "tablesProperties": {
+              "src.PARTS": {}
+            },
+            "type": "SingleTable"
+          },
+          {
+            "agentId": "target-agent",
+            "columns": [
+              {
+                "charMaxLength": 0,
+                "dataType": "int",
+                "id": 1,
+                "isIdentity": false,
+                "isNullable": false,
+                "isPK": true,
+                "name": "PART_ID",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 0,
+                "tableId": 1173570291
+              },
+              {
+                "charMaxLength": 255,
+                "dataType": "varchar",
+                "id": 2,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "LABEL",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 0,
+                "tableId": 1173570291
+              },
+              {
+                "charMaxLength": 255,
+                "dataType": "varchar",
+                "id": 3,
+                "isIdentity": false,
+                "isNullable": false,
+                "isPK": false,
+                "name": "CURRENCY",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 0,
+                "tableId": 1173570291
+              },
+              {
+                "charMaxLength": 255,
+                "dataType": "datetime",
+                "id": 4,
+                "isIdentity": false,
+                "isNullable": false,
+                "isPK": false,
+                "name": "CREATED_AT",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 0,
+                "tableId": 1173570291
+              }
+            ],
+            "customProperties": {},
+            "entityObject": {
+              "collection": "PARTS",
+              "id": "1173570291",
+              "scope": "tgt"
+            },
+            "entityType": {
+              "allowedOperations": [
+                "INSERT",
+                "DELETE",
+                "UPDATE",
+                "TRUNCATE"
+              ],
+              "columnsMappingMatrix": [
+                {
+                  "sourceColumnId": 0,
+                  "sourceTableObjectId": 500,
+                  "targetColumnId": 0,
+                  "targetTableObjectId": 1173570291
+                }
+              ],
+              "mappingFunctionInfo": {
+                "name": "UDF_PARTS",
+                "type": "Java"
+              },
+              "snapshotWritingConcurrency": 1,
+              "tablesWithUnlockedDataTypes": [],
+              "tablesWithUnlockedSchema": [
+                1173570291
+              ],
+              "type": "Target",
+              "udf": [
+                {
+                  "name": "UDF_PARTS",
+                  "type": "Java"
+                }
+              ],
+              "useBulkOperationsDuringCDC": false,
+              "useBulkOperationsWhileSnapshot": false
+            },
+            "table": {
+              "id": "1173570291",
+              "name": "PARTS",
+              "schema": "tgt"
+            },
+            "tablesProperties": {
+              "tgt.PARTS": {}
+            },
+            "type": "SingleTable"
+          }
+        ],
+        "entityName": "src.PARTS"
+      }
+    ]
+  }
+]

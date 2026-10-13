@@ -244,6 +244,111 @@ class DuplicatePipelineTests(unittest.TestCase):
         self.assertEqual(result["newPipelineId"], "cloned-pipe")
 
 
+class DuplicatePipelineUdfTests(unittest.TestCase):
+    """The UDFs of a duplicated pipeline are in place before its entities are saved.
+
+    A Gluesync 2.3 CoreHub drops the reference to a UDF whose source it cannot find before its
+    mapping stage runs, so an entity that relies on its UDF (an N:1 without a custom field function,
+    a column no source feeds, a target key the UDF produces) was refused when the duplicate created
+    the entities first and compiled and linked the UDFs afterwards.
+    """
+
+    def test_udf_sources_are_written_before_the_entities_are_created(self):
+        import automator_app.corehub as corehub
+        import create_user_defined_functions
+
+        udf_entity = {
+            "entityName": "demo.ORDERS",
+            "agentEntities": [
+                {"entityType": {"type": "Source"}, "agentId": "src1"},
+                {"entityType": {"type": "Target", "mappingFunctionInfo": {"name": "UDF_ORDERS", "type": "Java"}},
+                 "agentId": "tgt1"},
+            ],
+        }
+        calls = []
+
+        def fake_fetch(path, method="GET", token=None, body=None, **kwargs):
+            calls.append((method, path))
+            if path == "/pipelines/original-pipe/config" and method == "GET":
+                return {"agents": [{"agentType": "SOURCE", "agentTag": "mssql", "agentId": "src1"},
+                                   {"agentType": "TARGET", "agentTag": "mysql", "agentId": "tgt1"}]}
+            if path == "/pipelines" and method == "GET":
+                return []
+            if path == "/pipelines" and method == "POST":
+                return {"pipelineId": "cloned-pipe", "name": body.get("name")}
+            if "/agents/add" in path:
+                return {"agentId": "new-agent-1"}
+            if path == "/pipelines/original-pipe/config/entities/mapping-functions/UDF_ORDERS":
+                return {"code": "public class UDF_ORDERS {}", "type": "Java"}
+            return {"ok": True}
+
+        seen_at_creation = {}
+
+        def fake_run_create_entities(**kwargs):
+            root = Path(create_user_defined_functions.UDF_PATH)
+            seen_at_creation["files"] = sorted(p.name for p in root.rglob("*")) if root.is_dir() else []
+            return {"success": True, "result": {"errors": []}}
+
+        def fake_entities(token, pipeline_id):
+            return [udf_entity]  # the clone keeps the UDF reference create_entities wrote
+
+        previous_udf_path = create_user_defined_functions.UDF_PATH
+        with mock.patch.object(corehub, "fetch_core_hub", side_effect=fake_fetch), \
+             mock.patch.object(corehub, "fetch_pipeline_entities", side_effect=fake_entities), \
+             mock.patch.object(corehub, "export_pipeline_yaml", return_value="schemas:\n  demo:\n    target: public\n"), \
+             mock.patch.object(corehub, "run_create_entities", side_effect=fake_run_create_entities), \
+             mock.patch.object(corehub, "_load_agent_type_catalog", return_value={"mssql": "RDBMS", "mysql": "RDBMS"}):
+            result = corehub.duplicate_pipeline(
+                token="tok", base_url="http://test", pipeline_id="original-pipe", new_pipeline_name="ClonedPipe",
+                source_agent_tag="mssql", target_agent_tag="mysql", source_agent_password="src-pass",
+                target_agent_password="tgt-pass", clone_entities=True, use_ssl=False, skip_verify=False,
+            )
+
+        self.assertEqual(seen_at_creation["files"], ["UDF_ORDERS.java", "udf-tgt1"])
+        self.assertNotIn(("PUT", "/pipelines/cloned-pipe/config/entities"), calls)
+        self.assertNotIn(("POST", "/pipelines/cloned-pipe/config/entities/mapping-functions/compile-mapping-function"), calls)
+        self.assertEqual(result["udfCloneStatus"], "completed")
+        self.assertEqual(create_user_defined_functions.UDF_PATH, previous_udf_path)
+
+    def test_an_entity_left_without_its_udf_is_reported(self):
+        import automator_app.corehub as corehub
+
+        def entities(pipeline_id):
+            target_type = {"type": "Target"}
+            if pipeline_id == "original-pipe":
+                target_type["mappingFunctionInfo"] = {"name": "UDF_ORDERS", "type": "Java"}
+            return [{"entityName": "demo.ORDERS", "agentEntities": [
+                {"entityType": {"type": "Source"}}, {"entityType": target_type, "agentId": "tgt1"}]}]
+
+        def fake_fetch(path, method="GET", token=None, body=None, **kwargs):
+            if path == "/pipelines/original-pipe/config" and method == "GET":
+                return {"agents": [{"agentType": "SOURCE", "agentTag": "mssql", "agentId": "src1"},
+                                   {"agentType": "TARGET", "agentTag": "mysql", "agentId": "tgt1"}]}
+            if path == "/pipelines" and method == "GET":
+                return []
+            if path == "/pipelines" and method == "POST":
+                return {"pipelineId": "cloned-pipe", "name": body.get("name")}
+            if "/agents/add" in path:
+                return {"agentId": "new-agent-1"}
+            if path.endswith("/mapping-functions/UDF_ORDERS"):
+                return {"code": "public class UDF_ORDERS {}", "type": "Java"}
+            return {"ok": True}
+
+        with mock.patch.object(corehub, "fetch_core_hub", side_effect=fake_fetch), \
+             mock.patch.object(corehub, "fetch_pipeline_entities", side_effect=lambda token, pid: entities(pid)), \
+             mock.patch.object(corehub, "export_pipeline_yaml", return_value="schemas:\n  demo:\n    target: public\n"), \
+             mock.patch.object(corehub, "run_create_entities", return_value={"success": True, "result": {"errors": []}}), \
+             mock.patch.object(corehub, "_load_agent_type_catalog", return_value={"mssql": "RDBMS", "mysql": "RDBMS"}):
+            result = corehub.duplicate_pipeline(
+                token="tok", base_url="http://test", pipeline_id="original-pipe", new_pipeline_name="ClonedPipe",
+                source_agent_tag="mssql", target_agent_tag="mysql", source_agent_password="src-pass",
+                target_agent_password="tgt-pass", clone_entities=True, use_ssl=False, skip_verify=False,
+            )
+
+        self.assertEqual(result["udfCloneStatus"], "partial")
+        self.assertTrue(any("demo.ORDERS" in e and "UDF_ORDERS" in e for e in result["udfCloneErrors"]))
+
+
 class GlobalConfigFileSkipTests(unittest.TestCase):
     """Verify global-config.yaml files are excluded from pipeline YAML scanning."""
 

@@ -321,6 +321,19 @@ dbo:
           - source: PLATE
             target: plate
             charSet: "280"                # read the source column with CCSID 280
+          # Gluesync 2.3 relations (see "Column relations and keys" in README.md); a CoreHub
+          # older than 2.3 refuses the first three forms and skips the last:
+          # - source: [MAKE, MODEL]       # N:1: several sources onto one target, composed by a
+          #   target: make_model          # custom field function (or the entity's UDF)
+          #   expression: {type: CustomFn, functionName: concat, arguments: [{type: SourceColumnArg, name: MAKE}, {type: SourceColumnArg, name: MODEL}]}
+          # - source: YEAR                # 1:N: one row per target with the same source
+          #   target: model_year
+          # - source: INTERNAL_NOTE       # 1:null: read, never written
+          #   target: []
+          # - target: synced_at           # null:1: produced by its field function; the column
+          #   type: timestamp             # has to exist on the target table
+          #   expression:
+          #     type: LocalTs
         # Entity-level schedule configurations
         schedules:
           - name: "Weekly vehicles snapshot"

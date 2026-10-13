@@ -15,7 +15,7 @@ API coverage (mapped against develop branch of gluesync-kotlin):
   Notifications: list, count, mark-read
   Metrics    : get agent/pipeline/global metrics (JSON), Prometheus text (raw)
   Groups     : list
-  Mapping fn : list, get base-code
+  Mapping fn : list, get code
   License    : get instance/license info
   Export     : pipeline YAML backup
   Version    : get
@@ -397,7 +397,19 @@ TOOLS: List[types.Tool] = [
             "Create or update one or more entities in a pipeline. Each entity "
             "must be a full entity payload in the same JSON format returned by "
             "get_entity / get_pipeline_entities (entityName, agentEntities, ...). "
-            "Use this to fix entity configurations programmatically."
+            "Use this to fix entity configurations programmatically. "
+            "On Gluesync 2.3 and later, each entry of the target entityType's "
+            "columnsMappingMatrix holds lists: {sourceTableObjectId, targetTableObjectId, "
+            "sourceColumnIds, targetColumnIds}; one source and one target is 1:1, several "
+            "sources N:1 (needs a custom field function or the entity's UDF), several targets "
+            "1:N (each gets a copy of the source unless a function writes it), no target 1:null, "
+            "no source a column a field function or the UDF produces; several sources to "
+            "several targets is refused. Every checked column of the entity appears in exactly "
+            "one entry. A new or changed entity is refused with HTTP 400 for a matrix that "
+            "breaks these rules, a checked target column nothing writes, a fixed or technical "
+            "field function on a column a source feeds, keys that break the key rules (the "
+            "physical primary key of a table is its key; R12), or keys that cannot be read "
+            "because an agent is not loaded; one refused entity refuses the whole request."
         ),
         inputSchema={
             "type": "object",

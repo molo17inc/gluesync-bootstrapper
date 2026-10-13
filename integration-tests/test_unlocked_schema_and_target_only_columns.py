@@ -120,15 +120,26 @@ class UnlockedSchemaPayloadTests(unittest.TestCase):
 
     def test_unlocked_schema_sets_single_zero_mapping_matrix(self):
         """
-        For unlocked schema, columnsMappingMatrix must contain a single entry
-        with sourceColumnId=0 and targetColumnId=0.
+        For unlocked schema, columnsMappingMatrix must contain a single entry that pairs the
+        tables and names no column: sourceColumnId=0 and targetColumnId=0 for a CoreHub older
+        than Gluesync 2.3, two empty lists for 2.3 (T9).
         """
+        for version, expected in (
+            ("2.2.11.5", {"sourceColumnId": 0, "targetColumnId": 0}),
+            ("2.3.0.0 - build test", {"sourceColumnIds": [], "targetColumnIds": []}),
+        ):
+            with self.subTest(version=version):
+                self._check_unlocked_matrix(version, expected)
+
+    def _check_unlocked_matrix(self, version, expected):
         import create_all_entities
 
         yaml_config = yaml.safe_load(UNLOCKED_SCHEMA_TEMPLATE)
         captured_puts = []
 
         def fake_fetch(path, method="GET", token=None, body=None, **kwargs):
+            if path == "/version":
+                return version
             if path.endswith("/config/entities") and method == "PUT":
                 captured_puts.append(copy.deepcopy(body))
                 return {"ok": True}
@@ -169,7 +180,7 @@ class UnlockedSchemaPayloadTests(unittest.TestCase):
                 chunk_size=50,
             )
 
-        self.assertEqual(result, {"successful": 1, "failed": 0, "total": 1})
+        self.assertEqual(result, {"successful": 1, "failed": 0, "total": 1, "errors": []})
         payload = captured_puts[0]
         entity = payload["entities"][0]
         target_ae = entity["agentEntities"][1]
@@ -179,11 +190,10 @@ class UnlockedSchemaPayloadTests(unittest.TestCase):
         self.assertEqual(target_et["tablesWithUnlockedSchema"], [create_all_entities.get_table_id("public", "ARTICLES")])
         self.assertEqual(target_et["tablesWithUnlockedDataTypes"], [])
 
-        # Single zero-entry mapping matrix
+        # Single entry pairing the tables
         matrix = target_et["columnsMappingMatrix"]
         self.assertEqual(len(matrix), 1)
-        self.assertEqual(matrix[0]["sourceColumnId"], 0)
-        self.assertEqual(matrix[0]["targetColumnId"], 0)
+        self.assertEqual({k: v for k, v in matrix[0].items() if "Column" in k}, expected)
 
     def test_unlocked_schema_without_udf_raises_when_not_skipping_errors(self):
         """

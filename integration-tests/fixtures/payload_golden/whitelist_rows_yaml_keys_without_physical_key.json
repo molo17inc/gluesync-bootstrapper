@@ -1,0 +1,134 @@
+[
+  {
+    "entities": [
+      {
+        "agentEntities": [
+          {
+            "agentId": "source-agent",
+            "columns": [
+              {
+                "charMaxLength": 255,
+                "dataType": "varchar",
+                "id": 1,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": true,
+                "name": "CODE",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 1,
+                "tableId": 500
+              },
+              {
+                "charMaxLength": 255,
+                "dataType": "varchar",
+                "id": 2,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "DESCR",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 2,
+                "tableId": 500
+              }
+            ],
+            "customProperties": {},
+            "entityObject": {
+              "collection": "NOPK",
+              "id": "500",
+              "scope": "src"
+            },
+            "entityType": {
+              "type": "Source"
+            },
+            "table": {
+              "id": "500",
+              "name": "NOPK",
+              "schema": "src"
+            },
+            "tablesProperties": {
+              "src.NOPK": {}
+            },
+            "type": "SingleTable"
+          },
+          {
+            "agentId": "target-agent",
+            "columns": [
+              {
+                "charMaxLength": 255,
+                "dataType": "varchar",
+                "id": 1,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": true,
+                "name": "code",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 1,
+                "tableId": 592000233
+              },
+              {
+                "charMaxLength": 255,
+                "dataType": "varchar",
+                "id": 2,
+                "isIdentity": false,
+                "isNullable": true,
+                "isPK": false,
+                "name": "descr",
+                "numPrec": 0,
+                "numScale": 0,
+                "position": 2,
+                "tableId": 592000233
+              }
+            ],
+            "customProperties": {},
+            "entityObject": {
+              "collection": "NOPK",
+              "id": "592000233",
+              "scope": "tgt"
+            },
+            "entityType": {
+              "allowedOperations": [
+                "INSERT",
+                "DELETE",
+                "UPDATE",
+                "TRUNCATE"
+              ],
+              "columnsMappingMatrix": [
+                {
+                  "sourceColumnId": 1,
+                  "sourceTableObjectId": 500,
+                  "targetColumnId": 1,
+                  "targetTableObjectId": 592000233
+                },
+                {
+                  "sourceColumnId": 2,
+                  "sourceTableObjectId": 500,
+                  "targetColumnId": 2,
+                  "targetTableObjectId": 592000233
+                }
+              ],
+              "snapshotWritingConcurrency": 1,
+              "tablesWithUnlockedDataTypes": [],
+              "tablesWithUnlockedSchema": [],
+              "type": "Target",
+              "useBulkOperationsDuringCDC": false,
+              "useBulkOperationsWhileSnapshot": false
+            },
+            "table": {
+              "id": "592000233",
+              "name": "NOPK",
+              "schema": "tgt"
+            },
+            "tablesProperties": {
+              "tgt.NOPK": {}
+            },
+            "type": "SingleTable"
+          }
+        ],
+        "entityName": "src.NOPK"
+      }
+    ]
+  }
+]
