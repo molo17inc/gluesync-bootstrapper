@@ -158,7 +158,7 @@ const api = {
       throw new Error(detail.detail || `AI settings export failed: ${response.status}`);
     }
     const blob = await response.blob();
-    const filename = response.headers.get('Content-Disposition')?.split('filename=')[1]?.replace(/"/g, '') || 'ai_settings.json';
+    const filename = response.headers.get('Content-Disposition')?.split('filename=')[1]?.replaceAll('"', '') || 'ai_settings.json';
     return { blob, filename };
   },
   async importAiSettings(file, passphrase, dryRun) {

@@ -80,9 +80,10 @@ class ExportImportTests(unittest.TestCase):
 
     def test_a_refusal_carries_core_hub_s_message(self):
         error = _http_error(400, {"message": "The passphrase does not open the secrets of this bundle"})
+        bundle = _bundle()
         with mock.patch.object(ai_settings, "fetch_core_hub", side_effect=error):
             with self.assertRaises(ai_settings.AiSettingsError) as raised:
-                ai_settings.import_ai_settings("tok", _bundle(), passphrase="wrong passphrase!")
+                ai_settings.import_ai_settings("tok", bundle, passphrase="wrong passphrase!")
         self.assertEqual("The passphrase does not open the secrets of this bundle", str(raised.exception))
 
     def test_a_refusal_without_a_json_body_keeps_the_error_text(self):
@@ -109,11 +110,12 @@ class ExportImportTests(unittest.TestCase):
         self.assertEqual({"bundle": _bundle(), "dryRun": True}, fetch.call_args.kwargs["body"])
 
     def test_import_refuses_what_is_not_a_bundle_or_lacks_its_passphrase(self):
+        sealed = _bundle(secrets={"cipher": "AES-256-GCM"})
         with mock.patch.object(ai_settings, "fetch_core_hub") as fetch:
             with self.assertRaises(ValueError):
                 ai_settings.import_ai_settings("tok", {"format": "something-else"})
             with self.assertRaises(ValueError) as raised:
-                ai_settings.import_ai_settings("tok", _bundle(secrets={"cipher": "AES-256-GCM"}))
+                ai_settings.import_ai_settings("tok", sealed)
         self.assertIn("passphrase", str(raised.exception))
         fetch.assert_not_called()
 
