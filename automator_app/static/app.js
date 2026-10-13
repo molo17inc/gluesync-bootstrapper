@@ -147,6 +147,34 @@ const api = {
     const filename = response.headers.get('Content-Disposition')?.split('filename=')[1]?.replace(/"/g, '') || 'pipeline_backups.zip';
     return { blob, filename };
   },
+  async exportAiSettings(includeSecrets, passphrase) {
+    const response = await fetch('/api/export/ai-settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ include_secrets: includeSecrets, passphrase: includeSecrets ? passphrase : null }),
+    });
+    if (!response.ok) {
+      const detail = await response.json().catch(() => ({}));
+      throw new Error(detail.detail || `AI settings export failed: ${response.status}`);
+    }
+    const blob = await response.blob();
+    const filename = response.headers.get('Content-Disposition')?.split('filename=')[1]?.replace(/"/g, '') || 'ai_settings.json';
+    return { blob, filename };
+  },
+  async importAiSettings(file, passphrase, dryRun) {
+    const form = new FormData();
+    form.append('file', file);
+    if (passphrase) {
+      form.append('passphrase', passphrase);
+    }
+    form.append('dry_run', dryRun ? 'true' : 'false');
+    const res = await fetch('/api/import/ai-settings', { method: 'POST', body: form });
+    if (!res.ok) {
+      const detail = await res.json().catch(() => ({}));
+      throw new Error(detail.detail || `AI settings import failed: ${res.status}`);
+    }
+    return res.json();
+  },
   async importConfig(file) {
     const form = new FormData();
     form.append('file', file);
@@ -2163,6 +2191,108 @@ async function loadPipelines() {
   }
 }
 
+// ── AI Studio settings backup ───────────────────────────────────────────────
+const AI_SETTINGS_MIN_PASSPHRASE = 12;
+
+function showMessage(element, text, type = '', details = []) {
+  if (!element) return;
+  element.className = `message${type ? ' ' + type : ''}`;
+  element.textContent = text;
+  if (details.length) {
+    const list = document.createElement('ul');
+    details.forEach((detail) => {
+      const item = document.createElement('li');
+      item.textContent = detail;
+      list.appendChild(item);
+    });
+    element.appendChild(list);
+  }
+}
+
+function downloadBlob(blob, filename) {
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
+}
+
+function initAiSettings() {
+  const exportForm = document.getElementById('ai-settings-export-form');
+  const includeSecrets = document.getElementById('ai-settings-include-secrets');
+  const exportPassphraseLabel = document.getElementById('ai-settings-export-passphrase-label');
+  const exportPassphraseHint = document.getElementById('ai-settings-export-passphrase-hint');
+  const exportPassphrase = document.getElementById('ai-settings-export-passphrase');
+  const exportButton = document.getElementById('ai-settings-export-btn');
+  const exportMessage = document.getElementById('ai-settings-export-message');
+  const importFile = document.getElementById('ai-settings-import-file');
+  const importPassphrase = document.getElementById('ai-settings-import-passphrase');
+  const checkButton = document.getElementById('ai-settings-check-btn');
+  const importButton = document.getElementById('ai-settings-import-btn');
+  const importMessage = document.getElementById('ai-settings-import-message');
+  if (!exportForm || !importFile) return;
+
+  includeSecrets.addEventListener('change', () => {
+    exportPassphraseLabel.hidden = !includeSecrets.checked;
+    exportPassphraseHint.hidden = !includeSecrets.checked;
+    exportPassphrase.required = includeSecrets.checked;
+    if (includeSecrets.checked) exportPassphrase.focus();
+  });
+
+  exportForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const withSecrets = includeSecrets.checked;
+    if (withSecrets && exportPassphrase.value.length < AI_SETTINGS_MIN_PASSPHRASE) {
+      showMessage(exportMessage, `The passphrase must be at least ${AI_SETTINGS_MIN_PASSPHRASE} characters long`, 'error');
+      exportPassphrase.focus();
+      return;
+    }
+    exportButton.disabled = true;
+    showMessage(exportMessage, 'Exporting AI settings…');
+    try {
+      const { blob, filename } = await api.exportAiSettings(withSecrets, exportPassphrase.value);
+      downloadBlob(blob, filename);
+      showMessage(exportMessage, `Exported ${filename} ${withSecrets ? 'with sealed secrets' : 'without secrets'}`, 'success');
+      logActivity('AI settings', `Exported ${filename}`);
+    } catch (err) {
+      showMessage(exportMessage, err.message, 'error');
+      logActivity('AI settings', `Export failed: ${err.message}`);
+    } finally {
+      exportButton.disabled = false;
+    }
+  });
+
+  importFile.addEventListener('change', () => {
+    const ready = Boolean(importFile.files?.length);
+    checkButton.disabled = !ready;
+    importButton.disabled = !ready;
+  });
+
+  const runImport = async (dryRun) => {
+    const file = importFile.files?.[0];
+    if (!file) return;
+    checkButton.disabled = true;
+    importButton.disabled = true;
+    showMessage(importMessage, dryRun ? 'Checking the backup…' : 'Restoring AI settings…');
+    try {
+      const result = await api.importAiSettings(file, importPassphrase.value, dryRun);
+      showMessage(importMessage, result.message || 'Done', 'success', result.logs || []);
+      logActivity('AI settings', `${dryRun ? 'Checked' : 'Restored'} ${file.name}: ${result.message}`);
+    } catch (err) {
+      showMessage(importMessage, err.message, 'error');
+      logActivity('AI settings', `${dryRun ? 'Check' : 'Restore'} failed: ${err.message}`);
+    } finally {
+      checkButton.disabled = false;
+      importButton.disabled = false;
+    }
+  };
+  checkButton.addEventListener('click', () => runImport(true));
+  importButton.addEventListener('click', () => runImport(false));
+}
+
 // ── MCP one-click setup ─────────────────────────────────────────────────────
 function initMcpSetup() {
   const installBtn = document.getElementById('mcp-install-btn');
@@ -2238,4 +2368,5 @@ initTabs();
 bindEvents();
 updateImportButtonsVisibility();
 initMcpSetup();
+initAiSettings();
 initialize();

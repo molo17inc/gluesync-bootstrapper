@@ -721,6 +721,23 @@ Available environment variables:
 
 **Note**: Source and target schema information is now automatically read from the `table-list-template.yaml` file in the `schemas` section, eliminating the need for `CREATE_ENTITIES_FROM_SCHEMA` and `TARGET_SCHEMA` environment variables.
 
+### AI Studio settings backup (`ai_settings.py`)
+
+On Gluesync 2.3.0.1 and later, Core Hub exports every AI setting as one bundle: LLM providers, AI Studio agents, model deployments, skill and agent versions, skill attachments, remote MCP servers, Enterprise Brain settings, platform API keys, budgets and each user's conversation retention. Conversations, memories, runs and the Enterprise Brain index are not part of it. Ids and versions are kept, so a restore on another Core Hub keeps every reference between settings.
+
+Secrets (provider API keys, remote MCP credentials, API key hashes) are included only on request, sealed with a passphrase of at least 12 characters; the same passphrase is needed to restore them. Without secrets, the restore lists what is left to redo (a provider key to enter again, an MCP sign-in, an API key to issue again).
+
+```bash
+export CORE_HUB_URL=https://my-corehub:1717
+export AI_SETTINGS_PASSPHRASE='a long passphrase you keep'
+python ai_settings.py export --output ai-settings.json --include-secrets
+python ai_settings.py import --input ai-settings.json --dry-run
+python ai_settings.py import --input ai-settings.json
+python ai_settings.py compare before.json after.json
+```
+
+The passphrase is read from `AI_SETTINGS_PASSPHRASE` (or the variable `--passphrase-env` names), never from the command line. The token comes from `--token`, `AI_SETTINGS_TOKEN`, or a login as `admin` with `DEFAULT_PASSWORD`. In the Automator, the Backup tab exports the AI settings and the Import tab restores them (Check runs a dry run). The full Core Hub backup adds them as `ai-settings.json`.
+
 ### Transactions Auditing
 
 The bootstrapper supports configuring the **Transactions Auditing** feature via YAML. This feature allows you to track every transaction synchronized by Gluesync into a dedicated `GLUESYNC.TRANSACTIONS_AUDIT` table on a target agent of your choice.
