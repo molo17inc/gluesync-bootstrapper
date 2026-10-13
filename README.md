@@ -718,8 +718,27 @@ Available environment variables:
 - `DEFAULT_PASSWORD`: Password for authentication (default: `admin`)
 - `SOURCE_TYPE`: Source agent type (default: `RDBMS`)
 - `TARGET_TYPE`: Target agent type (default: `NoSQL`)
+- `START_SYNC`: Set to `false` to configure the pipeline and leave every entity stopped (default: `true`)
+- `BOOTSTRAPPER_RESULT_FILE`: Where the run writes `{"pipelineId", "pipelineName", "status"}` (`complete` or `failure`) when it ends (default: `/tmp/gluesync-bootstrapper-result.json`; empty turns it off)
 
 **Note**: Source and target schema information is now automatically read from the `table-list-template.yaml` file in the `schemas` section, eliminating the need for `CREATE_ENTITIES_FROM_SCHEMA` and `TARGET_SCHEMA` environment variables.
+
+### Export round trip (`automator_roundtrip.py`)
+
+`automator_roundtrip.py` checks that a live pipeline survives an Automator export and restore:
+
+1. it exports the pipeline to a table-list YAML, the same export as `export_template_from_corehub.py`;
+2. it restores that YAML as a second pipeline named `<name> [automator round-trip]`, through `main.py` with `START_SYNC=false` and `CREATE_TABLE_IF_NOT_EXISTS=false`, using the agent config in `FILE_CONF_PATH`;
+3. it exports the restored pipeline;
+4. it checks that the entities, groups and Chronos schedules of both pipelines match (ids are compared by name, runtime state is ignored) and that both exports are identical.
+
+```bash
+python automator_roundtrip.py --pipeline <PIPELINE_ID> --output-dir ./roundtrip
+```
+
+The output directory holds both exports, both CoreHub snapshots, `restore.log`, `report.json`, a `.diff` per failed check and `junit.xml`. The exit code is 0 when every check passes. The token comes from `--token-file` (default `/opt/config/auth_token.json`), or else from logging in as `admin` with `DEFAULT_PASSWORD`.
+
+The gluesync-demo-kits integration tests run it for every bootstrapper service of a kit once the kit's own tests are green, and a failed round trip fails the kit.
 
 ### Transactions Auditing
 
