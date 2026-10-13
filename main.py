@@ -291,6 +291,33 @@ AUTH_TOKEN_PATH = os.path.join('/opt/config', 'auth_token.json')
 # Allow sub-second pauses when starting entities
 ENTITY_START_TIMEOUT = float(os.getenv('ENTITY_START_TIMEOUT', '1'))
 
+# START_SYNC=false configures the pipeline and leaves every entity stopped
+# (used by the Automator round-trip check to restore an export side by side).
+START_SYNC = os.getenv('START_SYNC', 'true').strip().lower() != 'false'
+
+# The run writes {"pipelineId", "pipelineName", "status"} here so a caller can
+# find the pipeline it created without parsing logs (the demo-kits CI copies it
+# out of the exited container). An empty value turns it off.
+BOOTSTRAPPER_RESULT_FILE = os.getenv(
+    'BOOTSTRAPPER_RESULT_FILE', '/tmp/gluesync-bootstrapper-result.json'
+).strip()
+
+
+def write_run_result(pipeline_id, pipeline_name, status):
+    if not BOOTSTRAPPER_RESULT_FILE:
+        return
+    try:
+        result_dir = os.path.dirname(BOOTSTRAPPER_RESULT_FILE)
+        if result_dir:
+            os.makedirs(result_dir, exist_ok=True)
+        with open(BOOTSTRAPPER_RESULT_FILE, 'w', encoding='utf-8') as result_file:
+            json.dump(
+                {'pipelineId': pipeline_id, 'pipelineName': pipeline_name, 'status': status},
+                result_file,
+            )
+    except OSError as e:
+        logger.warning(f"Could not write run result to {BOOTSTRAPPER_RESULT_FILE}: {e}")
+
 # CoreHubClient and ProtocolAwareAdapter have been moved to utils/core_hub_client.py
 
 def generate_fancy_names(length):
@@ -1234,7 +1261,10 @@ def main():
 
         time.sleep(ENTITY_START_TIMEOUT)
 
-        start_entity_syncs(token, pipeline_id)
+        if START_SYNC:
+            start_entity_syncs(token, pipeline_id)
+        else:
+            logger.info("START_SYNC=false: leaving every entity of the pipeline stopped")
 
         # Configure transactions auditing if present in YAML
         try:
@@ -1262,9 +1292,11 @@ def main():
 
         # Log successful completion
         log_success(logger, f"Pipeline {pipeline_id} successfully configured and started")
+        write_run_result(pipeline_id, pipeline_name, 'complete')
         lockfile_complete()
     except Exception as error:
         log_failure(logger, f"Error: {error}")
+        write_run_result(pipeline_id, pipeline_name, 'failure')
         lockfile_failure()
 
 if __name__ == "__main__":
