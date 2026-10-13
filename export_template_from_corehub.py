@@ -1357,6 +1357,46 @@ def enrich_null_column_types_from_discovery(
     return enriched
 
 
+def render_pipeline_export(token: str, pipeline_id: str) -> str:
+    """Export one pipeline and return the YAML text, provenance header included.
+
+    This is the single export path: the CLI, ``export_all_pipelines.py`` and the
+    round-trip verifier all write exactly what this returns.
+    """
+    entities = fetch_pipeline_entities(token, pipeline_id)
+    entities_by_id = build_entities_maps(entities)
+    group_id_to_name, _, groups_by_name = fetch_groups_map(token, pipeline_id)
+    schemas = build_schemas_from_entities(entities, group_id_to_name)
+
+    # Override schema-level type hints using agents.json catalog when possible
+    src_type, tgt_type = infer_pipeline_schema_types_from_agents(token, pipeline_id)
+    if src_type and tgt_type:
+        logger.info(
+            "Using agents.json to set pipeline types: sourceType=%s, targetType=%s",
+            src_type,
+            tgt_type,
+        )
+        for schema_cfg in schemas.values():
+            schema_cfg["sourceType"] = src_type
+            schema_cfg["targetType"] = tgt_type
+
+    jobs = fetch_pipeline_jobs(pipeline_id, token=token)
+    attach_schedules_from_jobs(jobs, entities_by_id, schemas, group_id_to_name)
+
+    # Backfill null column types via live discovery (legacy entity serialisation bug)
+    enriched = enrich_null_column_types_from_discovery(schemas, entities, token, pipeline_id)
+    if enriched:
+        logger.info(f"Enriched null column types for {enriched} table(s) via live discovery")
+
+    yaml_data = build_yaml_structure(schemas, groups_by_name)
+
+    # Build provenance header and prepend it to the YAML
+    header = build_export_header(token, pipeline_id)
+    yaml_buffer = io.StringIO()
+    yaml.safe_dump(yaml_data, yaml_buffer, sort_keys=False, allow_unicode=True)
+    return header + yaml_buffer.getvalue()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
@@ -1381,46 +1421,15 @@ def main() -> None:
     logger.info(f"Starting export for pipeline {pipeline_id} -> {output_path}")
 
     try:
-        entities = fetch_pipeline_entities(token, pipeline_id)
-        entities_by_id = build_entities_maps(entities)
-        group_id_to_name, _, groups_by_name = fetch_groups_map(token, pipeline_id)
-        schemas = build_schemas_from_entities(entities, group_id_to_name)
-
-        # Override schema-level type hints using agents.json catalog when possible
-        src_type, tgt_type = infer_pipeline_schema_types_from_agents(token, pipeline_id)
-        if src_type and tgt_type:
-            logger.info(
-                "Using agents.json to set pipeline types: sourceType=%s, targetType=%s",
-                src_type,
-                tgt_type,
-            )
-            for schema_cfg in schemas.values():
-                schema_cfg["sourceType"] = src_type
-                schema_cfg["targetType"] = tgt_type
-
-        jobs = fetch_pipeline_jobs(pipeline_id, token=token)
-        attach_schedules_from_jobs(jobs, entities_by_id, schemas, group_id_to_name)
-
-        # Backfill null column types via live discovery (legacy entity serialisation bug)
-        enriched = enrich_null_column_types_from_discovery(schemas, entities, token, pipeline_id)
-        if enriched:
-            logger.info(f"Enriched null column types for {enriched} table(s) via live discovery")
-
-        yaml_data = build_yaml_structure(schemas, groups_by_name)
+        rendered = render_pipeline_export(token, pipeline_id)
 
         # Ensure destination directory exists
         out_dir = os.path.dirname(output_path)
         if out_dir and not os.path.exists(out_dir):
             os.makedirs(out_dir, exist_ok=True)
 
-        # Build provenance header and prepend it to the YAML
-        header = build_export_header(token, pipeline_id)
-        yaml_buffer = io.StringIO()
-        yaml.safe_dump(yaml_data, yaml_buffer, sort_keys=False, allow_unicode=True)
-
         with open(output_path, "w", encoding="utf-8") as f:
-            f.write(header)
-            f.write(yaml_buffer.getvalue())
+            f.write(rendered)
 
         log_success(logger, f"Export completed for pipeline {pipeline_id}. Output: {output_path}")
 
