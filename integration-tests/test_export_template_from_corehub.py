@@ -64,6 +64,38 @@ class FetchPipelineJobsTests(unittest.TestCase):
 
         self.assertEqual(jobs, jobs_payload)
 
+    def test_chronos_url_answers_when_the_corehub_path_does_not(self):
+        import export_template_from_corehub as export_mod
+
+        jobs_payload = [{"id": 3, "name": "snap", "task_type": "entity_snapshot", "pipeline_id": "p1"}]
+        env = {"CORE_HUB_URL": "http://gluesync-core-hub:1717", "CHRONOS_URL": "http://gluesync-chronos:1717"}
+        with mock.patch.dict("os.environ", env), mock.patch.object(
+            export_mod.ChronosClient, "_request", side_effect=[RuntimeError("404"), {"items": jobs_payload}],
+        ) as req_mock:
+            self.assertEqual(export_mod.read_pipeline_jobs("p1"), jobs_payload)
+        self.assertEqual(req_mock.call_count, 2)
+
+    def test_jobs_of_other_pipelines_are_dropped(self):
+        import export_template_from_corehub as export_mod
+
+        jobs_payload = [
+            {"id": 1, "name": "snap", "pipeline_id": "other"},
+            {"id": 2, "name": "snap", "pipeline_id": "p1"},
+            {"id": 3, "name": "legacy row without pipeline_id"},
+        ]
+        with mock.patch.object(export_mod.ChronosClient, "_request", return_value={"items": jobs_payload}):
+            self.assertEqual([j["id"] for j in export_mod.read_pipeline_jobs("p1")], [2, 3])
+
+    def test_no_chronos_answering_is_none_and_exports_no_schedules(self):
+        import export_template_from_corehub as export_mod
+
+        env = {"CORE_HUB_URL": "http://gluesync-core-hub:1717", "CHRONOS_URL": "http://gluesync-chronos:1717"}
+        with mock.patch.dict("os.environ", env), mock.patch.object(
+            export_mod.ChronosClient, "_request", side_effect=RuntimeError("404"),
+        ):
+            self.assertIsNone(export_mod.read_pipeline_jobs("p1"))
+            self.assertEqual(export_mod.fetch_pipeline_jobs("p1"), [])
+
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "roundtrip"
 

@@ -217,38 +217,55 @@ def fetch_groups_map(token: str, pipeline_id: str) -> Tuple[Dict[str, str], Dict
     return id_to_name, name_to_id, groups_by_name
 
 
-def fetch_pipeline_jobs(pipeline_id: str, token: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Fetch all Chronos jobs for the given pipeline."""
-    chronos_client = ChronosClient(corehub_url=os.getenv("CORE_HUB_URL"), token=token)
-    try:
-        jobs_response = chronos_client._request(  # type: ignore[attr-defined]
-            "api/jobs/", params={"pipeline_id": pipeline_id, "limit": 1000}
-        )
-    except Exception as exc:  # pylint: disable=broad-except
-        logger.warning(f"Failed to fetch Chronos jobs for pipeline {pipeline_id}: {exc}")
-        return []
+def _chronos_clients(token: Optional[str]) -> List[ChronosClient]:
+    """The Chronos endpoints to read from, in order.
 
-    # Chronos can return either:
-    # - a plain list of jobs (legacy shape)
-    # - a paginated object {"items": [...], ...} (newer shape)
-    jobs: List[Dict[str, Any]]
+    CoreHub's /chronos path first, as before; then CHRONOS_URL, where the import
+    writes schedules (a Chronos container of its own, as in the demo kits).
+    """
+    clients = [ChronosClient(corehub_url=os.getenv("CORE_HUB_URL"), token=token)]
+    chronos_url = os.getenv("CHRONOS_URL")
+    if chronos_url and chronos_url.rstrip("/") + "/" != clients[0].base_url:
+        clients.append(ChronosClient(base_url=chronos_url, token=token))
+    return clients
+
+
+def _jobs_from_response(jobs_response: Any) -> Optional[List[Dict[str, Any]]]:
+    """The jobs of a Chronos answer: a plain list (legacy) or {"items": [...]}."""
     if isinstance(jobs_response, list):
-        jobs = [j for j in jobs_response if isinstance(j, dict)]
-    elif isinstance(jobs_response, dict):
-        items = jobs_response.get("items")
-        if isinstance(items, list):
-            jobs = [j for j in items if isinstance(j, dict)]
-        else:
-            logger.warning(
-                "Unexpected Chronos jobs response format: missing 'items' list in %s",
-                str(jobs_response)[:500],
-            )
-            return []
-    else:
-        logger.warning(f"Unexpected Chronos jobs response format: {str(jobs_response)[:500]}")
-        return []
+        return [j for j in jobs_response if isinstance(j, dict)]
+    items = jobs_response.get("items") if isinstance(jobs_response, dict) else None
+    if isinstance(items, list):
+        return [j for j in items if isinstance(j, dict)]
+    logger.warning(f"Unexpected Chronos jobs response format: {str(jobs_response)[:500]}")
+    return None
 
-    logger.info(f"Fetched {len(jobs)} Chronos jobs for pipeline {pipeline_id}")
+
+def read_pipeline_jobs(pipeline_id: str, token: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
+    """The Chronos jobs of a pipeline, or None when no Chronos endpoint answered."""
+    for client in _chronos_clients(token):
+        try:
+            jobs_response = client._request(  # type: ignore[attr-defined]
+                "api/jobs/", params={"pipeline_id": pipeline_id, "limit": 1000}
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning(f"Chronos at {client.base_url} did not answer for pipeline {pipeline_id}: {exc}")
+            continue
+        jobs = _jobs_from_response(jobs_response)
+        if jobs is not None:
+            # Chronos may ignore the pipeline_id filter and answer with every job.
+            jobs = [j for j in jobs if str(j.get("pipeline_id", pipeline_id)) == str(pipeline_id)]
+            logger.info(f"Fetched {len(jobs)} Chronos jobs for pipeline {pipeline_id} from {client.base_url}")
+            return jobs
+    return None
+
+
+def fetch_pipeline_jobs(pipeline_id: str, token: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Fetch all Chronos jobs for the given pipeline ([] when Chronos cannot be read)."""
+    jobs = read_pipeline_jobs(pipeline_id, token)
+    if jobs is None:
+        logger.warning(f"No Chronos endpoint answered for pipeline {pipeline_id}: its schedules are not exported")
+        return []
     return jobs
 
 
