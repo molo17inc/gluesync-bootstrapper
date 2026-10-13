@@ -169,6 +169,45 @@ class RunChecksTests(unittest.TestCase):
         self.assertFalse(check.passed)
         self.assertIn("missing after restore: snap", check.message)
 
+    def test_chronos_run_state_is_ignored(self):
+        original = _side("a5d110b3", "a")
+        restored = _side("c0ffee00", "b")
+        original["jobs"][0].update({"is_cron_expression": True, "start_time": "08:55", "command": "Scheduled job ID: job_1",
+                                    "cron_job_identifier": "gluesync_job_1", "last_successful_run": "08:55"})
+        restored["jobs"][0].update({"is_cron_expression": True, "start_time": "09:05", "command": "pending",
+                                    "cron_job_identifier": "gluesync_job_2", "last_successful_run": None})
+        self.assertTrue(rt.check_schedules(original, restored).passed)
+
+    def test_start_time_of_a_one_off_schedule_is_compared(self):
+        original = _side("a5d110b3", "a")
+        restored = _side("c0ffee00", "b")
+        original["jobs"][0].update({"is_cron_expression": False, "start_time": "08:55"})
+        restored["jobs"][0].update({"is_cron_expression": False, "start_time": "09:05"})
+        self.assertFalse(rt.check_schedules(original, restored).passed)
+
+    def test_unreadable_chronos_passes_only_without_declared_schedules(self):
+        original = _side("a5d110b3", "a", jobs=None)
+        restored = _side("c0ffee00", "b", jobs=None)
+        original["jobs"] = restored["jobs"] = None
+        self.assertTrue(rt.check_schedules(original, restored).passed)
+        check = rt.check_schedules(original, restored, expects_schedules=True)
+        self.assertFalse(check.passed)
+        self.assertIn("could not be read", check.message)
+
+    def test_declared_schedules_missing_from_chronos_fail(self):
+        original = _side("a5d110b3", "a", jobs=[])
+        restored = _side("c0ffee00", "b", jobs=[])
+        original["jobs"] = restored["jobs"] = []
+        self.assertTrue(rt.check_schedules(original, restored).passed)
+        self.assertFalse(rt.check_schedules(original, restored, expects_schedules=True).passed)
+
+    def test_declares_schedules_finds_any_level(self):
+        self.assertTrue(rt.declares_schedules(
+            {"public": {"tables": {"custom": {"DRIVERS": {"schedules": [{"name": "s"}]}}}}}))
+        self.assertTrue(rt.declares_schedules({"public": {"group_schedules": [{"name": "g"}]}}))
+        self.assertFalse(rt.declares_schedules({"public": {"schedules": [], "tables": {"whitelist": ["a"]}}}))
+        self.assertFalse(rt.declares_schedules(None))
+
     def test_export_drift_fails(self):
         restored = _side("c0ffee00", "b")
         restored["export"] = restored["export"].replace("[drivers, vehicles]", "[drivers]")
@@ -239,6 +278,47 @@ class RunTests(unittest.TestCase):
         code, report, files, _ = self._run(restored)
         self.assertEqual(code, 1)
         self.assertIn("restored-entities-match.diff", files)
+
+
+class AuthenticateTests(unittest.TestCase):
+    def test_sdk_token_comes_first_when_use_sdk_is_on(self):
+        with mock.patch.dict("os.environ", {"USE_SDK": "true"}), \
+                mock.patch("utils.gluesync_sdk_client.initialize_gluesync_sdk"), \
+                mock.patch("utils.gluesync_sdk_client.get_token", return_value="sdk"), \
+                mock.patch.object(rt, "fetch_core_hub") as fetch:
+            self.assertEqual(rt.authenticate("/nonexistent"), "sdk")
+        fetch.assert_not_called()
+
+    def test_sdk_is_skipped_when_use_sdk_is_off(self):
+        with mock.patch.dict("os.environ", {"USE_SDK": "false"}), \
+                mock.patch("utils.gluesync_sdk_client.initialize_gluesync_sdk") as init, \
+                mock.patch.object(rt, "fetch_core_hub", return_value={"apiToken": "fresh"}):
+            self.assertEqual(rt.authenticate("/nonexistent"), "fresh")
+        init.assert_not_called()
+
+    def test_fresh_login_comes_first(self):
+        with mock.patch.dict("os.environ", {"USE_SDK": "false"}), \
+                mock.patch.object(rt, "fetch_core_hub", return_value={"apiToken": "fresh"}) as fetch:
+            self.assertEqual(rt.authenticate("/nonexistent"), "fresh")
+        self.assertEqual(fetch.call_args.args[0], "/authentication/login")
+
+    def test_saved_token_when_login_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            token_file = Path(tmp) / "auth_token.json"
+            token_file.write_text(json.dumps({"token": "saved"}))
+
+            def fetch(path, **_kwargs):
+                if path == "/authentication/login":
+                    return {"changeRequired": True}
+                return []
+
+            with mock.patch.object(rt, "fetch_core_hub", side_effect=fetch):
+                self.assertEqual(rt.authenticate(str(token_file)), "saved")
+
+    def test_no_way_in_raises(self):
+        with mock.patch.object(rt, "fetch_core_hub", side_effect=RuntimeError("401")):
+            with self.assertRaises(RuntimeError):
+                rt.authenticate("/nonexistent")
 
 
 class RestoreExportTests(unittest.TestCase):

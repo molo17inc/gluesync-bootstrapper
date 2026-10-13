@@ -54,7 +54,7 @@ import yaml
 from commons import fetch_core_hub
 from export_template_from_corehub import (
     fetch_pipeline_entities,
-    fetch_pipeline_jobs,
+    read_pipeline_jobs,
     render_pipeline_export,
 )
 from utils.log import create_log_file, get_logger
@@ -77,8 +77,11 @@ VOLATILE_KEYS = frozenset({
     "checkpoint", "offset", "lastCheckpoint",
 })
 
-# Chronos job fields that only identify the job row itself.
-JOB_IDENTITY_KEYS = frozenset({"id", "job_id", "pipeline_id"})
+# Chronos job fields that identify the job row or record its runs.
+JOB_IDENTITY_KEYS = frozenset({
+    "id", "job_id", "pipeline_id", "cron_job_identifier", "command",
+    "last_successful_run", "last_error_message", "last_run_error_time",
+})
 
 MAX_DIFF_LINES = 400
 
@@ -292,11 +295,40 @@ def check_groups(original: Dict[str, Any], restored: Dict[str, Any]) -> Check:
     return compare_keyed(check, left, right, "groups")
 
 
-def check_schedules(original: Dict[str, Any], restored: Dict[str, Any]) -> Check:
+def declares_schedules(template: Any) -> bool:
+    """Whether a table-list template asks for any Chronos schedule."""
+    if isinstance(template, dict):
+        return any(
+            (key in ("schedules", "group_schedules") and bool(value)) or declares_schedules(value)
+            for key, value in template.items()
+        )
+    if isinstance(template, list):
+        return any(declares_schedules(item) for item in template)
+    return False
+
+
+def job_settings(job: Dict[str, Any]) -> Dict[str, Any]:
+    """A Chronos job without what Chronos derives: a cron job's start_time is its next run."""
+    if job.get("is_cron_expression"):
+        return {k: v for k, v in job.items() if k != "start_time"}
+    return job
+
+
+def check_schedules(original: Dict[str, Any], restored: Dict[str, Any], expects_schedules: bool = False) -> Check:
+    """Compare Chronos jobs; with ``expects_schedules`` an unreadable or empty Chronos fails."""
     check = Check("restored-schedules-match", "Chronos schedules are restored for the new pipeline")
+    if original["jobs"] is None or restored["jobs"] is None:
+        if expects_schedules:
+            check.fail("Chronos could not be read, so the schedules the kit declares cannot be checked")
+        else:
+            check.message = "Chronos could not be read; the kit declares no schedules"
+        return check
+    if expects_schedules and not original["jobs"]:
+        check.fail("the kit declares schedules but the original pipeline has none in Chronos")
+        return check
     drop = VOLATILE_KEYS.union(JOB_IDENTITY_KEYS)
-    left = {k: normalize(v, original["idMap"], drop) for k, v in key_by_name(original["jobs"], "name").items()}
-    right = {k: normalize(v, restored["idMap"], drop) for k, v in key_by_name(restored["jobs"], "name").items()}
+    left = {k: normalize(job_settings(v), original["idMap"], drop) for k, v in key_by_name(original["jobs"], "name").items()}
+    right = {k: normalize(job_settings(v), restored["idMap"], drop) for k, v in key_by_name(restored["jobs"], "name").items()}
     return compare_keyed(check, left, right, "schedules")
 
 
@@ -316,11 +348,11 @@ def check_export_stable(original: Dict[str, Any], restored: Dict[str, Any]) -> C
     return check
 
 
-def run_checks(original: Dict[str, Any], restored: Dict[str, Any]) -> List[Check]:
+def run_checks(original: Dict[str, Any], restored: Dict[str, Any], expects_schedules: bool = False) -> List[Check]:
     return [
         check_entities(original, restored),
         check_groups(original, restored),
-        check_schedules(original, restored),
+        check_schedules(original, restored, expects_schedules),
         check_export_stable(original, restored),
     ]
 
@@ -360,8 +392,40 @@ def _as_list(response: Any, *keys: str) -> List[Dict[str, Any]]:
     return []
 
 
-def authenticate(token_file: str) -> str:
-    """Reuse the token the kit's bootstrapper saved, else log in as admin."""
+def _sdk_token() -> Optional[str]:
+    """A token from the Gluesync SDK handshake when USE_SDK is on.
+
+    The SDK session stays open for the rest of this process: Chronos accepts an
+    SDK token only while its session is alive (CoreHub keeps accepting it).
+    """
+    if os.getenv("USE_SDK", "false").strip().lower() not in ("true", "1", "t", "y", "yes"):
+        return None
+    try:
+        from utils.gluesync_sdk_client import get_token, initialize_gluesync_sdk
+
+        initialize_gluesync_sdk()
+        return get_token()
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning(f"Gluesync SDK token not available: {exc}")
+        return None
+
+
+def _login_token() -> Optional[str]:
+    try:
+        response = fetch_core_hub(
+            "/authentication/login",
+            method="POST",
+            body={"username": "admin", "password": os.getenv("DEFAULT_PASSWORD", "")},
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning(f"Admin login failed: {exc}")
+        return None
+    if not isinstance(response, dict) or response.get("changeRequired"):
+        return None
+    return response.get("apiToken")
+
+
+def _saved_token(token_file: str) -> Optional[str]:
     try:
         with open(token_file, "r", encoding="utf-8") as f:
             token = json.load(f).get("token")
@@ -369,15 +433,19 @@ def authenticate(token_file: str) -> str:
             return token
     except Exception as exc:  # pylint: disable=broad-except
         logger.warning(f"Saved token in {token_file} not usable: {exc}")
+    return None
 
-    response = fetch_core_hub(
-        "/authentication/login",
-        method="POST",
-        body={"username": "admin", "password": os.getenv("DEFAULT_PASSWORD", "")},
-    )
-    token = response.get("apiToken") if isinstance(response, dict) else None
+
+def authenticate(token_file: str) -> str:
+    """A token Chronos accepts too: an SDK token, else an admin login, else the saved one.
+
+    The saved token comes last: once its run has ended Chronos may refuse it
+    (an SDK token whose session is closed) although CoreHub still accepts it,
+    and the schedules could then not be read.
+    """
+    token = _sdk_token() or _login_token() or _saved_token(token_file)
     if not token:
-        raise RuntimeError("cannot authenticate to CoreHub: no saved token and admin login failed")
+        raise RuntimeError("cannot authenticate to CoreHub: admin login failed and no usable saved token")
     return token
 
 
@@ -397,7 +465,7 @@ def snapshot_pipeline(token: str, pipeline_id: str) -> Dict[str, Any]:
     except Exception as exc:  # pylint: disable=broad-except
         logger.warning(f"No groups for pipeline {pipeline_id}: {exc}")
         groups = []
-    jobs = fetch_pipeline_jobs(pipeline_id, token=token)
+    jobs = read_pipeline_jobs(pipeline_id, token=token)  # None: Chronos could not be read
     return {
         "pipelineId": pipeline_id,
         "pipeline": pipeline,
@@ -442,6 +510,17 @@ def restore_export(
 
 def write_json(path: Path, value: Any) -> None:
     path.write_text(json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def kit_declares_schedules() -> bool:
+    """Whether the template the pipeline was built from (TABLE_LIST_YAML) declares schedules."""
+    path = os.getenv("TABLE_LIST_YAML", "")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return declares_schedules(yaml.safe_load(f))
+    except (OSError, yaml.YAMLError) as exc:
+        logger.warning(f"Cannot read the kit template {path!r} to look for schedules: {exc}")
+        return False
 
 
 class RoundTripError(Exception):
@@ -504,7 +583,7 @@ def run(pipeline_id: str, out_dir: Path, token_file: str, timeout: int, suite_na
     checks = [step]
     try:
         original, restored, step.message = export_and_restore(pipeline_id, out_dir, token_file, timeout)
-        checks.extend(run_checks(original, restored))
+        checks.extend(run_checks(original, restored, kit_declares_schedules()))
     except RoundTripError as exc:
         step.fail(str(exc))
     return write_results(out_dir, pipeline_id, suite_name, checks, time.time() - started)

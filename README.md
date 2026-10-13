@@ -736,7 +736,7 @@ Available environment variables:
 python automator_roundtrip.py --pipeline <PIPELINE_ID> --output-dir ./roundtrip
 ```
 
-The output directory holds both exports, both CoreHub snapshots, `restore.log`, `report.json`, a `.diff` per failed check and `junit.xml`. The exit code is 0 when every check passes. The token comes from `--token-file` (default `/opt/config/auth_token.json`), or else from logging in as `admin` with `DEFAULT_PASSWORD`.
+The output directory holds both exports, both CoreHub snapshots, `restore.log`, `report.json`, a `.diff` per failed check and `junit.xml`. The exit code is 0 when every check passes. It authenticates with a Gluesync SDK token when `USE_SDK` is on (keeping that session open, since Chronos only accepts the token while it is), else by logging in as `admin` with `DEFAULT_PASSWORD`, else with the token saved in `--token-file` (default `/opt/config/auth_token.json`). Chronos is read at CoreHub's `/chronos` path, then at `CHRONOS_URL`; when the template in `TABLE_LIST_YAML` declares schedules, a Chronos that cannot be read fails the check.
 
 The gluesync-demo-kits integration tests run it for every bootstrapper service of a kit once the kit's own tests are green, and a failed round trip fails the kit.
 
