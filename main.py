@@ -297,9 +297,11 @@ START_SYNC = os.getenv('START_SYNC', 'true').strip().lower() != 'false'
 
 # The run writes {"pipelineId", "pipelineName", "status"} here so a caller can
 # find the pipeline it created without parsing logs (the demo-kits CI copies it
-# out of the exited container). An empty value turns it off.
+# out of the exited container). It defaults to sitting next to this script
+# (/opt/python in the image). An empty value turns it off.
 BOOTSTRAPPER_RESULT_FILE = os.getenv(
-    'BOOTSTRAPPER_RESULT_FILE', '/tmp/gluesync-bootstrapper-result.json'
+    'BOOTSTRAPPER_RESULT_FILE',
+    str(Path(__file__).resolve().parent / 'bootstrapper-result.json'),
 ).strip()
 
 
@@ -831,6 +833,9 @@ if True:
         )
 
     def start_entity_syncs(token, pipeline_id):
+        if not START_SYNC:
+            logger.info("START_SYNC=false: leaving every entity of the pipeline stopped")
+            return
         entities = get_entities(token, pipeline_id)
         print(f"Retrieved the following entities: {entities}")
         
@@ -1261,10 +1266,7 @@ def main():
 
         time.sleep(ENTITY_START_TIMEOUT)
 
-        if START_SYNC:
-            start_entity_syncs(token, pipeline_id)
-        else:
-            logger.info("START_SYNC=false: leaving every entity of the pipeline stopped")
+        start_entity_syncs(token, pipeline_id)
 
         # Configure transactions auditing if present in YAML
         try:

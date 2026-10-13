@@ -719,7 +719,7 @@ Available environment variables:
 - `SOURCE_TYPE`: Source agent type (default: `RDBMS`)
 - `TARGET_TYPE`: Target agent type (default: `NoSQL`)
 - `START_SYNC`: Set to `false` to configure the pipeline and leave every entity stopped (default: `true`)
-- `BOOTSTRAPPER_RESULT_FILE`: Where the run writes `{"pipelineId", "pipelineName", "status"}` (`complete` or `failure`) when it ends (default: `/tmp/gluesync-bootstrapper-result.json`; empty turns it off)
+- `BOOTSTRAPPER_RESULT_FILE`: Where the run writes `{"pipelineId", "pipelineName", "status"}` (`complete` or `failure`) when it ends (default: `bootstrapper-result.json` next to `main.py`, `/opt/python/bootstrapper-result.json` in the image; empty turns it off)
 
 **Note**: Source and target schema information is now automatically read from the `table-list-template.yaml` file in the `schemas` section, eliminating the need for `CREATE_ENTITIES_FROM_SCHEMA` and `TARGET_SCHEMA` environment variables.
 
