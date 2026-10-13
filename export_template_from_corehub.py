@@ -632,13 +632,17 @@ def _process_single_entity(
     
     if source_columns and target_columns:
         def _column_sort_key(col: Dict[str, Any], idx: int) -> int:
-            raw_id = col.get("ordinalPosition") or col.get("id")
+            # Discovered columns carry "position"; "id" is a hash of the
+            # column, so it is no order at all: fall back to the stored order.
+            raw_position = col.get("ordinalPosition")
+            if raw_position is None:
+                raw_position = col.get("position")
             try:
-                return int(raw_id)
+                return int(raw_position)
             except (TypeError, ValueError):
                 return idx
 
-        # Sort both source and target columns by ordinalPosition/id
+        # Sort both source and target columns by their position in the table
         ordered_source = sorted(
             enumerate(source_columns, start=1),
             key=lambda pair: _column_sort_key(pair[1], pair[0]),
@@ -753,13 +757,21 @@ def _process_single_entity(
     # Custom properties
     source_et = source_ae.get("entityType", {}) or {}
 
-    # Exclude internal keys that were not user-configured
-    source_excluded = {"type", "unchangedDataFilterType", "partitionSettings"}
+    # The source entityType holds the settings CoreHub runs with (the import
+    # writes customProperties.source there). "type" is implied and partitions
+    # are recomputed on import. Keys only found in the agent entity's own
+    # customProperties are kept too, so nothing the user wrote is lost.
+    source_excluded = {"type", "partitionSettings"}
     source_cp = {
+        k: v
+        for k, v in (source_ae.get("customProperties") or {}).items()
+        if k not in source_excluded and k not in source_et
+    }
+    source_cp.update({
         k: v
         for k, v in source_et.items()
         if k not in source_excluded
-    }
+    })
 
     target_cp = (target_ae.get("customProperties") or {}).copy()
 
