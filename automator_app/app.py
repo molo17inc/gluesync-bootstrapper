@@ -514,7 +514,7 @@ def _summarize_restore(results: Dict[str, Any]) -> str:
     return "; ".join(parts)
 
 
-async def _export_full_backup_with_options(request: FullBackupRequest):
+def _export_full_backup_with_options(request: FullBackupRequest):
     """Like GET /api/export/full-backup, with the passphrase that seals the AI settings secrets."""
     _require_login()
     if request.include_secrets and request.ai_settings_passphrase:
@@ -544,7 +544,7 @@ async def _export_full_backup_with_options(request: FullBackupRequest):
         headers={"Content-Disposition": f'attachment; filename="corehub_full_backup_{timestamp}.zip"'},
     )
 
-async def _export_ai_settings(request: AiSettingsExportRequest):
+def _export_ai_settings(request: AiSettingsExportRequest):
     """Download the AI settings bundle of the connected Core Hub (2.3.0.1+)."""
     _require_login()
     corehub.configure_core_hub(state.base_url, use_ssl=state.use_ssl, skip_verify=state.skip_verify)
