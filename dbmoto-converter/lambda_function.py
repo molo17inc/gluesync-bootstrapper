@@ -313,7 +313,6 @@ def upload_to_ftp(local_path, remote_filename):
         print(error_msg)
         raise Exception(error_msg)
 
-    ftp_url = None
     if os.environ.get("DUAL_WRITE_SG", "0") == "1":
         try:
             ftp_url = _upload_to_ftp_legacy(local_path, remote_filename)
@@ -322,8 +321,7 @@ def upload_to_ftp(local_path, remote_filename):
             # S3 succeeded; surface FTP failure but do not fail the job
             print(f"WARNING: DUAL_WRITE_SG FTP upload failed: {e}")
 
-    public_url = f"https://molo17.com/{key}"
-    return public_url if ftp_url is None else public_url
+    return f"https://molo17.com/{key}"
 
 
 def download_from_ftp(remote_filename, local_path):
