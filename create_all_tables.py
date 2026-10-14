@@ -20,6 +20,7 @@
 
 import os
 import json
+from dataclasses import dataclass
 import urllib.parse
 
 import requests
@@ -197,47 +198,227 @@ def create_target_table(pipeline_id: str, create_table_request: CreateTableReque
         logger.info(f"generate create table statement: {error_msg}")
         raise
 
-def create_tables(token, pipeline_id, source_schema, target_schema, tables, source_agent_id, target_agent_id,
-                  source_type, target_type, yaml_config, skip_errors=True,
-                  source_agent_tag=None, target_agent_tag=None):
-    # First, collect all unique group names from the YAML configuration
+def _add_custom_group_names(group_names: set, custom_tables) -> None:
+    """Add the (non-default) groups the custom tables of a schema belong to."""
+    for _, table_data in custom_tables.items():
+        if 'groupId' in table_data and table_data['groupId'] != '_default':
+            group_names.add(table_data['groupId'])
+
+
+def _collect_group_names(yaml_config) -> set:
+    """Collect all unique group names from the YAML configuration."""
     group_names = set()
-    if yaml_config:
-        schemas_dict = yaml_config.get('schemas', {})
-        if not schemas_dict:
-            schemas_dict = {k: v for k, v in yaml_config.items() if isinstance(v, dict)}
-
-        for schema_name, schema_config in schemas_dict.items():
-            if 'tables' in schema_config and 'custom' in schema_config['tables']:
-                for table_key, table_data in schema_config['tables']['custom'].items():
-                    if 'groupId' in table_data and table_data['groupId'] != '_default':
-                        group_names.add(table_data['groupId'])
-
-    # Create groups before creating entities
-    groupId_map = {}
-    for group_name in group_names:
-        groupId = create_group(token, pipeline_id, group_name)
-        if groupId != '_default':
-            groupId_map[group_name] = groupId
-            logger.info(f"Created/retrieved group '{group_name}' with ID: {groupId}")
-
-    """Create entities for the pipeline."""
     if not yaml_config:
-        yaml_config = {}
+        return group_names
+    schemas_dict = yaml_config.get('schemas', {})
+    if not schemas_dict:
+        schemas_dict = {k: v for k, v in yaml_config.items() if isinstance(v, dict)}
 
-    entities = []
+    for _, schema_config in schemas_dict.items():
+        if 'tables' in schema_config and 'custom' in schema_config['tables']:
+            _add_custom_group_names(group_names, schema_config['tables']['custom'])
+    return group_names
 
-    # Get node info for data type mapping
-    source_node_info = get_node_info(token, pipeline_id, source_agent_id)
-    target_node_info = get_node_info(token, pipeline_id, target_agent_id)
 
-    logger.info("Source Node Info:")
-    logger.info(json.dumps(source_node_info, indent=2))
-    logger.info("Target Node Info:")
-    logger.info(json.dumps(target_node_info, indent=2))
+def _create_groups(token, pipeline_id, group_names) -> None:
+    """Create groups before creating entities."""
+    for group_name in group_names:
+        group_id = create_group(token, pipeline_id, group_name)
+        if group_id != '_default':
+            logger.info(f"Created/retrieved group '{group_name}' with ID: {group_id}")
 
-    logger.info(f"Full YAML config: {json.dumps(yaml_config, indent=2)}")
 
+@dataclass
+class _TableCreationContext:
+    """What the creation of every table of one source schema shares."""
+
+    token: str
+    pipeline_id: str
+    source_schema: str
+    source_agent_id: str
+    yaml_target_schema: str
+    whitelist: list
+    blacklist: list
+    custom_tables: dict
+    global_source_custom_properties: dict
+    global_target_custom_properties: dict
+    source_node_info: dict
+    target_node_info: dict
+    source_agent_tag: Optional[str]
+    target_agent_tag: Optional[str]
+
+
+def _table_name_of(table):
+    """Name of a table of the source agent (a plain name, or an object with a name)."""
+    if isinstance(table, str):
+        return table
+    return table.get("name")
+
+
+def _is_skipped_table(table_name: str, blacklist, whitelist) -> bool:
+    """Whether a table is a system table, blacklisted or missing from the whitelist."""
+    return bool(table_name.startswith("sys") or
+                (blacklist and table_name in blacklist) or
+                (whitelist and table_name not in whitelist))
+
+
+def _discovered_pk_keys(columns) -> list:
+    """The primary keys the source agent discovered, as key definitions."""
+    return [
+        {
+            "name": col["name"],
+            "alias": col["name"],
+            "type": col.get("dataType")
+        } for col in columns["columns"] if col.get("isPK")
+    ]
+
+
+def _parse_key_def(key_def):
+    """``(name, alias, type)`` of a YAML key: a plain name, or a dict with a name and an optional alias."""
+    if not isinstance(key_def, dict):
+        # Simple string format - use the string as both name and alias
+        return key_def, key_def, None
+    # Handle the case where the key is specified as a dict with 'name' and optional 'alias'
+    key_name = next(iter(key_def)) if not key_def.get('name') else key_def['name']
+    key_config = key_def.get(key_name, {}) if isinstance(key_def.get(key_name), dict) else {}
+
+    # Get the key name (either from the dict key or from the 'name' field)
+    key_name = key_name or key_config.get('name')
+    # Get the alias (defaults to the key name if not specified)
+    key_alias = key_config.get('name', key_name)
+
+    # Get the key type from the config or find it in the columns
+    key_type = key_config.get('dataType')
+    return key_name, key_alias, key_type
+
+
+def _custom_keys(table_name: str, key_defs, columns) -> list:
+    """The keys the YAML declares for a table, typed from the source columns when not specified."""
+    keys = []
+    for key_def in key_defs:
+        # Handle both string (key name) and dict (key with name/alias) formats
+        key_name, key_alias, key_type = _parse_key_def(key_def)
+
+        # Try to find the key in the columns to get its type if not specified
+        key_column = next((col for col in columns["columns"] if col["name"] == key_name), None)
+
+        if key_column:
+            keys.append({
+                "name": key_name,
+                "alias": key_alias,
+                "type": key_type or key_column.get("dataType")
+            })
+        else:
+            logger.info(
+                f"Warning: Key {key_name} not found in columns for table {table_name}. Adding with unknown type.")
+            keys.append({
+                "name": key_name,
+                "alias": key_alias,
+                "type": key_type or "unknown"
+            })
+    return keys
+
+
+def _yaml_fallback_keys(table_name: str, custom_config: dict, columns) -> list:
+    """Source has no discovered PKs — fall back to YAML keys (or documentKey.keys)."""
+    keys = []
+    yaml_fallback_keys = custom_config.get('keys') or []
+    if not yaml_fallback_keys and 'documentKey' in custom_config:
+        yaml_fallback_keys = custom_config['documentKey'].get('keys', [])
+
+    if yaml_fallback_keys:
+        logger.info(f"Source table {table_name} has no PKs — using YAML-defined keys as fallback: {yaml_fallback_keys}")
+        for key_name in yaml_fallback_keys:
+            key_column = next((col for col in columns["columns"] if col["name"].lower() == key_name.lower()), None)
+            if key_column:
+                keys.append({
+                    "name": key_column["name"],
+                    "alias": key_column["name"],
+                    "type": key_column.get("dataType")
+                })
+            else:
+                logger.warning(f"Fallback key '{key_name}' not found in columns for table '{table_name}'")
+    return keys
+
+
+def _table_keys(table_name: str, custom_config: dict, columns) -> list:
+    """The keys of a table: the YAML ones when declared, else the discovered primary keys (else the YAML fallback)."""
+    if custom_config and 'keys' in custom_config and custom_config['keys'] is not None:
+        keys = _custom_keys(table_name, custom_config['keys'], columns)
+        logger.info(f"Using custom keys for {table_name}: {keys}")
+        return keys
+
+    keys = _discovered_pk_keys(columns)
+    logger.info(f"Using primary keys for {table_name}: {keys}")
+    if not keys and custom_config:
+        keys = _yaml_fallback_keys(table_name, custom_config, columns)
+    return keys
+
+
+def _log_table_settings(ctx: _TableCreationContext, table_name: str, custom_config: dict, columns) -> None:
+    """Log the custom properties, target name, filters and document key a table is configured with."""
+    # Get table-specific custom properties and merge with global properties
+    table_custom_properties = custom_config.get('customProperties', {})
+    source_custom_properties = {**ctx.global_source_custom_properties, **table_custom_properties.get('source', {})}
+    target_custom_properties = {**ctx.global_target_custom_properties, **table_custom_properties.get('target', {})}
+
+    logger.info(f"Source custom properties for {table_name}: {source_custom_properties}")
+    logger.info(f"Target custom properties for {table_name}: {target_custom_properties}")
+
+    # Get custom target table name if specified
+    target_table_name = custom_config.get('name', table_name)
+    logger.info(f"Using target table name: {target_table_name} for source table: {table_name}")
+
+    # Get and process filter configuration
+    filter_config = custom_config.get('filter')
+    processed_filters = process_filter_clauses(filter_config, columns) if filter_config else None
+    logger.info(f"Processed filters for {table_name}: {processed_filters}")
+
+    # Get document key configuration if it exists
+    if custom_config and 'documentKey' in custom_config:
+        doc_key_config = custom_config['documentKey']
+        document_key = {
+            "prefix": doc_key_config.get('prefix', ''),
+            "suffix": doc_key_config.get('suffix', ''),
+            "separator": doc_key_config.get('separator', '-'),
+            "keys": doc_key_config.get('keys', [])
+        }
+        logger.info(f"Document key configuration for {table_name}: {document_key}")
+
+
+def _create_table(ctx: _TableCreationContext, table_name: str) -> None:
+    """Create the target table of one source table, as the YAML configures it."""
+    columns = get_table_columns(ctx.token, ctx.pipeline_id, ctx.source_agent_id, ctx.source_schema, table_name)
+
+    custom_config = ctx.custom_tables.get(table_name, {})
+    if custom_config is None:
+        custom_config = {}
+        logger.info(
+            f"Warning: Custom config for table {table_name} is present but empty in YAML. Converting to empty dict.")
+    logger.info(f"Custom config for {table_name}: {custom_config}")
+
+    _log_table_settings(ctx, table_name, custom_config, columns)
+    target_table_name = custom_config.get('name', table_name)
+
+    # Process keys and other configurations as before...
+    keys = _table_keys(table_name, custom_config, columns)
+    if not keys:
+        logger.info(f"Warning: No keys specified for {table_name}. Table will have no keys.")
+
+    # Only send source-discovered keys to the create-table statement.
+    # YAML-defined keys are honoured for entity creation (create_all_entities.py)
+    # but must not be sent to generate_create_table_statement when the source
+    # agent has not discovered any primary keys.
+    source_discovered_keys = _discovered_pk_keys(columns)
+
+    # check if the table exists on the target
+    handle_table_creation(ctx.pipeline_id, target_table_name, ctx.yaml_target_schema, source_discovered_keys, ctx.token,
+                          columns, custom_config, ctx.source_node_info, ctx.target_node_info,
+                          source_agent_tag=ctx.source_agent_tag, target_agent_tag=ctx.target_agent_tag)
+
+
+def _schema_tables_context(yaml_config: dict, source_schema: str, target_schema: str) -> dict:
+    """The table settings of ``source_schema`` in the YAML configuration (target schema, lists, custom tables)."""
     schemas_root = yaml_config.get('schemas', yaml_config)
     schema_config = schemas_root.get(source_schema, {})
     logger.info(f"Schema config for {source_schema}: {json.dumps(schema_config, indent=2)}")
@@ -263,150 +444,64 @@ def create_tables(token, pipeline_id, source_schema, target_schema, tables, sour
     logger.info(f"Custom tables: {custom_tables}")
     logger.info(f"Global source custom properties: {global_source_custom_properties}")
     logger.info(f"Global target custom properties: {global_target_custom_properties}")
+    return {
+        "yaml_target_schema": yaml_target_schema,
+        "whitelist": whitelist,
+        "blacklist": blacklist,
+        "custom_tables": custom_tables,
+        "global_source_custom_properties": global_source_custom_properties,
+        "global_target_custom_properties": global_target_custom_properties,
+    }
+
+
+def create_tables(token, pipeline_id, source_schema, target_schema, tables, source_agent_id, target_agent_id,
+                  source_type, target_type, yaml_config, skip_errors=True,
+                  source_agent_tag=None, target_agent_tag=None):
+    """Create the target tables of the source tables of a schema, as the YAML configuration describes them."""
+    # First, collect all unique group names from the YAML configuration
+    group_names = _collect_group_names(yaml_config)
+
+    # Create groups before creating entities
+    _create_groups(token, pipeline_id, group_names)
+
+    if not yaml_config:
+        yaml_config = {}
+
+    # Get node info for data type mapping
+    source_node_info = get_node_info(token, pipeline_id, source_agent_id)
+    target_node_info = get_node_info(token, pipeline_id, target_agent_id)
+
+    logger.info("Source Node Info:")
+    logger.info(json.dumps(source_node_info, indent=2))
+    logger.info("Target Node Info:")
+    logger.info(json.dumps(target_node_info, indent=2))
+
+    logger.info(f"Full YAML config: {json.dumps(yaml_config, indent=2)}")
+
+    ctx = _TableCreationContext(
+        token=token,
+        pipeline_id=pipeline_id,
+        source_schema=source_schema,
+        source_agent_id=source_agent_id,
+        source_node_info=source_node_info,
+        target_node_info=target_node_info,
+        source_agent_tag=source_agent_tag,
+        target_agent_tag=target_agent_tag,
+        **_schema_tables_context(yaml_config, source_schema, target_schema),
+    )
 
     for table in tables:
-        if isinstance(table, str):
-            table_name = table
-        else:
-            table_name = table.get("name")
+        table_name = _table_name_of(table)
 
         if not table_name:
-            logger.info(f"Warning: Table without name encountered. Skipping.")
+            logger.info("Warning: Table without name encountered. Skipping.")
             continue
 
-        if (table_name.startswith("sys") or
-                (blacklist and table_name in blacklist) or
-                (whitelist and table_name not in whitelist)):
+        if _is_skipped_table(table_name, ctx.blacklist, ctx.whitelist):
             logger.info(f"Skipping table: {table_name}")
             continue
 
-        columns = get_table_columns(token, pipeline_id, source_agent_id, source_schema, table_name)
-
-        custom_config = custom_tables.get(table_name, {})
-        if custom_config is None:
-            custom_config = {}
-            logger.info(
-                f"Warning: Custom config for table {table_name} is present but empty in YAML. Converting to empty dict.")
-        logger.info(f"Custom config for {table_name}: {custom_config}")
-
-        # Get table-specific custom properties and merge with global properties
-        table_custom_properties = custom_config.get('customProperties', {})
-        source_custom_properties = {**global_source_custom_properties, **table_custom_properties.get('source', {})}
-        target_custom_properties = {**global_target_custom_properties, **table_custom_properties.get('target', {})}
-
-        logger.info(f"Source custom properties for {table_name}: {source_custom_properties}")
-        logger.info(f"Target custom properties for {table_name}: {target_custom_properties}")
-
-        # Get custom target table name if specified
-        target_table_name = custom_config.get('name', table_name)
-        logger.info(f"Using target table name: {target_table_name} for source table: {table_name}")
-
-        # Get and process filter configuration
-        filter_config = custom_config.get('filter')
-        processed_filters = process_filter_clauses(filter_config, columns) if filter_config else None
-        logger.info(f"Processed filters for {table_name}: {processed_filters}")
-
-        # Get document key configuration if it exists
-        document_key = None
-        if custom_config and 'documentKey' in custom_config:
-            doc_key_config = custom_config['documentKey']
-            document_key = {
-                "prefix": doc_key_config.get('prefix', ''),
-                "suffix": doc_key_config.get('suffix', ''),
-                "separator": doc_key_config.get('separator', '-'),
-                "keys": doc_key_config.get('keys', [])
-            }
-            logger.info(f"Document key configuration for {table_name}: {document_key}")
-
-        # Process keys and other configurations as before...
-        if custom_config and 'keys' in custom_config and custom_config['keys'] is not None:
-            keys = []
-            for key_def in custom_config['keys']:
-                # Handle both string (key name) and dict (key with name/alias) formats
-                if isinstance(key_def, dict):
-                    # Handle the case where the key is specified as a dict with 'name' and optional 'alias'
-                    key_name = next(iter(key_def)) if not key_def.get('name') else key_def['name']
-                    key_config = key_def.get(key_name, {}) if isinstance(key_def.get(key_name), dict) else {}
-
-                    # Get the key name (either from the dict key or from the 'name' field)
-                    key_name = key_name or key_config.get('name')
-                    # Get the alias (defaults to the key name if not specified)
-                    key_alias = key_config.get('name', key_name)
-
-                    # Get the key type from the config or find it in the columns
-                    key_type = key_config.get('dataType')
-                else:
-                    # Simple string format - use the string as both name and alias
-                    key_name = key_def
-                    key_alias = key_def
-                    key_type = None
-
-                # Try to find the key in the columns to get its type if not specified
-                key_column = next((col for col in columns["columns"] if col["name"] == key_name), None)
-
-                if key_column:
-                    keys.append({
-                        "name": key_name,
-                        "alias": key_alias,
-                        "type": key_type or key_column.get("dataType")
-                    })
-                else:
-                    logger.info(
-                        f"Warning: Key {key_name} not found in columns for table {table_name}. Adding with unknown type.")
-                    keys.append({
-                        "name": key_name,
-                        "alias": key_alias,
-                        "type": key_type or "unknown"
-                    })
-            logger.info(f"Using custom keys for {table_name}: {keys}")
-        else:
-            keys = [
-                {
-                    "name": col["name"],
-                    "alias": col["name"],
-                    "type": col.get("dataType")
-                } for col in columns["columns"] if col.get("isPK")
-            ]
-            logger.info(f"Using primary keys for {table_name}: {keys}")
-
-            if not keys and custom_config:
-                # Source has no discovered PKs — fall back to YAML keys (or documentKey.keys)
-                yaml_fallback_keys = custom_config.get('keys') or []
-                if not yaml_fallback_keys and 'documentKey' in custom_config:
-                    yaml_fallback_keys = custom_config['documentKey'].get('keys', [])
-
-                if yaml_fallback_keys:
-                    logger.info(f"Source table {table_name} has no PKs — using YAML-defined keys as fallback: {yaml_fallback_keys}")
-                    for key_name in yaml_fallback_keys:
-                        key_column = next((col for col in columns["columns"] if col["name"].lower() == key_name.lower()), None)
-                        if key_column:
-                            keys.append({
-                                "name": key_column["name"],
-                                "alias": key_column["name"],
-                                "type": key_column.get("dataType")
-                            })
-                        else:
-                            logger.warning(f"Fallback key '{key_name}' not found in columns for table '{table_name}'")
-
-        if not keys:
-            logger.info(f"Warning: No keys specified for {table_name}. Table will have no keys.")
-
-        # Only send source-discovered keys to the create-table statement.
-        # YAML-defined keys are honoured for entity creation (create_all_entities.py)
-        # but must not be sent to generate_create_table_statement when the source
-        # agent has not discovered any primary keys.
-        source_discovered_keys = [
-            {
-                "name": col["name"],
-                "alias": col["name"],
-                "type": col.get("dataType")
-            } for col in columns["columns"] if col.get("isPK")
-        ]
-
-        # check if the table exists on the target
-        handle_table_creation(pipeline_id, target_table_name, yaml_target_schema, source_discovered_keys, token, columns, custom_config,
-                              source_node_info, target_node_info,
-                              source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
+        _create_table(ctx, table_name)
 
 
 def _to_int(value, default=0):
