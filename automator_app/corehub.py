@@ -2846,36 +2846,15 @@ def import_schedules(
     return results
 
 
-def import_users(
-    *,
-    token: str,
-    base_url: str,
-    use_ssl: Optional[bool],
-    skip_verify: Optional[bool],
-    users_data: Dict[str, Any],
-) -> Dict[str, Any]:
-    """Restore user management configuration from a previously exported dict.
+def _collect_importable_users(raw_users: List[Any]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Split the backed-up users into every non-OIDC user and those that carry a password hash.
 
-    Uses the dedicated POST /users/import endpoint (available in CoreHub 1.4+)
-    which accepts password hashes directly, restoring original passwords.
-    Falls back to per-user PUT/POST when the endpoint is unavailable.
+    Returns ``(all_users, bulk_users)``: the normalized entries of every importable user, and
+    the payload entries of ``POST /users/import`` for the users with a ``passwordHash``.
     """
-    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
-
-    users = users_data.get("users")
-    if users is None:
-        return {"status": "skipped", "reason": _REASON_NOT_PRESENT_IN_BACKUP}
-    if isinstance(users, dict) and "error" in users:
-        return {"status": "skipped", "reason": _REASON_EXPORTED_WITH_ERROR}
-
-    raw = _unwrap_value_if_needed(users)
-    if not isinstance(raw, list):
-        return {"status": "skipped", "reason": "invalid users format"}
-
-    # Collect all non-OIDC users from the backup.
-    all_users: list[dict] = []
-    bulk_users: list[dict] = []
-    for user in raw:
+    all_users: List[Dict[str, Any]] = []
+    bulk_users: List[Dict[str, Any]] = []
+    for user in raw_users:
         if not isinstance(user, dict):
             continue
         if user.get("isOidcUser"):
@@ -2904,121 +2883,200 @@ def import_users(
                 "surname": entry["surname"],
                 "email": entry["email"],
             })
+    return all_users, bulk_users
+
+
+def _bulk_import_users(token: str, bulk_users: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Restore users with their password hashes through ``POST /users/import`` (CoreHub 1.4+).
+
+    Returns the import result, or None when the endpoint is unavailable or did not
+    answer with the list of imported users, so the caller falls back to per-user restore.
+    """
+    try:
+        response = fetch_core_hub(
+            "/users/import",
+            method="POST",
+            token=token,
+            body={"users": bulk_users},
+            expected_error_statuses={404},
+        )
+        if isinstance(response, list):
+            return {
+                "status": "restored",
+                "count": len(response),
+                "note": "passwords restored from backup hashes",
+            }
+    except Exception as exc:  # pylint: disable=broad-except
+        err_str = str(exc)
+        if "404" in err_str or "Not Found" in err_str:
+            logger.info("POST /users/import not available (CoreHub < 1.4); falling back to per-user restore")
+        else:
+            logger.warning("POST /users/import failed: %s; falling back", exc)
+    return None
+
+
+def _fetch_existing_users(token: str) -> List[Any]:
+    """The users currently defined on CoreHub, or an empty list when they cannot be fetched."""
+    try:
+        existing_resp = fetch_core_hub(_USERS_PATH, token=token)
+        if isinstance(existing_resp, list):
+            return existing_resp
+        if isinstance(existing_resp, dict):
+            return existing_resp.get("users") or []
+        return []
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("Failed to fetch existing users during import: %s", exc)
+        return []
+
+
+def _existing_users_by_username(token: str) -> Dict[str, dict]:
+    """The users currently defined on CoreHub, keyed by username."""
+    return {
+        str(u.get("username")): u
+        for u in _fetch_existing_users(token)
+        if isinstance(u, dict) and u.get("username")
+    }
+
+
+def _restore_users_one_by_one(
+    token: str,
+    all_users: List[Dict[str, Any]],
+    existing_by_username: Dict[str, dict],
+) -> Tuple[int, int, List[str]]:
+    """Update the users that already exist and create the others, one request per user.
+
+    Users without a username are ignored. Returns ``(created, updated, errors)``.
+    """
+    counts = {"created": 0, "updated": 0}
+    errors: List[str] = []
+    for user in all_users:
+        if not user["username"]:
+            continue
+        outcome, error = _restore_one_user(token, user, existing_by_username)
+        if error is None:
+            counts[outcome] += 1
+        else:
+            errors.append(error)
+    return counts["created"], counts["updated"], errors
+
+
+def _restore_one_user(
+    token: str,
+    user: Dict[str, Any],
+    existing_by_username: Dict[str, dict],
+) -> Tuple[str, Optional[str]]:
+    """Update ``user`` when it already exists on CoreHub, create it otherwise.
+
+    Returns ``("updated" | "created", error)``, where error is None on success.
+    """
+    username = user["username"]
+    if username in existing_by_username:
+        existing_id = existing_by_username[username].get("id")
+        return "updated", _update_existing_user(token, existing_id, user)
+    return "created", _create_user_with_temp_password(token, user)
+
+
+def _update_existing_user(token: str, existing_id: Any, user: Dict[str, Any]) -> Optional[str]:
+    """Update the profile of an existing CoreHub user; returns an error description on failure."""
+    username = user["username"]
+    try:
+        fetch_core_hub(
+            f"{_USERS_PATH}/{existing_id}",
+            method="PUT",
+            token=token,
+            body={
+                "role": user["role"],
+                "name": user["name"],
+                "surname": user["surname"],
+                "email": user["email"],
+            },
+        )
+        return None
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("Failed to update user %s: %s", username, exc)
+        return f"update {username}: {exc}"
+
+
+def _create_user_with_temp_password(token: str, user: Dict[str, Any]) -> Optional[str]:
+    """Create a user with a random temporary password; returns an error description on failure."""
+    import secrets
+    import string
+    username = user["username"]
+    temp_password = "".join(
+        secrets.choice(string.ascii_letters + string.digits) for _ in range(16)
+    )
+    try:
+        fetch_core_hub(
+            _USERS_PATH,
+            method="POST",
+            token=token,
+            body={
+                "username": username,
+                "password": temp_password,
+                "role": user["role"],
+                "name": user["name"],
+                "surname": user["surname"],
+                "email": user["email"],
+            },
+        )
+        return None
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("Failed to create user %s: %s", username, exc)
+        return f"create {username}: {exc}"
+
+
+def import_users(
+    *,
+    token: str,
+    base_url: str,
+    use_ssl: Optional[bool],
+    skip_verify: Optional[bool],
+    users_data: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Restore user management configuration from a previously exported dict.
+
+    Uses the dedicated POST /users/import endpoint (available in CoreHub 1.4+)
+    which accepts password hashes directly, restoring original passwords.
+    Falls back to per-user PUT/POST when the endpoint is unavailable.
+    """
+    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+
+    users = users_data.get("users")
+    if users is None:
+        return {"status": "skipped", "reason": _REASON_NOT_PRESENT_IN_BACKUP}
+    if isinstance(users, dict) and "error" in users:
+        return {"status": "skipped", "reason": _REASON_EXPORTED_WITH_ERROR}
+
+    raw = _unwrap_value_if_needed(users)
+    if not isinstance(raw, list):
+        return {"status": "skipped", "reason": "invalid users format"}
+
+    # Collect all non-OIDC users from the backup.
+    all_users, bulk_users = _collect_importable_users(raw)
 
     if not all_users:
         return {"status": "skipped", "reason": "no importable users"}
 
     # Try the new bulk import endpoint first (only for users with passwordHash).
-    bulk_succeeded = False
     if bulk_users:
-        try:
-            response = fetch_core_hub(
-                "/users/import",
-                method="POST",
-                token=token,
-                body={"users": bulk_users},
-                expected_error_statuses={404},
-            )
-            if isinstance(response, list):
-                return {
-                    "status": "restored",
-                    "count": len(response),
-                    "note": "passwords restored from backup hashes",
-                }
-        except Exception as exc:  # pylint: disable=broad-except
-            err_str = str(exc)
-            if "404" in err_str or "Not Found" in err_str:
-                logger.info("POST /users/import not available (CoreHub < 1.4); falling back to per-user restore")
-            else:
-                logger.warning("POST /users/import failed: %s; falling back", exc)
+        bulk_result = _bulk_import_users(token, bulk_users)
+        if bulk_result is not None:
+            return bulk_result
 
     # Fallback: per-user PUT/POST when the import endpoint is unavailable
     # or when some users lack a passwordHash.
-    try:
-        existing_resp = fetch_core_hub(_USERS_PATH, token=token)
-        if isinstance(existing_resp, list):
-            existing_users = existing_resp
-        elif isinstance(existing_resp, dict):
-            existing_users = existing_resp.get("users") or []
-        else:
-            existing_users = []
-    except Exception as exc:  # pylint: disable=broad-except
-        logger.warning("Failed to fetch existing users during import: %s", exc)
-        existing_users = []
+    created, updated, errors = _restore_users_one_by_one(token, all_users, _existing_users_by_username(token))
 
-    existing_by_username: Dict[str, dict] = {
-        str(u.get("username")): u
-        for u in existing_users
-        if isinstance(u, dict) and u.get("username")
-    }
-
-    created = updated = skipped = 0
-    errors: list[str] = []
-
-    for user in all_users:
-        username = user["username"]
-        if not username:
-            continue
-
-        if username in existing_by_username:
-            existing_id = existing_by_username[username].get("id")
-            try:
-                fetch_core_hub(
-                    f"/users/{existing_id}",
-                    method="PUT",
-                    token=token,
-                    body={
-                        "role": user["role"],
-                        "name": user["name"],
-                        "surname": user["surname"],
-                        "email": user["email"],
-                    },
-                )
-                updated += 1
-            except Exception as exc:  # pylint: disable=broad-except
-                logger.warning("Failed to update user %s: %s", username, exc)
-                errors.append(f"update {username}: {exc}")
-        else:
-            import secrets
-            import string
-            temp_password = "".join(
-                secrets.choice(string.ascii_letters + string.digits) for _ in range(16)
-            )
-            try:
-                fetch_core_hub(
-                    _USERS_PATH,
-                    method="POST",
-                    token=token,
-                    body={
-                        "username": username,
-                        "password": temp_password,
-                        "role": user["role"],
-                        "name": user["name"],
-                        "surname": user["surname"],
-                        "email": user["email"],
-                    },
-                )
-                created += 1
-            except Exception as exc:  # pylint: disable=broad-except
-                logger.warning("Failed to create user %s: %s", username, exc)
-                errors.append(f"create {username}: {exc}")
-
-    if errors:
-        return {
-            "status": "restored",
-            "created": created,
-            "updated": updated,
-            "skipped": skipped,
-            "errors": errors,
-            "note": "passwords NOT restored; users must reset passwords via CoreHub UI",
-        }
-    return {
+    result: Dict[str, Any] = {
         "status": "restored",
         "created": created,
         "updated": updated,
-        "skipped": skipped,
-        "note": "passwords NOT restored; users must reset passwords via CoreHub UI",
+        "skipped": 0,
     }
+    if errors:
+        result["errors"] = errors
+    result["note"] = "passwords NOT restored; users must reset passwords via CoreHub UI"
+    return result
 
 
 def import_oidc_config(
