@@ -46,6 +46,14 @@ from commons import extract_schemas_from_yaml, extract_all_schemas_from_yaml, ex
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+# Core Hub API paths used more than once
+PIPELINES_PATH = '/pipelines'
+LOGIN_PATH = '/authentication/login'
+
+
+class BootstrapperError(Exception):
+    """Raised when the bootstrapper cannot authenticate or create its pipeline."""
+
 # Core hub client accessor
 def get_core_hub_client():
     global _core_hub_client
@@ -88,7 +96,7 @@ def wait_for_corehub_ready(max_retries=30, initial_delay=2):
         try:
             logger.info(f"Checking CoreHub connectivity (attempt {attempt}/{max_retries})...")
             # Simple health check - try to fetch pipelines endpoint
-            response = client.request('/pipelines', 'GET', token=None, body=None, params=None)
+            response = client.request(PIPELINES_PATH, 'GET', token=None, body=None, params=None)
             logger.info("CoreHub is ready and responding")
             return True
         except Exception as e:
@@ -540,23 +548,23 @@ def change_password(token, old_password, new_password):
     )
 
     if response != "Password changed":
-        raise Exception(f"Unexpected response from password reset: {response}")
+        raise BootstrapperError(f"Unexpected response from password reset: {response}")
 
     print("Password reset successful")
 
     # Re-authenticate with the new password to get a fresh token
     auth_response = fetch_core_hub(
-        '/authentication/login',
+        LOGIN_PATH,
         method='POST',
         body={'username': default_user, 'password': new_password}
     )
     new_token = auth_response.get('apiToken')
     if not new_token:
-        raise Exception('Failed to re-authenticate after password change')
+        raise BootstrapperError('Failed to re-authenticate after password change')
 
     change_required = auth_response.get('changeRequired', False)
     if change_required:
-        raise Exception('Password change still required after reset')
+        raise BootstrapperError('Password change still required after reset')
 
     # Save the new token
     save_token(new_token)
@@ -625,7 +633,7 @@ if True:
                         # Verify login by attempting to authenticate
                         try:
                             check_token = fetch_core_hub(
-                                '/pipelines',
+                                PIPELINES_PATH,
                                 method='GET',
                                 token=token
                             )
@@ -644,7 +652,7 @@ if True:
         if not token:
             # Initial authentication
             auth_response = fetch_core_hub(
-                '/authentication/login',
+                LOGIN_PATH,
                 method='POST',
                 body={'username': default_user, 'password': user_defined_password}
             )
@@ -652,7 +660,7 @@ if True:
             if not token:
                 log_failure(logger, "Failed to authenticate")
                 lockfile_failure()
-                raise Exception('Failed to authenticate')
+                raise BootstrapperError('Failed to authenticate')
 
             change_required = auth_response.get('changeRequired', False)
             if change_required:
@@ -667,7 +675,7 @@ if True:
                     log_failure(logger, f"Password change failed, attempting to continue with default password: {str(e)}")
                     # Try to get a fresh token with the user-defined password
                     auth_response = fetch_core_hub(
-                        '/authentication/login',
+                        LOGIN_PATH,
                         method='POST',
                         body={'username': default_user, 'password': user_defined_password}
                     )
@@ -675,7 +683,7 @@ if True:
                     if not token:
                         log_failure(logger, "Failed to re-authenticate with user-defined password")
                         lockfile_failure()
-                        raise Exception('Failed to re-authenticate with user-defined password')
+                        raise BootstrapperError('Failed to re-authenticate with user-defined password')
                     new_password = user_defined_password
             else:
                 new_password = user_defined_password
@@ -732,7 +740,7 @@ if True:
                             logger.warning(f"Retry {retry} failed: {str(retry_error)}")
                             if retry == max_retries:
                                 logger.error("All SDK authentication retries exhausted.")
-                                raise Exception("Failed to authenticate via SDK after retries")
+                                raise BootstrapperError("Failed to authenticate via SDK after retries")
             else:
                 logger.info("Successfully obtained token from Gluesync SDK.")
                 # Save the token
@@ -740,7 +748,7 @@ if True:
         except Exception as e:
             logger.error(f"Exception during SDK token retrieval: {str(e)}")
             logger.error(f"Exception type: {type(e).__name__}")
-            raise Exception(f"SDK authentication failed: {str(e)}")
+            raise BootstrapperError(f"SDK authentication failed: {str(e)}")
 
         # Use the token for CoreHubClient
         # Set the global core_hub_client using the existing get_core_hub_client function
@@ -961,7 +969,7 @@ def main():
                         # Verify the SDK token works
                         try:
                             check_token = fetch_core_hub(
-                                '/pipelines',
+                                PIPELINES_PATH,
                                 method='GET',
                                 token=sdk_token
                             )
@@ -991,7 +999,7 @@ def main():
                     # Verify login by attempting to authenticate
                     try:
                         check_token = fetch_core_hub(
-                            '/pipelines',
+                            PIPELINES_PATH,
                             method='GET',
                             token=token
                         )
@@ -1012,7 +1020,7 @@ def main():
             logger.info("Attempting authentication with default credentials")
             try:
                 auth_response = fetch_core_hub(
-                    '/authentication/login',
+                    LOGIN_PATH,
                     method='POST',
                     body={'username': default_user, 'password': user_defined_password}
                 )
@@ -1023,7 +1031,7 @@ def main():
                 if not change_required == False and not token:
                     log_failure(logger, "Failed to authenticate")
                     lockfile_failure()
-                    raise Exception('Failed to authenticate')
+                    raise BootstrapperError('Failed to authenticate')
             except Exception as e:
                 if sdk_token:
                     # If we have an SDK token but direct auth failed, use the SDK token
@@ -1045,7 +1053,7 @@ def main():
                 log_failure(logger, f"Password change failed, attempting to continue with default password: {str(e)}")
                 # Try to get a fresh token with the user-defined password
                 auth_response = fetch_core_hub(
-                    '/authentication/login',
+                    LOGIN_PATH,
                     method='POST',
                     body={'username': default_user, 'password': user_defined_password}
                 )
@@ -1053,7 +1061,7 @@ def main():
                 if not token:
                     log_failure(logger, "Failed to re-authenticate with user-defined password")
                     lockfile_failure()
-                    raise Exception('Failed to re-authenticate with user-defined password')
+                    raise BootstrapperError('Failed to re-authenticate with user-defined password')
                 new_password = user_defined_password
         else:
             new_password = user_defined_password
@@ -1080,7 +1088,7 @@ def main():
 
     # Create pipeline
     pipeline_response = fetch_core_hub(
-        '/pipelines',
+        PIPELINES_PATH,
         method='POST',
         token=token,
         body={'name': pipeline_name, 'description': pipeline_description, 'configurationCompleted': False}
@@ -1089,7 +1097,7 @@ def main():
     if not pipeline_id:
         log_failure(logger, "Failed to create pipeline")
         lockfile_failure()
-        raise Exception('Failed to create pipeline')
+        raise BootstrapperError('Failed to create pipeline')
 
     # Provision and attach SOURCE/TARGET agents directly via Core Hub.
     agents_to_conf = []
