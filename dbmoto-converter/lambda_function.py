@@ -49,6 +49,7 @@ from datetime import datetime
 from decimal import Decimal
 
 import boto3
+from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from parse_dbmoto_metadata_xml import parse_xml, export_as_yaml, write_conversion_report
@@ -56,6 +57,11 @@ from parse_dbmoto_metadata_xml import parse_xml, export_as_yaml, write_conversio
 
 sqs = boto3.client("sqs")
 dynamodb = boto3.resource("dynamodb")
+
+# S3 client for the downloads bucket, created once per Lambda container.
+# Explicit timeouts equal botocore's defaults (60 s to connect, 60 s to read).
+s3_client_config = Config(connect_timeout=60, read_timeout=60)
+s3 = boto3.client("s3", config=s3_client_config)
 
 
 def _json_default(obj):
@@ -246,7 +252,7 @@ def create_output_zip(output_dir, temp_dir):
 
 
 def _s3_client():
-    return boto3.client("s3")
+    return s3
 
 
 def _s3_bucket_and_key(remote_filename):
