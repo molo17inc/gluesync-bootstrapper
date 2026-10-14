@@ -578,7 +578,7 @@ class ExportGlobalConfigsTests(unittest.TestCase):
         self.assertIn("release_channel", result)
         self.assertIn("license", result)
         self.assertIn("session", result)
-        self.assertEqual(result["grafana"]["enabled"], True)
+        self.assertTrue(result["grafana"]["enabled"])
         self.assertEqual(result["release_channel"]["channel"], "stable")
 
     def test_gracefully_handles_failed_endpoints(self):
