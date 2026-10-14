@@ -2307,6 +2307,12 @@ function initMcpSetup() {
     messageEl.className = `form-message ${type}`.trim();
   };
 
+  const describeStatus = (info) => {
+    if (info.installed) return '— configured ✓';
+    if (info.detected) return '— detected';
+    return '— not detected';
+  };
+
   const refreshStatus = async () => {
     try {
       const res = await fetch('/api/mcp/status');
@@ -2317,11 +2323,7 @@ function initMcpSetup() {
         const statusEl = document.getElementById(`mcp-status-${client}`);
         const info = status[client] || {};
         if (statusEl) {
-          statusEl.textContent = info.installed
-            ? '— configured ✓'
-            : info.detected
-              ? '— detected'
-              : '— not detected';
+          statusEl.textContent = describeStatus(info);
         }
         if (checkbox) {
           checkbox.checked = Boolean(info.detected && !info.installed);
