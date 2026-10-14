@@ -1655,9 +1655,13 @@ def _backup_agent_identity(agent: Any) -> Optional[Tuple[Any, Any, Any, Any]]:
 
 
 def _backup_agent_key(agent_type: Any, agent_tag: Any, host_credentials: Any, raw_agent_id: Any) -> tuple:
-    """Deduplication key of an agent: its agentId when available, otherwise type, tag and connection details."""
+    """Deduplication key of an agent: its agentId when available, otherwise type, tag and connection details.
+
+    Both kinds of key have the same length; the first item keeps them apart, so an agentId key only ever
+    equals the key of the same agentId.
+    """
     if raw_agent_id is not None:
-        return ("id", str(raw_agent_id))
+        return ("id", str(raw_agent_id), "", "", "", "")
     return (
         "props",
         str(agent_type),
