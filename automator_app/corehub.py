@@ -30,6 +30,7 @@ import shutil
 import zipfile
 import tempfile
 from contextlib import redirect_stdout
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -1596,24 +1597,194 @@ def export_pipeline_yaml(
     return header + buffer.getvalue()
 
 
-def export_pipeline_full_backup(
-    *,
-    token: str,
-    base_url: str,
-    pipeline_id: str,
-    use_ssl: Optional[bool],
-    skip_verify: Optional[bool],
-    include_secrets: bool = False,
-    chronos_token: Optional[str] = None,
-) -> bytes:
-    """Export a full backup (YAML + agents-config + UDFs) for a single pipeline."""
+@dataclass
+class _PipelinesBackup:
+    """Settings of a pipelines backup ZIP and the agent configurations gathered while writing it."""
 
-    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+    token: str
+    base_url: str
+    use_ssl: Optional[bool]
+    skip_verify: Optional[bool]
+    include_secrets: bool
+    chronos_token: Optional[str]
+    skip_schedules: bool = False
+    agents: List[Dict[str, Any]] = field(default_factory=list)
+    seen_agents: set = field(default_factory=set)
+    pipelines_meta: List[Dict[str, Any]] = field(default_factory=list)
 
+
+def _backup_pipeline_meta(backup: _PipelinesBackup, pipeline_id: str, pipeline_name: str) -> Dict[str, Any]:
+    """Register a pipeline in the backup and return its metadata (agents are referenced from it later)."""
+    pipeline_meta: Dict[str, Any] = {
+        "pipelineId": pipeline_id,
+        "pipelineName": pipeline_name,
+    }
+    backup.pipelines_meta.append(pipeline_meta)
+    return pipeline_meta
+
+
+def _backup_yaml_filename(pipeline_name: str, pipeline_id: str) -> str:
+    """``backup_<name>_<pipelineId>_<timestamp>.yaml``, the name of a pipeline YAML inside a backup ZIP."""
+    safe_name = "".join(c for c in pipeline_name if c.isalnum() or c in (" ", "-", "_")).rstrip()
+    if not safe_name:
+        safe_name = pipeline_id
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"backup_{safe_name}_{pipeline_id}_{timestamp}.yaml"
+
+
+def _fetch_udf_entities(token: str, pipeline_id: str) -> Any:
+    """Entities of a pipeline, used to discover its mapping functions; empty when CoreHub fails."""
+    try:
+        return fetch_pipeline_entities(token, pipeline_id)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception(_UDF_ENTITIES_FETCH_FAILED_LOG, pipeline_id, exc)
+        return []
+
+
+def _backup_agent_identity(agent: Any) -> Optional[Tuple[Any, Any, Any, Any]]:
+    """``(agentType, agentTag, hostCredentials, agentId)`` of an agent worth backing up, else None."""
+    if not isinstance(agent, dict):
+        return None
+    agent_type = agent.get("agentType")
+    agent_tag = agent.get("agentTag")
+    host_credentials = agent.get("hostCredentials") or {}
+    raw_agent_id = agent.get("agentId") or agent.get("id")
+    if not agent_type or not agent_tag or not host_credentials:
+        return None
+    return agent_type, agent_tag, host_credentials, raw_agent_id
+
+
+def _backup_agent_key(agent_type: Any, agent_tag: Any, host_credentials: Any, raw_agent_id: Any) -> tuple:
+    """Deduplication key of an agent: its agentId when available, otherwise type, tag and connection details."""
+    if raw_agent_id is not None:
+        return ("id", str(raw_agent_id))
+    return (
+        "props",
+        str(agent_type),
+        str(agent_tag),
+        str(host_credentials.get("connectionName")),
+        str(host_credentials.get("host")),
+        str(host_credentials.get("port")),
+    )
+
+
+def _backup_agent_entry(agent: Dict[str, Any], identity: Tuple[Any, Any, Any, Any], include_secrets: bool) -> Dict[str, Any]:
+    """agents-config.yaml entry of an agent; its password is masked unless ``include_secrets``."""
+    agent_type, agent_tag, host_credentials, raw_agent_id = identity
+    export_host_credentials = dict(host_credentials)
+    if not include_secrets and "password" in export_host_credentials and export_host_credentials["password"]:
+        export_host_credentials["password"] = _MASKED_SECRET
+
+    agent_payload: Dict[str, Any] = {
+        "agentType": agent_type,
+        "agentTag": agent_tag,
+        "hostCredentials": export_host_credentials,
+        # Keep the same naming as config.json/example-config.json
+        "customHostCredentials": agent.get("customHostCredentials") or {},
+        "specificConfiguration": agent.get("specificConfiguration") or {},
+    }
+    if raw_agent_id is not None:
+        agent_payload["agentId"] = str(raw_agent_id)
+    return agent_payload
+
+
+def _collect_backup_agents(backup: _PipelinesBackup, pipeline_agents: List[Any]) -> List[Dict[str, Any]]:
+    """Add the agents of one pipeline to the backup (once each) and return the pipeline's references to them."""
+    pipeline_agent_refs: List[Dict[str, Any]] = []
+    for agent in pipeline_agents:
+        identity = _backup_agent_identity(agent)
+        if identity is None:
+            continue
+        agent_type, agent_tag, _, raw_agent_id = identity
+
+        ref: Dict[str, Any] = {
+            "agentType": agent_type,
+            "agentTag": agent_tag,
+        }
+        if raw_agent_id is not None:
+            ref["agentId"] = str(raw_agent_id)
+        pipeline_agent_refs.append(ref)
+
+        key = _backup_agent_key(*identity)
+        if key in backup.seen_agents:
+            continue
+        backup.seen_agents.add(key)
+        backup.agents.append(_backup_agent_entry(agent, identity, backup.include_secrets))
+    return pipeline_agent_refs
+
+
+def _add_backup_pipeline_agents(backup: _PipelinesBackup, pipeline_id: str, pipeline_meta: Dict[str, Any]) -> None:
+    """Collect the agents of a pipeline into the backup and reference them from the pipeline metadata."""
+    try:
+        pipeline_agents = get_pipeline_agents(backup.token, pipeline_id)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Failed to fetch agents for pipeline %s: %s", pipeline_id, exc)
+        pipeline_agents = []
+
+    if isinstance(pipeline_agents, list):
+        pipeline_agent_refs = _collect_backup_agents(backup, pipeline_agents)
+        if pipeline_agent_refs:
+            pipeline_meta["agents"] = pipeline_agent_refs
+
+
+def _annotate_masked_passwords(yaml_text: str) -> str:
+    """Append a comment to every masked password line so the obfuscation is clear to readers."""
+    yaml_text_lines = []
+    for line in yaml_text.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith("password:") and _MASKED_SECRET in stripped:
+            # Preserve indentation when appending the comment
+            line = f"{line}  # original password omitted"
+        yaml_text_lines.append(line)
+    return "\n".join(yaml_text_lines) + "\n"
+
+
+def _write_backup_agents_config(zip_file: zipfile.ZipFile, backup: _PipelinesBackup, root_prefix: str = "") -> None:
+    """Write the collected agents and the pipelines referencing them to agents-config.yaml, if any agent was found."""
+    if not backup.agents:
+        return
+    agents_payload: Dict[str, Any] = {"agents": backup.agents}
+    if backup.pipelines_meta:
+        agents_payload["pipelines"] = backup.pipelines_meta
+
+    buffer = io.StringIO()
+    yaml.safe_dump(
+        agents_payload,
+        buffer,
+        sort_keys=False,
+        allow_unicode=True,
+    )
+    zip_file.writestr(f"{root_prefix}agents-config.yaml", _annotate_masked_passwords(buffer.getvalue()))
+
+
+def _write_backup_global_notifications(zip_file: zipfile.ZipFile, backup: _PipelinesBackup, root_prefix: str = "") -> bool:
+    """Write the global notification settings (SMTP) to global-config.yaml; False when CoreHub has none."""
+    notification_cfg = fetch_global_notification_config(
+        token=backup.token,
+        base_url=backup.base_url,
+        use_ssl=backup.use_ssl,
+        skip_verify=backup.skip_verify,
+        include_secrets=backup.include_secrets,
+    )
+    if not notification_cfg:
+        return False
+    buffer = io.StringIO()
+    yaml.safe_dump(
+        {"globalNotifications": notification_cfg},
+        buffer,
+        sort_keys=False,
+        allow_unicode=True,
+    )
+    zip_file.writestr(f"{root_prefix}global-config.yaml", buffer.getvalue())
+    return True
+
+
+def _full_backup_pipeline_name(token: str, pipeline_id: str) -> str:
+    """Name of the pipeline to back up; raise PipelineInMaintenanceError when it is in maintenance mode."""
     pipeline_name = pipeline_id
     try:
         response = fetch_core_hub(f"/pipelines/{pipeline_id}", token=token)
-    except Exception as exc:  # pylint: disable=broad-except
+    except Exception:  # pylint: disable=broad-except
         logger.exception("Failed to fetch pipeline %s metadata", pipeline_id)
         raise
     if isinstance(response, dict):
@@ -1636,20 +1807,38 @@ def export_pipeline_full_backup(
                 "maintenance mode and cannot be backed up. Exit maintenance "
                 "mode on CoreHub and try again."
             )
+    return pipeline_name
+
+
+def export_pipeline_full_backup(
+    *,
+    token: str,
+    base_url: str,
+    pipeline_id: str,
+    use_ssl: Optional[bool],
+    skip_verify: Optional[bool],
+    include_secrets: bool = False,
+    chronos_token: Optional[str] = None,
+) -> bytes:
+    """Export a full backup (YAML + agents-config + UDFs) for a single pipeline."""
+
+    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+
+    pipeline_name = _full_backup_pipeline_name(token, pipeline_id)
+    backup = _PipelinesBackup(
+        token=token,
+        base_url=base_url,
+        use_ssl=use_ssl,
+        skip_verify=skip_verify,
+        include_secrets=include_secrets,
+        chronos_token=chronos_token,
+    )
 
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-        all_agents: list[dict] = []
-        seen_agents: set[tuple] = set()
-        pipelines_meta: list[dict] = []
         # Top-level folder for this pipeline inside the ZIP
         root_prefix = f"pipeline_{pipeline_id}/"
-
-        pipeline_meta: Dict[str, Any] = {
-            "pipelineId": pipeline_id,
-            "pipelineName": pipeline_name,
-        }
-        pipelines_meta.append(pipeline_meta)
+        pipeline_meta = _backup_pipeline_meta(backup, pipeline_id, pipeline_name)
 
         # Export pipeline YAML configuration. Global config is written to a
         # separate global-config.yaml below, so don't embed it here.
@@ -1663,129 +1852,18 @@ def export_pipeline_full_backup(
             include_global_config=False,
             chronos_token=chronos_token,
         )
-
-        safe_name = "".join(c for c in pipeline_name if c.isalnum() or c in (" ", "-", "_")).rstrip()
-        if not safe_name:
-            safe_name = pipeline_id
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{root_prefix}backup_{safe_name}_{pipeline_id}_{timestamp}.yaml"
-        zip_file.writestr(filename, yaml_content)
+        zip_file.writestr(f"{root_prefix}{_backup_yaml_filename(pipeline_name, pipeline_id)}", yaml_content)
         logger.info("Exported pipeline %s (%s) YAML", pipeline_name, pipeline_id)
 
         # Discover mapping functions (UDFs) referenced by this pipeline
-        try:
-            entities = fetch_pipeline_entities(token, pipeline_id)
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.exception(_UDF_ENTITIES_FETCH_FAILED_LOG, pipeline_id, exc)
-            entities = []
-        udfs_to_export = discover_udfs_from_entities(entities)
+        udfs_to_export = discover_udfs_from_entities(_fetch_udf_entities(token, pipeline_id))
 
-        # Collect agents for this pipeline
-        try:
-            pipeline_agents = get_pipeline_agents(token, pipeline_id)
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.exception("Failed to fetch agents for pipeline %s: %s", pipeline_id, exc)
-            pipeline_agents = []
-
-        if isinstance(pipeline_agents, list):
-            pipeline_agent_refs: list[dict] = []
-            for agent in pipeline_agents:
-                if not isinstance(agent, dict):
-                    continue
-
-                agent_type = agent.get("agentType")
-                agent_tag = agent.get("agentTag")
-                host_credentials = agent.get("hostCredentials") or {}
-                raw_agent_id = agent.get("agentId") or agent.get("id")
-
-                if not agent_type or not agent_tag or not host_credentials:
-                    continue
-
-                ref: Dict[str, Any] = {
-                    "agentType": agent_type,
-                    "agentTag": agent_tag,
-                }
-                if raw_agent_id is not None:
-                    ref["agentId"] = str(raw_agent_id)
-                pipeline_agent_refs.append(ref)
-
-                if raw_agent_id is not None:
-                    key = ("id", str(raw_agent_id))
-                else:
-                    key = (
-                        "props",
-                        str(agent_type),
-                        str(agent_tag),
-                        str(host_credentials.get("connectionName")),
-                        str(host_credentials.get("host")),
-                        str(host_credentials.get("port")),
-                    )
-                if key in seen_agents:
-                    continue
-                seen_agents.add(key)
-
-                export_host_credentials = dict(host_credentials)
-                if not include_secrets and "password" in export_host_credentials and export_host_credentials["password"]:
-                    export_host_credentials["password"] = _MASKED_SECRET
-
-                agent_payload: Dict[str, Any] = {
-                    "agentType": agent_type,
-                    "agentTag": agent_tag,
-                    "hostCredentials": export_host_credentials,
-                    "customHostCredentials": agent.get("customHostCredentials") or {},
-                    "specificConfiguration": agent.get("specificConfiguration") or {},
-                }
-                if raw_agent_id is not None:
-                    agent_payload["agentId"] = str(raw_agent_id)
-                all_agents.append(agent_payload)
-
-            if pipeline_agent_refs:
-                pipeline_meta["agents"] = pipeline_agent_refs
-
-        if all_agents:
-            agents_payload: Dict[str, Any] = {"agents": all_agents}
-            if pipelines_meta:
-                agents_payload["pipelines"] = pipelines_meta
-
-            buffer = io.StringIO()
-            yaml.safe_dump(
-                agents_payload,
-                buffer,
-                sort_keys=False,
-                allow_unicode=True,
-            )
-
-            yaml_text_lines = []
-            for line in buffer.getvalue().splitlines():
-                stripped = line.lstrip()
-                if stripped.startswith("password:") and _MASKED_SECRET in stripped:
-                    line = f"{line}  # original password omitted"
-                yaml_text_lines.append(line)
-
-            yaml_text = "\n".join(yaml_text_lines) + "\n"
-            zip_file.writestr(f"{root_prefix}agents-config.yaml", yaml_text)
+        _add_backup_pipeline_agents(backup, pipeline_id, pipeline_meta)
+        _write_backup_agents_config(zip_file, backup, root_prefix)
 
         # Export global notification settings (SMTP)
         try:
-            notification_cfg = fetch_global_notification_config(
-                token=token,
-                base_url=base_url,
-                use_ssl=use_ssl,
-                skip_verify=skip_verify,
-                include_secrets=include_secrets,
-            )
-            if notification_cfg:
-                buffer = io.StringIO()
-                yaml.safe_dump(
-                    {"globalNotifications": notification_cfg},
-                    buffer,
-                    sort_keys=False,
-                    allow_unicode=True,
-                )
-                zip_file.writestr(
-                    f"{root_prefix}global-config.yaml",
-                    buffer.getvalue(),
-                )
+            if _write_backup_global_notifications(zip_file, backup, root_prefix):
                 logger.info(
                     "Exported global notification config for pipeline %s",
                     pipeline_id,
@@ -1808,6 +1886,98 @@ def export_pipeline_full_backup(
 
     zip_buffer.seek(0)
     return zip_buffer.read()
+
+
+def _export_pipeline_into_backup(
+    zip_file: zipfile.ZipFile,
+    backup: _PipelinesBackup,
+    pipeline_id: str,
+    pipeline_name: str,
+    udfs_to_export: Dict[Tuple[str, str], Dict[str, Any]],
+) -> None:
+    """Add one pipeline to an all-pipelines backup: its YAML, its mapping functions and its agents."""
+    pipeline_meta = _backup_pipeline_meta(backup, pipeline_id, pipeline_name)
+
+    try:
+        # Export individual pipeline
+        yaml_content = export_pipeline_yaml(
+            token=backup.token,
+            base_url=backup.base_url,
+            pipeline_id=pipeline_id,
+            use_ssl=backup.use_ssl,
+            skip_verify=backup.skip_verify,
+            skip_schedules=backup.skip_schedules,
+            include_secrets=backup.include_secrets,
+            include_global_config=False,
+            chronos_token=backup.chronos_token,
+        )
+        zip_file.writestr(_backup_yaml_filename(pipeline_name, pipeline_id), yaml_content)
+        logger.info("Exported pipeline %s (%s)", pipeline_name, pipeline_id)
+
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Failed to export pipeline %s: %s", pipeline_id, exc)
+        # Continue with other pipelines
+
+    # Discover mapping functions (UDFs) referenced by this pipeline so we can
+    # export their source code once per (pipeline, udfName) pair.
+    entities = _fetch_udf_entities(backup.token, pipeline_id)
+    for udf_name, meta in discover_udfs_from_entities(entities).items():
+        udfs_to_export.setdefault((pipeline_id, udf_name), meta)
+
+    _add_backup_pipeline_agents(backup, pipeline_id, pipeline_meta)
+
+
+def _write_all_pipelines_udf_sources(
+    zip_file: zipfile.ZipFile,
+    token: str,
+    udfs_to_export: Dict[Tuple[str, str], Dict[str, Any]],
+) -> None:
+    """Write the source of every discovered mapping function under ``udf-<agentId>/`` in the ZIP."""
+    for (pipeline_id, udf_name), meta in udfs_to_export.items():
+        for udf_filename, code in _udf_source_files(
+            token=token,
+            pipeline_id=pipeline_id,
+            udfs_to_export={udf_name: meta},
+        ):
+            # Store source code as UTF-8 text inside the ZIP
+            zip_file.writestr(udf_filename, code.encode("utf-8"))
+
+
+def _write_skipped_maintenance_note(
+    zip_file: zipfile.ZipFile,
+    skipped_maintenance: List[str],
+    exported_count: int,
+) -> None:
+    """Log how the backup went and list in the ZIP the pipelines skipped because of maintenance mode."""
+    if not skipped_maintenance:
+        logger.info(
+            "Backup completed: %d pipeline(s) exported, none in maintenance mode.",
+            exported_count,
+        )
+        return
+
+    # Leave a clear, human-readable trace of any pipeline that was excluded
+    # from the backup because it was in maintenance mode. This makes the
+    # skip visible to operators who inspect the backup archive without
+    # having to dig through server logs.
+    skipped_lines = [
+        "# The following pipelines were in maintenance mode at backup "
+        "# time and have been excluded from this archive.",
+        "# Exit maintenance mode on CoreHub and run the backup again to "
+        "# include them.",
+        "",
+    ]
+    skipped_lines.extend(f"- {name}" for name in skipped_maintenance)
+    zip_file.writestr(
+        "skipped-maintenance-pipelines.txt",
+        ("\n".join(skipped_lines) + "\n").encode("utf-8"),
+    )
+    logger.warning(
+        "Backup completed but %d pipeline(s) were skipped because they "
+        "are in maintenance mode: %s",
+        len(skipped_maintenance),
+        ", ".join(skipped_maintenance),
+    )
 
 
 def export_all_pipelines_yaml(
@@ -1838,20 +2008,26 @@ def export_all_pipelines_yaml(
         skip_verify=skip_verify,
     )
 
+    # Accumulate agent configurations across pipelines
+    backup = _PipelinesBackup(
+        token=token,
+        base_url=base_url,
+        use_ssl=use_ssl,
+        skip_verify=skip_verify,
+        include_secrets=include_secrets,
+        chronos_token=chronos_token,
+        skip_schedules=skip_schedules,
+    )
+
     # Create ZIP file in memory
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-        # Accumulate agent configurations across pipelines
-        all_agents: list[dict] = []
-        seen_agents: set[tuple] = set()
-        pipelines_meta: list[dict] = []
+        # Mapping functions (UDFs) referenced by entities, exported once per
+        # (pipeline, udfName) pair.
+        # Key: (pipeline_id, udf_name) -> {"name": str, "type": Optional[Any], "agentId": Optional[str]}
+        udfs_to_export: Dict[Tuple[str, str], Dict[str, Any]] = {}
 
-        # Track mapping functions (UDFs) referenced by entities so we can export
-        # their source code once per (pipeline, udfName) pair.
-        # Key: (pipeline_id, udf_name) -> {"name": str, "type": Optional[Any]}
-        udfs_to_export: Dict[tuple[str, str], Dict[str, Any]] = {}
-
-        skipped_maintenance: list[str] = []
+        skipped_maintenance: List[str] = []
 
         for pipeline in pipelines:
             pipeline_id = pipeline['id']
@@ -1873,213 +2049,15 @@ def export_all_pipelines_yaml(
                 )
                 continue
 
-            pipeline_meta: Dict[str, Any] = {
-                "pipelineId": pipeline_id,
-                "pipelineName": pipeline_name,
-            }
-            pipelines_meta.append(pipeline_meta)
-
-            try:
-                # Export individual pipeline
-                yaml_content = export_pipeline_yaml(
-                    token=token,
-                    base_url=base_url,
-                    pipeline_id=pipeline_id,
-                    use_ssl=use_ssl,
-                    skip_verify=skip_verify,
-                    skip_schedules=skip_schedules,
-                    include_secrets=include_secrets,
-                    include_global_config=False,
-                    chronos_token=chronos_token,
-                )
-
-                # Create filename with pipeline name if available
-                safe_name = "".join(c for c in pipeline_name if c.isalnum() or c in (' ', '-', '_')).rstrip()
-                if not safe_name:
-                    safe_name = pipeline_id
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = f"backup_{safe_name}_{pipeline_id}_{timestamp}.yaml"
-
-                # Add to ZIP
-                zip_file.writestr(filename, yaml_content)
-                logger.info("Exported pipeline %s (%s)", pipeline_name, pipeline_id)
-
-            except Exception as exc:  # pylint: disable=broad-except
-                logger.exception("Failed to export pipeline %s: %s", pipeline_id, exc)
-                # Continue with other pipelines
-
-            # Discover mapping functions (UDFs) referenced by this pipeline so we
-            # can export their source code as part of the full backup.
-            try:
-                entities = fetch_pipeline_entities(token, pipeline_id)
-            except Exception as exc:  # pylint: disable=broad-except
-                logger.exception(_UDF_ENTITIES_FETCH_FAILED_LOG, pipeline_id, exc)
-                entities = []
-
-            if isinstance(entities, list):
-                for ent in entities:
-                    if not isinstance(ent, dict):
-                        continue
-
-                    # Find the target agent entity for this logical entity
-                    target_ae: Optional[Dict[str, Any]] = None
-                    for ae in ent.get("agentEntities", []) or []:
-                        et = ae.get("entityType") or {}
-                        if et.get("type") == "Target":
-                            target_ae = ae
-                            break
-                    if not target_ae:
-                        continue
-
-                    target_et = target_ae.get("entityType") or {}
-
-                    # Preferred: single mappingFunctionInfo entry
-                    mf_info = target_et.get("mappingFunctionInfo")
-                    if isinstance(mf_info, dict):
-                        udf_name = mf_info.get("name")
-                        if udf_name:
-                            key = (pipeline_id, str(udf_name))
-                            if key not in udfs_to_export:
-                                raw_agent_id = target_ae.get("agentId") or target_ae.get("id")
-                                udfs_to_export[key] = {
-                                    "name": str(udf_name),
-                                    "type": mf_info.get("type"),
-                                    "agentId": str(raw_agent_id) if raw_agent_id is not None else None,
-                                }
-                        continue
-
-                    # Backwards-compat: array-style "udf" configuration on entityType
-                    udf_cfg = target_et.get("udf") or []
-                    if isinstance(udf_cfg, list):
-                        for udf in udf_cfg:
-                            if not isinstance(udf, dict):
-                                continue
-                            udf_name = udf.get("name")
-                            if not udf_name:
-                                continue
-                            key = (pipeline_id, str(udf_name))
-                            if key in udfs_to_export:
-                                continue
-                            raw_agent_id = target_ae.get("agentId") or target_ae.get("id")
-                            udfs_to_export[key] = {
-                                "name": str(udf_name),
-                                "type": udf.get("type"),
-                                "agentId": str(raw_agent_id) if raw_agent_id is not None else None,
-                            }
-
-            # Try to collect agents for this pipeline
-            try:
-                pipeline_agents = get_pipeline_agents(token, pipeline_id)
-            except Exception as exc:  # pylint: disable=broad-except
-                logger.exception("Failed to fetch agents for pipeline %s: %s", pipeline_id, exc)
-                pipeline_agents = []
-
-            if isinstance(pipeline_agents, list):
-                # Per-pipeline agent references (by type/tag)
-                pipeline_agent_refs: list[dict] = []
-                for agent in pipeline_agents:
-                    if not isinstance(agent, dict):
-                        continue
-
-                    agent_type = agent.get("agentType")
-                    agent_tag = agent.get("agentTag")
-                    host_credentials = agent.get("hostCredentials") or {}
-                    raw_agent_id = agent.get("agentId") or agent.get("id")
-
-                    if not agent_type or not agent_tag or not host_credentials:
-                        continue
-
-                    # Add lightweight reference for this pipeline
-                    ref: Dict[str, Any] = {
-                        "agentType": agent_type,
-                        "agentTag": agent_tag,
-                    }
-                    if raw_agent_id is not None:
-                        ref["agentId"] = str(raw_agent_id)
-                    pipeline_agent_refs.append(ref)
-
-                    # Deduplicate primarily by agentId when available, otherwise by
-                    # a composite key of type, tag and basic connection details
-                    if raw_agent_id is not None:
-                        key = ("id", str(raw_agent_id))
-                    else:
-                        key = (
-                            "props",
-                            str(agent_type),
-                            str(agent_tag),
-                            str(host_credentials.get("connectionName")),
-                            str(host_credentials.get("host")),
-                            str(host_credentials.get("port")),
-                        )
-                    if key in seen_agents:
-                        continue
-                    seen_agents.add(key)
-
-                    # Mask secrets when exporting, unless include_secrets is True
-                    masked_host_credentials = dict(host_credentials)
-                    if not include_secrets and "password" in masked_host_credentials and masked_host_credentials["password"]:
-                        masked_host_credentials["password"] = _MASKED_SECRET
-
-                    agent_payload: Dict[str, Any] = {
-                        "agentType": agent_type,
-                        "agentTag": agent_tag,
-                        "hostCredentials": masked_host_credentials,
-                        # Keep the same naming as config.json/example-config.json
-                        "customHostCredentials": agent.get("customHostCredentials") or {},
-                        "specificConfiguration": agent.get("specificConfiguration") or {},
-                    }
-                    if raw_agent_id is not None:
-                        agent_payload["agentId"] = str(raw_agent_id)
-                    all_agents.append(agent_payload)
-
-                if pipeline_agent_refs:
-                    pipeline_meta["agents"] = pipeline_agent_refs
+            _export_pipeline_into_backup(zip_file, backup, pipeline_id, pipeline_name, udfs_to_export)
 
         # After processing all pipelines, write a consolidated agents-config.yaml
         # if any agents were found, and export UDF source files when present.
-        if all_agents:
-            agents_payload: Dict[str, Any] = {"agents": all_agents}
-            if pipelines_meta:
-                agents_payload["pipelines"] = pipelines_meta
-
-            buffer = io.StringIO()
-            yaml.safe_dump(
-                agents_payload,
-                buffer,
-                sort_keys=False,
-                allow_unicode=True,
-            )
-
-            # Add inline comments to make password obfuscation clear
-            yaml_text_lines = []
-            for line in buffer.getvalue().splitlines():
-                stripped = line.lstrip()
-                if stripped.startswith("password:") and _MASKED_SECRET in stripped:
-                    # Preserve indentation when appending the comment
-                    line = f"{line}  # original password omitted"
-                yaml_text_lines.append(line)
-
-            yaml_text = "\n".join(yaml_text_lines) + "\n"
-            zip_file.writestr("agents-config.yaml", yaml_text)
+        _write_backup_agents_config(zip_file, backup)
 
         # Export global notification settings (SMTP) once for the whole backup.
         try:
-            notification_cfg = fetch_global_notification_config(
-                token=token,
-                base_url=base_url,
-                use_ssl=use_ssl,
-                skip_verify=skip_verify,
-                include_secrets=include_secrets,
-            )
-            if notification_cfg:
-                buffer = io.StringIO()
-                yaml.safe_dump(
-                    {"globalNotifications": notification_cfg},
-                    buffer,
-                    sort_keys=False,
-                    allow_unicode=True,
-                )
-                zip_file.writestr("global-config.yaml", buffer.getvalue())
+            if _write_backup_global_notifications(zip_file, backup):
                 logger.info("Exported global notification config to all-pipelines backup")
         except Exception as exc:  # pylint: disable=broad-except
             logger.warning(
@@ -2087,96 +2065,8 @@ def export_all_pipelines_yaml(
                 exc,
             )
 
-        # Export mapping function (UDF) source files, if any were discovered.
-        for (pipeline_id, udf_name), meta in udfs_to_export.items():
-            try:
-                response = fetch_core_hub(
-                    f"/pipelines/{pipeline_id}/config/entities/mapping-functions/{udf_name}",
-                    token=token,
-                )
-            except Exception as exc:  # pylint: disable=broad-except
-                logger.exception("Failed to fetch mapping function %s for pipeline %s: %s", udf_name, pipeline_id, exc)
-                continue
-
-            if not isinstance(response, dict):
-                logger.warning(
-                    "Unexpected response while fetching mapping function %s for pipeline %s: %r",
-                    udf_name,
-                    pipeline_id,
-                    response,
-                )
-                continue
-
-            code = response.get("code")
-            mf_type = response.get("type") or meta.get("type")
-            if not isinstance(code, str) or not code:
-                logger.warning("Mapping function %s for pipeline %s has no code to export", udf_name, pipeline_id)
-                continue
-
-            # Determine file extension based on mapping function type.
-            # Mapping aligned with MappingFunctionsType in CoreHub:
-            # - Java      -> .java
-            # - Kotlin    -> .kt
-            # - Python    -> .js
-            # - Javascript-> .py
-            # - Ruby      -> .rb
-            ext = ".java"
-            if isinstance(mf_type, str):
-                t = mf_type.lower()
-                if t == "java":
-                    ext = ".java"
-                elif t == "kotlin":
-                    ext = ".kt"
-                elif t == "python":
-                    ext = ".js"
-                elif t == "javascript":
-                    ext = ".py"
-                elif t == "ruby":
-                    ext = ".rb"
-
-            safe_udf_name = "".join(c for c in str(udf_name) if c.isalnum() or c in ("_", "-")) or "udf"
-            # Place each UDF under a folder named 'udf-<agentId>', with the file
-            # named as the UDF name plus extension so it can be reused with the
-            # UDF_PATH-based lookup used by create_user_defined_functions.
-            agent_id = meta.get("agentId")
-            if agent_id is not None:
-                safe_agent_id = "".join(c for c in str(agent_id) if c.isalnum() or c in ("_", "-")) or "unknown"
-                folder = f"udf-{safe_agent_id}"
-            else:
-                folder = "udf-unknown"
-            udf_filename = f"{folder}/{safe_udf_name}{ext}"
-
-            # Store source code as UTF-8 text inside the ZIP
-            zip_file.writestr(udf_filename, code.encode("utf-8"))
-
-        # Leave a clear, human-readable trace of any pipeline that was excluded
-        # from the backup because it was in maintenance mode. This makes the
-        # skip visible to operators who inspect the backup archive without
-        # having to dig through server logs.
-        if skipped_maintenance:
-            skipped_lines = [
-                "# The following pipelines were in maintenance mode at backup "
-                "# time and have been excluded from this archive.",
-                "# Exit maintenance mode on CoreHub and run the backup again to "
-                "# include them.",
-                "",
-            ]
-            skipped_lines.extend(f"- {name}" for name in skipped_maintenance)
-            zip_file.writestr(
-                "skipped-maintenance-pipelines.txt",
-                ("\n".join(skipped_lines) + "\n").encode("utf-8"),
-            )
-            logger.warning(
-                "Backup completed but %d pipeline(s) were skipped because they "
-                "are in maintenance mode: %s",
-                len(skipped_maintenance),
-                ", ".join(skipped_maintenance),
-            )
-        else:
-            logger.info(
-                "Backup completed: %d pipeline(s) exported, none in maintenance mode.",
-                len(pipelines_meta),
-            )
+        _write_all_pipelines_udf_sources(zip_file, token, udfs_to_export)
+        _write_skipped_maintenance_note(zip_file, skipped_maintenance, len(backup.pipelines_meta))
 
     zip_buffer.seek(0)
     return zip_buffer.read()
