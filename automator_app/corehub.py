@@ -32,7 +32,7 @@ import tempfile
 from contextlib import redirect_stdout
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urljoin
 
 import requests
@@ -1143,6 +1143,46 @@ def _mapping_function_extension(mf_type: Optional[Any]) -> str:
     return ext
 
 
+def _target_agent_entity(entity: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Return the first agentEntity of ``entity`` whose entityType is Target, if any."""
+    for ae in entity.get("agentEntities", []) or []:
+        et = ae.get("entityType") or {}
+        if et.get("type") == "Target":
+            return ae
+    return None
+
+
+def _referenced_udfs(target_et: Dict[str, Any]) -> List[Tuple[Any, Any]]:
+    """``(name, type)`` of the UDFs a Target entityType refers to, in declaration order.
+
+    ``mappingFunctionInfo`` wins when present; otherwise the legacy ``udf`` array is used.
+    Entries without a name are ignored.
+    """
+    mf_info = target_et.get("mappingFunctionInfo")
+    if isinstance(mf_info, dict):
+        udf_name = mf_info.get("name")
+        return [(udf_name, mf_info.get("type"))] if udf_name else []
+
+    udf_cfg = target_et.get("udf") or []
+    if not isinstance(udf_cfg, list):
+        return []
+    return [
+        (udf.get("name"), udf.get("type"))
+        for udf in udf_cfg
+        if isinstance(udf, dict) and udf.get("name")
+    ]
+
+
+def _udf_export_entry(target_ae: Dict[str, Any], udf_name: Any, udf_type: Any) -> Dict[str, Any]:
+    """Describe one UDF to export: its name, type and the agentId of its Target agent."""
+    raw_agent_id = target_ae.get("agentId") or target_ae.get("id")
+    return {
+        "name": str(udf_name),
+        "type": udf_type,
+        "agentId": str(raw_agent_id) if raw_agent_id is not None else None,
+    }
+
+
 def discover_udfs_from_entities(
     entities: Any,
 ) -> Dict[str, Dict[str, Any]]:
@@ -1160,48 +1200,15 @@ def discover_udfs_from_entities(
         if not isinstance(ent, dict):
             continue
 
-        target_ae: Optional[Dict[str, Any]] = None
-        for ae in ent.get("agentEntities", []) or []:
-            et = ae.get("entityType") or {}
-            if et.get("type") == "Target":
-                target_ae = ae
-                break
+        target_ae = _target_agent_entity(ent)
         if not target_ae:
             continue
 
         target_et = target_ae.get("entityType") or {}
-
-        mf_info = target_et.get("mappingFunctionInfo")
-        if isinstance(mf_info, dict):
-            udf_name = mf_info.get("name")
-            if udf_name:
-                key = str(udf_name)
-                if key not in udfs_to_export:
-                    raw_agent_id = target_ae.get("agentId") or target_ae.get("id")
-                    udfs_to_export[key] = {
-                        "name": str(udf_name),
-                        "type": mf_info.get("type"),
-                        "agentId": str(raw_agent_id) if raw_agent_id is not None else None,
-                    }
-            continue
-
-        udf_cfg = target_et.get("udf") or []
-        if isinstance(udf_cfg, list):
-            for udf in udf_cfg:
-                if not isinstance(udf, dict):
-                    continue
-                udf_name = udf.get("name")
-                if not udf_name:
-                    continue
-                key = str(udf_name)
-                if key in udfs_to_export:
-                    continue
-                raw_agent_id = target_ae.get("agentId") or target_ae.get("id")
-                udfs_to_export[key] = {
-                    "name": str(udf_name),
-                    "type": udf.get("type"),
-                    "agentId": str(raw_agent_id) if raw_agent_id is not None else None,
-                }
+        for udf_name, udf_type in _referenced_udfs(target_et):
+            key = str(udf_name)
+            if key not in udfs_to_export:
+                udfs_to_export[key] = _udf_export_entry(target_ae, udf_name, udf_type)
 
     return udfs_to_export
 
