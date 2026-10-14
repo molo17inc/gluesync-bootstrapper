@@ -468,6 +468,45 @@ def _target_keys_to_export(relations: Dict[str, Any], source_columns: List[Dict[
     return stored if set(stored) != inherited and stored else []
 
 
+def _target_columns_by_id(ordered_target: List[Tuple[int, Dict[str, Any]]]) -> Dict[Any, Dict[str, Any]]:
+    """Target columns by id, logging the first few of them."""
+    target_by_id = {}
+    for idx, (_, tcol) in enumerate(ordered_target):
+        tid = tcol.get("id")
+        tname = tcol.get("name")
+        if tid is not None:
+            target_by_id[tid] = tcol
+            if idx < 3:  # Log only first 3 to avoid spam
+                logger.info(f"Target column: id={tid}, name={tname}")
+    return target_by_id
+
+
+def _matrix_target_column_id(columns_mapping_matrix: List[Dict[str, Any]], source_id: Any) -> Any:
+    """Target column id of the first pair of the mapping matrix that names source column ``source_id``."""
+    for mapping in columns_mapping_matrix:
+        if mapping.get("sourceColumnId") == source_id:
+            return mapping.get("targetColumnId")
+    return None
+
+
+def _positional_target_column(
+    ordered_target: List[Tuple[int, Dict[str, Any]]],
+    col_index: int,
+    source_name: str,
+    source_table_name: str,
+) -> Optional[Dict[str, Any]]:
+    """Fallback: pair source/target columns by order when mapping matrix missing."""
+    target_col = None
+    target_idx = col_index - 1
+    if target_idx < len(ordered_target):
+        _, target_col = ordered_target[target_idx]
+        if target_col.get("name", source_name) != source_name:
+            logger.info(f"Fallback column mapping by position: {source_name} -> {target_col.get('name')}")
+    if col_index == 1:
+        logger.info(f"No columnsMappingMatrix for {source_table_name}; using positional fallback")
+    return target_col
+
+
 def _legacy_mapping_rows(
     columns_mapping_matrix: List[Dict[str, Any]],
     ordered_source: List[Tuple[int, Dict[str, Any]]],
@@ -480,14 +519,7 @@ def _legacy_mapping_rows(
     matrix at all, source and target columns are paired by position.
     """
     has_mapping_matrix = len(columns_mapping_matrix) > 0
-    target_by_id = {}
-    for idx, (_, tcol) in enumerate(ordered_target):
-        tid = tcol.get("id")
-        tname = tcol.get("name")
-        if tid is not None:
-            target_by_id[tid] = tcol
-            if idx < 3:  # Log only first 3 to avoid spam
-                logger.info(f"Target column: id={tid}, name={tname}")
+    target_by_id = _target_columns_by_id(ordered_target)
 
     column_mappings = []
     # Use index in sorted array as ordinalPosition (1-based)
@@ -498,12 +530,7 @@ def _legacy_mapping_rows(
             continue
 
         # Find corresponding target column ID from mapping matrix
-        target_col_id = None
-        if has_mapping_matrix:
-            for mapping in columns_mapping_matrix:
-                if mapping.get("sourceColumnId") == source_id:
-                    target_col_id = mapping.get("targetColumnId")
-                    break
+        target_col_id = _matrix_target_column_id(columns_mapping_matrix, source_id)
 
         target_col = None
         if target_col_id is not None and target_col_id in target_by_id:
@@ -511,14 +538,7 @@ def _legacy_mapping_rows(
             if target_col.get("name", source_name) != source_name:
                 logger.info(f"Column mapping: {source_name} -> {target_col.get('name')}")
         elif not has_mapping_matrix:
-            # Fallback: pair source/target columns by order when mapping matrix missing
-            target_idx = col_index - 1
-            if target_idx < len(ordered_target):
-                _, target_col = ordered_target[target_idx]
-                if target_col.get("name", source_name) != source_name:
-                    logger.info(f"Fallback column mapping by position: {source_name} -> {target_col.get('name')}")
-            if col_index == 1:
-                logger.info(f"No columnsMappingMatrix for {source_table_name}; using positional fallback")
+            target_col = _positional_target_column(ordered_target, col_index, source_name, source_table_name)
         elif col_index == 1:  # Log only once when matrix exists but id missing
             logger.info(f"No target mapping found for {source_name} (using same name)")
 
@@ -565,6 +585,307 @@ def _source_custom_properties(source_ae: Dict[str, Any]) -> Dict[str, Any]:
     return {k: v for k, v in settings.items() if k not in _SOURCE_EXCLUDED_SETTINGS}
 
 
+def _single_source_location(entity_name: str, source_table: Dict[str, Any]) -> Tuple[Any, Any]:
+    """Source schema and table name of a SingleTable/NoSqlEntity entity.
+
+    Fallbacks from entityName if table metadata missing. Split at the first dot only so table names that
+    themselves contain dots (e.g. "my.table") are preserved intact.
+    """
+    source_schema = source_table.get("schema")
+    source_table_name = source_table.get("name")
+    if not source_schema or not source_table_name:
+        parts = entity_name.split(".", 1)
+        if len(parts) >= 2:
+            source_schema = source_schema or parts[0]
+            source_table_name = source_table_name or parts[-1]
+    return source_schema, source_table_name
+
+
+def _single_target_location(
+    target_table: Dict[str, Any],
+    target_entity_object: Dict[str, Any],
+    source_schema: str,
+    source_table_name: str,
+) -> Tuple[Any, Any]:
+    """Target schema and table name, checking both table and entityObject (the source ones by default)."""
+    target_schema = target_table.get("schema") or target_entity_object.get("scope") or source_schema
+    # For NoSQL, collection name is in entityObject.collection, for SQL it's in table.name
+    target_table_name = target_table.get("name") or target_entity_object.get("collection") or source_table_name
+    return target_schema, target_table_name
+
+
+def _is_custom_group(group_id: Any) -> bool:
+    """Whether an entity belongs to a group of its own (not the default one)."""
+    return bool(group_id and group_id != "_default")
+
+
+def _schema_cfg_for(schemas: Dict[str, Dict[str, Any]], source_schema: str, target_schema: str) -> Dict[str, Any]:
+    """The configuration of ``source_schema``, created onto ``target_schema`` when it does not exist yet."""
+    schema_cfg = schemas.get(source_schema)
+    if not schema_cfg:
+        schema_cfg = init_schema_cfg(target_schema)
+        schemas[source_schema] = schema_cfg
+    return schema_cfg
+
+
+def _unique_table_key(schema_cfg: Dict[str, Any], source_schema: str, source_table_name: str, entity_name: str) -> str:
+    """The YAML key of a source table: its name, or ``name@@N`` when another entity already reads that table."""
+    custom_tables: Dict[str, Any] = schema_cfg["tables"]["custom"]
+    existing_table_cfg = custom_tables.get(source_table_name)
+    if not existing_table_cfg:
+        return source_table_name
+    # Table already exists - check if it's a duplicate with different config
+    existing_entity_name = existing_table_cfg.get("entityName", "")
+    if not existing_entity_name or existing_entity_name == entity_name:
+        return source_table_name
+    # This is a duplicate table with different entity - create unique key
+    # Use @@ as separator to avoid conflicts with tables that have underscores
+    suffix_num = 2
+    while f"{source_table_name}@@{suffix_num}" in custom_tables:
+        suffix_num += 1
+    table_key = f"{source_table_name}@@{suffix_num}"
+    logger.warning(
+        f"Duplicate source table detected: {source_schema}.{source_table_name} "
+        f"used in multiple entities ({existing_entity_name}, {entity_name}). "
+        f"Creating separate entry as '{table_key}'"
+    )
+    # Mark schema as having duplicates for later splitting
+    schema_cfg.setdefault("has_duplicates", []).append({
+        "original_table": source_table_name,
+        "unique_key": table_key,
+        "entity_name": entity_name
+    })
+    return table_key
+
+
+def _single_table_keys(source_ae: Dict[str, Any]) -> List[str]:
+    """Keys: prefer the legacy 'keys' array if present (older CoreHub versions),
+    otherwise derive from columns where isPK == true (2.2.6.0+ column model)."""
+    keys: List[str] = []
+    for key in source_ae.get("keys", []) or []:
+        name = key.get("name")
+        if name:
+            keys.append(name)
+    if not keys:
+        keys = _keys_from_columns(source_ae.get("columns", []) or [])
+    return keys
+
+
+def _export_where_clause(
+    table_cfg: Dict[str, Any],
+    source_ae: Dict[str, Any],
+    source_schema: str,
+    table_name: str,
+    label: str,
+) -> None:
+    """Extract whereClause from source tablesProperties of ``source_schema.table_name``."""
+    source_tables_properties = source_ae.get("tablesProperties", {}) or {}
+    source_table_key = f"{source_schema}.{table_name}"
+    table_properties = source_tables_properties.get(source_table_key, {}) or {}
+    if "whereClause" in table_properties and table_properties["whereClause"]:
+        where_clause = table_properties["whereClause"]
+        table_cfg["whereClause"] = str(where_clause)
+        logger.debug(f"Exported whereClause for {label}: {where_clause}")
+
+
+def _export_single_column_mappings(
+    table_cfg: Dict[str, Any],
+    source_ae: Dict[str, Any],
+    target_ae: Dict[str, Any],
+    source_table_name: str,
+) -> None:
+    """Columns: Export source->target column mappings (and the target keys of a Gluesync 2.3 matrix)."""
+    source_columns = source_ae.get("columns", []) or []
+    target_columns = target_ae.get("columns", []) or []
+    if not (source_columns and target_columns):
+        return
+
+    # Sort both source and target columns by their position in the table
+    ordered_source = _columns_in_table_order(source_columns)
+    ordered_target = _columns_in_table_order(target_columns)
+
+    # The matrix of the target entity type: lists of column ids on Gluesync 2.3, single pairs before.
+    columns_mapping_matrix = target_ae.get("entityType", {}).get("columnsMappingMatrix", []) or []
+    logger.info(
+        f"Table {source_table_name}: columnsMappingMatrix has {len(columns_mapping_matrix)} entries"
+    )
+    unlocked_tables = (target_ae.get("entityType", {}) or {}).get("tablesWithUnlockedSchema") or []
+
+    if _is_grouped_matrix(columns_mapping_matrix) and not unlocked_tables:
+        column_mappings, relations = _grouped_mapping_rows(
+            columns_mapping_matrix, ordered_source, [col for _, col in ordered_target]
+        )
+        target_keys = _target_keys_to_export(relations, source_columns, target_columns)
+        if target_keys:
+            table_cfg["targetKeys"] = target_keys
+    else:
+        column_mappings = _legacy_mapping_rows(
+            columns_mapping_matrix, ordered_source, ordered_target, source_table_name
+        )
+
+    # Always export column mappings with full metadata
+    if column_mappings:
+        table_cfg["columns"] = column_mappings
+        logger.debug(f"Exported {len(column_mappings)} column mappings with metadata for {source_table_name}")
+
+
+def _export_single_field_functions(table_cfg: Dict[str, Any], target_ae: Dict[str, Any], source_table_name: str) -> None:
+    """Field Functions (per-column expressions on Target entityType) — GSSD-1355.
+
+    CoreHub stores these on entityType.fieldFunctions as {columnId, tableOrObjectId, expression:{type,...}};
+    YAML documents them as columns[].expression (Date2Str / TrimStr / StaticStr / …).
+    """
+    target_et = target_ae.get("entityType", {}) or {}
+    field_functions = target_et.get("fieldFunctions") or []
+    if not field_functions:
+        return
+    column_mappings = table_cfg.get("columns") or []
+    if not isinstance(column_mappings, list):
+        column_mappings = []
+    column_mappings = apply_field_functions_to_column_mappings(
+        column_mappings,
+        target_ae.get("columns", []) or [],
+        field_functions,
+    )
+    if column_mappings:
+        table_cfg["columns"] = column_mappings
+        logger.info(
+            f"Exported {sum(1 for c in column_mappings if isinstance(c, dict) and c.get('expression'))} "
+            f"field function expression(s) for {source_table_name}"
+        )
+
+
+def _export_target_filters(table_cfg: Dict[str, Any], target_et: Dict[str, Any]) -> None:
+    """Filters on target entityType, and unlockedSchema detection."""
+    for filter_key in ("filter", "snapshotDeleteFilter"):
+        if filter_key in target_et:
+            inv = invert_filter(target_et.get(filter_key, {}))
+            if inv:
+                table_cfg[filter_key] = inv
+
+    tables_with_unlocked = target_et.get("tablesWithUnlockedSchema") or []
+    if tables_with_unlocked:
+        table_cfg["unlockedSchema"] = True
+
+
+def _column_names_by_int_id(columns: List[Dict[str, Any]]) -> Dict[int, str]:
+    """Column names by integer column id (columns without a usable id are left out)."""
+    id_to_name: Dict[int, str] = {}
+    for col in columns:
+        cid = col.get("id")
+        name = col.get("name")
+        if cid is None or name is None:
+            continue
+        try:
+            cid_int = int(cid)
+        except (TypeError, ValueError):
+            continue
+        id_to_name[cid_int] = name
+    return id_to_name
+
+
+def _document_key_names(key_ids: List[Any], id_to_name: Dict[int, str], source_table_name: str) -> List[str]:
+    """Column names of the document key column ids."""
+    key_names: List[str] = []
+    for kid in key_ids:
+        try:
+            kid_int = int(kid)
+        except (TypeError, ValueError):
+            logger.debug(f"Document key has non-integer ID: {kid}")
+            continue
+        name = id_to_name.get(kid_int)
+        if name:
+            key_names.append(name)
+        else:
+            logger.warning(
+                f"Unable to map document key column ID {kid_int} back to a column name for table {source_table_name}"
+            )
+    return key_names
+
+
+def _document_key_cfg(
+    source_ae: Dict[str, Any],
+    target_ae: Dict[str, Any],
+    source_table_name: str,
+) -> Optional[Dict[str, Any]]:
+    """Document key (keyMapping uses column IDs), with the column names in place of the ids."""
+    doc_key = target_ae.get("keyMapping") or {}
+    if not (doc_key and isinstance(doc_key, dict)):
+        return None
+    key_ids = doc_key.get("keys", []) or []
+    id_to_name = _column_names_by_int_id(source_ae.get("columns", []) or [])
+    key_names = _document_key_names(key_ids, id_to_name, source_table_name)
+    if not key_names:
+        return None
+    return {
+        "prefix": doc_key.get("prefix", ""),
+        "suffix": doc_key.get("suffix", ""),
+        "separator": doc_key.get("separator", "-"),
+        "keys": key_names,
+    }
+
+
+def _udf_config(target_et: Dict[str, Any]) -> Any:
+    """UDFs are stored on entityType, but YAML expects them in customProperties.target.udf.
+
+    Prefer the explicit "udf" array when present; otherwise, fall back to
+    mappingFunctionInfo (the single-UDT representation used by Core Hub).
+    """
+    udf_cfg = target_et.get("udf")
+    if udf_cfg:
+        return udf_cfg
+    mf_info = target_et.get("mappingFunctionInfo")
+    if not isinstance(mf_info, dict):
+        return udf_cfg
+    udf_name = mf_info.get("name")
+    if not udf_name:
+        return udf_cfg
+    udf_entry: Dict[str, Any] = {"name": udf_name}
+    mf_type = mf_info.get("type")
+    if mf_type is not None:
+        udf_entry["type"] = mf_type
+    return [udf_entry]
+
+
+_DEFAULT_ALLOWED_OPERATIONS = ["INSERT", "DELETE", "UPDATE", "TRUNCATE"]
+
+
+def _target_custom_properties(target_ae: Dict[str, Any], target_et: Dict[str, Any]) -> Dict[str, Any]:
+    """``customProperties.target`` of a table: its own custom properties and the non-default target settings."""
+    target_cp = (target_ae.get("customProperties") or {}).copy()
+
+    udf_cfg = _udf_config(target_et)
+    if udf_cfg:
+        target_cp["udf"] = udf_cfg
+
+    # Snapshot concurrency: expose only when different from default 1
+    snapshot_conc = target_et.get("snapshotWritingConcurrency")
+    if isinstance(snapshot_conc, int) and snapshot_conc != 1:
+        target_cp["snapshotWritingConcurrency"] = snapshot_conc
+
+    # Bulk operations flags (default False) - include only when enabled
+    for bulk_key in ("useBulkOperationsDuringCDC", "useBulkOperationsWhileSnapshot"):
+        bulk_flag = target_et.get(bulk_key)
+        if isinstance(bulk_flag, bool) and bulk_flag:
+            target_cp[bulk_key] = bulk_flag
+
+    # allowedOperations: expose effective operations when different from default
+    allowed_ops = target_et.get("allowedOperations")
+    if isinstance(allowed_ops, list) and allowed_ops and allowed_ops != _DEFAULT_ALLOWED_OPERATIONS:
+        target_cp["allowedOperations"] = allowed_ops
+    return target_cp
+
+
+def _attach_custom_properties(table_cfg: Dict[str, Any], source_cp: Dict[str, Any], target_cp: Dict[str, Any]) -> None:
+    """Write the source/target custom properties of a table, when it has any."""
+    if source_cp or target_cp:
+        cp = table_cfg.setdefault("customProperties", {})
+        if source_cp:
+            cp["source"] = source_cp
+        if target_cp:
+            cp["target"] = target_cp
+
+
 def _process_single_entity(
     ent: Dict[str, Any],
     source_ae: Dict[str, Any],
@@ -577,78 +898,36 @@ def _process_single_entity(
 
     source_table = source_ae.get("table", {}) or {}
     target_table = target_ae.get("table", {}) or {}
-    
+
     # For NoSQL entities, also check entityObject which contains collection name
     target_entity_object = target_ae.get("entityObject", {}) or {}
 
-    source_schema = source_table.get("schema")
-    source_table_name = source_table.get("name")
-
-    # Fallbacks from entityName if table metadata missing.
-    # Split at the first dot only so table names that themselves contain dots
-    # (e.g. "my.table") are preserved intact.
-    if not source_schema or not source_table_name:
-        parts = entity_name.split(".", 1)
-        if len(parts) >= 2:
-            source_schema = source_schema or parts[0]
-            source_table_name = source_table_name or parts[-1]
-
+    source_schema, source_table_name = _single_source_location(entity_name, source_table)
     if not source_schema or not source_table_name:
         logger.warning(f"Unable to determine source schema/table for entity {entity_name}. Skipping.")
         return
 
-    # Extract target schema and table name, checking both table and entityObject
-    target_schema = target_table.get("schema") or target_entity_object.get("scope") or source_schema
-    # For NoSQL, collection name is in entityObject.collection, for SQL it's in table.name
-    target_table_name = target_table.get("name") or target_entity_object.get("collection") or source_table_name
+    target_schema, target_table_name = _single_target_location(
+        target_table, target_entity_object, source_schema, source_table_name
+    )
 
-    schema_cfg = schemas.get(source_schema)
-    if not schema_cfg:
-        schema_cfg = init_schema_cfg(target_schema)
-        schemas[source_schema] = schema_cfg
+    schema_cfg = _schema_cfg_for(schemas, source_schema, target_schema)
 
-    custom_tables: Dict[str, Any] = schema_cfg["tables"]["custom"]
-    
     # Check if this table already exists with different configuration
     # If so, create a unique key by appending a suffix
-    table_key = source_table_name
-    existing_table_cfg = custom_tables.get(table_key)
-    
-    if existing_table_cfg:
-        # Table already exists - check if it's a duplicate with different config
-        existing_entity_name = existing_table_cfg.get("entityName", "")
-        if existing_entity_name and existing_entity_name != entity_name:
-            # This is a duplicate table with different entity - create unique key
-            # Use @@ as separator to avoid conflicts with tables that have underscores
-            suffix_num = 2
-            while f"{source_table_name}@@{suffix_num}" in custom_tables:
-                suffix_num += 1
-            table_key = f"{source_table_name}@@{suffix_num}"
-            logger.warning(
-                f"Duplicate source table detected: {source_schema}.{source_table_name} "
-                f"used in multiple entities ({existing_entity_name}, {entity_name}). "
-                f"Creating separate entry as '{table_key}'"
-            )
-            # Mark schema as having duplicates for later splitting
-            if "has_duplicates" not in schema_cfg:
-                schema_cfg["has_duplicates"] = []
-            schema_cfg["has_duplicates"].append({
-                "original_table": source_table_name,
-                "unique_key": table_key,
-                "entity_name": entity_name
-            })
+    table_key = _unique_table_key(schema_cfg, source_schema, source_table_name, entity_name)
 
     # Track whitelist tables using the final key (including any @@N suffix for duplicates)
     # so that whitelist and custom always have the same set of entries.
     schema_cfg["tables"]["whitelist"].add(table_key)
 
     table_cfg = {}
-    custom_tables[table_key] = table_cfg
+    schema_cfg["tables"]["custom"][table_key] = table_cfg
 
     # Table name (target name / collection)
     table_cfg["name"] = target_table_name
     table_cfg["entityName"] = entity_name
-    
+
     # If the YAML key is different from the actual source table name (duplicate table case),
     # store the real source table name so import can find it in the database
     if table_key != source_table_name:
@@ -656,191 +935,28 @@ def _process_single_entity(
 
     # Group mapping
     group_id = ent.get("groupId")
-    if group_id and group_id != "_default":
-        group_name = group_id_to_name.get(str(group_id), str(group_id))
-        table_cfg["groupId"] = group_name
+    if _is_custom_group(group_id):
+        table_cfg["groupId"] = group_id_to_name.get(str(group_id), str(group_id))
 
-    # Keys: prefer the legacy 'keys' array if present (older CoreHub versions),
-    # otherwise derive from columns where isPK == true (2.2.6.0+ column model).
-    keys: List[str] = []
-    for key in source_ae.get("keys", []) or []:
-        name = key.get("name")
-        if name:
-            keys.append(name)
-    if not keys:
-        keys = _keys_from_columns(source_ae.get("columns", []) or [])
+    keys = _single_table_keys(source_ae)
     if keys:
         table_cfg["keys"] = keys
 
-    # Extract whereClause from source tablesProperties
-    source_tables_properties = source_ae.get("tablesProperties", {}) or {}
-    source_table_key = f"{source_schema}.{source_table_name}"
-    table_properties = source_tables_properties.get(source_table_key, {}) or {}
-    if "whereClause" in table_properties:
-        where_clause = table_properties["whereClause"]
-        if where_clause:
-            table_cfg["whereClause"] = str(where_clause)
-            logger.debug(f"Exported whereClause for {source_table_name}: {where_clause}")
+    _export_where_clause(table_cfg, source_ae, source_schema, source_table_name, source_table_name)
+    _export_single_column_mappings(table_cfg, source_ae, target_ae, source_table_name)
+    _export_single_field_functions(table_cfg, target_ae, source_table_name)
 
-    # Columns: Export source->target column mappings
-    source_columns = source_ae.get("columns", []) or []
-    target_columns = target_ae.get("columns", []) or []
-    
-    if source_columns and target_columns:
-        # Sort both source and target columns by their position in the table
-        ordered_source = _columns_in_table_order(source_columns)
-        ordered_target = _columns_in_table_order(target_columns)
-        
-        # The matrix of the target entity type: lists of column ids on Gluesync 2.3, single pairs before.
-        columns_mapping_matrix = target_ae.get("entityType", {}).get("columnsMappingMatrix", []) or []
-        logger.info(
-            f"Table {source_table_name}: columnsMappingMatrix has {len(columns_mapping_matrix)} entries"
-        )
-        unlocked_tables = (target_ae.get("entityType", {}) or {}).get("tablesWithUnlockedSchema") or []
-
-        if _is_grouped_matrix(columns_mapping_matrix) and not unlocked_tables:
-            column_mappings, relations = _grouped_mapping_rows(
-                columns_mapping_matrix, ordered_source, [col for _, col in ordered_target]
-            )
-            target_keys = _target_keys_to_export(relations, source_columns, target_columns)
-            if target_keys:
-                table_cfg["targetKeys"] = target_keys
-        else:
-            column_mappings = _legacy_mapping_rows(
-                columns_mapping_matrix, ordered_source, ordered_target, source_table_name
-            )
-        
-        # Always export column mappings with full metadata
-        if column_mappings:
-            table_cfg["columns"] = column_mappings
-            logger.debug(f"Exported {len(column_mappings)} column mappings with metadata for {source_table_name}")
-
-    # Field Functions (per-column expressions on Target entityType) — GSSD-1355
-    # CoreHub stores these on entityType.fieldFunctions as
-    # {columnId, tableOrObjectId, expression:{type,...}}; YAML documents them
-    # as columns[].expression (Date2Str / TrimStr / StaticStr / …).
-    target_et_early = target_ae.get("entityType", {}) or {}
-    field_functions = target_et_early.get("fieldFunctions") or []
-    if field_functions:
-        column_mappings = table_cfg.get("columns") or []
-        if not isinstance(column_mappings, list):
-            column_mappings = []
-        column_mappings = apply_field_functions_to_column_mappings(
-            column_mappings,
-            target_ae.get("columns", []) or [],
-            field_functions,
-        )
-        if column_mappings:
-            table_cfg["columns"] = column_mappings
-            logger.info(
-                f"Exported {sum(1 for c in column_mappings if isinstance(c, dict) and c.get('expression'))} "
-                f"field function expression(s) for {source_table_name}"
-            )
-
-    # Filters on target entityType
     target_et = target_ae.get("entityType", {}) or {}
-    if "filter" in target_et:
-        inv = invert_filter(target_et.get("filter", {}))
-        if inv:
-            table_cfg["filter"] = inv
+    _export_target_filters(table_cfg, target_et)
 
-    if "snapshotDeleteFilter" in target_et:
-        inv = invert_filter(target_et.get("snapshotDeleteFilter", {}))
-        if inv:
-            table_cfg["snapshotDeleteFilter"] = inv
-
-    # unlockedSchema detection
-    tables_with_unlocked = target_et.get("tablesWithUnlockedSchema") or []
-    if tables_with_unlocked:
-        table_cfg["unlockedSchema"] = True
-
-    # Document key (keyMapping uses column IDs)
-    doc_key = target_ae.get("keyMapping") or {}
-    if doc_key and isinstance(doc_key, dict):
-        key_ids = doc_key.get("keys", []) or []
-        id_to_name: Dict[int, str] = {}
-        for col in source_ae.get("columns", []) or []:
-            cid = col.get("id")
-            name = col.get("name")
-            if cid is None or name is None:
-                continue
-            try:
-                cid_int = int(cid)
-            except (TypeError, ValueError):
-                continue
-            id_to_name[cid_int] = name
-
-        key_names: List[str] = []
-        for kid in key_ids:
-            try:
-                kid_int = int(kid)
-            except (TypeError, ValueError):
-                logger.debug(f"Document key has non-integer ID: {kid}")
-                continue
-            name = id_to_name.get(kid_int)
-            if name:
-                key_names.append(name)
-            else:
-                logger.warning(
-                    f"Unable to map document key column ID {kid_int} back to a column name for table {source_table_name}"
-                )
-
-        if key_names:
-            table_cfg["documentKey"] = {
-                "prefix": doc_key.get("prefix", ""),
-                "suffix": doc_key.get("suffix", ""),
-                "separator": doc_key.get("separator", "-"),
-                "keys": key_names,
-            }
+    document_key = _document_key_cfg(source_ae, target_ae, source_table_name)
+    if document_key:
+        table_cfg["documentKey"] = document_key
 
     # Custom properties
     source_cp = _source_custom_properties(source_ae)
-
-    target_cp = (target_ae.get("customProperties") or {}).copy()
-
-    # UDFs are stored on entityType, but YAML expects them in customProperties.target.udf.
-    # Prefer the explicit "udf" array when present; otherwise, fall back to
-    # mappingFunctionInfo (the single-UDT representation used by Core Hub).
-    udf_cfg = target_et.get("udf")
-    if not udf_cfg:
-        mf_info = target_et.get("mappingFunctionInfo")
-        if isinstance(mf_info, dict):
-            udf_name = mf_info.get("name")
-            if udf_name:
-                udf_entry: Dict[str, Any] = {"name": udf_name}
-                mf_type = mf_info.get("type")
-                if mf_type is not None:
-                    udf_entry["type"] = mf_type
-                udf_cfg = [udf_entry]
-    if udf_cfg:
-        target_cp["udf"] = udf_cfg
-
-    # Snapshot concurrency: expose only when different from default 1
-    snapshot_conc = target_et.get("snapshotWritingConcurrency")
-    if isinstance(snapshot_conc, int) and snapshot_conc != 1:
-        target_cp["snapshotWritingConcurrency"] = snapshot_conc
-
-    # Bulk operations flags (default False) - include only when enabled
-    bulk_cdc = target_et.get("useBulkOperationsDuringCDC")
-    if isinstance(bulk_cdc, bool) and bulk_cdc:
-        target_cp["useBulkOperationsDuringCDC"] = bulk_cdc
-
-    bulk_snapshot = target_et.get("useBulkOperationsWhileSnapshot")
-    if isinstance(bulk_snapshot, bool) and bulk_snapshot:
-        target_cp["useBulkOperationsWhileSnapshot"] = bulk_snapshot
-
-    # allowedOperations: expose effective operations when different from default
-    allowed_ops = target_et.get("allowedOperations")
-    default_ops = ["INSERT", "DELETE", "UPDATE", "TRUNCATE"]
-    if isinstance(allowed_ops, list) and allowed_ops and allowed_ops != default_ops:
-        target_cp["allowedOperations"] = allowed_ops
-
-    if source_cp or target_cp:
-        cp = table_cfg.setdefault("customProperties", {})
-        if source_cp:
-            cp["source"] = source_cp
-        if target_cp:
-            cp["target"] = target_cp
+    target_cp = _target_custom_properties(target_ae, target_et)
+    _attach_custom_properties(table_cfg, source_cp, target_cp)
 
 
 def _process_multitable_entity(
