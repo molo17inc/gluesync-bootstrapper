@@ -273,6 +273,57 @@
               </form>
               <div id="export-message" class="message"></div>
             </section>
+
+            <section class="card requires-auth" id="ai-settings-export-card">
+              <h2>Export AI Studio settings</h2>
+              <form id="ai-settings-export-form" class="form-grid">
+                <fieldset class="fieldset">
+                  <legend>AI settings</legend>
+                  <span class="hint-text"
+                    >LLM providers, AI Studio agents, models, skills, agent
+                    versions, remote MCP servers, Enterprise Brain settings, API
+                    keys, budgets and conversation retention. Needs Gluesync
+                    2.3.0.1 or later.</span
+                  >
+                  <label class="checkbox-label">
+                    <input type="checkbox" id="ai-settings-include-secrets" />
+                    Include secrets
+                  </label>
+                  <label id="ai-settings-export-passphrase-label" hidden>
+                    Passphrase (at least 12 characters)
+                    <input
+                      type="password"
+                      id="ai-settings-export-passphrase"
+                      autocomplete="new-password"
+                      minlength="12"
+                      aria-describedby="ai-settings-export-passphrase-hint"
+                    />
+                  </label>
+                  <span
+                    class="hint-text"
+                    id="ai-settings-export-passphrase-hint"
+                    hidden
+                    >Provider API keys, MCP credentials and API keys are sealed
+                    with this passphrase. Keep it safe: the same passphrase is
+                    needed to restore them.</span
+                  >
+                  <div class="button-group">
+                    <button
+                      type="submit"
+                      class="secondary"
+                      id="ai-settings-export-btn"
+                    >
+                      Export AI settings
+                    </button>
+                  </div>
+                </fieldset>
+              </form>
+              <div
+                id="ai-settings-export-message"
+                class="message"
+                aria-live="polite"
+              ></div>
+            </section>
           </div>
 
           <div class="tab-panel" data-tab-panel="import">
@@ -390,6 +441,59 @@
                 </fieldset>
               </form>
               <div id="config-message" class="message"></div>
+            </section>
+
+            <section class="card requires-auth" id="ai-settings-import-card">
+              <h2>Restore AI Studio settings</h2>
+              <form id="ai-settings-import-form" class="form-grid">
+                <fieldset class="fieldset">
+                  <legend>Import an AI settings backup</legend>
+                  <label>
+                    Backup file (.json)
+                    <input
+                      type="file"
+                      id="ai-settings-import-file"
+                      accept=".json,application/json"
+                    />
+                  </label>
+                  <label>
+                    Passphrase (only for a backup with secrets)
+                    <input
+                      type="password"
+                      id="ai-settings-import-passphrase"
+                      autocomplete="off"
+                    />
+                  </label>
+                  <span class="hint-text"
+                    >Settings are matched by id: they are created or updated,
+                    the others are left alone. Check shows what would change
+                    without writing anything.</span
+                  >
+                  <div class="button-group">
+                    <button
+                      type="button"
+                      class="secondary"
+                      id="ai-settings-check-btn"
+                      disabled
+                    >
+                      Check
+                    </button>
+                    <button
+                      type="button"
+                      class="secondary"
+                      id="ai-settings-import-btn"
+                      disabled
+                    >
+                      Restore
+                    </button>
+                  </div>
+                </fieldset>
+              </form>
+              <div
+                id="ai-settings-import-message"
+                class="message"
+                aria-live="polite"
+              ></div>
             </section>
 
             <section class="card requires-auth" id="duplicate-card">

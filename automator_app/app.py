@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import mimetypes
 import logging
 import os
 import shutil
@@ -50,11 +51,15 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from commons import extract_all_schemas_from_yaml, extract_schema_types_from_yaml
 from . import corehub
+import ai_settings
 from .corehub import PipelineInMaintenanceError
 from .state import state
 from .version import get_version
 
 logger = logging.getLogger(__name__)
+
+LOGIN_REQUIRED = "Log in to a Core Hub first"
+ZIP_MEDIA_TYPE = mimetypes.types_map[".zip"]
 
 CHANGELOG_API_BASE_URL = "https://api.backoffice.molo17.com"
 
@@ -323,6 +328,18 @@ class ApiMessage(BaseModel):
     logs: Optional[list[str]] = None
 
 
+class AiSettingsExportRequest(BaseModel):
+    """The passphrase travels in the body, never in a URL that proxies and logs keep."""
+
+    include_secrets: bool = False
+    passphrase: Optional[str] = None
+
+
+class FullBackupRequest(BaseModel):
+    include_secrets: bool = False
+    ai_settings_passphrase: Optional[str] = None
+
+
 class PipelineInfo(BaseModel):
     id: str
     name: Optional[str] = None
@@ -466,6 +483,130 @@ def _has_masked_password(value: Any) -> bool:
         return any(_has_masked_password(v) for v in value)
 
     return False
+
+
+_ERROR_RESPONSES: Dict[Any, Dict[str, Any]] = {
+    400: {"description": "The request or the bundle is refused (passphrase, format, references)"},
+    401: {"description": LOGIN_REQUIRED},
+    409: {"description": "The Core Hub has no AI settings backup (older than 2.3.0.1)"},
+    500: {"description": "Core Hub or the Automator failed"},
+}
+
+
+def _require_login() -> None:
+    if not state.token or not state.base_url:
+        raise HTTPException(status_code=401, detail=LOGIN_REQUIRED)
+
+
+def _summarize_restore(results: Dict[str, Any]) -> str:
+    """One part per restored domain of a full backup, with the AI settings summary when there is one."""
+    parts: list[str] = []
+    for domain, result in results.items():
+        status = result.get("status", "unknown") if isinstance(result, dict) else "unknown"
+        if status == "restored":
+            parts.append(f"{domain}: {result.get('summary') or 'restored'}")
+        elif status == "skipped":
+            parts.append(f"{domain}: skipped ({result.get('reason', '')})")
+        elif status == "pending":
+            parts.append(f"{domain}: pending (requires manual pipeline import)")
+        else:
+            parts.append(f"{domain}: {status}")
+    return "; ".join(parts)
+
+
+def _export_full_backup_with_options(request: FullBackupRequest):
+    """Like GET /api/export/full-backup, with the passphrase that seals the AI settings secrets."""
+    _require_login()
+    if request.include_secrets and request.ai_settings_passphrase:
+        try:
+            ai_settings.check_passphrase(request.ai_settings_passphrase)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        zip_data = corehub.export_full_corehub_backup(
+            token=state.token,
+            base_url=state.base_url,
+            use_ssl=state.use_ssl,
+            skip_verify=state.skip_verify,
+            include_secrets=request.include_secrets,
+            chronos_token=state.chronos_token,
+            ai_settings_passphrase=request.ai_settings_passphrase,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Failed to export full CoreHub backup")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return StreamingResponse(
+        io.BytesIO(zip_data),
+        media_type=ZIP_MEDIA_TYPE,
+        headers={"Content-Disposition": f'attachment; filename="corehub_full_backup_{timestamp}.zip"'},
+    )
+
+def _export_ai_settings(request: AiSettingsExportRequest):
+    """Download the AI settings bundle of the connected Core Hub (2.3.0.1+)."""
+    _require_login()
+    corehub.configure_core_hub(state.base_url, use_ssl=state.use_ssl, skip_verify=state.skip_verify)
+    try:
+        bundle = ai_settings.export_ai_settings(
+            state.token,
+            include_secrets=request.include_secrets,
+            passphrase=request.passphrase,
+        )
+    except ai_settings.AiSettingsUnsupported as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (ai_settings.AiSettingsError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Failed to export AI settings")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return Response(
+        content=json.dumps(bundle, indent=2, ensure_ascii=False).encode("utf-8"),
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="ai_settings_{timestamp}.json"'},
+    )
+
+async def _import_ai_settings(
+    file: UploadFile = File(...),
+    passphrase: Optional[str] = Form(None),
+    dry_run: bool = Form(False),
+) -> ApiMessage:
+    """Restore an AI settings bundle; dry_run only reports what would change."""
+    _require_login()
+    try:
+        bundle = json.loads((await file.read()).decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail="The file is not an AI settings bundle (JSON)") from exc
+
+    corehub.configure_core_hub(state.base_url, use_ssl=state.use_ssl, skip_verify=state.skip_verify)
+    try:
+        result = corehub.restore_ai_settings(
+            token=state.token,
+            bundle=bundle,
+            passphrase=passphrase or None,
+            dry_run=dry_run,
+        )
+    except (ai_settings.AiSettingsError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Failed to import AI settings")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    if result.get("status") == "skipped":
+        raise HTTPException(status_code=409, detail=result.get("reason"))
+    return ApiMessage(message=result.get("summary"), logs=result.get("warnings") or None)
+
+
+def _register_ai_settings_routes(app: FastAPI) -> None:
+    """The AI settings backup routes, and the full backup with the passphrase that seals their secrets."""
+    app.add_api_route(
+        "/api/export/full-backup", _export_full_backup_with_options, methods=["POST"], responses=_ERROR_RESPONSES
+    )
+    app.add_api_route("/api/export/ai-settings", _export_ai_settings, methods=["POST"], responses=_ERROR_RESPONSES)
+    app.add_api_route("/api/import/ai-settings", _import_ai_settings, methods=["POST"], responses=_ERROR_RESPONSES)
 
 
 def create_app() -> FastAPI:
@@ -1955,7 +2096,8 @@ def create_app() -> FastAPI:
 
     @app.post("/api/import/full-backup", response_model=ApiMessage)
     async def import_full_backup(
-        file: UploadFile = File(...)
+        file: UploadFile = File(...),
+        ai_settings_passphrase: Optional[str] = Form(None),
     ) -> ApiMessage:
         """Restore a complete CoreHub backup (pipelines + global configs + schedules).
 
@@ -1979,27 +2121,13 @@ def create_app() -> FastAPI:
                 skip_verify=state.skip_verify,
                 zip_bytes=contents,
                 chronos_token=state.chronos_token,
+                ai_settings_passphrase=ai_settings_passphrase,
             )
         except Exception as exc:  # pylint: disable=broad-except
             logger.exception("Failed to import full CoreHub backup")
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-        # Build summary
-        summary_parts: list[str] = []
-        for domain, result in results.items():
-            status = result.get("status", "unknown") if isinstance(result, dict) else "unknown"
-            if status == "restored":
-                summary_parts.append(f"{domain}: restored")
-            elif status == "skipped":
-                reason = result.get("reason", "")
-                summary_parts.append(f"{domain}: skipped ({reason})")
-            elif status == "pending":
-                summary_parts.append(f"{domain}: pending (requires manual pipeline import)")
-            else:
-                summary_parts.append(f"{domain}: {status}")
-
-        message = "Full backup restore completed. " + "; ".join(summary_parts)
-        return ApiMessage(message=message)
+        return ApiMessage(message="Full backup restore completed. " + _summarize_restore(results))
 
     @app.post("/api/import/users", response_model=ApiMessage)
     async def import_users(file: UploadFile = File(...)) -> ApiMessage:
@@ -2575,6 +2703,8 @@ def create_app() -> FastAPI:
         )
     except Exception as _mcp_exc:  # pylint: disable=broad-except
         logger.warning("Failed to mount MCP server: %s", _mcp_exc)
+
+    _register_ai_settings_routes(app)
 
     return app
 

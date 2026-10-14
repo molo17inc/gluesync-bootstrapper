@@ -53,6 +53,7 @@ from create_all_entities import (
     set_create_table_if_not_exists,
 )
 import create_user_defined_functions
+import ai_settings
 from export_template_from_corehub import (
     fetch_pipeline_entities,
     build_entities_maps,
@@ -2331,6 +2332,7 @@ def export_full_corehub_backup(
     skip_verify: Optional[bool],
     include_secrets: bool = False,
     chronos_token: Optional[str] = None,
+    ai_settings_passphrase: Optional[str] = None,
 ) -> bytes:
     """Export a complete CoreHub backup including pipelines, global configs, SMTP, webhooks, thresholds, and schedules.
 
@@ -2342,6 +2344,8 @@ def export_full_corehub_backup(
       - schedules.yaml
       - pipelines/ (individual pipeline YAMLs)
       - agents-config.yaml
+      - ai-settings.json (Core Hub 2.3.0.1+; its secrets are included only with
+        include_secrets and an ai_settings_passphrase, sealed with it)
     """
     configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
 
@@ -2429,6 +2433,14 @@ def export_full_corehub_backup(
             logger.warning("Failed to export OIDC config: %s", exc)
             zip_file.writestr("oidc.yaml", _dump_to_yaml({"error": str(exc)}).encode("utf-8"))
 
+        # AI settings: one bundle from Core Hub. An older Core Hub has none to back up.
+        _write_ai_settings(
+            zip_file,
+            token=token,
+            include_secrets=include_secrets and bool(ai_settings_passphrase),
+            passphrase=ai_settings_passphrase,
+        )
+
         # Pipelines backup (already a ZIP, extract contents).
         # We skip embedding schedules in pipeline YAMLs because the full backup
         # already includes a separate schedules.yaml with all Chronos jobs.
@@ -2452,6 +2464,52 @@ def export_full_corehub_backup(
 
     zip_buffer.seek(0)
     return zip_buffer.read()
+
+
+AI_SETTINGS_ERROR_FILENAME = "ai-settings.error.yaml"
+
+
+def _write_ai_settings(
+    zip_file: zipfile.ZipFile,
+    *,
+    token: str,
+    include_secrets: bool,
+    passphrase: Optional[str],
+) -> None:
+    try:
+        bundle = ai_settings.export_ai_settings(token, include_secrets=include_secrets, passphrase=passphrase)
+    except ai_settings.AiSettingsUnsupported as exc:
+        logger.info("Skipping AI settings: %s", exc)
+        return
+    except Exception as exc:  # pylint: disable=broad-except
+        # The restore reports this file, so a failed export cannot pass for "no AI settings".
+        logger.warning("Failed to export AI settings: %s", exc)
+        zip_file.writestr(AI_SETTINGS_ERROR_FILENAME, _dump_to_yaml({"error": str(exc)}).encode("utf-8"))
+        return
+    zip_file.writestr(
+        ai_settings.BACKUP_FILENAME,
+        json.dumps(bundle, indent=2, ensure_ascii=False).encode("utf-8"),
+    )
+
+
+def restore_ai_settings(
+    *,
+    token: str,
+    bundle: Dict[str, Any],
+    passphrase: Optional[str] = None,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """Import an AI settings bundle; the result keeps Core Hub's counts and warnings."""
+    try:
+        result = ai_settings.import_ai_settings(token, bundle, passphrase=passphrase, dry_run=dry_run)
+    except ai_settings.AiSettingsUnsupported as exc:
+        return {"status": "skipped", "reason": str(exc)}
+    return {
+        "status": "checked" if dry_run else "restored",
+        "summary": ai_settings.summarize_import(result),
+        "sections": result.get("sections", []),
+        "warnings": result.get("warnings", []),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -2916,11 +2974,13 @@ def import_full_corehub_backup(
     skip_verify: Optional[bool],
     zip_bytes: bytes,
     chronos_token: Optional[str] = None,
+    ai_settings_passphrase: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Restore a complete CoreHub backup from a ZIP archive.
 
     Each domain is restored independently. Pipelines are restored via the
     existing import-all logic (agents-config + per-pipeline YAMLs + UDFs).
+    AI settings come last, once the users they belong to exist.
     """
     import tempfile
     import shutil
@@ -3023,10 +3083,28 @@ def import_full_corehub_backup(
         else:
             results["pipelines"] = {"status": "skipped", "reason": "pipelines.zip not found"}
 
+        results["ai_settings"] = _restore_ai_settings_file(extract_dir, token, ai_settings_passphrase)
+
     finally:
         shutil.rmtree(extract_dir, ignore_errors=True)
 
     return results
+
+
+def _restore_ai_settings_file(extract_dir: Path, token: str, passphrase: Optional[str]) -> Dict[str, Any]:
+    bundle_path = extract_dir / ai_settings.BACKUP_FILENAME
+    error_path = extract_dir / AI_SETTINGS_ERROR_FILENAME
+    if bundle_path.exists():
+        try:
+            with open(bundle_path, "r", encoding="utf-8") as f:
+                bundle = json.load(f)
+            return restore_ai_settings(token=token, bundle=bundle, passphrase=passphrase)
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("Failed to restore AI settings: %s", exc)
+            return {"status": "failed", "reason": str(exc)}
+    if error_path.exists():
+        return {"status": "skipped", "reason": "the backup could not export them, see ai-settings.error.yaml"}
+    return {"status": "skipped", "reason": f"{ai_settings.BACKUP_FILENAME} not found"}
 
 
 def _normalize_agent_type_for_add(agent_type: str) -> str:
