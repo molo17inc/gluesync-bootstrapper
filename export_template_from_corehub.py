@@ -26,7 +26,7 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import yaml
 
@@ -1488,6 +1488,114 @@ def build_export_header(
     return "\n".join(lines)
 
 
+def _source_agent_id_of_entity(ent: Dict[str, Any]) -> Optional[str]:
+    """Agent id of the first Source agent entity of an entity."""
+    for ae in ent.get("agentEntities", []) or []:
+        if (ae.get("entityType") or {}).get("type") == "Source":
+            return ae.get("agentId")
+    return None
+
+
+def _source_agent_id(entities: List[Dict[str, Any]]) -> Optional[str]:
+    """Identify the source agent ID from the entity list."""
+    source_agent_id: Optional[str] = None
+    for ent in entities:
+        source_agent_id = _source_agent_id_of_entity(ent)
+        if source_agent_id:
+            break
+    return source_agent_id
+
+
+def _all_column_types_null(columns: List[Any]) -> bool:
+    """Whether every column of a table is an export row whose type is null (else it already has types, or
+    mixed format – leave alone)."""
+    export_format_cols = [
+        c for c in columns
+        if isinstance(c, dict) and "source" in c and c.get("type") is None
+    ]
+    return bool(export_format_cols) and len(export_format_cols) >= len(columns)
+
+
+def _null_typed_tables_of_schema(custom: Dict[str, Any]) -> Iterator[Tuple[str, List[Any]]]:
+    """``(table, columns)`` of every custom table of a schema whose exported column types are all null."""
+    for table_name, table_cfg in custom.items():
+        if not isinstance(table_cfg, dict):
+            continue
+        columns = table_cfg.get("columns") or []
+        if columns and _all_column_types_null(columns):
+            yield table_name, columns
+
+
+def _tables_with_null_column_types(schemas: Dict[str, Any]) -> Iterator[Tuple[str, str, List[Any]]]:
+    """``(schema, table, columns)`` of every table whose exported column types are all null.
+
+    Only those are enriched: that is the clear fingerprint of the legacy serialisation bug.
+    """
+    for schema_name, schema_cfg in schemas.items():
+        if not isinstance(schema_cfg, dict):
+            continue
+        custom = (schema_cfg.get("tables") or {}).get("custom") or {}
+        for table_name, columns in _null_typed_tables_of_schema(custom):
+            yield schema_name, table_name, columns
+
+
+def _fill_null_column_types(columns: List[Any], disc_by_name: Dict[str, Any]) -> int:
+    """Backfill the null 'type' of the column mappings from the discovered columns; returns how many were filled."""
+    filled = 0
+    for col_mapping in columns:
+        if not (isinstance(col_mapping, dict) and col_mapping.get("type") is None and "source" in col_mapping):
+            continue
+        source_col_name = col_mapping["source"]
+        if not isinstance(source_col_name, str):
+            continue  # an N:1 row (a list of sources): its type is the target column's
+        disc_col = disc_by_name.get(source_col_name)
+        resolved = (disc_col.get("dataType") or disc_col.get("type")) if disc_col else None
+        if resolved:
+            col_mapping["type"] = resolved
+            filled += 1
+    return filled
+
+
+def _enrich_table_column_types(
+    token: str,
+    pipeline_id: str,
+    source_agent_id: str,
+    schema_name: str,
+    table_name: str,
+    columns: List[Any],
+) -> bool:
+    """Backfill the null column types of one table via live discovery; returns whether any type was filled."""
+    try:
+        discovered = get_table_columns(token, pipeline_id, source_agent_id, schema_name, table_name)
+        if not discovered or not isinstance(discovered.get("columns"), list):
+            logger.warning(
+                f"enrich_null_column_types_from_discovery: discovery returned no columns "
+                f"for {schema_name}.{table_name} – leaving type as null"
+            )
+            return False
+
+        disc_by_name: Dict[str, Any] = {
+            c["name"]: c for c in discovered["columns"] if c.get("name")
+        }
+
+        filled = _fill_null_column_types(columns, disc_by_name)
+        if filled:
+            logger.info(
+                f"enrich_null_column_types_from_discovery: filled {filled}/{len(columns)} "
+                f"null column types for {schema_name}.{table_name} via live discovery"
+            )
+            return True
+        logger.warning(
+            f"enrich_null_column_types_from_discovery: discovery found no matching columns "
+            f"for {schema_name}.{table_name}"
+        )
+    except Exception as exc:
+        logger.warning(
+            f"enrich_null_column_types_from_discovery: failed for {schema_name}.{table_name}: {exc}"
+        )
+    return False
+
+
 def enrich_null_column_types_from_discovery(
     schemas: Dict[str, Any],
     entities: List[Dict[str, Any]],
@@ -1500,83 +1608,15 @@ def enrich_null_column_types_from_discovery(
 
     Returns the number of tables that were successfully enriched.
     """
-    # Identify the source agent ID from the entity list
-    source_agent_id: Optional[str] = None
-    for ent in entities:
-        for ae in ent.get("agentEntities", []) or []:
-            if (ae.get("entityType") or {}).get("type") == "Source":
-                source_agent_id = ae.get("agentId")
-                break
-        if source_agent_id:
-            break
-
+    source_agent_id = _source_agent_id(entities)
     if not source_agent_id:
         logger.warning("enrich_null_column_types_from_discovery: could not determine source agent ID – skipping enrichment")
         return 0
 
     enriched = 0
-    for schema_name, schema_cfg in schemas.items():
-        if not isinstance(schema_cfg, dict):
-            continue
-        custom = (schema_cfg.get("tables") or {}).get("custom") or {}
-        for table_name, table_cfg in custom.items():
-            if not isinstance(table_cfg, dict):
-                continue
-            columns = table_cfg.get("columns") or []
-            if not columns:
-                continue
-
-            # Only attempt enrichment when ALL column type fields are null –
-            # that is the clear fingerprint of the legacy serialisation bug.
-            export_format_cols = [
-                c for c in columns
-                if isinstance(c, dict) and "source" in c and c.get("type") is None
-            ]
-            if not export_format_cols or len(export_format_cols) < len(columns):
-                continue  # already has types, or mixed format – leave alone
-
-            try:
-                discovered = get_table_columns(token, pipeline_id, source_agent_id, schema_name, table_name)
-                if not discovered or not isinstance(discovered.get("columns"), list):
-                    logger.warning(
-                        f"enrich_null_column_types_from_discovery: discovery returned no columns "
-                        f"for {schema_name}.{table_name} – leaving type as null"
-                    )
-                    continue
-
-                disc_by_name: Dict[str, Any] = {
-                    c["name"]: c for c in discovered["columns"] if c.get("name")
-                }
-
-                filled = 0
-                for col_mapping in columns:
-                    if not (isinstance(col_mapping, dict) and col_mapping.get("type") is None and "source" in col_mapping):
-                        continue
-                    source_col_name = col_mapping["source"]
-                    if not isinstance(source_col_name, str):
-                        continue  # an N:1 row (a list of sources): its type is the target column's
-                    disc_col = disc_by_name.get(source_col_name)
-                    if disc_col:
-                        resolved = disc_col.get("dataType") or disc_col.get("type")
-                        if resolved:
-                            col_mapping["type"] = resolved
-                            filled += 1
-
-                if filled:
-                    logger.info(
-                        f"enrich_null_column_types_from_discovery: filled {filled}/{len(columns)} "
-                        f"null column types for {schema_name}.{table_name} via live discovery"
-                    )
-                    enriched += 1
-                else:
-                    logger.warning(
-                        f"enrich_null_column_types_from_discovery: discovery found no matching columns "
-                        f"for {schema_name}.{table_name}"
-                    )
-            except Exception as exc:
-                logger.warning(
-                    f"enrich_null_column_types_from_discovery: failed for {schema_name}.{table_name}: {exc}"
-                )
+    for schema_name, table_name, columns in _tables_with_null_column_types(schemas):
+        if _enrich_table_column_types(token, pipeline_id, source_agent_id, schema_name, table_name, columns):
+            enriched += 1
 
     return enriched
 
