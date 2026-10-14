@@ -33,7 +33,7 @@ import sys
 import tempfile
 import uuid
 import zipfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace as dataclass_replace
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any, Callable, Dict, Optional
@@ -564,6 +564,15 @@ _SESSION_RESPONSES: Dict[Any, Dict[str, Any]] = {
 }
 _ARCHIVE_IMPORT_RESPONSES: Dict[Any, Dict[str, Any]] = {
     400: {"description": "The archive is empty, is not a ZIP, or has no usable agents-config.yaml"},
+    401: _NOT_LOGGED_IN_RESPONSE,
+    500: _FAILURE_RESPONSE,
+}
+_RUN_RESPONSES: Dict[Any, Dict[str, Any]] = {
+    401: _NOT_LOGGED_IN_RESPONSE,
+    409: {"description": "An entity creation run is already in progress"},
+}
+_CERTIFICATE_RESPONSES: Dict[Any, Dict[str, Any]] = {
+    400: {"description": "No certificate file was sent, or it is empty"},
     401: _NOT_LOGGED_IN_RESPONSE,
     500: _FAILURE_RESPONSE,
 }
@@ -2667,6 +2676,235 @@ def _register_export_routes(app: FastAPI) -> None:
         app.add_api_route(path, handler, methods=["GET"], responses=_COREHUB_CALL_RESPONSES)
 
 
+# Strong references to the entity creation runs started in the background, so
+# that they are not garbage collected before they finish.
+_BACKGROUND_TASKS: set = set()
+
+
+@dataclass
+class _RunSettings:
+    """Session and options one entity creation run works with."""
+
+    token: str
+    base_url: str
+    enable_scheduling: Any
+    create_tables: Any
+    use_ssl: Any
+    skip_verify: Any
+    log_callback: Callable[[str], None]
+    yaml_file: str = ""
+    source_type: str = ""
+    target_type: str = ""
+
+
+def _run_schema_types(request: RunRequest, yaml_file_path: str) -> tuple[str, str]:
+    """Source and target type of a run: the request's, else the YAML's, else SQL."""
+    # Extract source_type and target_type from YAML if they're empty
+    source_type = request.source_type
+    target_type = request.target_type
+
+    if not source_type or not target_type:
+        from commons import extract_schema_types_from_yaml
+        src_hint, tgt_hint = extract_schema_types_from_yaml(yaml_file_path)
+        if not source_type and src_hint:
+            source_type = src_hint
+        if not target_type and tgt_hint:
+            target_type = tgt_hint
+
+    # Final fallback to SQL if still empty
+    if not source_type:
+        source_type = "SQL"
+    if not target_type:
+        target_type = "SQL"
+    return source_type, target_type
+
+
+def _run_create_entities(request: RunRequest, settings: _RunSettings, source_schema: str, target_schema: str) -> dict:
+    """Create the entities of one schema pair of a run."""
+    return corehub.run_create_entities(
+        token=settings.token,
+        base_url=settings.base_url,
+        pipeline_id=request.pipeline_id,
+        source_schema=source_schema,
+        target_schema=target_schema,
+        source_type=settings.source_type,
+        target_type=settings.target_type,
+        yaml_file=settings.yaml_file,
+        skip_errors=request.skip_errors,
+        chunk_size=request.chunk_size,
+        enable_scheduling=settings.enable_scheduling,
+        create_tables=settings.create_tables,
+        use_ssl=settings.use_ssl,
+        skip_verify=settings.skip_verify,
+        log_callback=settings.log_callback,
+        chronos_token=state.chronos_token,
+    )
+
+
+def _run_all_schema_pairs(request: RunRequest, settings: _RunSettings) -> dict:
+    """Create the entities of every schema pair the run's YAML defines."""
+    yaml_file_path = settings.yaml_file
+    schema_pairs = extract_all_schemas_from_yaml(yaml_file_path)
+    if not schema_pairs:
+        return {
+            "success": False,
+            "logs": [],
+            "error": f"No schemas found in YAML file: {yaml_file_path}",
+        }
+
+    overall_success = True
+    errors: list[str] = []
+
+    for idx, (src_schema, tgt_schema) in enumerate(schema_pairs, start=1):
+        if settings.log_callback is not None:
+            settings.log_callback(
+                f"[Schema {idx}/{len(schema_pairs)}] Creating entities for {src_schema} -> {tgt_schema}"
+            )
+
+        result = _run_create_entities(request, settings, src_schema, tgt_schema)
+
+        if not result.get("success"):
+            overall_success = False
+            if result.get("error"):
+                errors.append(str(result["error"]))
+
+    return {
+        "success": overall_success,
+        "logs": [],
+        "error": "; ".join(errors) if errors else None,
+    }
+
+
+def _run_entity_creation(request: RunRequest, settings: _RunSettings, yaml_path: Path) -> dict:
+    """Run the entity creation of a run, for every schema pair of its YAML or for the requested schemas."""
+    yaml_file_path = str(yaml_path)
+    source_type, target_type = _run_schema_types(request, yaml_file_path)
+    settings = dataclass_replace(settings, yaml_file=yaml_file_path, source_type=source_type, target_type=target_type)
+
+    if request.auto_schemas:
+        return _run_all_schema_pairs(request, settings)
+
+    # Custom schemas provided by user
+    return _run_create_entities(request, settings, request.source_schema, request.target_schema)
+
+
+async def _execute_run(run_id: str, request: RunRequest) -> None:
+    token = state.token
+    base_url = state.base_url
+    if not token or not base_url:
+        state.finalize_run(run_id, "failed", AUTH_REQUIRED)
+        return
+
+    prefs = state.preferences()
+    enable_scheduling = request.enable_scheduling if request.enable_scheduling is not None else prefs["enableScheduling"]
+    create_tables = request.create_tables if request.create_tables is not None else prefs["createTables"]
+    use_ssl = request.use_ssl if request.use_ssl is not None else state.use_ssl
+    skip_verify = request.skip_verify if request.skip_verify is not None else state.skip_verify
+
+    yaml_path = state.get_upload_path(request.yaml_file_id)
+    if not yaml_path:
+        state.finalize_run(run_id, "failed", "Uploaded YAML not found")
+        return
+
+    def _log_callback(message: str) -> None:
+        state.append_log(run_id, message)
+
+    settings = _RunSettings(
+        token=token,
+        base_url=base_url,
+        enable_scheduling=enable_scheduling,
+        create_tables=create_tables,
+        use_ssl=use_ssl,
+        skip_verify=skip_verify,
+        log_callback=_log_callback,
+    )
+
+    loop = asyncio.get_running_loop()
+
+    def _run_sync() -> dict:
+        return _run_entity_creation(request, settings, yaml_path)
+
+    result = await loop.run_in_executor(None, _run_sync)
+
+    status = "completed" if result.get("success") else "failed"
+    state.finalize_run(run_id, status, result.get("error"))
+
+
+async def start_run(request: RunRequest) -> ApiMessage:
+    if not state.token:
+        raise HTTPException(status_code=401, detail=AUTH_REQUIRED)
+
+    try:
+        run_status = state.start_run()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    task = asyncio.create_task(_execute_run(run_status.run_id, request))
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+    return ApiMessage(message="Entity creation started")
+
+
+async def upload_certificate(
+    pipeline_id: str = Form(..., alias="pipelineId"),
+    agent_id: str = Form(..., alias="agentId"),
+    certificate_type: str = Form(..., alias="certificateType"),
+    file: UploadFile = File(...)
+) -> ApiMessage:
+    """Upload a certificate file for an agent.
+
+    Args:
+        pipeline_id: Pipeline ID
+        agent_id: Agent ID
+        certificate_type: Type of certificate (truststore, keystore, certificate)
+        file: Certificate file to upload
+
+    Returns:
+        ApiMessage with success status
+    """
+    _require_session()
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file provided")
+
+    # Extract file extension
+    certificate_ext = Path(file.filename).suffix.lstrip('.').lower() or 'crt'
+
+    # Read file content
+    certificate_data = await file.read()
+    if not certificate_data:
+        raise HTTPException(status_code=400, detail="Certificate file is empty")
+
+    try:
+        corehub.upload_agent_certificate(
+            token=state.token,
+            pipeline_id=pipeline_id,
+            agent_id=agent_id,
+            certificate_type=certificate_type,
+            certificate_data=certificate_data,
+            certificate_ext=certificate_ext,
+        )
+
+        return ApiMessage(
+            success=True,
+            message=f"Certificate uploaded successfully for agent {agent_id}"
+        )
+    except Exception as e:
+        logger.exception(f"Failed to upload certificate: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to upload certificate: {str(e)}"
+        ) from e
+
+
+def _register_run_routes(app: FastAPI) -> None:
+    """The entity creation run and the agent certificate upload routes."""
+    app.add_api_route("/api/run", start_run, methods=["POST"], responses=_RUN_RESPONSES)
+    app.add_api_route(
+        "/api/agent/certificate/upload", upload_certificate, methods=["POST"], responses=_CERTIFICATE_RESPONSES
+    )
+
+
 def create_app() -> FastAPI:
     _ensure_static_assets()
     asset_rewrites = _fingerprint_static_assets()
@@ -2694,188 +2932,7 @@ def create_app() -> FastAPI:
 
     _register_export_routes(app)
 
-    async def _execute_run(run_id: str, request: RunRequest) -> None:
-        token = state.token
-        base_url = state.base_url
-        if not token or not base_url:
-            state.finalize_run(run_id, "failed", "Authentication required")
-            return
-
-        prefs = state.preferences()
-        enable_scheduling = request.enable_scheduling if request.enable_scheduling is not None else prefs["enableScheduling"]
-        create_tables = request.create_tables if request.create_tables is not None else prefs["createTables"]
-        use_ssl = request.use_ssl if request.use_ssl is not None else state.use_ssl
-        skip_verify = request.skip_verify if request.skip_verify is not None else state.skip_verify
-
-        yaml_path = state.get_upload_path(request.yaml_file_id)
-        if not yaml_path:
-            state.finalize_run(run_id, "failed", "Uploaded YAML not found")
-            return
-
-        def _log_callback(message: str) -> None:
-            state.append_log(run_id, message)
-
-        loop = asyncio.get_running_loop()
-
-        def _run_sync() -> dict:
-            yaml_file_path = str(yaml_path)
-            
-            # Extract source_type and target_type from YAML if they're empty
-            source_type = request.source_type
-            target_type = request.target_type
-            
-            if not source_type or not target_type:
-                from commons import extract_schema_types_from_yaml
-                src_hint, tgt_hint = extract_schema_types_from_yaml(yaml_file_path)
-                if not source_type and src_hint:
-                    source_type = src_hint
-                if not target_type and tgt_hint:
-                    target_type = tgt_hint
-            
-            # Final fallback to SQL if still empty
-            if not source_type:
-                source_type = "SQL"
-            if not target_type:
-                target_type = "SQL"
-
-            if request.auto_schemas:
-                schema_pairs = extract_all_schemas_from_yaml(yaml_file_path)
-                if not schema_pairs:
-                    return {
-                        "success": False,
-                        "logs": [],
-                        "error": f"No schemas found in YAML file: {yaml_file_path}",
-                    }
-
-                overall_success = True
-                errors: list[str] = []
-
-                for idx, (src_schema, tgt_schema) in enumerate(schema_pairs, start=1):
-                    if _log_callback is not None:
-                        _log_callback(
-                            f"[Schema {idx}/{len(schema_pairs)}] Creating entities for {src_schema} -> {tgt_schema}"
-                        )
-
-                    result = corehub.run_create_entities(
-                        token=token,
-                        base_url=base_url,
-                        pipeline_id=request.pipeline_id,
-                        source_schema=src_schema,
-                        target_schema=tgt_schema,
-                        source_type=source_type,
-                        target_type=target_type,
-                        yaml_file=yaml_file_path,
-                        skip_errors=request.skip_errors,
-                        chunk_size=request.chunk_size,
-                        enable_scheduling=enable_scheduling,
-                        create_tables=create_tables,
-                        use_ssl=use_ssl,
-                        skip_verify=skip_verify,
-                        log_callback=_log_callback,
-                        chronos_token=state.chronos_token,
-                    )
-
-                    if not result.get("success"):
-                        overall_success = False
-                        if result.get("error"):
-                            errors.append(str(result["error"]))
-
-                return {
-                    "success": overall_success,
-                    "logs": [],
-                    "error": "; ".join(errors) if errors else None,
-                }
-
-            # Custom schemas provided by user
-            return corehub.run_create_entities(
-                token=token,
-                base_url=base_url,
-                pipeline_id=request.pipeline_id,
-                source_schema=request.source_schema,
-                target_schema=request.target_schema,
-                source_type=source_type,
-                target_type=target_type,
-                yaml_file=yaml_file_path,
-                skip_errors=request.skip_errors,
-                chunk_size=request.chunk_size,
-                enable_scheduling=enable_scheduling,
-                create_tables=create_tables,
-                use_ssl=use_ssl,
-                skip_verify=skip_verify,
-                log_callback=_log_callback,
-                chronos_token=state.chronos_token,
-            )
-
-        result = await loop.run_in_executor(None, _run_sync)
-
-        status = "completed" if result.get("success") else "failed"
-        state.finalize_run(run_id, status, result.get("error"))
-
-    @app.post("/api/run", response_model=ApiMessage)
-    async def start_run(request: RunRequest) -> ApiMessage:
-        if not state.token:
-            raise HTTPException(status_code=401, detail="Authentication required")
-
-        try:
-            run_status = state.start_run()
-        except RuntimeError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-        asyncio.create_task(_execute_run(run_status.run_id, request))
-        return ApiMessage(message="Entity creation started")
-
-    @app.post("/api/agent/certificate/upload", response_model=ApiMessage)
-    async def upload_certificate(
-        pipeline_id: str = Form(..., alias="pipelineId"),
-        agent_id: str = Form(..., alias="agentId"),
-        certificate_type: str = Form(..., alias="certificateType"),
-        file: UploadFile = File(...)
-    ) -> ApiMessage:
-        """Upload a certificate file for an agent.
-        
-        Args:
-            pipeline_id: Pipeline ID
-            agent_id: Agent ID
-            certificate_type: Type of certificate (truststore, keystore, certificate)
-            file: Certificate file to upload
-        
-        Returns:
-            ApiMessage with success status
-        """
-        if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
-
-        if not file.filename:
-            raise HTTPException(status_code=400, detail="No file provided")
-
-        # Extract file extension
-        certificate_ext = Path(file.filename).suffix.lstrip('.').lower() or 'crt'
-        
-        # Read file content
-        certificate_data = await file.read()
-        if not certificate_data:
-            raise HTTPException(status_code=400, detail="Certificate file is empty")
-
-        try:
-            corehub.upload_agent_certificate(
-                token=state.token,
-                pipeline_id=pipeline_id,
-                agent_id=agent_id,
-                certificate_type=certificate_type,
-                certificate_data=certificate_data,
-                certificate_ext=certificate_ext,
-            )
-            
-            return ApiMessage(
-                success=True,
-                message=f"Certificate uploaded successfully for agent {agent_id}"
-            )
-        except Exception as e:
-            logger.error(f"Failed to upload certificate: {e}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to upload certificate: {str(e)}"
-            ) from e
+    _register_run_routes(app)
 
     # ── MCP client setup (one-click install) ───────────────────────────────
 
