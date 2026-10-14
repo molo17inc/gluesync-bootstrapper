@@ -996,6 +996,103 @@ def extract_schema_types_from_yaml(yaml_file_path):
         logger.error(f"Exception details: {traceback.format_exc()}")
         return None, None
 
+# Optional column metadata copied into a filter clause column when discovery reports it.
+_FILTER_COLUMN_OPTIONAL_FIELDS = [
+    'charMaxLength', 'charOctetLength', 'charSet', 'collation',
+    'numPrec', 'numPrecRadix', 'numScale', 'datetimePrec',
+    'udtCategory', 'udtName',
+]
+
+
+def _find_discovered_column(columns_info, column_name):
+    """Return the discovered column named ``column_name`` (or None)."""
+    if columns_info and 'columns' in columns_info:
+        for col in columns_info['columns']:
+            if col.get('name') == column_name:
+                return col
+    return None
+
+
+def _build_filter_column(column_name, matched_column, fallback_type, table_id,
+                         source_node_info, target_node_info):
+    """Build the column object of a filter clause (full Column model when discovered)."""
+    if matched_column is None:
+        print(f"Warning: Column '{column_name}' not found in table columns, using minimal fallback")
+        filter_column = {
+            "id": 1,
+            "name": column_name,
+            "dataType": fallback_type
+        }
+        if table_id is not None:
+            filter_column["tableId"] = int(table_id)
+        return filter_column
+
+    # Map the source native dataType to the target native type when node info is available
+    source_data_type = matched_column.get('dataType', fallback_type)
+    if source_node_info and target_node_info:
+        mapped_data_type = map_data_type(source_data_type, source_node_info, target_node_info)
+    else:
+        mapped_data_type = source_data_type
+
+    # Full column object mirroring the entity's column payload (2.2.6.0 Column model)
+    filter_column = {
+        "id": matched_column.get('id'),
+        "name": column_name,
+        "position": matched_column.get('position', 0),
+        "dataType": mapped_data_type,
+        "isPK": matched_column.get('isPK', False),
+        "isIdentity": matched_column.get('isIdentity', False),
+        "isNullable": matched_column.get('isNullable', False),
+    }
+    if table_id is not None:
+        filter_column["tableId"] = int(table_id)
+    # Copy optional metadata fields when present
+    for field in _FILTER_COLUMN_OPTIONAL_FIELDS:
+        if field in matched_column and matched_column[field] is not None:
+            filter_column[field] = matched_column[field]
+    return filter_column
+
+
+def _build_filter_clause(clause, columns_info, table_id, source_node_info, target_node_info):
+    """Convert one YAML filter clause; return None when the clause must be skipped."""
+    # Skip invalid clauses
+    if 'column' not in clause or 'operation' not in clause:
+        print(f"Warning: Skipping invalid filter clause: {clause}")
+        return None
+
+    column_name = clause['column']
+    operation_type = clause['operation']
+
+    # Find the matching column from discovery
+    matched_column = _find_discovered_column(columns_info, column_name)
+    fallback_type = clause.get('type', 'string')
+    filter_column = _build_filter_column(column_name, matched_column, fallback_type, table_id,
+                                         source_node_info, target_node_info)
+
+    filter_clause = {
+        "column": filter_column,
+        "operation": {
+            "type": operation_type
+        }
+    }
+
+    # Handle value based on operation type
+    if operation_type not in ['IsNull', 'IsNotNull']:
+        if 'value' not in clause:
+            print(f"Warning: Missing value for operation {operation_type} on column {column_name}")
+            return None
+
+        # Convert all values to strings
+        if isinstance(clause['value'], (list, tuple)):
+            # Handle arrays (for IN operations)
+            filter_clause["operation"]["filterValue"] = [str(v) for v in clause['value']]
+        else:
+            # Handle single values
+            filter_clause["operation"]["filterValue"] = str(clause['value'])
+
+    return filter_clause
+
+
 def process_filter_clauses(filter_config, columns_info, table_id=None,
                            source_node_info=None, target_node_info=None):
     """
@@ -1016,80 +1113,10 @@ def process_filter_clauses(filter_config, columns_info, table_id=None,
 
     processed_clauses = []
     for clause in filter_config['clauses']:
-        # Skip invalid clauses
-        if 'column' not in clause or 'operation' not in clause:
-            print(f"Warning: Skipping invalid filter clause: {clause}")
+        filter_clause = _build_filter_clause(clause, columns_info, table_id,
+                                             source_node_info, target_node_info)
+        if filter_clause is None:
             continue
-
-        column_name = clause['column']
-        operation_type = clause['operation']
-
-        # Find the matching column from discovery
-        matched_column = None
-        if columns_info and 'columns' in columns_info:
-            for col in columns_info['columns']:
-                if col.get('name') == column_name:
-                    matched_column = col
-                    break
-
-        fallback_type = clause.get('type', 'string')
-
-        if matched_column is None:
-            print(f"Warning: Column '{column_name}' not found in table columns, using minimal fallback")
-            filter_column = {
-                "id": 1,
-                "name": column_name,
-                "dataType": fallback_type
-            }
-            if table_id is not None:
-                filter_column["tableId"] = int(table_id)
-        else:
-            # Map the source native dataType to the target native type when node info is available
-            source_data_type = matched_column.get('dataType', fallback_type)
-            if source_node_info and target_node_info:
-                mapped_data_type = map_data_type(source_data_type, source_node_info, target_node_info)
-            else:
-                mapped_data_type = source_data_type
-
-            # Full column object mirroring the entity's column payload (2.2.6.0 Column model)
-            filter_column = {
-                "id": matched_column.get('id'),
-                "name": column_name,
-                "position": matched_column.get('position', 0),
-                "dataType": mapped_data_type,
-                "isPK": matched_column.get('isPK', False),
-                "isIdentity": matched_column.get('isIdentity', False),
-                "isNullable": matched_column.get('isNullable', False),
-            }
-            if table_id is not None:
-                filter_column["tableId"] = int(table_id)
-            # Copy optional metadata fields when present
-            for field in ['charMaxLength', 'charOctetLength', 'charSet', 'collation',
-                          'numPrec', 'numPrecRadix', 'numScale', 'datetimePrec',
-                          'udtCategory', 'udtName']:
-                if field in matched_column and matched_column[field] is not None:
-                    filter_column[field] = matched_column[field]
-
-        filter_clause = {
-            "column": filter_column,
-            "operation": {
-                "type": operation_type
-            }
-        }
-
-        # Handle value based on operation type
-        if operation_type not in ['IsNull', 'IsNotNull']:
-            if 'value' not in clause:
-                print(f"Warning: Missing value for operation {operation_type} on column {column_name}")
-                continue
-
-            # Convert all values to strings
-            if isinstance(clause['value'], (list, tuple)):
-                # Handle arrays (for IN operations)
-                filter_clause["operation"]["filterValue"] = [str(v) for v in clause['value']]
-            else:
-                # Handle single values
-                filter_clause["operation"]["filterValue"] = str(clause['value'])
 
         print(f"Generated filter clause: {json.dumps(filter_clause, indent=2)}")
         processed_clauses.append(filter_clause)
