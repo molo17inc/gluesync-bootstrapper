@@ -414,11 +414,9 @@ class JavaCodegen:
         return f"makeDateTime({self.as_local_date(inner, kind)})", "dateobj"
 
     def _gen_makedatetime_date_time(self, first: ExprNode, second: ExprNode) -> Tuple[str, str]:
-        second_expr, second_kind = self.gen(second)
+        # The Java helper takes the time argument as is, whatever its kind.
+        second_expr, _ = self.gen(second)
         date_expr = self._makedatetime_date_part(first)
-
-        if second_kind == "time":
-            return f"makeDateTime({date_expr}, {second_expr})", "object"
         return f"makeDateTime({date_expr}, {second_expr})", "object"
 
     def _makedatetime_date_part(self, first: ExprNode) -> str:
