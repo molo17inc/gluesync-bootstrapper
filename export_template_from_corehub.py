@@ -24,6 +24,7 @@ import argparse
 import io
 import json
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -959,6 +960,219 @@ def _process_single_entity(
     _attach_custom_properties(table_cfg, source_cp, target_cp)
 
 
+def _group_multitable_entries(entries: Any) -> Dict[str, List[Dict[str, Any]]]:
+    """Decode the alternating [table, [items]] structure used by MultiTable payloads."""
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    if not isinstance(entries, list):
+        return grouped
+    idx = 0
+    while idx < len(entries):
+        header = entries[idx]
+        body = entries[idx + 1] if idx + 1 < len(entries) else []
+        idx += 2
+        if not isinstance(header, dict) or not isinstance(body, list):
+            continue
+        table_name = header.get("name")
+        if not table_name:
+            continue
+        grouped[str(table_name)] = [item for item in body if isinstance(item, dict)]
+    return grouped
+
+
+def _keys_by_table_from_pk_columns(
+    key_groups: Dict[str, List[Dict[str, Any]]],
+    column_groups: Dict[str, List[Dict[str, Any]]],
+) -> Dict[str, List[str]]:
+    """In 2.2.6.0 the 'keys' array is removed from MultiTable agent entities; the
+    primary-key information is encoded as isPK on each column. Derive a
+    fallback {table_name: [pk_col_name, ...]} mapping so that downstream code
+    can still emit a 'keys' list per chained table."""
+    keys_by_table_from_is_pk: Dict[str, List[str]] = {}
+    if not key_groups and column_groups:
+        for tname, cols in column_groups.items():
+            pk_names = _keys_from_columns(cols)
+            if pk_names:
+                keys_by_table_from_is_pk[tname] = pk_names
+    return keys_by_table_from_is_pk
+
+
+def _source_to_target_table_names(tables: List[Dict[str, Any]], target_tables: List[Dict[str, Any]]) -> Dict[Any, Any]:
+    """Build a mapping from source table names to target table names (when both lists pair up)."""
+    source_to_target_name = {}
+    if target_tables and len(target_tables) == len(tables):
+        for src_tbl, tgt_tbl in zip(tables, target_tables):
+            src_name = src_tbl.get("name")
+            tgt_name = tgt_tbl.get("name")
+            if src_name and tgt_name:
+                source_to_target_name[src_name] = tgt_name
+    return source_to_target_name
+
+
+@dataclass
+class _MultiTableExport:
+    """What the export of every table of one MultiTable entity shares."""
+
+    entity_name: str
+    chain_id: str
+    group_name: Optional[str]
+    source_schema: str
+    schema_cfg: Dict[str, Any]
+    source_ae: Dict[str, Any]
+    target_tables: List[Dict[str, Any]]
+    column_groups: Dict[str, List[Dict[str, Any]]]
+    key_groups: Dict[str, List[Dict[str, Any]]]
+    target_column_groups: Dict[str, List[Dict[str, Any]]]
+    matrix: List[Any]
+    field_functions: List[Any]
+    keys_by_table_from_is_pk: Dict[str, List[str]]
+    source_to_target_name: Dict[Any, Any]
+
+
+def _multitable_grouped_columns(
+    export: _MultiTableExport,
+    table_cfg: Dict[str, Any],
+    table_name: str,
+    pair_matrix: List[Dict[str, Any]],
+    target_cols: List[Dict[str, Any]],
+    paired_target: Optional[Dict[str, Any]],
+) -> None:
+    """The rows, target keys and field functions of a SingleTable entity, so every 2.3 form comes back (BOP-16 A).
+
+    A column fed by no source is a {target, expression} row, which the import checks with the key rules, instead
+    of a targetOnlyColumns entry. The source of a MultiTable entity holds every column, so a column read and never
+    written needs no target: [] row unless it is a source key, which the import would otherwise map by name;
+    without one, a 1:1 chain still imports into 2.2.x.
+    """
+    source_columns = export.column_groups[table_name]
+    rows, relations = _grouped_mapping_rows(pair_matrix, list(enumerate(source_columns, start=1)), target_cols)
+    source_keys = set(_keys_from_columns(source_columns))
+    rows = [row for row in rows if row.get("target") != [] or row.get("source") in source_keys]
+    pair_functions = [
+        ff for ff in export.field_functions
+        if paired_target is None or str(ff.get("tableOrObjectId")) == str(paired_target.get("id"))
+    ]
+    table_cfg["columns"] = apply_field_functions_to_column_mappings(rows, target_cols, pair_functions)
+    target_keys = _target_keys_to_export(relations, source_columns, target_cols)
+    if target_keys:
+        table_cfg["targetKeys"] = target_keys
+
+
+def _export_multitable_mapping_rows(
+    export: _MultiTableExport,
+    table_cfg: Dict[str, Any],
+    tbl: Dict[str, Any],
+    table_name: str,
+    target_table_name: str,
+) -> None:
+    """Mapping rows, as for a SingleTable entity, so renames and target-only columns survive (BOP-12 A)."""
+    source_table_id = tbl.get("id")
+    paired_target = next(
+        (t for t in export.target_tables if str(t.get("name")) == str(target_table_name)), None
+    )
+    target_cols = export.target_column_groups.get(str(target_table_name))
+    if table_name not in export.column_groups or target_cols is None or "columns" in table_cfg:
+        return
+    pair_matrix = [
+        entry for entry in export.matrix
+        if isinstance(entry, dict) and str(entry.get("sourceTableObjectId")) == str(source_table_id)
+    ]
+    if _is_grouped_matrix(pair_matrix):
+        _multitable_grouped_columns(export, table_cfg, table_name, pair_matrix, target_cols, paired_target)
+    else:
+        ordered_source = list(enumerate(export.column_groups[table_name], start=1))
+        table_cfg["columns"] = _legacy_mapping_rows(
+            pair_matrix, ordered_source, list(enumerate(target_cols, start=1)), table_name
+        )
+
+
+def _multitable_column_metadata(columns: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Column metadata with full details including id and ordinalPosition."""
+    column_metadata: List[Dict[str, Any]] = []
+    for col in columns:
+        name = col.get("name")
+        if not name:
+            continue
+
+        # Use the actual id from the entity column data
+        col_id = col.get("id")
+        # Use ordinalPosition from entity if available, otherwise use id
+        ordinal = col.get("ordinalPosition") or col.get("position") or col_id
+
+        col_meta: Dict[str, Any] = {
+            "name": name,
+            "type": _column_data_type(col),
+            "dataLength": _column_attr(col, "charMaxLength", "dataLength", 0),
+            "numericPrecision": _column_attr(col, "numPrec", "numericPrecision", 0),
+            "numericScale": _column_attr(col, "numScale", "numericScale", 0),
+            "isNullable": col.get("isNullable", False),
+            "isPK": bool(col.get("isPK") or col.get("isPrimaryKey")),
+            "id": col_id,
+            "ordinalPosition": ordinal,
+            # See the single table export above: written even when null so the
+            # restore puts the column back exactly as it was backed up
+            "charSet": col.get("charSet"),
+        }
+        column_metadata.append(col_meta)
+    return column_metadata
+
+
+def _multitable_key_names(export: _MultiTableExport, table_name: str) -> List[str]:
+    """Key names of a chained table.
+
+    Prefer the legacy per-table key array; if absent (2.2.6.0+), fall back
+    to the isPK-derived list.
+    """
+    key_names: List[str] = []
+    for key in export.key_groups.get(table_name, []):
+        name = key.get("name")
+        if name and name not in key_names:
+            key_names.append(str(name))
+    if not key_names and table_name in export.keys_by_table_from_is_pk:
+        key_names = list(export.keys_by_table_from_is_pk[table_name])
+    return key_names
+
+
+def _export_multitable_table(export: _MultiTableExport, tbl: Dict[str, Any]) -> None:
+    """Assign chain metadata to one table of the chain and restore its columns/keys."""
+    table_name = tbl.get("name")
+    if not table_name:
+        return
+
+    export.schema_cfg["tables"]["whitelist"].add(table_name)
+
+    custom_tables: Dict[str, Any] = export.schema_cfg["tables"]["custom"]
+    table_cfg = custom_tables.get(table_name)
+    if not table_cfg:
+        table_cfg = {}
+        custom_tables[table_name] = table_cfg
+
+    # Use the actual target table name if available, otherwise use source table name
+    target_table_name = export.source_to_target_name.get(table_name, table_name)
+    table_cfg.setdefault("name", target_table_name)
+    # MultiTable entities share one entity name; persist it per table so import can reuse it
+    table_cfg["entityName"] = export.entity_name
+    table_cfg["chainId"] = export.chain_id
+    if export.group_name:
+        table_cfg["groupId"] = export.group_name
+
+    _export_multitable_mapping_rows(export, table_cfg, tbl, table_name, target_table_name)
+
+    # Restore column metadata with full details including id and ordinalPosition
+    if table_name in export.column_groups and "columns" not in table_cfg:
+        column_metadata = _multitable_column_metadata(export.column_groups[table_name])
+        if column_metadata:
+            table_cfg["columns"] = column_metadata
+
+    # Restore key names if missing.
+    if "keys" not in table_cfg:
+        key_names = _multitable_key_names(export, table_name)
+        if key_names:
+            table_cfg["keys"] = key_names
+
+    # Extract whereClause from source tablesProperties for this table
+    _export_where_clause(table_cfg, export.source_ae, export.source_schema, table_name, f"MultiTable {table_name}")
+
+
 def _process_multitable_entity(
     ent: Dict[str, Any],
     source_ae: Dict[str, Any],
@@ -987,188 +1201,44 @@ def _process_multitable_entity(
         logger.warning(f"Unable to determine schema for MultiTable entity {entity_name}. Skipping.")
         return
 
-    # Generate deterministic chainId
-    chain_id = f"multitable_{first_table_name}"
-
     # Group info from entity
     group_id = ent.get("groupId")
     group_name = None
-    if group_id and group_id != "_default":
+    if _is_custom_group(group_id):
         group_name = group_id_to_name.get(str(group_id), str(group_id))
 
     # Ensure schema config exists
     # Target schema for MultiTable is inferred from first target table
     target_tables = target_ae.get("tables", []) or []
-    if target_tables:
-        first_target = target_tables[0]
-        target_schema = first_target.get("schema") or source_schema
-    else:
-        target_schema = source_schema
+    target_schema = (target_tables[0].get("schema") or source_schema) if target_tables else source_schema
+    schema_cfg = _schema_cfg_for(schemas, source_schema, target_schema)
 
-    schema_cfg = schemas.get(source_schema)
-    if not schema_cfg:
-        schema_cfg = init_schema_cfg(target_schema)
-        schemas[source_schema] = schema_cfg
-
-    custom_tables: Dict[str, Any] = schema_cfg["tables"]["custom"]
-
-    # Helper to decode alternating [table, [items]] structure used by MultiTable payloads
-    def _group_entries(entries: Any) -> Dict[str, List[Dict[str, Any]]]:
-        grouped: Dict[str, List[Dict[str, Any]]] = {}
-        if not isinstance(entries, list):
-            return grouped
-        idx = 0
-        while idx < len(entries):
-            header = entries[idx]
-            body = entries[idx + 1] if idx + 1 < len(entries) else []
-            idx += 2
-            if not isinstance(header, dict) or not isinstance(body, list):
-                continue
-            table_name = header.get("name")
-            if not table_name:
-                continue
-            grouped[str(table_name)] = [item for item in body if isinstance(item, dict)]
-        return grouped
-
-    column_groups = _group_entries(source_ae.get("columns"))
-    key_groups = _group_entries(source_ae.get("keys"))
-    target_column_groups = _group_entries(target_ae.get("columns"))
+    column_groups = _group_multitable_entries(source_ae.get("columns"))
+    key_groups = _group_multitable_entries(source_ae.get("keys"))
+    target_column_groups = _group_multitable_entries(target_ae.get("columns"))
     target_type = target_ae.get("entityType", {}) or {}
-    matrix = target_type.get("columnsMappingMatrix", []) or []
-    field_functions = target_type.get("fieldFunctions") or []
 
-    # In 2.2.6.0 the 'keys' array is removed from MultiTable agent entities; the
-    # primary-key information is encoded as isPK on each column. Derive a
-    # fallback {table_name: [pk_col_name, ...]} mapping so that downstream code
-    # can still emit a 'keys' list per chained table.
-    keys_by_table_from_isPK: Dict[str, List[str]] = {}
-    if not key_groups and column_groups:
-        for tname, cols in column_groups.items():
-            pk_names = _keys_from_columns(cols)
-            if pk_names:
-                keys_by_table_from_isPK[tname] = pk_names
-    
-    # Build a mapping from source table names to target table names
-    source_to_target_name = {}
-    if target_tables and len(target_tables) == len(tables):
-        for src_tbl, tgt_tbl in zip(tables, target_tables):
-            src_name = src_tbl.get("name")
-            tgt_name = tgt_tbl.get("name")
-            if src_name and tgt_name:
-                source_to_target_name[src_name] = tgt_name
+    export = _MultiTableExport(
+        entity_name=entity_name,
+        # Generate deterministic chainId
+        chain_id=f"multitable_{first_table_name}",
+        group_name=group_name,
+        source_schema=source_schema,
+        schema_cfg=schema_cfg,
+        source_ae=source_ae,
+        target_tables=target_tables,
+        column_groups=column_groups,
+        key_groups=key_groups,
+        target_column_groups=target_column_groups,
+        matrix=target_type.get("columnsMappingMatrix", []) or [],
+        field_functions=target_type.get("fieldFunctions") or [],
+        keys_by_table_from_is_pk=_keys_by_table_from_pk_columns(key_groups, column_groups),
+        source_to_target_name=_source_to_target_table_names(tables, target_tables),
+    )
 
     # For each table in the chain, assign chain metadata and restore columns/keys
     for tbl in tables:
-        table_name = tbl.get("name")
-        if not table_name:
-            continue
-
-        schema_cfg["tables"]["whitelist"].add(table_name)
-
-        table_cfg = custom_tables.get(table_name)
-        if not table_cfg:
-            table_cfg = {}
-            custom_tables[table_name] = table_cfg
-
-        # Use the actual target table name if available, otherwise use source table name
-        target_table_name = source_to_target_name.get(table_name, table_name)
-        table_cfg.setdefault("name", target_table_name)
-        # MultiTable entities share one entity name; persist it per table so import can reuse it
-        table_cfg["entityName"] = entity_name
-        table_cfg["chainId"] = chain_id
-        if group_name:
-            table_cfg["groupId"] = group_name
-
-        # Mapping rows, as for a SingleTable entity, so renames and target-only columns survive (BOP-12 A).
-        source_table_id = tbl.get("id")
-        paired_target = next(
-            (t for t in target_tables if str(t.get("name")) == str(target_table_name)), None
-        )
-        target_cols = target_column_groups.get(str(target_table_name))
-        if table_name in column_groups and target_cols is not None and "columns" not in table_cfg:
-            pair_matrix = [
-                entry for entry in matrix
-                if isinstance(entry, dict) and str(entry.get("sourceTableObjectId")) == str(source_table_id)
-            ]
-            ordered_source = list(enumerate(column_groups[table_name], start=1))
-            if _is_grouped_matrix(pair_matrix):
-                # The rows, target keys and field functions of a SingleTable entity, so every 2.3 form comes back
-                # (BOP-16 A): a column fed by no source is a {target, expression} row, which the import checks with
-                # the key rules, instead of a targetOnlyColumns entry. The source of a MultiTable entity holds every
-                # column, so a column read and never written needs no target: [] row unless it is a source key,
-                # which the import would otherwise map by name; without one, a 1:1 chain still imports into 2.2.x.
-                rows, relations = _grouped_mapping_rows(pair_matrix, ordered_source, target_cols)
-                source_keys = set(_keys_from_columns(column_groups[table_name]))
-                rows = [row for row in rows if row.get("target") != [] or row.get("source") in source_keys]
-                pair_functions = [
-                    ff for ff in field_functions
-                    if paired_target is None or str(ff.get("tableOrObjectId")) == str(paired_target.get("id"))
-                ]
-                table_cfg["columns"] = apply_field_functions_to_column_mappings(rows, target_cols, pair_functions)
-                target_keys = _target_keys_to_export(relations, column_groups[table_name], target_cols)
-                if target_keys:
-                    table_cfg["targetKeys"] = target_keys
-            else:
-                table_cfg["columns"] = _legacy_mapping_rows(
-                    pair_matrix, ordered_source, list(enumerate(target_cols, start=1)), table_name
-                )
-
-        # Restore column metadata with full details including id and ordinalPosition
-        if table_name in column_groups and "columns" not in table_cfg:
-            column_metadata: List[Dict[str, Any]] = []
-            for col in column_groups[table_name]:
-                name = col.get("name")
-                if not name:
-                    continue
-                
-                # Use the actual id from the entity column data
-                col_id = col.get("id")
-                # Use ordinalPosition from entity if available, otherwise use id
-                ordinal = col.get("ordinalPosition") or col.get("position") or col_id
-                
-                col_meta: Dict[str, Any] = {
-                    "name": name,
-                    "type": _column_data_type(col),
-                    "dataLength": _column_attr(col, "charMaxLength", "dataLength", 0),
-                    "numericPrecision": _column_attr(col, "numPrec", "numericPrecision", 0),
-                    "numericScale": _column_attr(col, "numScale", "numericScale", 0),
-                    "isNullable": col.get("isNullable", False),
-                    "isPK": bool(col.get("isPK") or col.get("isPrimaryKey")),
-                    "id": col_id,
-                    "ordinalPosition": ordinal,
-                    # See the single table export above: written even when null so the
-                    # restore puts the column back exactly as it was backed up
-                    "charSet": col.get("charSet"),
-                }
-                column_metadata.append(col_meta)
-            
-            if column_metadata:
-                table_cfg["columns"] = column_metadata
-
-        # Restore key names if missing.
-        # Prefer the legacy per-table key array; if absent (2.2.6.0+), fall back
-        # to the isPK-derived list computed above.
-        if "keys" not in table_cfg:
-            key_names: List[str] = []
-            if table_name in key_groups:
-                for key in key_groups[table_name]:
-                    name = key.get("name")
-                    if name and name not in key_names:
-                        key_names.append(str(name))
-            if not key_names and table_name in keys_by_table_from_isPK:
-                key_names = list(keys_by_table_from_isPK[table_name])
-            if key_names:
-                table_cfg["keys"] = key_names
-
-        # Extract whereClause from source tablesProperties for this table
-        source_tables_properties = source_ae.get("tablesProperties", {}) or {}
-        source_table_key = f"{source_schema}.{table_name}"
-        table_properties = source_tables_properties.get(source_table_key, {}) or {}
-        if "whereClause" in table_properties:
-            where_clause = table_properties["whereClause"]
-            if where_clause:
-                table_cfg["whereClause"] = str(where_clause)
-                logger.debug(f"Exported whereClause for MultiTable {table_name}: {where_clause}")
+        _export_multitable_table(export, tbl)
 
 
 def attach_schedules_from_jobs(
