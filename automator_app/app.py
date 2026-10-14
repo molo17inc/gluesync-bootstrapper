@@ -738,41 +738,6 @@ def _register_ai_settings_routes(app: FastAPI) -> None:
     app.add_api_route("/api/import/ai-settings", _import_ai_settings, methods=["POST"], responses=_ERROR_RESPONSES)
 
 
-def _index_page_handler(asset_rewrites: Dict[str, str]):
-    """Build the handler of /, which serves index.html with the fingerprinted asset names."""
-
-    async def root() -> Response:
-        index_path = _static_dir() / "index.html"
-        if not index_path.exists():
-            raise HTTPException(status_code=500, detail="UI assets missing")
-
-        content = index_path.read_text(encoding="utf-8")
-        for original, hashed in asset_rewrites.items():
-            content = content.replace(original, hashed)
-
-        return Response(content=content, media_type="text/html")
-
-    return root
-
-
-async def healthcheck() -> dict:
-    return {"status": "ok"}
-
-
-async def version() -> VersionResponse:
-    try:
-        version = get_version()
-    except Exception as exc:
-        logger.exception("Failed to get version: %s", exc)
-        version = "unknown"
-    return VersionResponse(version=version)
-
-
-async def get_state() -> StateResponse:
-    snapshot = state.snapshot()
-    return StateResponse(**snapshot)
-
-
 def _fetch_automator_changelog(version: str) -> Any:
     """Fetch the changelog of an Automator version from the changelog service."""
     url = f"{CHANGELOG_API_BASE_URL}/changelog/automator/{version}"
@@ -803,22 +768,45 @@ def _fetch_automator_changelog(version: str) -> Any:
     return data
 
 
-async def get_automator_changelog(version: str):
-    return _fetch_automator_changelog(version)
-
-
 def _register_page_routes(app: FastAPI, asset_rewrites: Dict[str, str]) -> None:
     """The UI page, health, version, state and changelog routes."""
-    app.add_api_route("/", _index_page_handler(asset_rewrites), methods=["GET"], responses=_UI_RESPONSES)
-    app.add_api_route("/api/healthz", healthcheck, methods=["GET"])
-    app.add_api_route("/api/version", version, methods=["GET"])
-    app.add_api_route("/api/state", get_state, methods=["GET"])
-    app.add_api_route(
-        "/api/changelog/automator/{version}", get_automator_changelog, methods=["GET"], responses=_CHANGELOG_RESPONSES
-    )
+
+    @app.get("/", responses=_UI_RESPONSES)
+    async def root() -> Response:
+        index_path = _static_dir() / "index.html"
+        if not index_path.exists():
+            raise HTTPException(status_code=500, detail="UI assets missing")
+
+        content = index_path.read_text(encoding="utf-8")
+        for original, hashed in asset_rewrites.items():
+            content = content.replace(original, hashed)
+
+        return Response(content=content, media_type="text/html")
+
+    @app.get("/api/healthz")
+    async def healthcheck() -> dict:
+        return {"status": "ok"}
+
+    @app.get("/api/version")
+    async def version() -> VersionResponse:
+        try:
+            version = get_version()
+        except Exception as exc:
+            logger.exception("Failed to get version: %s", exc)
+            version = "unknown"
+        return VersionResponse(version=version)
+
+    @app.get("/api/state")
+    async def get_state() -> StateResponse:
+        snapshot = state.snapshot()
+        return StateResponse(**snapshot)
+
+    @app.get("/api/changelog/automator/{version}", responses=_CHANGELOG_RESPONSES)
+    async def get_automator_changelog(version: str):
+        return _fetch_automator_changelog(version)
 
 
-async def login(payload: LoginRequest) -> ApiMessage:
+def _login(payload: LoginRequest) -> ApiMessage:
     try:
         token = corehub.authenticate(
             base_url=payload.base_url,
@@ -842,11 +830,6 @@ async def login(payload: LoginRequest) -> ApiMessage:
         create_tables=payload.create_tables,
     )
     return ApiMessage(message="Authentication successful")
-
-
-async def logout() -> ApiMessage:
-    state.clear_auth()
-    return ApiMessage(message="Logged out")
 
 
 def _is_entity_yaml(lower: str) -> bool:
@@ -925,7 +908,7 @@ async def upload_yaml(file: UploadFile = File(...)) -> UploadResponse:
     return UploadResponse(fileId=file_id, filename=file.filename)
 
 
-async def current_run(include_logs: bool = False):
+def _current_run(include_logs: bool = False):
     snapshot = state.current_run_snapshot()
     if not snapshot:
         return {"run": None}
@@ -938,13 +921,24 @@ async def current_run(include_logs: bool = False):
 
 def _register_session_routes(app: FastAPI) -> None:
     """The login, logout, YAML upload and current run routes."""
-    app.add_api_route("/api/login", login, methods=["POST"], responses=_LOGIN_RESPONSES)
-    app.add_api_route("/api/logout", logout, methods=["POST"])
+
+    @app.post("/api/login", responses=_LOGIN_RESPONSES)
+    async def login(payload: LoginRequest) -> ApiMessage:
+        return _login(payload)
+
+    @app.post("/api/logout")
+    async def logout() -> ApiMessage:
+        state.clear_auth()
+        return ApiMessage(message="Logged out")
+
     app.add_api_route("/api/upload", upload_yaml, methods=["POST"], responses=_UPLOAD_RESPONSES)
-    app.add_api_route("/api/run/current", current_run, methods=["GET"])
+
+    @app.get("/api/run/current")
+    async def current_run(include_logs: bool = False):
+        return _current_run(include_logs)
 
 
-async def list_pipelines() -> PipelinesResponse:
+def _list_pipelines() -> PipelinesResponse:
     _require_session()
 
     try:
@@ -961,7 +955,7 @@ async def list_pipelines() -> PipelinesResponse:
     return PipelinesResponse(pipelines=[PipelineInfo(**p) for p in pipelines])
 
 
-async def bulk_list_schemas(pipeline_id: Annotated[str, Query(alias="pipelineId")]) -> BulkSchemasResponse:
+def _bulk_list_schemas(pipeline_id: str) -> BulkSchemasResponse:
     _require_session()
 
     try:
@@ -987,7 +981,7 @@ async def bulk_list_schemas(pipeline_id: Annotated[str, Query(alias="pipelineId"
     return BulkSchemasResponse(schemas=schemas, source_type=source_type, target_type=target_type)
 
 
-async def bulk_list_tables(pipeline_id: Annotated[str, Query(alias="pipelineId")], schema: str) -> BulkTablesResponse:
+def _bulk_list_tables(pipeline_id: str, schema: str) -> BulkTablesResponse:
     _require_session()
 
     try:
@@ -1045,7 +1039,7 @@ def _bulk_schema_types(request: BulkCreateRequest) -> tuple[str, str]:
     return source_type, target_type
 
 
-async def bulk_create_entities(request: BulkCreateRequest) -> ApiMessage:
+def _bulk_create_entities(request: BulkCreateRequest) -> ApiMessage:
     _require_session()
 
     prefs = state.preferences()
@@ -1212,15 +1206,7 @@ def _template_yaml(request: BulkTemplateRequest, table_names: list[str]) -> str:
     )
 
 
-async def bulk_export_template(request: BulkTemplateRequest):
-    """Generate an on-the-fly table-list-style YAML for the selected tables.
-
-    This does *not* export an existing pipeline configuration. Instead it
-    produces a minimal table-list-template.yaml-shaped document containing
-    only the chosen source schema and tables, so it can be refined and
-    later used with the CLI bootstrapper.
-    """
-
+def _bulk_export_template(request: BulkTemplateRequest):
     _require_session()
 
     pipeline_id = request.pipeline_id
@@ -1246,25 +1232,38 @@ async def bulk_export_template(request: BulkTemplateRequest):
 
 def _register_bulk_routes(app: FastAPI) -> None:
     """The pipeline list and the bulk entity creation routes."""
-    app.add_api_route("/api/pipelines", list_pipelines, methods=["GET"], responses=_COREHUB_CALL_RESPONSES)
-    app.add_api_route("/api/bulk/schemas", bulk_list_schemas, methods=["GET"], responses=_COREHUB_CALL_RESPONSES)
-    app.add_api_route("/api/bulk/tables", bulk_list_tables, methods=["GET"], responses=_COREHUB_CALL_RESPONSES)
-    app.add_api_route("/api/bulk/create", bulk_create_entities, methods=["POST"], responses=_COREHUB_CALL_RESPONSES)
-    app.add_api_route("/api/bulk/template", bulk_export_template, methods=["POST"], responses=_TEMPLATE_RESPONSES)
+
+    @app.get("/api/pipelines", responses=_COREHUB_CALL_RESPONSES)
+    async def list_pipelines() -> PipelinesResponse:
+        return _list_pipelines()
+
+    @app.get("/api/bulk/schemas", responses=_COREHUB_CALL_RESPONSES)
+    async def bulk_list_schemas(pipeline_id: Annotated[str, Query(alias="pipelineId")]) -> BulkSchemasResponse:
+        return _bulk_list_schemas(pipeline_id)
+
+    @app.get("/api/bulk/tables", responses=_COREHUB_CALL_RESPONSES)
+    async def bulk_list_tables(
+        pipeline_id: Annotated[str, Query(alias="pipelineId")], schema: str
+    ) -> BulkTablesResponse:
+        return _bulk_list_tables(pipeline_id, schema)
+
+    @app.post("/api/bulk/create", responses=_COREHUB_CALL_RESPONSES)
+    async def bulk_create_entities(request: BulkCreateRequest) -> ApiMessage:
+        return _bulk_create_entities(request)
+
+    @app.post("/api/bulk/template", responses=_TEMPLATE_RESPONSES)
+    async def bulk_export_template(request: BulkTemplateRequest):
+        """Generate an on-the-fly table-list-style YAML for the selected tables.
+
+        This does *not* export an existing pipeline configuration. Instead it
+        produces a minimal table-list-template.yaml-shaped document containing
+        only the chosen source schema and tables, so it can be refined and
+        later used with the CLI bootstrapper.
+        """
+        return _bulk_export_template(request)
 
 
-async def export_pipeline(pipeline_id: str, include_secrets: bool = False):
-    """Export entity metadata for a single pipeline.
-
-    Returns plain YAML when no entity-level UDFs are referenced. When UDFs
-    are present, returns a ZIP containing the YAML plus ``udf-<agentId>/``
-    source folders (same layout full backup / import already understand)
-    so entity-only export round-trips mapping-function sources (GSSD-1355).
-
-    Duplicate source tables are handled by creating unique keys (e.g., table@@2, table@@3)
-    within the same YAML file to avoid key conflicts.
-    """
-
+def _export_pipeline(pipeline_id: str, include_secrets: bool = False):
     _require_session()
 
     try:
@@ -1304,9 +1303,7 @@ def _pipeline_backup_name(pipeline_id: str) -> str:
     return safe_name
 
 
-async def export_pipeline_full_backup(pipeline_id: str, include_secrets: bool = False):
-    """Export a full backup (YAML + agents-config + UDFs) for a single pipeline."""
-
+def _export_pipeline_full_backup(pipeline_id: str, include_secrets: bool = False):
     _require_session()
 
     try:
@@ -1354,13 +1351,7 @@ def _check_duplicate_request(request: DuplicatePipelineRequest) -> None:
         )
 
 
-async def duplicate_pipeline(pipeline_id: str, request: DuplicatePipelineRequest):
-    """Duplicate a pipeline with new source and target agent configuration.
-
-    This endpoint allows users to clone an existing pipeline with different agents.
-    Agents are provisioned via CoreHub API during pipeline creation.
-    """
-
+def _duplicate_pipeline(pipeline_id: str, request: DuplicatePipelineRequest):
     _require_session()
     _check_duplicate_request(request)
 
@@ -1409,9 +1400,7 @@ async def duplicate_pipeline(pipeline_id: str, request: DuplicatePipelineRequest
     return DuplicatePipelineResponse(**result)
 
 
-async def cancel_duplicate() -> ApiMessage:
-    """Request cancellation of an in-flight duplicate pipeline operation."""
-
+def _cancel_duplicate() -> ApiMessage:
     _require_session()
 
     requested = state.request_duplicate_cancel()
@@ -1420,7 +1409,7 @@ async def cancel_duplicate() -> ApiMessage:
     return ApiMessage(success=True, message="Duplicate cancellation requested")
 
 
-async def get_corehub_overview() -> dict:
+def _get_corehub_overview() -> dict:
     _require_session()
 
     try:
@@ -1448,9 +1437,7 @@ async def get_corehub_overview() -> dict:
     return summary
 
 
-async def get_pipeline_agents(pipeline_id: str) -> PipelineAgentsResponse:
-    """Get pipeline agent details for auto-populating duplicate form."""
-
+def _get_pipeline_agents(pipeline_id: str) -> PipelineAgentsResponse:
     _require_session()
 
     try:
@@ -1486,29 +1473,52 @@ async def get_pipeline_agents(pipeline_id: str) -> PipelineAgentsResponse:
 
 def _register_pipeline_routes(app: FastAPI) -> None:
     """The single pipeline export, duplicate, Core Hub overview and pipeline agents routes."""
-    app.add_api_route(
-        "/api/export/pipeline/{pipeline_id}", export_pipeline, methods=["GET"], responses=_PIPELINE_EXPORT_RESPONSES
-    )
-    app.add_api_route(
-        "/api/export/pipeline/{pipeline_id}/full",
-        export_pipeline_full_backup,
-        methods=["GET"],
-        responses=_PIPELINE_EXPORT_RESPONSES,
-    )
-    app.add_api_route(
+
+    @app.get("/api/export/pipeline/{pipeline_id}", responses=_PIPELINE_EXPORT_RESPONSES)
+    async def export_pipeline(pipeline_id: str, include_secrets: bool = False):
+        """Export entity metadata for a single pipeline.
+
+        Returns plain YAML when no entity-level UDFs are referenced. When UDFs
+        are present, returns a ZIP containing the YAML plus ``udf-<agentId>/``
+        source folders (same layout full backup / import already understand)
+        so entity-only export round-trips mapping-function sources (GSSD-1355).
+
+        Duplicate source tables are handled by creating unique keys (e.g., table@@2, table@@3)
+        within the same YAML file to avoid key conflicts.
+        """
+        return _export_pipeline(pipeline_id, include_secrets)
+
+    @app.get("/api/export/pipeline/{pipeline_id}/full", responses=_PIPELINE_EXPORT_RESPONSES)
+    async def export_pipeline_full_backup(pipeline_id: str, include_secrets: bool = False):
+        """Export a full backup (YAML + agents-config + UDFs) for a single pipeline."""
+        return _export_pipeline_full_backup(pipeline_id, include_secrets)
+
+    @app.post(
         "/api/duplicate/pipeline/{pipeline_id}",
-        duplicate_pipeline,
-        methods=["POST"],
         response_model=DuplicatePipelineResponse,
         responses=_DUPLICATE_RESPONSES,
     )
-    app.add_api_route("/api/duplicate/cancel", cancel_duplicate, methods=["POST"], responses=_SESSION_RESPONSES)
-    app.add_api_route(
-        "/api/corehub/overview", get_corehub_overview, methods=["GET"], responses=_COREHUB_CALL_RESPONSES
-    )
-    app.add_api_route(
-        "/api/pipeline/{pipeline_id}/agents", get_pipeline_agents, methods=["GET"], responses=_COREHUB_CALL_RESPONSES
-    )
+    async def duplicate_pipeline(pipeline_id: str, request: DuplicatePipelineRequest):
+        """Duplicate a pipeline with new source and target agent configuration.
+
+        This endpoint allows users to clone an existing pipeline with different agents.
+        Agents are provisioned via CoreHub API during pipeline creation.
+        """
+        return _duplicate_pipeline(pipeline_id, request)
+
+    @app.post("/api/duplicate/cancel", responses=_SESSION_RESPONSES)
+    async def cancel_duplicate() -> ApiMessage:
+        """Request cancellation of an in-flight duplicate pipeline operation."""
+        return _cancel_duplicate()
+
+    @app.get("/api/corehub/overview", responses=_COREHUB_CALL_RESPONSES)
+    async def get_corehub_overview() -> dict:
+        return _get_corehub_overview()
+
+    @app.get("/api/pipeline/{pipeline_id}/agents", responses=_COREHUB_CALL_RESPONSES)
+    async def get_pipeline_agents(pipeline_id: str) -> PipelineAgentsResponse:
+        """Get pipeline agent details for auto-populating duplicate form."""
+        return _get_pipeline_agents(pipeline_id)
 
 
 @dataclass
@@ -2562,7 +2572,7 @@ def _register_import_routes(app: FastAPI) -> None:
     app.add_api_route("/api/import/oidc", import_oidc, methods=["POST"], responses=_FILE_IMPORT_RESPONSES)
 
 
-async def export_all_pipelines(include_secrets: bool = False):
+def _export_all_pipelines(include_secrets: bool = False):
     _require_session()
 
     try:
@@ -2603,43 +2613,7 @@ def _export_corehub_config(export: Callable[..., Any], failure_message: str, wit
     return JSONResponse(config)
 
 
-async def export_global_configs():
-    """Export all global CoreHub configuration settings."""
-    return _export_corehub_config(corehub.export_global_configs, "Failed to export global configs")
-
-
-async def export_smtp():
-    """Export SMTP configuration from CoreHub."""
-    return _export_corehub_config(corehub.export_smtp_settings, "Failed to export SMTP settings")
-
-
-async def export_webhooks():
-    """Export webhooks configuration from CoreHub."""
-    return _export_corehub_config(corehub.export_webhooks_config, "Failed to export webhooks config")
-
-
-async def export_thresholds():
-    """Export thresholds configuration from CoreHub."""
-    return _export_corehub_config(corehub.export_thresholds, "Failed to export thresholds")
-
-
-async def export_schedules():
-    """Export Chronos scheduler jobs and settings from CoreHub."""
-    return _export_corehub_config(corehub.export_schedules, "Failed to export schedules", with_chronos_token=True)
-
-
-async def export_users():
-    """Export user management configuration from CoreHub."""
-    return _export_corehub_config(corehub.export_users, "Failed to export users")
-
-
-async def export_oidc():
-    """Export OIDC configuration from CoreHub."""
-    return _export_corehub_config(corehub.export_oidc_config, "Failed to export OIDC config")
-
-
-async def export_full_backup(include_secrets: bool = False):
-    """Export a complete CoreHub backup including pipelines, global configs, SMTP, webhooks, thresholds, and schedules."""
+def _export_full_backup(include_secrets: bool = False):
     _require_session()
 
     try:
@@ -2662,18 +2636,50 @@ async def export_full_backup(include_secrets: bool = False):
 
 def _register_export_routes(app: FastAPI) -> None:
     """The Export All, global configuration and full backup export routes."""
-    for path, handler in (
-        ("/api/export/all-pipelines", export_all_pipelines),
-        ("/api/export/global-configs", export_global_configs),
-        ("/api/export/smtp", export_smtp),
-        ("/api/export/webhooks", export_webhooks),
-        ("/api/export/thresholds", export_thresholds),
-        ("/api/export/schedules", export_schedules),
-        ("/api/export/users", export_users),
-        ("/api/export/oidc", export_oidc),
-        ("/api/export/full-backup", export_full_backup),
-    ):
-        app.add_api_route(path, handler, methods=["GET"], responses=_COREHUB_CALL_RESPONSES)
+
+    @app.get("/api/export/all-pipelines", responses=_COREHUB_CALL_RESPONSES)
+    async def export_all_pipelines(include_secrets: bool = False):
+        return _export_all_pipelines(include_secrets)
+
+    @app.get("/api/export/global-configs", responses=_COREHUB_CALL_RESPONSES)
+    async def export_global_configs():
+        """Export all global CoreHub configuration settings."""
+        return _export_corehub_config(corehub.export_global_configs, "Failed to export global configs")
+
+    @app.get("/api/export/smtp", responses=_COREHUB_CALL_RESPONSES)
+    async def export_smtp():
+        """Export SMTP configuration from CoreHub."""
+        return _export_corehub_config(corehub.export_smtp_settings, "Failed to export SMTP settings")
+
+    @app.get("/api/export/webhooks", responses=_COREHUB_CALL_RESPONSES)
+    async def export_webhooks():
+        """Export webhooks configuration from CoreHub."""
+        return _export_corehub_config(corehub.export_webhooks_config, "Failed to export webhooks config")
+
+    @app.get("/api/export/thresholds", responses=_COREHUB_CALL_RESPONSES)
+    async def export_thresholds():
+        """Export thresholds configuration from CoreHub."""
+        return _export_corehub_config(corehub.export_thresholds, "Failed to export thresholds")
+
+    @app.get("/api/export/schedules", responses=_COREHUB_CALL_RESPONSES)
+    async def export_schedules():
+        """Export Chronos scheduler jobs and settings from CoreHub."""
+        return _export_corehub_config(corehub.export_schedules, "Failed to export schedules", with_chronos_token=True)
+
+    @app.get("/api/export/users", responses=_COREHUB_CALL_RESPONSES)
+    async def export_users():
+        """Export user management configuration from CoreHub."""
+        return _export_corehub_config(corehub.export_users, "Failed to export users")
+
+    @app.get("/api/export/oidc", responses=_COREHUB_CALL_RESPONSES)
+    async def export_oidc():
+        """Export OIDC configuration from CoreHub."""
+        return _export_corehub_config(corehub.export_oidc_config, "Failed to export OIDC config")
+
+    @app.get("/api/export/full-backup", responses=_COREHUB_CALL_RESPONSES)
+    async def export_full_backup(include_secrets: bool = False):
+        """Export a complete CoreHub backup including pipelines, global configs, SMTP, webhooks, thresholds, and schedules."""
+        return _export_full_backup(include_secrets)
 
 
 # Strong references to the entity creation runs started in the background, so
@@ -2830,7 +2836,7 @@ async def _execute_run(run_id: str, request: RunRequest) -> None:
     state.finalize_run(run_id, status, result.get("error"))
 
 
-async def start_run(request: RunRequest) -> ApiMessage:
+def _start_run(request: RunRequest) -> ApiMessage:
     if not state.token:
         raise HTTPException(status_code=401, detail=AUTH_REQUIRED)
 
@@ -2899,7 +2905,11 @@ async def upload_certificate(
 
 def _register_run_routes(app: FastAPI) -> None:
     """The entity creation run and the agent certificate upload routes."""
-    app.add_api_route("/api/run", start_run, methods=["POST"], responses=_RUN_RESPONSES)
+
+    @app.post("/api/run", responses=_RUN_RESPONSES)
+    async def start_run(request: RunRequest) -> ApiMessage:
+        return _start_run(request)
+
     app.add_api_route(
         "/api/agent/certificate/upload", upload_certificate, methods=["POST"], responses=_CERTIFICATE_RESPONSES
     )
@@ -2938,8 +2948,7 @@ def _mcp_server_entry() -> Dict[str, Any]:
     }
 
 
-async def mcp_status() -> Dict[str, Any]:
-    """Report which MCP clients are detected and whether gluesync is configured."""
+def _mcp_status() -> Dict[str, Any]:
     result: Dict[str, Any] = {}
     for client, path in _mcp_client_config_paths().items():
         installed = False
@@ -2974,8 +2983,7 @@ def _install_mcp_client(client: str, path: Optional[Path], entry: Dict[str, Any]
     return None
 
 
-async def mcp_install(payload: Dict[str, Any]) -> ApiMessage:
-    """Install the gluesync MCP server entry into the selected clients' configs."""
+def _mcp_install(payload: Dict[str, Any]) -> ApiMessage:
     clients = payload.get("clients") or []
     if not clients:
         raise HTTPException(status_code=400, detail="No clients selected")
@@ -3005,8 +3013,16 @@ async def mcp_install(payload: Dict[str, Any]) -> ApiMessage:
 
 def _register_mcp_routes(app: FastAPI) -> None:
     """The MCP client detection and one-click install routes."""
-    app.add_api_route("/api/mcp/status", mcp_status, methods=["GET"])
-    app.add_api_route("/api/mcp/install", mcp_install, methods=["POST"], responses=_MCP_INSTALL_RESPONSES)
+
+    @app.get("/api/mcp/status")
+    async def mcp_status() -> Dict[str, Any]:
+        """Report which MCP clients are detected and whether gluesync is configured."""
+        return _mcp_status()
+
+    @app.post("/api/mcp/install", responses=_MCP_INSTALL_RESPONSES)
+    async def mcp_install(payload: Dict[str, Any]) -> ApiMessage:
+        """Install the gluesync MCP server entry into the selected clients' configs."""
+        return _mcp_install(payload)
 
 
 def _mount_mcp_server(app: FastAPI) -> None:
