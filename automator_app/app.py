@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import io
 import json
 import mimetypes
@@ -79,6 +80,7 @@ CHANGELOG_API_BASE_URL = "https://api.backoffice.molo17.com"
 GLOBAL_CONFIG_NAMES = {
     "global-config", "global-configs", "smtp", "webhooks",
     "thresholds", "schedules", "users", "oidc",
+    "user-groups", "data-access-policies",
 }
 
 
@@ -1811,6 +1813,44 @@ def _restore_archive_globals(contents: bytes, errors: list[str]) -> None:
     )
 
 
+def _restore_archive_access(contents: bytes, errors: list[str]) -> None:
+    """Restore the user groups and the data-access policies of a full backup ZIP.
+
+    Runs once the pipelines are imported, so that the policies find the connections the import recreated.
+    A policy whose connection is still missing is left out and reported, like any other failure.
+    """
+    connection = {
+        "token": state.token,
+        "base_url": state.base_url,
+        "use_ssl": state.use_ssl,
+        "skip_verify": state.skip_verify,
+    }
+    sections = (
+        ("user groups", "user-groups", lambda data: corehub.import_user_groups(**connection, groups_data=data)),
+        ("data-access policies", "data-access-policies",
+         lambda data: corehub.import_data_access_policies(**connection, policies_data=data)),
+    )
+    for label, stem, restore in sections:
+        try:
+            data = _find_config_by_stem(contents, stem)
+        except Exception as exc:  # pylint: disable=broad-except
+            errors.append(f"{label}: {exc}")
+            continue
+        if data is None:
+            continue
+        result = corehub.restore_safely(f"{stem}.yaml", functools.partial(restore, data))
+        if result.get("status") == "failed":
+            errors.append(f"{label}: {result.get('error')}")
+            continue
+        errors.extend(
+            f"{label}: {message}"
+            for key in ("errors", "warnings", "skipped_policies")
+            for message in result.get(key) or []
+        )
+        if result.get("status") == "restored":
+            logger.info("Restored %s during import-all: %s", label, result.get("summary"))
+
+
 def _agent_matches(candidate: Any, a_type: Any, a_tag: Any, a_id: Any) -> bool:
     if not isinstance(candidate, dict):
         return False
@@ -2293,6 +2333,8 @@ def _import_archive(contents: bytes) -> ApiMessage:
     except Exception as exc:  # pylint: disable=broad-except
         logger.exception("Unexpected error during import-all processing")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    _restore_archive_access(contents, job.errors)
 
     errors = job.errors
     return ApiMessage(message=_import_summary(job.created_pipelines, errors), logs=errors if errors else None)

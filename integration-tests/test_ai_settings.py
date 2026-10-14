@@ -244,7 +244,8 @@ class FullBackupTests(unittest.TestCase):
             mock.patch.object(corehub, name, empty)
             for name in (
                 "export_global_configs", "export_smtp_settings", "export_webhooks_config", "export_thresholds",
-                "export_schedules", "export_users", "export_oidc_config",
+                "export_schedules", "export_users", "export_oidc_config", "export_user_groups",
+                "export_data_access_policies",
             )
         ]
         self.patches.append(mock.patch.object(corehub, "export_all_pipelines_yaml", return_value=self._empty_zip()))
