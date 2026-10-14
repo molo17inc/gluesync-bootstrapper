@@ -1563,16 +1563,16 @@ def _target_key_from_columns(tb, target_keys, key_name):
 def _target_keys_from_names(tb):
     """The target keys of a table without column mappings: the YAML keys directly from the source columns.
 
-    As this loop always has, a key found sets ``found`` for the keys after it too.
+    A key missing from both the source columns and the target columns is refused, naming it.
     """
     target_keys = []
     for key_name in tb.pair.custom_config['keys']:
         # Find the column and its ID (case-insensitive)
         col = next((c for c in tb.pair.columns["columns"] if c["name"].lower() == key_name.lower()), None)
-        if col is not None:
+        found = col is not None
+        if found:
             _append_named_target_key(tb, target_keys, col, key_name)
-            found = True
-        if not found:
+        else:
             found = _target_key_from_columns(tb, target_keys, key_name)
         if not found:
             error_msg = f"CRITICAL ERROR: Target key '{key_name}' not found in discovery or target_columns_def for table '{tb.pair.table_name}' in schema '{tb.ctx.yaml_target_schema}'. This key is required by the YAML configuration but does not exist in the target database discovery."
@@ -2748,37 +2748,40 @@ def _discovered_source_table_id(run, table, table_name):
     return _resolve_table_id(run.source_schema, table_name, run.source_tables_lookup, _SOURCE_ROLE)
 
 
-def _requested_group_id(run, custom_config):
-    """The group ID of the group a table requests ('_default' when none, or when it cannot be used)."""
-    # Get the requested group from config, default to '_default'
-    requested_group = str(custom_config.get('groupId', _DEFAULT_GROUP)).strip()
-    group_id = _DEFAULT_GROUP
+def resolve_group_id(custom_config, group_id_map, token, pipeline_id):
+    """The Core Hub group id for a table's YAML config, or '_default'.
 
-    # Log the requested group for debugging
-    logger.debug(f"Requested group: '{requested_group}' (type: {type(requested_group)})")
-
+    The YAML names the group under 'groupId' (older templates used 'group'). Groups are created
+    up front into group_id_map; a group missing there is created/fetched here and cached.
+    """
+    requested_group = str(custom_config.get('groupId') or custom_config.get('group') or _DEFAULT_GROUP).strip()
+    logger.debug(f"Requested group: '{requested_group}'")
     if not requested_group or requested_group == _DEFAULT_GROUP:
         logger.debug("Using default group as no specific group was requested")
-        return group_id
+        return _DEFAULT_GROUP
 
     # Use the pre-created group ID from the upfront group ID cache to avoid making a redundant API call per
     # entity (which causes the import to appear to loop indefinitely when many entities share the same group).
-    cached_id = run.group_id_map.get(requested_group)
-    if cached_id and cached_id != _DEFAULT_GROUP:
-        group_id = cached_id
+    group_id = group_id_map.get(requested_group)
+    if group_id and group_id != _DEFAULT_GROUP:
         logger.debug(f"Using cached group ID for '{requested_group}': {group_id}")
     else:
         # Fallback: try to create/get the group (e.g. if upfront pre-creation failed)
-        group_id = create_group(run.ctx.token, run.ctx.pipeline_id, requested_group)
+        group_id = create_group(token, pipeline_id, requested_group)
         if group_id != _DEFAULT_GROUP:
             # Cache it so subsequent entities skip the API call
-            run.group_id_map[requested_group] = group_id
+            group_id_map[requested_group] = group_id
 
     if group_id != _DEFAULT_GROUP:
         logger.info(f"Using group '{requested_group}' with ID: {group_id}")
     else:
         logger.warning(f"Could not use group '{requested_group}'. Using default group.")
     return group_id
+
+
+def _requested_group_id(run, custom_config):
+    """The group ID of the group a table requests ('_default' when none, or when it cannot be used)."""
+    return resolve_group_id(custom_config, run.group_id_map, run.ctx.token, run.ctx.pipeline_id)
 
 
 def _entity_payload(entity_name, source_entity, target_entity, group_id):
@@ -2976,17 +2979,6 @@ def _duplicate_table_columns(run, yaml_table_key, table_name):
         return False, None
 
 
-def _duplicate_group_id(custom_config, yaml_table_key):
-    """The group ID of the ``group`` a duplicate table names."""
-    group_name = custom_config.get('group')
-    group_id = None
-    if group_name and groups_by_name:
-        group_id = groups_by_name.get(group_name, {}).get('id')
-        if not group_id:
-            logger.warning(f"Group '{group_name}' not found for duplicate table {yaml_table_key}")
-    return group_id
-
-
 def _add_duplicate_table_entity(run, pair, props, document_key, yaml_table_key):
     """Build the SingleTable entity of a duplicate table, with the same logic as the first loop."""
     ctx, custom_config, table_name = run.ctx, pair.custom_config, pair.table_name
@@ -3041,14 +3033,14 @@ def _add_duplicate_table_entity(run, pair, props, document_key, yaml_table_key):
     # Get entity name from custom config
     entity_name = custom_config.get('entityName', f"{pair.target_table_name} - {run.source_schema}.{table_name}")
 
-    entity = _entity_payload(entity_name, source_entity, target_entity, _duplicate_group_id(custom_config, yaml_table_key))
+    entity = _entity_payload(entity_name, source_entity, target_entity, _requested_group_id(run, custom_config))
     run.entities.append(entity)
     logger.info(f"Created entity for duplicate table {yaml_table_key}: {entity_name}")
 
     run.queue_partition_request(entity["entityName"], partition_settings, props.partition_max)
 
-    # Process UDFs
-    table_udfs = props.target.get('udf', [])
+    # Process UDFs: 'udf' was popped from props.target, so read the table's own config as the first loop does
+    table_udfs = custom_config.get('customProperties', {}).get('target', {}).get('udf', [])
     if table_udfs:
         _define_table_udfs(run, table_name, table_udfs, f"duplicate table {yaml_table_key}")
 
@@ -4259,38 +4251,6 @@ def _start_entity_run(token, pipeline_id, yaml_config, source_schema, target_sch
                            is_target_nosql_type)
     return _EntityRun(ctx, schema, source_schema, target_schema, source_agent_id, source_type, target_type, grouped)
 
-
-
-def resolve_group_id(custom_config, group_id_map, token, pipeline_id):
-    """The Core Hub group id for a table's YAML config, or '_default'.
-
-    The YAML names the group under 'groupId' (older templates used 'group'). Groups are created
-    up front into group_id_map; a group missing there is created/fetched here and cached.
-    """
-    requested_group = str(custom_config.get('groupId') or custom_config.get('group') or '_default').strip()
-    logger.debug(f"Requested group: '{requested_group}'")
-    if not requested_group or requested_group == '_default':
-        logger.debug("Using default group as no specific group was requested")
-        return '_default'
-
-    # Use the pre-created group ID from the upfront group_id_map cache to avoid
-    # making a redundant API call per entity (which causes the import to appear
-    # to loop indefinitely when many entities share the same group).
-    group_id = group_id_map.get(requested_group)
-    if group_id and group_id != '_default':
-        logger.debug(f"Using cached group ID for '{requested_group}': {group_id}")
-    else:
-        # Fallback: try to create/get the group (e.g. if upfront pre-creation failed)
-        group_id = create_group(token, pipeline_id, requested_group)
-        if group_id != '_default':
-            # Cache it so subsequent entities skip the API call
-            group_id_map[requested_group] = group_id
-
-    if group_id != '_default':
-        logger.info(f"Using group '{requested_group}' with ID: {group_id}")
-    else:
-        logger.warning(f"Could not use group '{requested_group}'. Using default group.")
-    return group_id
 
 
 def create_entities(token, pipeline_id, source_schema, target_schema, tables, source_agent_id, target_agent_id, source_type, target_type, yaml_config, skip_errors=True, chunk_size=50, source_agent_tag=None, target_agent_tag=None, chronos_token=None):

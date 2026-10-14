@@ -1000,34 +1000,34 @@ def _bulk_list_tables(pipeline_id: str, schema: str) -> BulkTablesResponse:
     return BulkTablesResponse(tables=tables)
 
 
-def _schema_types_from_pipeline_yaml(pipeline_id: str, source_type: str, target_type: str) -> tuple[str, str]:
-    """Fill the empty source/target type from the pipeline's YAML configuration, when one is known."""
+def _schema_types_from_pipeline_agents(pipeline_id: str, source_type: str, target_type: str) -> tuple[str, str]:
+    """Fill the empty source/target type from the pipeline's agents, as the bulk schemas and template routes do."""
     try:
-        # Try to get the pipeline's YAML configuration
-        yaml_path = state.get_pipeline_yaml_path(pipeline_id)
-        if yaml_path and yaml_path.exists():
-            from commons import extract_schema_types_from_yaml
-            src_hint, tgt_hint = extract_schema_types_from_yaml(str(yaml_path))
-            if not source_type and src_hint:
-                source_type = src_hint
-                logger.info(f"Extracted source_type from YAML: {source_type}")
-            if not target_type and tgt_hint:
-                target_type = tgt_hint
-                logger.info(f"Extracted target_type from YAML: {target_type}")
-    except Exception as e:
-        logger.warning(f"Could not extract types from YAML: {e}")
+        src_hint, tgt_hint = corehub.infer_agent_schema_types(
+            token=state.token,
+            base_url=state.base_url,
+            pipeline_id=pipeline_id,
+            use_ssl=state.use_ssl,
+            skip_verify=state.skip_verify,
+        )
+        return source_type or src_hint, target_type or tgt_hint
+    except Exception as e:  # pylint: disable=broad-except
+        logger.warning(f"Could not infer types from the pipeline agents: {e}")
     return source_type, target_type
 
 
 def _bulk_schema_types(request: BulkCreateRequest) -> tuple[str, str]:
-    """Source and target type of a bulk creation: the request's, else the YAML's, else SQL."""
-    # If source_type or target_type are empty strings, try to extract from pipeline's YAML
+    """Source and target type of a bulk creation: the request's, else the pipeline agents', else SQL."""
     source_type = request.source_type
     target_type = request.target_type
 
     if not source_type or not target_type:
-        logger.info(f"source_type or target_type empty (source='{source_type}', target='{target_type}'), attempting to extract from pipeline YAML")
-        source_type, target_type = _schema_types_from_pipeline_yaml(request.pipeline_id, source_type, target_type)
+        logger.info(
+            "source_type or target_type empty (source='%s', target='%s'), inferring them from the pipeline agents",
+            source_type,
+            target_type,
+        )
+        source_type, target_type = _schema_types_from_pipeline_agents(request.pipeline_id, source_type, target_type)
 
     # Final fallback to SQL if still empty
     if not source_type:
@@ -1905,13 +1905,14 @@ def _agents_for_pipeline(job: _ArchiveImport, name: str, meta: Any) -> Optional[
 def _read_archive_certificate(
     zf_cert: zipfile.ZipFile, name: str, cert_path: str, agent_id: Any, errors: list[str]
 ) -> Optional[bytes]:
-    """Certificate file an agent of a backup ZIP points at; None (and an error) when it is missing."""
+    """Certificate file an agent of a backup ZIP points at; None (and an error) when it is missing or empty."""
     # Try to find the certificate file in the ZIP
     # Support both absolute and relative paths
     cert_filename = cert_path.lstrip("./")
     logger.debug(f"Looking for certificate file: {cert_filename}")
     logger.debug(f"Available files in ZIP: {zf_cert.namelist()}")
-    cert_data = None
+    # Pipeline folder of the YAML (e.g. pipeline_xxx/certificate.txt), if any
+    pipeline_folder = name.split('/')[0] if '/' in name else None
 
     # Try exact match first
     if cert_filename in zf_cert.namelist():
@@ -1919,14 +1920,17 @@ def _read_archive_certificate(
         logger.debug(f"Found certificate via exact match: {cert_filename}")
     else:
         # Try with pipeline folder prefix (e.g., pipeline_xxx/certificate.txt)
-        # Extract pipeline folder from the YAML name
-        pipeline_folder = name.split('/')[0] if '/' in name else None
         cert_data = _find_certificate_near_pipeline(zf_cert, pipeline_folder, cert_filename)
 
-    if not cert_data:
+    if cert_data is None:
         error_msg = f"{name}: Certificate file '{cert_path}' not found in ZIP for agent {agent_id}"
         logger.error(error_msg)
         logger.error(f"Searched for: {cert_filename}, {pipeline_folder}/{cert_filename if pipeline_folder else 'N/A'}")
+        errors.append(error_msg)
+        return None
+    if not cert_data:
+        error_msg = f"{name}: Certificate file '{cert_path}' in the ZIP is empty; not uploaded for agent {agent_id}"
+        logger.error(error_msg)
         errors.append(error_msg)
         return None
     return cert_data
@@ -1944,7 +1948,7 @@ def _find_certificate_near_pipeline(
             logger.debug(f"Found certificate with pipeline prefix: {prefixed_path}")
 
     # Try case-insensitive search as fallback
-    if not cert_data:
+    if cert_data is None:
         cert_data = _find_certificate_by_file_name(zf_cert, cert_filename)
     return cert_data
 
