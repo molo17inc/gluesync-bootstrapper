@@ -2905,125 +2905,112 @@ def _register_run_routes(app: FastAPI) -> None:
     )
 
 
-def create_app() -> FastAPI:
-    _ensure_static_assets()
-    asset_rewrites = _fingerprint_static_assets()
+# ── MCP client setup (one-click install) ───────────────────────────────
 
-    app = FastAPI(title="Gluesync Automator", version="1.0.0")
+def _mcp_client_config_paths() -> Dict[str, Path]:
+    """Return per-client MCP config file paths for the current OS."""
+    home = Path.home()
+    if sys.platform == "darwin":
+        claude = home / "Library" / "Application Support" / "Claude" / CLAUDE_DESKTOP_CONFIG
+    elif sys.platform == "win32":
+        claude = Path(os.environ.get("APPDATA", home / "AppData" / "Roaming")) / "Claude" / CLAUDE_DESKTOP_CONFIG
+    else:
+        claude = home / ".config" / "Claude" / CLAUDE_DESKTOP_CONFIG
+    return {
+        "claude": claude,
+        "windsurf": home / ".codeium" / "windsurf" / "mcp_config.json",
+        "cursor": home / ".cursor" / "mcp.json",
+    }
 
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
 
-    app.mount("/static", StaticFiles(directory=_static_dir()), name="static")
+def _mcp_server_entry() -> Dict[str, Any]:
+    """Build the MCP server config entry pointing at this installation."""
+    project_root = str(Path(__file__).resolve().parent.parent)
+    if getattr(sys, "frozen", False):
+        # PyInstaller build: python interpreter not bundled separately
+        python_cmd = "python3" if sys.platform != "win32" else "python"
+    else:
+        python_cmd = sys.executable
+    return {
+        "command": python_cmd,
+        "args": ["-m", "mcp_server.server"],
+        "env": {"PYTHONPATH": project_root},
+    }
 
-    _register_page_routes(app, asset_rewrites)
-    _register_session_routes(app)
 
-    _register_bulk_routes(app)
-
-    _register_pipeline_routes(app)
-
-    _register_import_routes(app)
-
-    _register_export_routes(app)
-
-    _register_run_routes(app)
-
-    # ── MCP client setup (one-click install) ───────────────────────────────
-
-    def _mcp_client_config_paths() -> Dict[str, Path]:
-        """Return per-client MCP config file paths for the current OS."""
-        home = Path.home()
-        if sys.platform == "darwin":
-            claude = home / "Library" / "Application Support" / "Claude" / CLAUDE_DESKTOP_CONFIG
-        elif sys.platform == "win32":
-            claude = Path(os.environ.get("APPDATA", home / "AppData" / "Roaming")) / "Claude" / CLAUDE_DESKTOP_CONFIG
-        else:
-            claude = home / ".config" / "Claude" / CLAUDE_DESKTOP_CONFIG
-        return {
-            "claude": claude,
-            "windsurf": home / ".codeium" / "windsurf" / "mcp_config.json",
-            "cursor": home / ".cursor" / "mcp.json",
-        }
-
-    def _mcp_server_entry() -> Dict[str, Any]:
-        """Build the MCP server config entry pointing at this installation."""
-        project_root = str(Path(__file__).resolve().parent.parent)
-        if getattr(sys, "frozen", False):
-            # PyInstaller build: python interpreter not bundled separately
-            python_cmd = "python3" if sys.platform != "win32" else "python"
-        else:
-            python_cmd = sys.executable
-        return {
-            "command": python_cmd,
-            "args": ["-m", "mcp_server.server"],
-            "env": {"PYTHONPATH": project_root},
-        }
-
-    @app.get("/api/mcp/status")
-    async def mcp_status() -> Dict[str, Any]:
-        """Report which MCP clients are detected and whether gluesync is configured."""
-        result: Dict[str, Any] = {}
-        for client, path in _mcp_client_config_paths().items():
-            installed = False
-            detected = path.parent.exists()
-            if path.exists():
-                try:
-                    cfg = json.loads(path.read_text())
-                    installed = "gluesync" in cfg.get("mcpServers", {})
-                except Exception:  # pylint: disable=broad-except
-                    pass
-            result[client] = {"detected": detected, "installed": installed, "configPath": str(path)}
-        return result
-
-    @app.post("/api/mcp/install", responses=_MCP_INSTALL_RESPONSES)
-    async def mcp_install(payload: Dict[str, Any]) -> ApiMessage:
-        """Install the gluesync MCP server entry into the selected clients' configs."""
-        clients = payload.get("clients") or []
-        if not clients:
-            raise HTTPException(status_code=400, detail="No clients selected")
-
-        paths = _mcp_client_config_paths()
-        entry = _mcp_server_entry()
-        configured: list[str] = []
-        errors: list[str] = []
-
-        for client in clients:
-            path = paths.get(client)
-            if path is None:
-                errors.append(f"Unknown client: {client}")
-                continue
+async def mcp_status() -> Dict[str, Any]:
+    """Report which MCP clients are detected and whether gluesync is configured."""
+    result: Dict[str, Any] = {}
+    for client, path in _mcp_client_config_paths().items():
+        installed = False
+        detected = path.parent.exists()
+        if path.exists():
             try:
-                if path.exists():
-                    try:
-                        cfg = json.loads(path.read_text())
-                    except json.JSONDecodeError:
-                        errors.append(f"{client}: existing config is not valid JSON ({path})")
-                        continue
-                else:
-                    path.parent.mkdir(parents=True, exist_ok=True)
-                    cfg = {}
-                cfg.setdefault("mcpServers", {})["gluesync"] = entry
-                path.write_text(json.dumps(cfg, indent=2) + "\n")
-                configured.append(client)
-                logger.info("MCP server configured for %s at %s", client, path)
-            except Exception as exc:  # pylint: disable=broad-except
-                errors.append(f"{client}: {exc}")
+                cfg = json.loads(path.read_text())
+                installed = "gluesync" in cfg.get("mcpServers", {})
+            except Exception:  # pylint: disable=broad-except
+                pass
+        result[client] = {"detected": detected, "installed": installed, "configPath": str(path)}
+    return result
 
-        if not configured:
-            raise HTTPException(status_code=500, detail="; ".join(errors) or "Nothing configured")
 
-        msg = f"MCP server configured for: {', '.join(configured)}. Restart the client app(s) to activate."
-        if errors:
-            msg += f" Errors: {'; '.join(errors)}"
-        return ApiMessage(message=msg)
+def _install_mcp_client(client: str, path: Optional[Path], entry: Dict[str, Any]) -> Optional[str]:
+    """Add the gluesync MCP server entry to one client's config; the error, if it could not."""
+    if path is None:
+        return f"Unknown client: {client}"
+    try:
+        if path.exists():
+            try:
+                cfg = json.loads(path.read_text())
+            except json.JSONDecodeError:
+                return f"{client}: existing config is not valid JSON ({path})"
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            cfg = {}
+        cfg.setdefault("mcpServers", {})["gluesync"] = entry
+        path.write_text(json.dumps(cfg, indent=2) + "\n")
+    except Exception as exc:  # pylint: disable=broad-except
+        return f"{client}: {exc}"
+    return None
 
-    # ── MCP Server (SSE transport) ─────────────────────────────────────────
+
+async def mcp_install(payload: Dict[str, Any]) -> ApiMessage:
+    """Install the gluesync MCP server entry into the selected clients' configs."""
+    clients = payload.get("clients") or []
+    if not clients:
+        raise HTTPException(status_code=400, detail="No clients selected")
+
+    paths = _mcp_client_config_paths()
+    entry = _mcp_server_entry()
+    configured: list[str] = []
+    errors: list[str] = []
+
+    for client in clients:
+        path = paths.get(client)
+        error = _install_mcp_client(client, path, entry)
+        if error is not None:
+            errors.append(error)
+            continue
+        configured.append(client)
+        logger.info("MCP server configured for %s at %s", client, path)
+
+    if not configured:
+        raise HTTPException(status_code=500, detail="; ".join(errors) or "Nothing configured")
+
+    msg = f"MCP server configured for: {', '.join(configured)}. Restart the client app(s) to activate."
+    if errors:
+        msg += f" Errors: {'; '.join(errors)}"
+    return ApiMessage(message=msg)
+
+
+def _register_mcp_routes(app: FastAPI) -> None:
+    """The MCP client detection and one-click install routes."""
+    app.add_api_route("/api/mcp/status", mcp_status, methods=["GET"])
+    app.add_api_route("/api/mcp/install", mcp_install, methods=["POST"], responses=_MCP_INSTALL_RESPONSES)
+
+
+def _mount_mcp_server(app: FastAPI) -> None:
+    """Mount the Gluesync MCP server (SSE transport) at /mcp when the mcp package is available."""
     # Mount the Gluesync MCP server at /mcp so any MCP-capable AI agent can
     # connect while the Automator is running.  The dependency on the `mcp`
     # package is optional: if it is not installed the Automator continues to
@@ -3072,6 +3059,33 @@ def create_app() -> FastAPI:
     except Exception as _mcp_exc:  # pylint: disable=broad-except
         logger.warning("Failed to mount MCP server: %s", _mcp_exc)
 
+
+def create_app() -> FastAPI:
+    _ensure_static_assets()
+    asset_rewrites = _fingerprint_static_assets()
+
+    app = FastAPI(title="Gluesync Automator", version="1.0.0")
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    app.mount("/static", StaticFiles(directory=_static_dir()), name="static")
+
+    # FastAPI matches routes in registration order: keep this order.
+    _register_page_routes(app, asset_rewrites)
+    _register_session_routes(app)
+    _register_bulk_routes(app)
+    _register_pipeline_routes(app)
+    _register_import_routes(app)
+    _register_export_routes(app)
+    _register_run_routes(app)
+    _register_mcp_routes(app)
+    _mount_mcp_server(app)
     _register_ai_settings_routes(app)
 
     return app
