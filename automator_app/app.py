@@ -35,7 +35,7 @@ import uuid
 import zipfile
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Annotated, Any, Dict, Optional
 import hashlib
 import re
 
@@ -43,7 +43,7 @@ import requests
 import yaml
 import create_user_defined_functions
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile, Response
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -520,7 +520,7 @@ _ERROR_RESPONSES: Dict[Any, Dict[str, Any]] = {
 _UPLOAD_RESPONSES: Dict[Any, Dict[str, Any]] = {
     400: {"description": "The file is not a YAML or ZIP configuration, is empty, or cannot be extracted"},
 }
-_EXPORT_RESPONSES: Dict[Any, Dict[str, Any]] = {
+_COREHUB_CALL_RESPONSES: Dict[Any, Dict[str, Any]] = {
     401: _NOT_LOGGED_IN_RESPONSE,
     500: _FAILURE_RESPONSE,
 }
@@ -547,6 +547,10 @@ _CHANGELOG_RESPONSES: Dict[Any, Dict[str, Any]] = {
 }
 _LOGIN_RESPONSES: Dict[Any, Dict[str, Any]] = {
     401: {"description": "Core Hub refused the credentials"},
+}
+_TEMPLATE_RESPONSES: Dict[Any, Dict[str, Any]] = {
+    400: {"description": "The pipeline, the schemas or the tables are missing"},
+    401: _NOT_LOGGED_IN_RESPONSE,
 }
 
 
@@ -916,6 +920,315 @@ def _register_session_routes(app: FastAPI) -> None:
     app.add_api_route("/api/run/current", current_run, methods=["GET"])
 
 
+async def list_pipelines() -> PipelinesResponse:
+    _require_session()
+
+    try:
+        pipelines = corehub.list_pipelines(
+            token=state.token,
+            base_url=state.base_url,
+            use_ssl=state.use_ssl,
+            skip_verify=state.skip_verify,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Failed to list pipelines")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return PipelinesResponse(pipelines=[PipelineInfo(**p) for p in pipelines])
+
+
+async def bulk_list_schemas(pipeline_id: Annotated[str, Query(alias="pipelineId")]) -> BulkSchemasResponse:
+    _require_session()
+
+    try:
+        schemas = corehub.list_source_schemas(
+            token=state.token,
+            base_url=state.base_url,
+            pipeline_id=pipeline_id,
+            use_ssl=state.use_ssl,
+            skip_verify=state.skip_verify,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Failed to list source schemas for pipeline %s", pipeline_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    source_type, target_type = corehub.infer_agent_schema_types(
+        token=state.token,
+        base_url=state.base_url,
+        pipeline_id=pipeline_id,
+        use_ssl=state.use_ssl,
+        skip_verify=state.skip_verify,
+    )
+
+    return BulkSchemasResponse(schemas=schemas, source_type=source_type, target_type=target_type)
+
+
+async def bulk_list_tables(pipeline_id: Annotated[str, Query(alias="pipelineId")], schema: str) -> BulkTablesResponse:
+    _require_session()
+
+    try:
+        tables = corehub.list_source_tables(
+            token=state.token,
+            base_url=state.base_url,
+            pipeline_id=pipeline_id,
+            schema=schema,
+            use_ssl=state.use_ssl,
+            skip_verify=state.skip_verify,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Failed to list source tables for pipeline %s schema %s", pipeline_id, schema)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return BulkTablesResponse(tables=tables)
+
+
+def _schema_types_from_pipeline_yaml(pipeline_id: str, source_type: str, target_type: str) -> tuple[str, str]:
+    """Fill the empty source/target type from the pipeline's YAML configuration, when one is known."""
+    try:
+        # Try to get the pipeline's YAML configuration
+        yaml_path = state.get_pipeline_yaml_path(pipeline_id)
+        if yaml_path and yaml_path.exists():
+            from commons import extract_schema_types_from_yaml
+            src_hint, tgt_hint = extract_schema_types_from_yaml(str(yaml_path))
+            if not source_type and src_hint:
+                source_type = src_hint
+                logger.info(f"Extracted source_type from YAML: {source_type}")
+            if not target_type and tgt_hint:
+                target_type = tgt_hint
+                logger.info(f"Extracted target_type from YAML: {target_type}")
+    except Exception as e:
+        logger.warning(f"Could not extract types from YAML: {e}")
+    return source_type, target_type
+
+
+def _bulk_schema_types(request: BulkCreateRequest) -> tuple[str, str]:
+    """Source and target type of a bulk creation: the request's, else the YAML's, else SQL."""
+    # If source_type or target_type are empty strings, try to extract from pipeline's YAML
+    source_type = request.source_type
+    target_type = request.target_type
+
+    if not source_type or not target_type:
+        logger.info(f"source_type or target_type empty (source='{source_type}', target='{target_type}'), attempting to extract from pipeline YAML")
+        source_type, target_type = _schema_types_from_pipeline_yaml(request.pipeline_id, source_type, target_type)
+
+    # Final fallback to SQL if still empty
+    if not source_type:
+        source_type = "SQL"
+        logger.info(f"Using fallback source_type: {source_type}")
+    if not target_type:
+        target_type = "SQL"
+        logger.info(f"Using fallback target_type: {target_type}")
+    return source_type, target_type
+
+
+async def bulk_create_entities(request: BulkCreateRequest) -> ApiMessage:
+    _require_session()
+
+    prefs = state.preferences()
+    enable_scheduling = request.enable_scheduling
+    if enable_scheduling is None:
+        enable_scheduling = prefs["enableScheduling"]
+    create_tables = request.create_tables
+    if create_tables is None:
+        create_tables = prefs["createTables"]
+
+    source_type, target_type = _bulk_schema_types(request)
+
+    # Disable table creation for NoSQL targets (same logic as duplicate pipeline)
+    effective_create_tables = bool(create_tables)
+    if target_type and target_type.upper() == 'NOSQL':
+        logger.info("Target is NoSQL - disabling table creation")
+        effective_create_tables = False
+
+    try:
+        result = corehub.run_create_entities_for_tables(
+            token=state.token,
+            base_url=state.base_url,
+            pipeline_id=request.pipeline_id,
+            source_schema=request.source_schema,
+            target_schema=request.target_schema,
+            source_type=source_type,
+            target_type=target_type,
+            table_names=request.table_names,
+            skip_errors=request.skip_errors,
+            chunk_size=request.chunk_size,
+            enable_scheduling=bool(enable_scheduling),
+            create_tables=effective_create_tables,
+            use_ssl=state.use_ssl,
+            skip_verify=state.skip_verify,
+            chronos_token=state.chronos_token,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Bulk create entities failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    ok = result.get("success", False)
+    logs = result.get("logs") or []
+    if logs:
+        for line in logs:
+            logger.info("[bulk-create] %s", line)
+
+    msg = "Bulk entity creation completed successfully" if ok else result.get("error") or "Bulk entity creation failed"
+    return ApiMessage(success=ok, message=msg, logs=logs)
+
+
+def _template_schema_types(pipeline_id: str) -> tuple[Any, Any]:
+    """Default source/target types of a bulk template, inferred from the pipeline agents."""
+    # Infer default source/target types from the pipeline agents so the
+    # generated template is immediately usable by the CLI.
+    try:
+        source_type, target_type = corehub.infer_agent_schema_types(
+            token=state.token,
+            base_url=state.base_url,
+            pipeline_id=pipeline_id,
+            use_ssl=state.use_ssl,
+            skip_verify=state.skip_verify,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception(
+            "Failed to infer schema types for bulk template on pipeline %s", pipeline_id
+        )
+        source_type, target_type = "SQL", "SQL"
+    return source_type, target_type
+
+
+def _unique_table_names(table_names: list[str]) -> list[str]:
+    """Deduplicate tables while preserving selection order."""
+    seen = set()
+    unique_tables: list[str] = []
+    for raw in table_names:
+        name = str(raw)
+        if name in seen:
+            continue
+        seen.add(name)
+        unique_tables.append(name)
+    return unique_tables
+
+
+def _template_table_entry(pipeline_id: str, source_schema: str, name: str) -> dict[str, Any]:
+    """Template entry of one table: its primary keys and, when discovered, its columns."""
+    try:
+        pk_names = corehub.discover_primary_key_names(
+            token=state.token,
+            base_url=state.base_url,
+            pipeline_id=pipeline_id,
+            schema=source_schema,
+            table_name=name,
+            use_ssl=state.use_ssl,
+            skip_verify=state.skip_verify,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception(
+            "Failed to discover primary keys for %s.%s on pipeline %s: %s",
+            source_schema,
+            name,
+            pipeline_id,
+            exc,
+        )
+        pk_names = []
+
+    try:
+        columns_meta = corehub.discover_column_metadata_for_table(
+            token=state.token,
+            base_url=state.base_url,
+            pipeline_id=pipeline_id,
+            schema=source_schema,
+            table_name=name,
+            use_ssl=state.use_ssl,
+            skip_verify=state.skip_verify,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception(
+            "Failed to discover column metadata for %s.%s on pipeline %s: %s",
+            source_schema,
+            name,
+            pipeline_id,
+            exc,
+        )
+        columns_meta = []
+
+    entry: dict[str, Any] = {"keys": pk_names}
+    if columns_meta:
+        entry["columns"] = columns_meta
+    return entry
+
+
+def _template_yaml(request: BulkTemplateRequest, table_names: list[str]) -> str:
+    """Table-list-template YAML of the selected tables of one source schema."""
+    pipeline_id = request.pipeline_id
+    source_schema = request.source_schema
+    source_type, target_type = _template_schema_types(pipeline_id)
+
+    unique_tables = _unique_table_names(table_names)
+
+    custom_cfg: dict[str, Any] = {}
+    for name in unique_tables:
+        custom_cfg[name] = _template_table_entry(pipeline_id, source_schema, name)
+
+    schema_cfg: dict[str, Any] = {
+        "target": request.target_schema,
+        "tables": {
+            "whitelist": unique_tables,
+            "custom": custom_cfg,
+        },
+    }
+
+    if source_type:
+        schema_cfg["sourceType"] = source_type
+    if target_type:
+        schema_cfg["targetType"] = target_type
+
+    # Direct schema configuration (no top-level "schemas" wrapper)
+    yaml_doc: dict[str, Any] = {source_schema: schema_cfg}
+
+    return yaml.safe_dump(
+        yaml_doc,
+        sort_keys=False,
+        allow_unicode=True,
+    )
+
+
+async def bulk_export_template(request: BulkTemplateRequest):
+    """Generate an on-the-fly table-list-style YAML for the selected tables.
+
+    This does *not* export an existing pipeline configuration. Instead it
+    produces a minimal table-list-template.yaml-shaped document containing
+    only the chosen source schema and tables, so it can be refined and
+    later used with the CLI bootstrapper.
+    """
+
+    _require_session()
+
+    pipeline_id = request.pipeline_id
+    source_schema = request.source_schema
+    target_schema = request.target_schema
+    table_names = [name for name in request.table_names or [] if name]
+
+    if not pipeline_id:
+        raise HTTPException(status_code=400, detail="pipelineId is required")
+    if not source_schema:
+        raise HTTPException(status_code=400, detail="sourceSchema is required")
+    if not target_schema:
+        raise HTTPException(status_code=400, detail="targetSchema is required")
+    if not table_names:
+        raise HTTPException(status_code=400, detail="tableNames must contain at least one table")
+
+    yaml_text = _template_yaml(request, table_names)
+
+    timestamp = datetime.now().strftime(TIMESTAMP_FORMAT)
+    filename = f"template_{pipeline_id}_{source_schema}_{timestamp}.yaml"
+    return _attachment(yaml_text.encode("utf-8"), "application/x-yaml", filename)
+
+
+def _register_bulk_routes(app: FastAPI) -> None:
+    """The pipeline list and the bulk entity creation routes."""
+    app.add_api_route("/api/pipelines", list_pipelines, methods=["GET"], responses=_COREHUB_CALL_RESPONSES)
+    app.add_api_route("/api/bulk/schemas", bulk_list_schemas, methods=["GET"], responses=_COREHUB_CALL_RESPONSES)
+    app.add_api_route("/api/bulk/tables", bulk_list_tables, methods=["GET"], responses=_COREHUB_CALL_RESPONSES)
+    app.add_api_route("/api/bulk/create", bulk_create_entities, methods=["POST"], responses=_COREHUB_CALL_RESPONSES)
+    app.add_api_route("/api/bulk/template", bulk_export_template, methods=["POST"], responses=_TEMPLATE_RESPONSES)
+
+
 def create_app() -> FastAPI:
     _ensure_static_assets()
     asset_rewrites = _fingerprint_static_assets()
@@ -935,283 +1248,7 @@ def create_app() -> FastAPI:
     _register_page_routes(app, asset_rewrites)
     _register_session_routes(app)
 
-    @app.get("/api/pipelines", response_model=PipelinesResponse)
-    async def list_pipelines() -> PipelinesResponse:
-        if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
-
-        try:
-            pipelines = corehub.list_pipelines(
-                token=state.token,
-                base_url=state.base_url,
-                use_ssl=state.use_ssl,
-                skip_verify=state.skip_verify,
-            )
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.exception("Failed to list pipelines")
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-        return PipelinesResponse(pipelines=[PipelineInfo(**p) for p in pipelines])
-
-    @app.get("/api/bulk/schemas", response_model=BulkSchemasResponse)
-    async def bulk_list_schemas(pipelineId: str) -> BulkSchemasResponse:  # pylint: disable=invalid-name
-        if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
-
-        try:
-            schemas = corehub.list_source_schemas(
-                token=state.token,
-                base_url=state.base_url,
-                pipeline_id=pipelineId,
-                use_ssl=state.use_ssl,
-                skip_verify=state.skip_verify,
-            )
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.exception("Failed to list source schemas for pipeline %s", pipelineId)
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-        source_type, target_type = corehub.infer_agent_schema_types(
-            token=state.token,
-            base_url=state.base_url,
-            pipeline_id=pipelineId,
-            use_ssl=state.use_ssl,
-            skip_verify=state.skip_verify,
-        )
-
-        return BulkSchemasResponse(schemas=schemas, source_type=source_type, target_type=target_type)
-
-    @app.get("/api/bulk/tables", response_model=BulkTablesResponse)
-    async def bulk_list_tables(pipelineId: str, schema: str) -> BulkTablesResponse:  # pylint: disable=invalid-name
-        if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
-
-        try:
-            tables = corehub.list_source_tables(
-                token=state.token,
-                base_url=state.base_url,
-                pipeline_id=pipelineId,
-                schema=schema,
-                use_ssl=state.use_ssl,
-                skip_verify=state.skip_verify,
-            )
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.exception("Failed to list source tables for pipeline %s schema %s", pipelineId, schema)
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-        return BulkTablesResponse(tables=tables)
-
-    @app.post("/api/bulk/create", response_model=ApiMessage)
-    async def bulk_create_entities(request: BulkCreateRequest) -> ApiMessage:
-        if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
-
-        prefs = state.preferences()
-        enable_scheduling = request.enable_scheduling
-        if enable_scheduling is None:
-            enable_scheduling = prefs["enableScheduling"]
-        create_tables = request.create_tables
-        if create_tables is None:
-            create_tables = prefs["createTables"]
-
-        # If source_type or target_type are empty strings, try to extract from pipeline's YAML
-        source_type = request.source_type
-        target_type = request.target_type
-        
-        if not source_type or not target_type:
-            logger.info(
-                "source_type or target_type empty (source='%s', target='%s'), inferring them from the pipeline agents",
-                source_type,
-                target_type,
-            )
-            try:
-                src_hint, tgt_hint = corehub.infer_agent_schema_types(
-                    token=state.token,
-                    base_url=state.base_url,
-                    pipeline_id=request.pipeline_id,
-                    use_ssl=state.use_ssl,
-                    skip_verify=state.skip_verify,
-                )
-                source_type = source_type or src_hint
-                target_type = target_type or tgt_hint
-            except Exception as e:  # pylint: disable=broad-except
-                logger.warning(f"Could not infer types from the pipeline agents: {e}")
-
-        # Final fallback to SQL if still empty
-        if not source_type:
-            source_type = "SQL"
-            logger.info(f"Using fallback source_type: {source_type}")
-        if not target_type:
-            target_type = "SQL"
-            logger.info(f"Using fallback target_type: {target_type}")
-
-        # Disable table creation for NoSQL targets (same logic as duplicate pipeline)
-        effective_create_tables = bool(create_tables)
-        if target_type and target_type.upper() == 'NOSQL':
-            logger.info("Target is NoSQL - disabling table creation")
-            effective_create_tables = False
-
-        try:
-            result = corehub.run_create_entities_for_tables(
-                token=state.token,
-                base_url=state.base_url,
-                pipeline_id=request.pipeline_id,
-                source_schema=request.source_schema,
-                target_schema=request.target_schema,
-                source_type=source_type,
-                target_type=target_type,
-                table_names=request.table_names,
-                skip_errors=request.skip_errors,
-                chunk_size=request.chunk_size,
-                enable_scheduling=bool(enable_scheduling),
-                create_tables=effective_create_tables,
-                use_ssl=state.use_ssl,
-                skip_verify=state.skip_verify,
-                chronos_token=state.chronos_token,
-            )
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.exception("Bulk create entities failed")
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-        ok = result.get("success", False)
-        logs = result.get("logs") or []
-        if logs:
-            for line in logs:
-                logger.info("[bulk-create] %s", line)
-
-        msg = "Bulk entity creation completed successfully" if ok else result.get("error") or "Bulk entity creation failed"
-        return ApiMessage(success=ok, message=msg, logs=logs)
-
-    @app.post("/api/bulk/template")
-    async def bulk_export_template(request: BulkTemplateRequest):
-        """Generate an on-the-fly table-list-style YAML for the selected tables.
-
-        This does *not* export an existing pipeline configuration. Instead it
-        produces a minimal table-list-template.yaml-shaped document containing
-        only the chosen source schema and tables, so it can be refined and
-        later used with the CLI bootstrapper.
-        """
-
-        if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
-
-        pipeline_id = request.pipeline_id
-        source_schema = request.source_schema
-        target_schema = request.target_schema
-        table_names = [name for name in request.table_names or [] if name]
-
-        if not pipeline_id:
-            raise HTTPException(status_code=400, detail="pipelineId is required")
-        if not source_schema:
-            raise HTTPException(status_code=400, detail="sourceSchema is required")
-        if not target_schema:
-            raise HTTPException(status_code=400, detail="targetSchema is required")
-        if not table_names:
-            raise HTTPException(status_code=400, detail="tableNames must contain at least one table")
-
-        # Infer default source/target types from the pipeline agents so the
-        # generated template is immediately usable by the CLI.
-        try:
-            source_type, target_type = corehub.infer_agent_schema_types(
-                token=state.token,
-                base_url=state.base_url,
-                pipeline_id=pipeline_id,
-                use_ssl=state.use_ssl,
-                skip_verify=state.skip_verify,
-            )
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.exception(
-                "Failed to infer schema types for bulk template on pipeline %s", pipeline_id
-            )
-            source_type, target_type = "SQL", "SQL"
-
-        # Deduplicate tables while preserving selection order
-        seen = set()
-        unique_tables: list[str] = []
-        for raw in table_names:
-            name = str(raw)
-            if name in seen:
-                continue
-            seen.add(name)
-            unique_tables.append(name)
-
-        custom_cfg: dict[str, Any] = {}
-        for name in unique_tables:
-            try:
-                pk_names = corehub.discover_primary_key_names(
-                    token=state.token,
-                    base_url=state.base_url,
-                    pipeline_id=pipeline_id,
-                    schema=source_schema,
-                    table_name=name,
-                    use_ssl=state.use_ssl,
-                    skip_verify=state.skip_verify,
-                )
-            except Exception as exc:  # pylint: disable=broad-except
-                logger.exception(
-                    "Failed to discover primary keys for %s.%s on pipeline %s: %s",
-                    source_schema,
-                    name,
-                    pipeline_id,
-                    exc,
-                )
-                pk_names = []
-
-            try:
-                columns_meta = corehub.discover_column_metadata_for_table(
-                    token=state.token,
-                    base_url=state.base_url,
-                    pipeline_id=pipeline_id,
-                    schema=source_schema,
-                    table_name=name,
-                    use_ssl=state.use_ssl,
-                    skip_verify=state.skip_verify,
-                )
-            except Exception as exc:  # pylint: disable=broad-except
-                logger.exception(
-                    "Failed to discover column metadata for %s.%s on pipeline %s: %s",
-                    source_schema,
-                    name,
-                    pipeline_id,
-                    exc,
-                )
-                columns_meta = []
-
-            entry: dict[str, Any] = {"keys": pk_names}
-            if columns_meta:
-                entry["columns"] = columns_meta
-            custom_cfg[name] = entry
-
-        schema_cfg: dict[str, Any] = {
-            "target": target_schema,
-            "tables": {
-                "whitelist": unique_tables,
-                "custom": custom_cfg,
-            },
-        }
-
-        if source_type:
-            schema_cfg["sourceType"] = source_type
-        if target_type:
-            schema_cfg["targetType"] = target_type
-
-        # Direct schema configuration (no top-level "schemas" wrapper)
-        yaml_doc: dict[str, Any] = {source_schema: schema_cfg}
-
-        yaml_text = yaml.safe_dump(
-            yaml_doc,
-            sort_keys=False,
-            allow_unicode=True,
-        )
-
-        timestamp = datetime.now().strftime(TIMESTAMP_FORMAT)
-        filename = f"template_{pipeline_id}_{source_schema}_{timestamp}.yaml"
-        return StreamingResponse(
-            io.BytesIO(yaml_text.encode("utf-8")),
-            media_type="application/x-yaml",
-            headers={
-                "Content-Disposition": f'attachment; filename="{filename}"',
-            },
-        )
+    _register_bulk_routes(app)
 
     @app.get("/api/export/pipeline/{pipeline_id}", responses=_PIPELINE_EXPORT_RESPONSES)
     async def export_pipeline(pipeline_id: str, include_secrets: bool = False):
@@ -2368,7 +2405,7 @@ def create_app() -> FastAPI:
             },
         )
 
-    @app.get("/api/export/global-configs", responses=_EXPORT_RESPONSES)
+    @app.get("/api/export/global-configs", responses=_COREHUB_CALL_RESPONSES)
     async def export_global_configs():
         """Export all global CoreHub configuration settings."""
         if not state.token or not state.base_url:
@@ -2387,7 +2424,7 @@ def create_app() -> FastAPI:
 
         return JSONResponse(configs)
 
-    @app.get("/api/export/smtp", responses=_EXPORT_RESPONSES)
+    @app.get("/api/export/smtp", responses=_COREHUB_CALL_RESPONSES)
     async def export_smtp():
         """Export SMTP configuration from CoreHub."""
         if not state.token or not state.base_url:
@@ -2406,7 +2443,7 @@ def create_app() -> FastAPI:
 
         return JSONResponse(smtp_config)
 
-    @app.get("/api/export/webhooks", responses=_EXPORT_RESPONSES)
+    @app.get("/api/export/webhooks", responses=_COREHUB_CALL_RESPONSES)
     async def export_webhooks():
         """Export webhooks configuration from CoreHub."""
         if not state.token or not state.base_url:
@@ -2425,7 +2462,7 @@ def create_app() -> FastAPI:
 
         return JSONResponse(webhooks_config)
 
-    @app.get("/api/export/thresholds", responses=_EXPORT_RESPONSES)
+    @app.get("/api/export/thresholds", responses=_COREHUB_CALL_RESPONSES)
     async def export_thresholds():
         """Export thresholds configuration from CoreHub."""
         if not state.token or not state.base_url:
@@ -2444,7 +2481,7 @@ def create_app() -> FastAPI:
 
         return JSONResponse(thresholds_config)
 
-    @app.get("/api/export/schedules", responses=_EXPORT_RESPONSES)
+    @app.get("/api/export/schedules", responses=_COREHUB_CALL_RESPONSES)
     async def export_schedules():
         """Export Chronos scheduler jobs and settings from CoreHub."""
         if not state.token or not state.base_url:
@@ -2464,7 +2501,7 @@ def create_app() -> FastAPI:
 
         return JSONResponse(schedules_config)
 
-    @app.get("/api/export/users", responses=_EXPORT_RESPONSES)
+    @app.get("/api/export/users", responses=_COREHUB_CALL_RESPONSES)
     async def export_users():
         """Export user management configuration from CoreHub."""
         if not state.token or not state.base_url:
@@ -2483,7 +2520,7 @@ def create_app() -> FastAPI:
 
         return JSONResponse(users_config)
 
-    @app.get("/api/export/oidc", responses=_EXPORT_RESPONSES)
+    @app.get("/api/export/oidc", responses=_COREHUB_CALL_RESPONSES)
     async def export_oidc():
         """Export OIDC configuration from CoreHub."""
         if not state.token or not state.base_url:
@@ -2502,7 +2539,7 @@ def create_app() -> FastAPI:
 
         return JSONResponse(oidc_config)
 
-    @app.get("/api/export/full-backup", responses=_EXPORT_RESPONSES)
+    @app.get("/api/export/full-backup", responses=_COREHUB_CALL_RESPONSES)
     async def export_full_backup(include_secrets: bool = False):
         """Export a complete CoreHub backup including pipelines, global configs, SMTP, webhooks, thresholds, and schedules."""
         if not state.token or not state.base_url:
