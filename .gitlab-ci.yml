@@ -126,6 +126,8 @@ bootstrapper_core_unit_tests:
     - python3 -m unittest integration-tests.test_automator_backup_import -v
     - echo "Running column mapping matrix regression tests..."
     - python3 -m unittest integration-tests.test_unlocked_schema_and_target_only_columns integration-tests.test_multitable_chains integration-tests.test_field_functions_export_import -v
+    - echo "Running demo-kits round-trip verifier tests..."
+    - python3 -m unittest integration-tests.test_automator_roundtrip -v
   allow_failure: false
 
 automator_smoke_linux:

@@ -1,0 +1,354 @@
+{
+  "agentEntities": [
+    {
+      "agentEntityId": "76e5ee55",
+      "agentId": "59632e8c",
+      "columns": [
+        {
+          "charMaxLength": 0,
+          "charOctetLength": 0,
+          "dataType": "integer",
+          "id": -6529861950688021570,
+          "isIdentity": false,
+          "isNullable": false,
+          "isPK": true,
+          "name": "id",
+          "numPrec": 32,
+          "numPrecRadix": 2,
+          "numScale": 0,
+          "position": 1,
+          "tableId": -5992740378860606882,
+          "udtName": "int4"
+        },
+        {
+          "charMaxLength": 1000,
+          "charOctetLength": 4000,
+          "dataType": "character varying",
+          "id": 378706712368109145,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "first_name",
+          "numPrecRadix": 0,
+          "position": 2,
+          "tableId": -5992740378860606882,
+          "udtName": "varchar"
+        },
+        {
+          "charMaxLength": 1000,
+          "charOctetLength": 4000,
+          "dataType": "character varying",
+          "id": 2532914575784924444,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "last_name",
+          "numPrecRadix": 0,
+          "position": 3,
+          "tableId": -5992740378860606882,
+          "udtName": "varchar"
+        },
+        {
+          "charMaxLength": 1000,
+          "charOctetLength": 4000,
+          "dataType": "character varying",
+          "id": -9069048879859192708,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "email",
+          "numPrecRadix": 0,
+          "position": 4,
+          "tableId": -5992740378860606882,
+          "udtName": "varchar"
+        },
+        {
+          "charMaxLength": 1000,
+          "charOctetLength": 4000,
+          "dataType": "character varying",
+          "id": -2404945382910527558,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "gender",
+          "numPrecRadix": 0,
+          "position": 5,
+          "tableId": -5992740378860606882,
+          "udtName": "varchar"
+        },
+        {
+          "charMaxLength": 1000,
+          "charOctetLength": 4000,
+          "dataType": "character varying",
+          "id": -4722818871729489233,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "driving_license_id",
+          "numPrecRadix": 0,
+          "position": 6,
+          "tableId": -5992740378860606882,
+          "udtName": "varchar"
+        },
+        {
+          "charMaxLength": 1000,
+          "charOctetLength": 4000,
+          "dataType": "character varying",
+          "id": 2679031691212359186,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "driving_license_expire_date",
+          "numPrecRadix": 0,
+          "position": 7,
+          "tableId": -5992740378860606882,
+          "udtName": "varchar"
+        }
+      ],
+      "customProperties": {
+        "maxItemsCountPerIteration": 1000,
+        "pollingIntervalMilliseconds": 100,
+        "unchangedDataFilterType": "FIELDS"
+      },
+      "entityId": "ae391f99",
+      "entityName": "public.drivers",
+      "entityType": {
+        "maxFetchItemsCountPerIteration": 10000,
+        "maxTransactionMessageKbSize": 1024,
+        "pollingIntervalMilliseconds": 100,
+        "snapshotOnly": false,
+        "type": "Source",
+        "unchangedDataFilterType": "FIELDS"
+      },
+      "orderIndex": 0,
+      "table": {
+        "id": -5992740378860606882,
+        "name": "drivers",
+        "schema": "public",
+        "type": "TABLE"
+      },
+      "tablesProperties": {
+        "public.drivers": {}
+      },
+      "type": "SingleTable"
+    },
+    {
+      "agentEntityId": "38ad9411",
+      "agentId": "3ea39f06",
+      "columns": [
+        {
+          "charMaxLength": 0,
+          "charOctetLength": 0,
+          "dataType": "int",
+          "id": 4054250243860915464,
+          "isIdentity": false,
+          "isNullable": false,
+          "isPK": true,
+          "name": "ID",
+          "numPrec": 10,
+          "numScale": 0,
+          "position": 0,
+          "tableId": -3087394313992273219,
+          "udtName": "int"
+        },
+        {
+          "charMaxLength": 1000,
+          "charOctetLength": 4000,
+          "charSet": "utf8mb4",
+          "collation": "utf8mb4_0900_ai_ci",
+          "dataType": "varchar",
+          "id": 3280626576278720473,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "FIRST_NAME",
+          "position": 0,
+          "tableId": -3087394313992273219,
+          "udtName": "varchar(1000)"
+        },
+        {
+          "charMaxLength": 1000,
+          "charOctetLength": 4000,
+          "charSet": "utf8mb4",
+          "collation": "utf8mb4_0900_ai_ci",
+          "dataType": "varchar",
+          "id": 7696657422409895801,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "LAST_NAME",
+          "position": 0,
+          "tableId": -3087394313992273219,
+          "udtName": "varchar(1000)"
+        },
+        {
+          "charMaxLength": 1000,
+          "charOctetLength": 4000,
+          "charSet": "utf8mb4",
+          "collation": "utf8mb4_0900_ai_ci",
+          "dataType": "varchar",
+          "id": 8275657831543607410,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "EMAIL",
+          "position": 0,
+          "tableId": -3087394313992273219,
+          "udtName": "varchar(1000)"
+        },
+        {
+          "charMaxLength": 1000,
+          "charOctetLength": 4000,
+          "charSet": "utf8mb4",
+          "collation": "utf8mb4_0900_ai_ci",
+          "dataType": "varchar",
+          "id": 751284306666685497,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "GENDER",
+          "position": 0,
+          "tableId": -3087394313992273219,
+          "udtName": "varchar(1000)"
+        },
+        {
+          "charMaxLength": 1000,
+          "charOctetLength": 4000,
+          "charSet": "utf8mb4",
+          "collation": "utf8mb4_0900_ai_ci",
+          "dataType": "varchar",
+          "id": 8404640664226742139,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "DRIVING_LICENSE_ID",
+          "position": 0,
+          "tableId": -3087394313992273219,
+          "udtName": "varchar(1000)"
+        },
+        {
+          "charMaxLength": 1000,
+          "charOctetLength": 4000,
+          "charSet": "utf8mb4",
+          "collation": "utf8mb4_0900_ai_ci",
+          "dataType": "varchar",
+          "id": 524369289400984570,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "DRIVING_LICENSE_EXPIRE_DATE",
+          "position": 0,
+          "tableId": -3087394313992273219,
+          "udtName": "varchar(1000)"
+        }
+      ],
+      "customProperties": {},
+      "entityId": "ae391f99",
+      "entityName": "public.drivers",
+      "entityType": {
+        "allowedOperations": [
+          "INSERT",
+          "DELETE",
+          "UPDATE",
+          "TRUNCATE"
+        ],
+        "columnsMappingMatrix": [
+          {
+            "sourceColumnIds": [
+              -6529861950688021570
+            ],
+            "sourceTableObjectId": -5992740378860606882,
+            "targetColumnIds": [
+              4054250243860915464
+            ],
+            "targetTableObjectId": -3087394313992273219
+          },
+          {
+            "sourceColumnIds": [
+              378706712368109145
+            ],
+            "sourceTableObjectId": -5992740378860606882,
+            "targetColumnIds": [
+              3280626576278720473
+            ],
+            "targetTableObjectId": -3087394313992273219
+          },
+          {
+            "sourceColumnIds": [
+              2532914575784924444
+            ],
+            "sourceTableObjectId": -5992740378860606882,
+            "targetColumnIds": [
+              7696657422409895801
+            ],
+            "targetTableObjectId": -3087394313992273219
+          },
+          {
+            "sourceColumnIds": [
+              -9069048879859192708
+            ],
+            "sourceTableObjectId": -5992740378860606882,
+            "targetColumnIds": [
+              8275657831543607410
+            ],
+            "targetTableObjectId": -3087394313992273219
+          },
+          {
+            "sourceColumnIds": [
+              -2404945382910527558
+            ],
+            "sourceTableObjectId": -5992740378860606882,
+            "targetColumnIds": [
+              751284306666685497
+            ],
+            "targetTableObjectId": -3087394313992273219
+          },
+          {
+            "sourceColumnIds": [
+              -4722818871729489233
+            ],
+            "sourceTableObjectId": -5992740378860606882,
+            "targetColumnIds": [
+              8404640664226742139
+            ],
+            "targetTableObjectId": -3087394313992273219
+          },
+          {
+            "sourceColumnIds": [
+              2679031691212359186
+            ],
+            "sourceTableObjectId": -5992740378860606882,
+            "targetColumnIds": [
+              524369289400984570
+            ],
+            "targetTableObjectId": -3087394313992273219
+          }
+        ],
+        "distinctCaseInsensitiveKeyData": false,
+        "fieldFunctions": [],
+        "insertConflictStrategy": "UPSERT",
+        "snapshotWritingConcurrency": 1,
+        "tablesWithUnlockedDataTypes": [],
+        "tablesWithUnlockedSchema": [],
+        "type": "Target",
+        "useBulkOperationsDuringCDC": false,
+        "useBulkOperationsWhileSnapshot": false
+      },
+      "orderIndex": 0,
+      "table": {
+        "id": -3087394313992273219,
+        "name": "DRIVERS",
+        "schema": "demo",
+        "type": "TABLE"
+      },
+      "tablesProperties": {
+        "demo.DRIVERS": {}
+      },
+      "type": "SingleTable"
+    }
+  ],
+  "entityId": "ae391f99",
+  "entityName": "public.drivers",
+  "groupId": "_default",
+  "orderIndex": 0
+}

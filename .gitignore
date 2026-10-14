@@ -48,3 +48,6 @@ automator_app/static/app.*.js
 !automator_app/static/app.js
 automator_app/static/styles.*.css
 !automator_app/static/styles.css
+
+# Run result of main.py (BOOTSTRAPPER_RESULT_FILE default)
+bootstrapper-result.json

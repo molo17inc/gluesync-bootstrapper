@@ -217,38 +217,55 @@ def fetch_groups_map(token: str, pipeline_id: str) -> Tuple[Dict[str, str], Dict
     return id_to_name, name_to_id, groups_by_name
 
 
-def fetch_pipeline_jobs(pipeline_id: str, token: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Fetch all Chronos jobs for the given pipeline."""
-    chronos_client = ChronosClient(corehub_url=os.getenv("CORE_HUB_URL"), token=token)
-    try:
-        jobs_response = chronos_client._request(  # type: ignore[attr-defined]
-            "api/jobs/", params={"pipeline_id": pipeline_id, "limit": 1000}
-        )
-    except Exception as exc:  # pylint: disable=broad-except
-        logger.warning(f"Failed to fetch Chronos jobs for pipeline {pipeline_id}: {exc}")
-        return []
+def _chronos_clients(token: Optional[str]) -> List[ChronosClient]:
+    """The Chronos endpoints to read from, in order.
 
-    # Chronos can return either:
-    # - a plain list of jobs (legacy shape)
-    # - a paginated object {"items": [...], ...} (newer shape)
-    jobs: List[Dict[str, Any]]
+    CoreHub's /chronos path first, as before; then CHRONOS_URL, where the import
+    writes schedules (a Chronos container of its own, as in the demo kits).
+    """
+    clients = [ChronosClient(corehub_url=os.getenv("CORE_HUB_URL"), token=token)]
+    chronos_url = os.getenv("CHRONOS_URL")
+    if chronos_url and chronos_url.rstrip("/") + "/" != clients[0].base_url:
+        clients.append(ChronosClient(base_url=chronos_url, token=token))
+    return clients
+
+
+def _jobs_from_response(jobs_response: Any) -> Optional[List[Dict[str, Any]]]:
+    """The jobs of a Chronos answer: a plain list (legacy) or {"items": [...]}."""
     if isinstance(jobs_response, list):
-        jobs = [j for j in jobs_response if isinstance(j, dict)]
-    elif isinstance(jobs_response, dict):
-        items = jobs_response.get("items")
-        if isinstance(items, list):
-            jobs = [j for j in items if isinstance(j, dict)]
-        else:
-            logger.warning(
-                "Unexpected Chronos jobs response format: missing 'items' list in %s",
-                str(jobs_response)[:500],
-            )
-            return []
-    else:
-        logger.warning(f"Unexpected Chronos jobs response format: {str(jobs_response)[:500]}")
-        return []
+        return [j for j in jobs_response if isinstance(j, dict)]
+    items = jobs_response.get("items") if isinstance(jobs_response, dict) else None
+    if isinstance(items, list):
+        return [j for j in items if isinstance(j, dict)]
+    logger.warning(f"Unexpected Chronos jobs response format: {str(jobs_response)[:500]}")
+    return None
 
-    logger.info(f"Fetched {len(jobs)} Chronos jobs for pipeline {pipeline_id}")
+
+def read_pipeline_jobs(pipeline_id: str, token: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
+    """The Chronos jobs of a pipeline, or None when no Chronos endpoint answered."""
+    for client in _chronos_clients(token):
+        try:
+            jobs_response = client._request(  # type: ignore[attr-defined]
+                "api/jobs/", params={"pipeline_id": pipeline_id, "limit": 1000}
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning(f"Chronos at {client.base_url} did not answer for pipeline {pipeline_id}: {exc}")
+            continue
+        jobs = _jobs_from_response(jobs_response)
+        if jobs is not None:
+            # Chronos may ignore the pipeline_id filter and answer with every job.
+            jobs = [j for j in jobs if str(j.get("pipeline_id", pipeline_id)) == str(pipeline_id)]
+            logger.info(f"Fetched {len(jobs)} Chronos jobs for pipeline {pipeline_id} from {client.base_url}")
+            return jobs
+    return None
+
+
+def fetch_pipeline_jobs(pipeline_id: str, token: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Fetch all Chronos jobs for the given pipeline ([] when Chronos cannot be read)."""
+    jobs = read_pipeline_jobs(pipeline_id, token)
+    if jobs is None:
+        logger.warning(f"No Chronos endpoint answered for pipeline {pipeline_id}: its schedules are not exported")
+        return []
     return jobs
 
 
@@ -509,6 +526,45 @@ def _legacy_mapping_rows(
     return column_mappings
 
 
+def _column_position(col: Dict[str, Any], stored_index: int) -> int:
+    """Where a column sits in its table.
+
+    Discovered columns carry "position"; "id" is a hash of the column, so it is
+    no order at all: without a position the stored order is kept.
+    """
+    raw_position = col.get("ordinalPosition")
+    if raw_position is None:
+        raw_position = col.get("position")
+    try:
+        return int(raw_position)
+    except (TypeError, ValueError):
+        return stored_index
+
+
+def _columns_in_table_order(columns: List[Dict[str, Any]]) -> List[Tuple[int, Dict[str, Any]]]:
+    """``(1-based stored index, column)`` pairs sorted by position in the table."""
+    return sorted(enumerate(columns, start=1), key=lambda pair: _column_position(pair[1], pair[0]))
+
+
+# "type" is implied by the side, and partitions are recomputed on import.
+_SOURCE_EXCLUDED_SETTINGS = frozenset({"type", "partitionSettings"})
+
+
+def _source_custom_properties(source_ae: Dict[str, Any]) -> Dict[str, Any]:
+    """``customProperties.source`` of a table: the settings its source runs with.
+
+    The source entityType holds what CoreHub runs with (the import writes
+    customProperties.source there). Keys found only in the agent entity's own
+    customProperties are kept too, so nothing the user wrote is lost.
+    """
+    source_et = source_ae.get("entityType", {}) or {}
+    user_only = {
+        k: v for k, v in (source_ae.get("customProperties") or {}).items() if k not in source_et
+    }
+    settings = {**user_only, **source_et}
+    return {k: v for k, v in settings.items() if k not in _SOURCE_EXCLUDED_SETTINGS}
+
+
 def _process_single_entity(
     ent: Dict[str, Any],
     source_ae: Dict[str, Any],
@@ -631,22 +687,9 @@ def _process_single_entity(
     target_columns = target_ae.get("columns", []) or []
     
     if source_columns and target_columns:
-        def _column_sort_key(col: Dict[str, Any], idx: int) -> int:
-            raw_id = col.get("ordinalPosition") or col.get("id")
-            try:
-                return int(raw_id)
-            except (TypeError, ValueError):
-                return idx
-
-        # Sort both source and target columns by ordinalPosition/id
-        ordered_source = sorted(
-            enumerate(source_columns, start=1),
-            key=lambda pair: _column_sort_key(pair[1], pair[0]),
-        )
-        ordered_target = sorted(
-            enumerate(target_columns, start=1),
-            key=lambda pair: _column_sort_key(pair[1], pair[0]),
-        )
+        # Sort both source and target columns by their position in the table
+        ordered_source = _columns_in_table_order(source_columns)
+        ordered_target = _columns_in_table_order(target_columns)
         
         # The matrix of the target entity type: lists of column ids on Gluesync 2.3, single pairs before.
         columns_mapping_matrix = target_ae.get("entityType", {}).get("columnsMappingMatrix", []) or []
@@ -751,15 +794,7 @@ def _process_single_entity(
             }
 
     # Custom properties
-    source_et = source_ae.get("entityType", {}) or {}
-
-    # Exclude internal keys that were not user-configured
-    source_excluded = {"type", "unchangedDataFilterType", "partitionSettings"}
-    source_cp = {
-        k: v
-        for k, v in source_et.items()
-        if k not in source_excluded
-    }
+    source_cp = _source_custom_properties(source_ae)
 
     target_cp = (target_ae.get("customProperties") or {}).copy()
 
@@ -1357,6 +1392,46 @@ def enrich_null_column_types_from_discovery(
     return enriched
 
 
+def render_pipeline_export(token: str, pipeline_id: str) -> str:
+    """Export one pipeline and return the YAML text, provenance header included.
+
+    This is the single export path: the CLI, ``export_all_pipelines.py`` and the
+    round-trip verifier all write exactly what this returns.
+    """
+    entities = fetch_pipeline_entities(token, pipeline_id)
+    entities_by_id = build_entities_maps(entities)
+    group_id_to_name, _, groups_by_name = fetch_groups_map(token, pipeline_id)
+    schemas = build_schemas_from_entities(entities, group_id_to_name)
+
+    # Override schema-level type hints using agents.json catalog when possible
+    src_type, tgt_type = infer_pipeline_schema_types_from_agents(token, pipeline_id)
+    if src_type and tgt_type:
+        logger.info(
+            "Using agents.json to set pipeline types: sourceType=%s, targetType=%s",
+            src_type,
+            tgt_type,
+        )
+        for schema_cfg in schemas.values():
+            schema_cfg["sourceType"] = src_type
+            schema_cfg["targetType"] = tgt_type
+
+    jobs = fetch_pipeline_jobs(pipeline_id, token=token)
+    attach_schedules_from_jobs(jobs, entities_by_id, schemas, group_id_to_name)
+
+    # Backfill null column types via live discovery (legacy entity serialisation bug)
+    enriched = enrich_null_column_types_from_discovery(schemas, entities, token, pipeline_id)
+    if enriched:
+        logger.info(f"Enriched null column types for {enriched} table(s) via live discovery")
+
+    yaml_data = build_yaml_structure(schemas, groups_by_name)
+
+    # Build provenance header and prepend it to the YAML
+    header = build_export_header(token, pipeline_id)
+    yaml_buffer = io.StringIO()
+    yaml.safe_dump(yaml_data, yaml_buffer, sort_keys=False, allow_unicode=True)
+    return header + yaml_buffer.getvalue()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
@@ -1381,46 +1456,15 @@ def main() -> None:
     logger.info(f"Starting export for pipeline {pipeline_id} -> {output_path}")
 
     try:
-        entities = fetch_pipeline_entities(token, pipeline_id)
-        entities_by_id = build_entities_maps(entities)
-        group_id_to_name, _, groups_by_name = fetch_groups_map(token, pipeline_id)
-        schemas = build_schemas_from_entities(entities, group_id_to_name)
-
-        # Override schema-level type hints using agents.json catalog when possible
-        src_type, tgt_type = infer_pipeline_schema_types_from_agents(token, pipeline_id)
-        if src_type and tgt_type:
-            logger.info(
-                "Using agents.json to set pipeline types: sourceType=%s, targetType=%s",
-                src_type,
-                tgt_type,
-            )
-            for schema_cfg in schemas.values():
-                schema_cfg["sourceType"] = src_type
-                schema_cfg["targetType"] = tgt_type
-
-        jobs = fetch_pipeline_jobs(pipeline_id, token=token)
-        attach_schedules_from_jobs(jobs, entities_by_id, schemas, group_id_to_name)
-
-        # Backfill null column types via live discovery (legacy entity serialisation bug)
-        enriched = enrich_null_column_types_from_discovery(schemas, entities, token, pipeline_id)
-        if enriched:
-            logger.info(f"Enriched null column types for {enriched} table(s) via live discovery")
-
-        yaml_data = build_yaml_structure(schemas, groups_by_name)
+        rendered = render_pipeline_export(token, pipeline_id)
 
         # Ensure destination directory exists
         out_dir = os.path.dirname(output_path)
         if out_dir and not os.path.exists(out_dir):
             os.makedirs(out_dir, exist_ok=True)
 
-        # Build provenance header and prepend it to the YAML
-        header = build_export_header(token, pipeline_id)
-        yaml_buffer = io.StringIO()
-        yaml.safe_dump(yaml_data, yaml_buffer, sort_keys=False, allow_unicode=True)
-
         with open(output_path, "w", encoding="utf-8") as f:
-            f.write(header)
-            f.write(yaml_buffer.getvalue())
+            f.write(rendered)
 
         log_success(logger, f"Export completed for pipeline {pipeline_id}. Output: {output_path}")
 
