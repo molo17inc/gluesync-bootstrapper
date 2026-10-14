@@ -70,6 +70,28 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
+# CoreHub REST paths used more than once.
+_SMTP_CONFIG_PATH = "/global-config/smtp"
+_USERS_PATH = "/users"
+
+# Placeholder written instead of a secret when secrets are not exported.
+_MASKED_SECRET = "*******"
+
+_UDF_ENTITIES_FETCH_FAILED_LOG = "Failed to fetch entities for UDF export in pipeline %s: %s"
+
+# Files of the full CoreHub backup ZIP, one per configuration domain.
+_GLOBAL_CONFIGS_BACKUP_FILE = "global-configs.yaml"
+_SMTP_BACKUP_FILE = "smtp.yaml"
+_WEBHOOKS_BACKUP_FILE = "webhooks.yaml"
+_THRESHOLDS_BACKUP_FILE = "thresholds.yaml"
+_SCHEDULES_BACKUP_FILE = "schedules.yaml"
+_USERS_BACKUP_FILE = "users.yaml"
+_OIDC_BACKUP_FILE = "oidc.yaml"
+
+# Reasons reported when a restore skips a configuration section.
+_REASON_NOT_PRESENT_IN_BACKUP = "not present in backup"
+_REASON_EXPORTED_WITH_ERROR = "exported with error"
+
 
 class DuplicateCancelledError(RuntimeError):
     """Raised when a duplicate pipeline request is cancelled by the user."""
@@ -1042,7 +1064,7 @@ def fetch_global_notification_config(
     params = {"include_secrets": "true"} if include_secrets else None
 
     try:
-        smtp = fetch_core_hub("/global-config/smtp", token=token, params=params)
+        smtp = fetch_core_hub(_SMTP_CONFIG_PATH, token=token, params=params)
     except Exception as exc:  # pylint: disable=broad-except
         logger.warning("Failed to fetch global SMTP config: %s", exc)
         return None
@@ -1052,7 +1074,7 @@ def fetch_global_notification_config(
 
     cfg = dict(smtp)
     if not include_secrets and "password" in cfg and cfg["password"]:
-        cfg["password"] = "*******"
+        cfg["password"] = _MASKED_SECRET
     return cfg
 
 
@@ -1302,7 +1324,7 @@ def export_pipeline_entities_package(
         entities = fetch_pipeline_entities(token, pipeline_id)
     except Exception as exc:  # pylint: disable=broad-except
         logger.exception(
-            "Failed to fetch entities for UDF export in pipeline %s: %s",
+            _UDF_ENTITIES_FETCH_FAILED_LOG,
             pipeline_id,
             exc,
         )
@@ -1586,7 +1608,7 @@ def export_pipeline_full_backup(
         try:
             entities = fetch_pipeline_entities(token, pipeline_id)
         except Exception as exc:  # pylint: disable=broad-except
-            logger.exception("Failed to fetch entities for UDF export in pipeline %s: %s", pipeline_id, exc)
+            logger.exception(_UDF_ENTITIES_FETCH_FAILED_LOG, pipeline_id, exc)
             entities = []
         udfs_to_export = discover_udfs_from_entities(entities)
 
@@ -1636,7 +1658,7 @@ def export_pipeline_full_backup(
 
                 export_host_credentials = dict(host_credentials)
                 if not include_secrets and "password" in export_host_credentials and export_host_credentials["password"]:
-                    export_host_credentials["password"] = "*******"
+                    export_host_credentials["password"] = _MASKED_SECRET
 
                 agent_payload: Dict[str, Any] = {
                     "agentType": agent_type,
@@ -1668,7 +1690,7 @@ def export_pipeline_full_backup(
             yaml_text_lines = []
             for line in buffer.getvalue().splitlines():
                 stripped = line.lstrip()
-                if stripped.startswith("password:") and "*******" in stripped:
+                if stripped.startswith("password:") and _MASKED_SECRET in stripped:
                     line = f"{line}  # original password omitted"
                 yaml_text_lines.append(line)
 
@@ -1823,7 +1845,7 @@ def export_all_pipelines_yaml(
             try:
                 entities = fetch_pipeline_entities(token, pipeline_id)
             except Exception as exc:  # pylint: disable=broad-except
-                logger.exception("Failed to fetch entities for UDF export in pipeline %s: %s", pipeline_id, exc)
+                logger.exception(_UDF_ENTITIES_FETCH_FAILED_LOG, pipeline_id, exc)
                 entities = []
 
             if isinstance(entities, list):
@@ -1928,7 +1950,7 @@ def export_all_pipelines_yaml(
                     # Mask secrets when exporting, unless include_secrets is True
                     masked_host_credentials = dict(host_credentials)
                     if not include_secrets and "password" in masked_host_credentials and masked_host_credentials["password"]:
-                        masked_host_credentials["password"] = "*******"
+                        masked_host_credentials["password"] = _MASKED_SECRET
 
                     agent_payload: Dict[str, Any] = {
                         "agentType": agent_type,
@@ -1964,7 +1986,7 @@ def export_all_pipelines_yaml(
             yaml_text_lines = []
             for line in buffer.getvalue().splitlines():
                 stripped = line.lstrip()
-                if stripped.startswith("password:") and "*******" in stripped:
+                if stripped.startswith("password:") and _MASKED_SECRET in stripped:
                     # Preserve indentation when appending the comment
                     line = f"{line}  # original password omitted"
                 yaml_text_lines.append(line)
@@ -2138,7 +2160,7 @@ def export_smtp_settings(
     configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
 
     try:
-        response = fetch_core_hub("/global-config/smtp", token=token, params={"include_secrets": "true"})
+        response = fetch_core_hub(_SMTP_CONFIG_PATH, token=token, params={"include_secrets": "true"})
         if isinstance(response, dict):
             return {"smtp": response}
         return {"smtp": {"value": response}}
@@ -2271,7 +2293,7 @@ def export_users(
     configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
 
     try:
-        response = fetch_core_hub("/users", token=token, params={"include_secrets": "true"})
+        response = fetch_core_hub(_USERS_PATH, token=token, params={"include_secrets": "true"})
         if isinstance(response, dict):
             return {"users": response}
         if isinstance(response, list):
@@ -2356,40 +2378,40 @@ def export_full_corehub_backup(
             global_configs = export_global_configs(
                 token=token, base_url=base_url, use_ssl=use_ssl, skip_verify=skip_verify
             )
-            zip_file.writestr("global-configs.yaml", _dump_to_yaml(global_configs).encode("utf-8"))
+            zip_file.writestr(_GLOBAL_CONFIGS_BACKUP_FILE, _dump_to_yaml(global_configs).encode("utf-8"))
         except Exception as exc:  # pylint: disable=broad-except
             logger.warning("Failed to export global configs: %s", exc)
-            zip_file.writestr("global-configs.yaml", _dump_to_yaml({"error": str(exc)}).encode("utf-8"))
+            zip_file.writestr(_GLOBAL_CONFIGS_BACKUP_FILE, _dump_to_yaml({"error": str(exc)}).encode("utf-8"))
 
         # SMTP settings
         try:
             smtp = export_smtp_settings(
                 token=token, base_url=base_url, use_ssl=use_ssl, skip_verify=skip_verify
             )
-            zip_file.writestr("smtp.yaml", _dump_to_yaml(smtp).encode("utf-8"))
+            zip_file.writestr(_SMTP_BACKUP_FILE, _dump_to_yaml(smtp).encode("utf-8"))
         except Exception as exc:  # pylint: disable=broad-except
             logger.warning("Failed to export SMTP settings: %s", exc)
-            zip_file.writestr("smtp.yaml", _dump_to_yaml({"error": str(exc)}).encode("utf-8"))
+            zip_file.writestr(_SMTP_BACKUP_FILE, _dump_to_yaml({"error": str(exc)}).encode("utf-8"))
 
         # Webhooks config
         try:
             webhooks = export_webhooks_config(
                 token=token, base_url=base_url, use_ssl=use_ssl, skip_verify=skip_verify
             )
-            zip_file.writestr("webhooks.yaml", _dump_to_yaml(webhooks).encode("utf-8"))
+            zip_file.writestr(_WEBHOOKS_BACKUP_FILE, _dump_to_yaml(webhooks).encode("utf-8"))
         except Exception as exc:  # pylint: disable=broad-except
             logger.warning("Failed to export webhooks config: %s", exc)
-            zip_file.writestr("webhooks.yaml", _dump_to_yaml({"error": str(exc)}).encode("utf-8"))
+            zip_file.writestr(_WEBHOOKS_BACKUP_FILE, _dump_to_yaml({"error": str(exc)}).encode("utf-8"))
 
         # Thresholds config
         try:
             thresholds = export_thresholds(
                 token=token, base_url=base_url, use_ssl=use_ssl, skip_verify=skip_verify
             )
-            zip_file.writestr("thresholds.yaml", _dump_to_yaml(thresholds).encode("utf-8"))
+            zip_file.writestr(_THRESHOLDS_BACKUP_FILE, _dump_to_yaml(thresholds).encode("utf-8"))
         except Exception as exc:  # pylint: disable=broad-except
             logger.warning("Failed to export thresholds: %s", exc)
-            zip_file.writestr("thresholds.yaml", _dump_to_yaml({"error": str(exc)}).encode("utf-8"))
+            zip_file.writestr(_THRESHOLDS_BACKUP_FILE, _dump_to_yaml({"error": str(exc)}).encode("utf-8"))
 
         # Schedules config
         try:
@@ -2397,10 +2419,10 @@ def export_full_corehub_backup(
                 token=token, base_url=base_url, use_ssl=use_ssl, skip_verify=skip_verify,
                 chronos_token=chronos_token,
             )
-            zip_file.writestr("schedules.yaml", _dump_to_yaml(schedules).encode("utf-8"))
+            zip_file.writestr(_SCHEDULES_BACKUP_FILE, _dump_to_yaml(schedules).encode("utf-8"))
         except Exception as exc:  # pylint: disable=broad-except
             logger.warning("Failed to export schedules: %s", exc)
-            zip_file.writestr("schedules.yaml", _dump_to_yaml({"error": str(exc)}).encode("utf-8"))
+            zip_file.writestr(_SCHEDULES_BACKUP_FILE, _dump_to_yaml({"error": str(exc)}).encode("utf-8"))
 
         # Users config
         try:
@@ -2416,22 +2438,22 @@ def export_full_corehub_backup(
                 "#   - ALL affected users MUST reset their password via the CoreHub UI.\n"
             )
             zip_file.writestr(
-                "users.yaml",
+                _USERS_BACKUP_FILE,
                 (users_comment + _dump_to_yaml(users)).encode("utf-8"),
             )
         except Exception as exc:  # pylint: disable=broad-except
             logger.warning("Failed to export users: %s", exc)
-            zip_file.writestr("users.yaml", _dump_to_yaml({"error": str(exc)}).encode("utf-8"))
+            zip_file.writestr(_USERS_BACKUP_FILE, _dump_to_yaml({"error": str(exc)}).encode("utf-8"))
 
         # OIDC config
         try:
             oidc = export_oidc_config(
                 token=token, base_url=base_url, use_ssl=use_ssl, skip_verify=skip_verify
             )
-            zip_file.writestr("oidc.yaml", _dump_to_yaml(oidc).encode("utf-8"))
+            zip_file.writestr(_OIDC_BACKUP_FILE, _dump_to_yaml(oidc).encode("utf-8"))
         except Exception as exc:  # pylint: disable=broad-except
             logger.warning("Failed to export OIDC config: %s", exc)
-            zip_file.writestr("oidc.yaml", _dump_to_yaml({"error": str(exc)}).encode("utf-8"))
+            zip_file.writestr(_OIDC_BACKUP_FILE, _dump_to_yaml({"error": str(exc)}).encode("utf-8"))
 
         # AI settings: one bundle from Core Hub. An older Core Hub has none to back up.
         _write_ai_settings(
@@ -2548,10 +2570,10 @@ def import_global_configs(
     for key, path in endpoints.items():
         data = configs.get(key)
         if data is None:
-            results[key] = {"status": "skipped", "reason": "not present in backup"}
+            results[key] = {"status": "skipped", "reason": _REASON_NOT_PRESENT_IN_BACKUP}
             continue
         if isinstance(data, dict) and "error" in data:
-            results[key] = {"status": "skipped", "reason": "exported with error"}
+            results[key] = {"status": "skipped", "reason": _REASON_EXPORTED_WITH_ERROR}
             continue
 
         payload = _unwrap_value_if_needed(data)
@@ -2578,13 +2600,13 @@ def import_smtp_settings(
 
     smtp = smtp_data.get("smtp")
     if smtp is None:
-        return {"status": "skipped", "reason": "not present in backup"}
+        return {"status": "skipped", "reason": _REASON_NOT_PRESENT_IN_BACKUP}
     if isinstance(smtp, dict) and "error" in smtp:
-        return {"status": "skipped", "reason": "exported with error"}
+        return {"status": "skipped", "reason": _REASON_EXPORTED_WITH_ERROR}
 
     payload = _unwrap_value_if_needed(smtp)
     try:
-        fetch_core_hub("/global-config/smtp", method="PUT", token=token, body=payload)
+        fetch_core_hub(_SMTP_CONFIG_PATH, method="PUT", token=token, body=payload)
         return {"status": "restored"}
     except Exception as exc:  # pylint: disable=broad-except
         logger.warning("Failed to restore SMTP settings: %s", exc)
@@ -2617,11 +2639,11 @@ def import_global_notifications(
 
     payload = dict(payload)
     pwd = payload.get("password")
-    if pwd in ("*******", "<hidden>", None, ""):
+    if pwd in (_MASKED_SECRET, "<hidden>", None, ""):
         payload.pop("password", None)
 
     try:
-        fetch_core_hub("/global-config/smtp", method="PUT", token=token, body=payload)
+        fetch_core_hub(_SMTP_CONFIG_PATH, method="PUT", token=token, body=payload)
         return {"status": "restored"}
     except Exception as exc:  # pylint: disable=broad-except
         logger.warning("Failed to restore global notification settings: %s", exc)
@@ -2651,10 +2673,10 @@ def import_webhooks_config(
     for key, path in endpoints.items():
         data = webhooks_data.get(key)
         if data is None:
-            results[key] = {"status": "skipped", "reason": "not present in backup"}
+            results[key] = {"status": "skipped", "reason": _REASON_NOT_PRESENT_IN_BACKUP}
             continue
         if isinstance(data, dict) and "error" in data:
-            results[key] = {"status": "skipped", "reason": "exported with error"}
+            results[key] = {"status": "skipped", "reason": _REASON_EXPORTED_WITH_ERROR}
             continue
 
         payload = _unwrap_value_if_needed(data)
@@ -2689,10 +2711,10 @@ def import_thresholds(
     for key, path in endpoints.items():
         data = thresholds_data.get(key)
         if data is None:
-            results[key] = {"status": "skipped", "reason": "not present in backup"}
+            results[key] = {"status": "skipped", "reason": _REASON_NOT_PRESENT_IN_BACKUP}
             continue
         if isinstance(data, dict) and "error" in data:
-            results[key] = {"status": "skipped", "reason": "exported with error"}
+            results[key] = {"status": "skipped", "reason": _REASON_EXPORTED_WITH_ERROR}
             continue
 
         payload = _unwrap_value_if_needed(data)
@@ -2772,9 +2794,9 @@ def import_users(
 
     users = users_data.get("users")
     if users is None:
-        return {"status": "skipped", "reason": "not present in backup"}
+        return {"status": "skipped", "reason": _REASON_NOT_PRESENT_IN_BACKUP}
     if isinstance(users, dict) and "error" in users:
-        return {"status": "skipped", "reason": "exported with error"}
+        return {"status": "skipped", "reason": _REASON_EXPORTED_WITH_ERROR}
 
     raw = _unwrap_value_if_needed(users)
     if not isinstance(raw, list):
@@ -2843,7 +2865,7 @@ def import_users(
     # Fallback: per-user PUT/POST when the import endpoint is unavailable
     # or when some users lack a passwordHash.
     try:
-        existing_resp = fetch_core_hub("/users", token=token)
+        existing_resp = fetch_core_hub(_USERS_PATH, token=token)
         if isinstance(existing_resp, list):
             existing_users = existing_resp
         elif isinstance(existing_resp, dict):
@@ -2894,7 +2916,7 @@ def import_users(
             )
             try:
                 fetch_core_hub(
-                    "/users",
+                    _USERS_PATH,
                     method="POST",
                     token=token,
                     body={
@@ -2949,10 +2971,10 @@ def import_oidc_config(
     for key, path in endpoints.items():
         data = oidc_data.get(key)
         if data is None:
-            results[key] = {"status": "skipped", "reason": "not present in backup"}
+            results[key] = {"status": "skipped", "reason": _REASON_NOT_PRESENT_IN_BACKUP}
             continue
         if isinstance(data, dict) and "error" in data:
-            results[key] = {"status": "skipped", "reason": "exported with error"}
+            results[key] = {"status": "skipped", "reason": _REASON_EXPORTED_WITH_ERROR}
             continue
 
         payload = _unwrap_value_if_needed(data)
@@ -3004,7 +3026,7 @@ def import_full_corehub_backup(
                 return yaml.safe_load(f)
 
         # Restore global configs
-        global_configs = _read_yaml("global-configs.yaml")
+        global_configs = _read_yaml(_GLOBAL_CONFIGS_BACKUP_FILE)
         if global_configs is not None:
             results["global_configs"] = import_global_configs(
                 token=token, base_url=base_url, use_ssl=use_ssl, skip_verify=skip_verify,
@@ -3014,7 +3036,7 @@ def import_full_corehub_backup(
             results["global_configs"] = {"status": "skipped", "reason": "global-configs.yaml not found"}
 
         # Restore SMTP
-        smtp = _read_yaml("smtp.yaml")
+        smtp = _read_yaml(_SMTP_BACKUP_FILE)
         if smtp is not None:
             results["smtp"] = import_smtp_settings(
                 token=token, base_url=base_url, use_ssl=use_ssl, skip_verify=skip_verify,
@@ -3024,7 +3046,7 @@ def import_full_corehub_backup(
             results["smtp"] = {"status": "skipped", "reason": "smtp.yaml not found"}
 
         # Restore webhooks
-        webhooks = _read_yaml("webhooks.yaml")
+        webhooks = _read_yaml(_WEBHOOKS_BACKUP_FILE)
         if webhooks is not None:
             results["webhooks"] = import_webhooks_config(
                 token=token, base_url=base_url, use_ssl=use_ssl, skip_verify=skip_verify,
@@ -3034,7 +3056,7 @@ def import_full_corehub_backup(
             results["webhooks"] = {"status": "skipped", "reason": "webhooks.yaml not found"}
 
         # Restore thresholds
-        thresholds = _read_yaml("thresholds.yaml")
+        thresholds = _read_yaml(_THRESHOLDS_BACKUP_FILE)
         if thresholds is not None:
             results["thresholds"] = import_thresholds(
                 token=token, base_url=base_url, use_ssl=use_ssl, skip_verify=skip_verify,
@@ -3044,7 +3066,7 @@ def import_full_corehub_backup(
             results["thresholds"] = {"status": "skipped", "reason": "thresholds.yaml not found"}
 
         # Restore schedules
-        schedules = _read_yaml("schedules.yaml")
+        schedules = _read_yaml(_SCHEDULES_BACKUP_FILE)
         if schedules is not None:
             results["schedules"] = import_schedules(
                 token=token, base_url=base_url, use_ssl=use_ssl, skip_verify=skip_verify,
@@ -3054,7 +3076,7 @@ def import_full_corehub_backup(
             results["schedules"] = {"status": "skipped", "reason": "schedules.yaml not found"}
 
         # Restore users
-        users = _read_yaml("users.yaml")
+        users = _read_yaml(_USERS_BACKUP_FILE)
         if users is not None:
             results["users"] = import_users(
                 token=token, base_url=base_url, use_ssl=use_ssl, skip_verify=skip_verify,
@@ -3064,7 +3086,7 @@ def import_full_corehub_backup(
             results["users"] = {"status": "skipped", "reason": "users.yaml not found"}
 
         # Restore OIDC
-        oidc = _read_yaml("oidc.yaml")
+        oidc = _read_yaml(_OIDC_BACKUP_FILE)
         if oidc is not None:
             results["oidc"] = import_oidc_config(
                 token=token, base_url=base_url, use_ssl=use_ssl, skip_verify=skip_verify,
