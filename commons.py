@@ -124,32 +124,118 @@ def get_oracle_agent_tags() -> set[str]:
     return oracle_tags
 
 
-def fetch_core_hub(path, method='GET', token=None, body=None, params=None, headers=None, expected_error_statuses=None):
-    # Log request details
+def _log_request_mapping(title, mapping):
+    logger.debug(title)
+    for k, v in mapping.items():
+        logger.debug(f"  {k}: {v}")
+
+
+def _log_request_body(body):
+    logger.debug("\nRequest Body:")
+    try:
+        if isinstance(body, (bytes, bytearray)):
+            logger.debug(f"<binary payload: {len(body)} bytes>")
+        else:
+            logger.debug(json.dumps(body, indent=2) if isinstance(body, (dict, list)) else str(body))
+    except Exception as e:
+        logger.debug(f"<Unable to serialize request body: {e}>")
+
+
+def _log_core_hub_request(method, path, body, params, headers):
+    """Log the details of a CoreHub request before it is sent."""
     logger.debug(f"\n{'=' * 80}")
     logger.debug(f"[API REQUEST] {method.upper()} {path}")
 
     if params:
-        logger.debug("\nQuery Parameters:")
-        for k, v in params.items():
-            logger.debug(f"  {k}: {v}")
+        _log_request_mapping("\nQuery Parameters:", params)
 
     if headers:
-        logger.debug("\nCustom Headers:")
-        for k, v in headers.items():
-            logger.debug(f"  {k}: {v}")
+        _log_request_mapping("\nCustom Headers:", headers)
 
     if body is not None:
-        logger.debug("\nRequest Body:")
-        try:
-            if isinstance(body, (bytes, bytearray)):
-                logger.debug(f"<binary payload: {len(body)} bytes>")
-            else:
-                logger.debug(json.dumps(body, indent=2) if isinstance(body, (dict, list)) else str(body))
-        except Exception as e:
-            logger.debug(f"<Unable to serialize request body: {e}>")
+        _log_request_body(body)
 
     logger.debug("-" * 40)
+
+
+def _log_core_hub_response(method, path, response, duration):
+    """Log a CoreHub response (full JSON when possible, long strings trimmed)."""
+    logger.debug(f"Request completed in {duration:.3f}s")
+    logger.debug(f"[RESPONSE] {method.upper()} {path}")
+
+    try:
+        if isinstance(response, (dict, list)):
+            response_text = json.dumps(response, indent=2, ensure_ascii=False)
+        else:
+            response_text = str(response)
+    except Exception as exc:  # pragma: no cover - defensive
+        response_text = f"<unable to serialize response: {exc}>"
+
+    max_preview_chars = 10000
+    if len(response_text) > max_preview_chars:
+        logger.debug(
+            "Response (trimmed to %d of %d chars): %s…",
+            max_preview_chars,
+            len(response_text),
+            response_text[:max_preview_chars],
+        )
+    else:
+        logger.debug("Response: %s", response_text)
+
+    logger.debug("=" * 80 + "\n")
+
+
+def _has_error_response(error):
+    return hasattr(error, 'response') and error.response is not None
+
+
+def _log_error_response(is_expected, text):
+    if is_expected:
+        logger.info(f"Response: {text}")
+    else:
+        logger.error(f"Error response: {text}")
+
+
+def _read_error_payload(error, is_expected):
+    """Log and return the body of a failed CoreHub response (JSON when possible)."""
+    if not _has_error_response(error):
+        return None
+    try:
+        error_payload = error.response.json()
+        _log_error_response(is_expected, json.dumps(error_payload, indent=2))
+    except Exception:
+        error_payload = error.response.text
+        _log_error_response(is_expected, error_payload)
+    return error_payload
+
+
+def _describe_core_hub_failure(error, method, path, expected_error_statuses):
+    """Log a failed CoreHub request and return the message of the error to raise."""
+    # Check if this is an expected error status (e.g. 404 during table existence checks)
+    is_expected = False
+    if expected_error_statuses and _has_error_response(error):
+        is_expected = error.response.status_code in expected_error_statuses
+
+    if is_expected:
+        logger.info(f"API request returned expected status: {str(error)}")
+    else:
+        logger.error(f"API request failed: {str(error)}")
+
+    error_payload = _read_error_payload(error, is_expected)
+    logger.debug("=" * 80 + "\n")
+
+    message = f"CoreHub request {method.upper()} {path} failed: {error}"
+    if error_payload:
+        if isinstance(error_payload, (dict, list)):
+            message += f" | Response: {json.dumps(error_payload, ensure_ascii=False)}"
+        else:
+            message += f" | Response: {error_payload}"
+    return message
+
+
+def fetch_core_hub(path, method='GET', token=None, body=None, params=None, headers=None, expected_error_statuses=None):
+    # Log request details
+    _log_core_hub_request(method, path, body, params, headers)
 
     try:
         # Make the request
@@ -157,67 +243,12 @@ def fetch_core_hub(path, method='GET', token=None, body=None, params=None, heade
         response = core_hub_client.request(path, method, token, body, params, headers=headers, expected_error_statuses=expected_error_statuses)
         duration = time.time() - start_time
 
-        # Log response (dump full JSON when possible, otherwise capture long strings)
-        logger.debug(f"Request completed in {duration:.3f}s")
-        logger.debug(f"[RESPONSE] {method.upper()} {path}")
-
-        try:
-            if isinstance(response, (dict, list)):
-                response_text = json.dumps(response, indent=2, ensure_ascii=False)
-            else:
-                response_text = str(response)
-        except Exception as exc:  # pragma: no cover - defensive
-            response_text = f"<unable to serialize response: {exc}>"
-
-        max_preview_chars = 10000
-        if len(response_text) > max_preview_chars:
-            logger.debug(
-                "Response (trimmed to %d of %d chars): %s…",
-                max_preview_chars,
-                len(response_text),
-                response_text[:max_preview_chars],
-            )
-        else:
-            logger.debug("Response: %s", response_text)
-
-        logger.debug("=" * 80 + "\n")
+        _log_core_hub_response(method, path, response, duration)
 
         return response
 
     except Exception as e:
-        # Check if this is an expected error status (e.g. 404 during table existence checks)
-        is_expected = False
-        if expected_error_statuses and hasattr(e, 'response') and e.response is not None:
-            is_expected = e.response.status_code in expected_error_statuses
-
-        if is_expected:
-            logger.info(f"API request returned expected status: {str(e)}")
-        else:
-            logger.error(f"API request failed: {str(e)}")
-
-        error_payload = None
-        if hasattr(e, 'response') and e.response is not None:
-            try:
-                error_payload = e.response.json()
-                if is_expected:
-                    logger.info(f"Response: {json.dumps(error_payload, indent=2)}")
-                else:
-                    logger.error(f"Error response: {json.dumps(error_payload, indent=2)}")
-            except Exception:
-                error_payload = e.response.text
-                if is_expected:
-                    logger.info(f"Response: {error_payload}")
-                else:
-                    logger.error(f"Error response: {error_payload}")
-        logger.debug("=" * 80 + "\n")
-
-        message = f"CoreHub request {method.upper()} {path} failed: {e}"
-        if error_payload:
-            if isinstance(error_payload, (dict, list)):
-                message += f" | Response: {json.dumps(error_payload, ensure_ascii=False)}"
-            else:
-                message += f" | Response: {error_payload}"
-
+        message = _describe_core_hub_failure(e, method, path, expected_error_statuses)
         raise RuntimeError(message) from e
 
 
