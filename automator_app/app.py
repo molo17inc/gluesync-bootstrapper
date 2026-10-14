@@ -1123,47 +1123,41 @@ def _unique_table_names(table_names: list[str]) -> list[str]:
     return unique_tables
 
 
+def _discover_table_metadata(
+    discover: Callable[..., Any], failure_message: str, pipeline_id: str, source_schema: str, name: str
+) -> Any:
+    """Metadata of one source table read by discover; an empty list (logged) when that fails."""
+    try:
+        return discover(
+            token=state.token,
+            base_url=state.base_url,
+            pipeline_id=pipeline_id,
+            schema=source_schema,
+            table_name=name,
+            use_ssl=state.use_ssl,
+            skip_verify=state.skip_verify,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception(failure_message, source_schema, name, pipeline_id, exc)
+        return []
+
+
 def _template_table_entry(pipeline_id: str, source_schema: str, name: str) -> dict[str, Any]:
     """Template entry of one table: its primary keys and, when discovered, its columns."""
-    try:
-        pk_names = corehub.discover_primary_key_names(
-            token=state.token,
-            base_url=state.base_url,
-            pipeline_id=pipeline_id,
-            schema=source_schema,
-            table_name=name,
-            use_ssl=state.use_ssl,
-            skip_verify=state.skip_verify,
-        )
-    except Exception as exc:  # pylint: disable=broad-except
-        logger.exception(
-            "Failed to discover primary keys for %s.%s on pipeline %s: %s",
-            source_schema,
-            name,
-            pipeline_id,
-            exc,
-        )
-        pk_names = []
-
-    try:
-        columns_meta = corehub.discover_column_metadata_for_table(
-            token=state.token,
-            base_url=state.base_url,
-            pipeline_id=pipeline_id,
-            schema=source_schema,
-            table_name=name,
-            use_ssl=state.use_ssl,
-            skip_verify=state.skip_verify,
-        )
-    except Exception as exc:  # pylint: disable=broad-except
-        logger.exception(
-            "Failed to discover column metadata for %s.%s on pipeline %s: %s",
-            source_schema,
-            name,
-            pipeline_id,
-            exc,
-        )
-        columns_meta = []
+    pk_names = _discover_table_metadata(
+        corehub.discover_primary_key_names,
+        "Failed to discover primary keys for %s.%s on pipeline %s: %s",
+        pipeline_id,
+        source_schema,
+        name,
+    )
+    columns_meta = _discover_table_metadata(
+        corehub.discover_column_metadata_for_table,
+        "Failed to discover column metadata for %s.%s on pipeline %s: %s",
+        pipeline_id,
+        source_schema,
+        name,
+    )
 
     entry: dict[str, Any] = {"keys": pk_names}
     if columns_meta:
