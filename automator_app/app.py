@@ -45,7 +45,7 @@ import create_user_defined_functions
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -875,22 +875,24 @@ def create_app() -> FastAPI:
         target_type = request.target_type
         
         if not source_type or not target_type:
-            logger.info(f"source_type or target_type empty (source='{source_type}', target='{target_type}'), attempting to extract from pipeline YAML")
+            logger.info(
+                "source_type or target_type empty (source='%s', target='%s'), inferring them from the pipeline agents",
+                source_type,
+                target_type,
+            )
             try:
-                # Try to get the pipeline's YAML configuration
-                yaml_path = state.get_pipeline_yaml_path(request.pipeline_id)
-                if yaml_path and yaml_path.exists():
-                    from commons import extract_schema_types_from_yaml
-                    src_hint, tgt_hint = extract_schema_types_from_yaml(str(yaml_path))
-                    if not source_type and src_hint:
-                        source_type = src_hint
-                        logger.info(f"Extracted source_type from YAML: {source_type}")
-                    if not target_type and tgt_hint:
-                        target_type = tgt_hint
-                        logger.info(f"Extracted target_type from YAML: {target_type}")
-            except Exception as e:
-                logger.warning(f"Could not extract types from YAML: {e}")
-        
+                src_hint, tgt_hint = corehub.infer_agent_schema_types(
+                    token=state.token,
+                    base_url=state.base_url,
+                    pipeline_id=request.pipeline_id,
+                    use_ssl=state.use_ssl,
+                    skip_verify=state.skip_verify,
+                )
+                source_type = source_type or src_hint
+                target_type = target_type or tgt_hint
+            except Exception as e:  # pylint: disable=broad-except
+                logger.warning(f"Could not infer types from the pipeline agents: {e}")
+
         # Final fallback to SQL if still empty
         if not source_type:
             source_type = "SQL"
@@ -1688,15 +1690,15 @@ def create_app() -> FastAPI:
                                     logger.debug(f"Looking for certificate file: {cert_filename}")
                                     logger.debug(f"Available files in ZIP: {zf_cert.namelist()}")
                                     cert_data = None
-                                    
+                                    # Pipeline folder of the YAML (e.g. pipeline_xxx/certificate.txt), if any
+                                    pipeline_folder = name.split('/')[0] if '/' in name else None
+
                                     # Try exact match first
                                     if cert_filename in zf_cert.namelist():
                                         cert_data = zf_cert.read(cert_filename)
                                         logger.debug(f"Found certificate via exact match: {cert_filename}")
                                     else:
                                         # Try with pipeline folder prefix (e.g., pipeline_xxx/certificate.txt)
-                                        # Extract pipeline folder from the YAML name
-                                        pipeline_folder = name.split('/')[0] if '/' in name else None
                                         if pipeline_folder:
                                             prefixed_path = f"{pipeline_folder}/{cert_filename}"
                                             if prefixed_path in zf_cert.namelist():
@@ -1704,7 +1706,7 @@ def create_app() -> FastAPI:
                                                 logger.debug(f"Found certificate with pipeline prefix: {prefixed_path}")
                                         
                                         # Try case-insensitive search as fallback
-                                        if not cert_data:
+                                        if cert_data is None:
                                             for zip_name in zf_cert.namelist():
                                                 # Match by filename only (ignore path)
                                                 if zip_name.lower().endswith(cert_filename.lower()):
@@ -1712,10 +1714,15 @@ def create_app() -> FastAPI:
                                                     logger.debug(f"Found certificate via filename match: {zip_name}")
                                                     break
                                     
-                                    if not cert_data:
+                                    if cert_data is None:
                                         error_msg = f"{name}: Certificate file '{cert_path}' not found in ZIP for agent {agent_id}"
                                         logger.error(error_msg)
                                         logger.error(f"Searched for: {cert_filename}, {pipeline_folder}/{cert_filename if pipeline_folder else 'N/A'}")
+                                        errors.append(error_msg)
+                                        continue
+                                    if not cert_data:
+                                        error_msg = f"{name}: Certificate file '{cert_path}' in the ZIP is empty; not uploaded for agent {agent_id}"
+                                        logger.error(error_msg)
                                         errors.append(error_msg)
                                         continue
                                     

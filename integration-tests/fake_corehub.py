@@ -117,8 +117,11 @@ class FakeCoreHub:
 
 
 def run_create_entities(hub, yaml_text, source_tables, *, source_schema="src", target_schema="tgt",
-                        source_type="RDBMS", target_type="RDBMS", skip_errors=True, chunk_size=50):
-    """Run ``create_entities`` on ``yaml_text`` against ``hub``; returns its result."""
+                        source_type="RDBMS", target_type="RDBMS", skip_errors=True, chunk_size=50, udf_handler=None):
+    """Run ``create_entities`` on ``yaml_text`` against ``hub``; returns its result.
+
+    ``udf_handler`` stands in for ``handle_udf_function_definition`` (a no-op by default).
+    """
     import commons
     import create_all_entities
 
@@ -132,7 +135,8 @@ def run_create_entities(hub, yaml_text, source_tables, *, source_schema="src", t
         mock.patch.object(create_all_entities, "get_table_columns", side_effect=hub.table_columns),
         mock.patch.object(create_all_entities, "map_data_type", side_effect=lambda source_type, *a, **k: source_type),
         mock.patch.object(create_all_entities, "fetch_core_hub", side_effect=hub.fetch),
-        mock.patch.object(create_all_entities, "handle_udf_function_definition", return_value=None),
+        mock.patch.object(create_all_entities, "handle_udf_function_definition",
+                          side_effect=udf_handler or (lambda *a, **k: None)),
         mock.patch.object(create_all_entities, "create_group", side_effect=lambda token, pipeline_id, name, **k: f"group-{name}"),
         mock.patch.object(create_all_entities, "assign_entities_to_group", return_value=True),
         mock.patch.object(create_all_entities, "create_entity_schedules", return_value=None),

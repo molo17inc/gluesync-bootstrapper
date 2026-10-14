@@ -1456,6 +1456,7 @@ def _assemble_target_side(token, pipeline_id, target_agent_id, yaml_target_schem
                 # No column mappings, use keys directly from source columns
                 for key_name in custom_config['keys']:
                     # Find the column and its ID (case-insensitive)
+                    found = False
                     for col in columns["columns"]:
                         if col["name"].lower() == key_name.lower():
                             # Use the id field from CoreHub API as the column ID
@@ -1683,6 +1684,39 @@ def get_allowed_operations(target_custom_properties):
     default_ops = ["INSERT", "DELETE", "UPDATE", "TRUNCATE"]
     logger.info(f"Using default allowedOperations: {default_ops}")
     return default_ops
+
+
+def resolve_group_id(custom_config, group_id_map, token, pipeline_id):
+    """The Core Hub group id for a table's YAML config, or '_default'.
+
+    The YAML names the group under 'groupId' (older templates used 'group'). Groups are created
+    up front into group_id_map; a group missing there is created/fetched here and cached.
+    """
+    requested_group = str(custom_config.get('groupId') or custom_config.get('group') or '_default').strip()
+    logger.debug(f"Requested group: '{requested_group}'")
+    if not requested_group or requested_group == '_default':
+        logger.debug("Using default group as no specific group was requested")
+        return '_default'
+
+    # Use the pre-created group ID from the upfront group_id_map cache to avoid
+    # making a redundant API call per entity (which causes the import to appear
+    # to loop indefinitely when many entities share the same group).
+    group_id = group_id_map.get(requested_group)
+    if group_id and group_id != '_default':
+        logger.debug(f"Using cached group ID for '{requested_group}': {group_id}")
+    else:
+        # Fallback: try to create/get the group (e.g. if upfront pre-creation failed)
+        group_id = create_group(token, pipeline_id, requested_group)
+        if group_id != '_default':
+            # Cache it so subsequent entities skip the API call
+            group_id_map[requested_group] = group_id
+
+    if group_id != '_default':
+        logger.info(f"Using group '{requested_group}' with ID: {group_id}")
+    else:
+        logger.warning(f"Could not use group '{requested_group}'. Using default group.")
+    return group_id
+
 
 def create_entities(token, pipeline_id, source_schema, target_schema, tables, source_agent_id, target_agent_id, source_type, target_type, yaml_config, skip_errors=True, chunk_size=50, source_agent_tag=None, target_agent_tag=None, chronos_token=None):
     # Debug logging to see what source_type and target_type values are received
@@ -2515,35 +2549,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         if document_key:
             target_entity["keyMapping"] = document_key
 
-        # Get the requested group from config, default to '_default'
-        requested_group = str(custom_config.get('groupId', '_default')).strip()
-        group_id = "_default"  # Default group ID
-        
-        # Log the requested group for debugging
-        logger.debug(f"Requested group: '{requested_group}' (type: {type(requested_group)})")
-        
-        # If a specific group was requested and it's not '_default'
-        if requested_group and requested_group != '_default':
-            # Use the pre-created group ID from the upfront groupId_map cache to avoid
-            # making a redundant API call per entity (which causes the import to appear
-            # to loop indefinitely when many entities share the same group).
-            cached_id = groupId_map.get(requested_group)
-            if cached_id and cached_id != '_default':
-                group_id = cached_id
-                logger.debug(f"Using cached group ID for '{requested_group}': {group_id}")
-            else:
-                # Fallback: try to create/get the group (e.g. if upfront pre-creation failed)
-                group_id = create_group(token, pipeline_id, requested_group)
-                if group_id != '_default':
-                    # Cache it so subsequent entities skip the API call
-                    groupId_map[requested_group] = group_id
-            
-            if group_id != "_default":
-                logger.info(f"Using group '{requested_group}' with ID: {group_id}")
-            else:
-                logger.warning(f"Could not use group '{requested_group}'. Using default group.")
-        else:
-            logger.debug("Using default group as no specific group was requested")
+        group_id = resolve_group_id(custom_config, groupId_map, token, pipeline_id)
         
         # Create the entity
         # Use custom entityName from YAML if provided, otherwise fall back to schema.table format
@@ -2829,13 +2835,7 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         # Get entity name from custom config
         entity_name = custom_config.get('entityName', f"{target_table_name} - {source_schema}.{table_name}")
         
-        # Get group ID
-        group_name = custom_config.get('group')
-        group_id = None
-        if group_name and groups_by_name:
-            group_id = groups_by_name.get(group_name, {}).get('id')
-            if not group_id:
-                logger.warning(f"Group '{group_name}' not found for duplicate table {yaml_table_key}")
+        group_id = resolve_group_id(custom_config, groupId_map, token, pipeline_id)
 
         entity = {
             "entityName": entity_name,
@@ -2856,8 +2856,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
                 "source_agent_id": source_agent_id
             })
         
-        # Process UDFs
-        table_udfs = target_custom_properties.get('udf', [])
+        # Process UDFs: 'udf' was popped from target_custom_properties above, so read the table's own config
+        table_udfs = table_custom_properties.get('target', {}).get('udf', [])
         if table_udfs:
             logger.info(f"Found UDFs for duplicate table {yaml_table_key}: {table_udfs}")
             try:
