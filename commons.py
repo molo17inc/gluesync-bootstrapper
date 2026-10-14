@@ -678,7 +678,6 @@ def _compatibility_group_default_type(source_gluesync_type, target_node_info, ta
 
 
 def map_data_type(source_type, source_node_info, target_node_info,
-                  source_agent_tag=None, target_agent_tag=None,
                   target_table_column_types=None):
     """Map a source native type to the corresponding target native type.
 

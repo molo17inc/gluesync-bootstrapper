@@ -872,7 +872,6 @@ class _TablePair:
 def _map_target_type(ctx, data_type, target_table_column_types):
     """The target native type of the source native type ``data_type`` (:func:`commons.map_data_type`)."""
     return map_data_type(data_type, ctx.source_node_info, ctx.target_node_info,
-                         source_agent_tag=ctx.source_agent_tag, target_agent_tag=ctx.target_agent_tag,
                          target_table_column_types=target_table_column_types)
 
 
@@ -2737,8 +2736,6 @@ def _create_target_table(run, pair, keys):
         pair.custom_config,
         ctx.source_node_info,
         ctx.target_node_info,
-        source_agent_tag=ctx.source_agent_tag,
-        target_agent_tag=ctx.target_agent_tag,
     )
 
 

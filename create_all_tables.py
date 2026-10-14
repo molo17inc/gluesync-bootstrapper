@@ -244,8 +244,6 @@ class _TableCreationContext:
     global_target_custom_properties: dict
     source_node_info: dict
     target_node_info: dict
-    source_agent_tag: Optional[str]
-    target_agent_tag: Optional[str]
 
 
 def _table_name_of(table):
@@ -413,8 +411,7 @@ def _create_table(ctx: _TableCreationContext, table_name: str) -> None:
 
     # check if the table exists on the target
     handle_table_creation(ctx.pipeline_id, target_table_name, ctx.yaml_target_schema, source_discovered_keys, ctx.token,
-                          columns, custom_config, ctx.source_node_info, ctx.target_node_info,
-                          source_agent_tag=ctx.source_agent_tag, target_agent_tag=ctx.target_agent_tag)
+                          columns, custom_config, ctx.source_node_info, ctx.target_node_info)
 
 
 def _schema_tables_context(yaml_config: dict, source_schema: str, target_schema: str) -> dict:
@@ -455,8 +452,7 @@ def _schema_tables_context(yaml_config: dict, source_schema: str, target_schema:
 
 
 def create_tables(token, pipeline_id, source_schema, target_schema, tables, source_agent_id, target_agent_id,
-                  source_type, target_type, yaml_config, skip_errors=True,
-                  source_agent_tag=None, target_agent_tag=None):
+                  source_type, target_type, yaml_config, skip_errors=True):
     """Create the target tables of the source tables of a schema, as the YAML configuration describes them."""
     # First, collect all unique group names from the YAML configuration
     group_names = _collect_group_names(yaml_config)
@@ -485,8 +481,6 @@ def create_tables(token, pipeline_id, source_schema, target_schema, tables, sour
         source_agent_id=source_agent_id,
         source_node_info=source_node_info,
         target_node_info=target_node_info,
-        source_agent_tag=source_agent_tag,
-        target_agent_tag=target_agent_tag,
         **_schema_tables_context(yaml_config, source_schema, target_schema),
     )
 
@@ -584,8 +578,7 @@ def _target_only_column_spec(target_col):
     )
 
 
-def _target_only_column_dtos(target_only_columns, key_lookup: _KeyLookup, source_node_info, target_node_info,
-                             source_agent_tag, target_agent_tag) -> list:
+def _target_only_column_dtos(target_only_columns, key_lookup: _KeyLookup, source_node_info, target_node_info) -> list:
     """The target columns of a targetOnlyColumns definition."""
     column_dtos = []
     for idx, target_col in enumerate(target_only_columns, 1):
@@ -597,8 +590,6 @@ def _target_only_column_dtos(target_only_columns, key_lookup: _KeyLookup, source
             col_type,
             source_node_info,
             target_node_info,
-            source_agent_tag=source_agent_tag,
-            target_agent_tag=target_agent_tag,
         )
         col_data_length = _normalize_data_length(mapped_type, col_data_length)
 
@@ -629,8 +620,8 @@ def _split_column_entries(column_entries):
     return metadata_columns, simple_mappings
 
 
-def _metadata_column_dto(idx: int, col_meta: dict, key_lookup: _KeyLookup, source_node_info, target_node_info,
-                         source_agent_tag, target_agent_tag) -> Column:
+def _metadata_column_dto(idx: int, col_meta: dict, key_lookup: _KeyLookup, source_node_info,
+                         target_node_info) -> Column:
     """The target column of a YAML column metadata entry."""
     col_name = col_meta.get('name')
 
@@ -660,8 +651,6 @@ def _metadata_column_dto(idx: int, col_meta: dict, key_lookup: _KeyLookup, sourc
             col_type,
             source_node_info,
             target_node_info,
-            source_agent_tag=source_agent_tag,
-            target_agent_tag=target_agent_tag,
         )
     col_data_length = _normalize_data_length(mapped_type, col_data_length)
     resolved_target_type = mapped_type
@@ -687,7 +676,7 @@ def _metadata_column_dto(idx: int, col_meta: dict, key_lookup: _KeyLookup, sourc
 
 
 def _metadata_column_dtos(metadata_columns, target_table_name: str, key_lookup: _KeyLookup, source_node_info,
-                          target_node_info, source_agent_tag, target_agent_tag) -> list:
+                          target_node_info) -> list:
     """The target columns of the YAML column metadata entries."""
     logger.info(f"Using YAML column metadata for table {target_table_name}")
     column_dtos = []
@@ -697,13 +686,12 @@ def _metadata_column_dtos(metadata_columns, target_table_name: str, key_lookup: 
                 f"Warning: Column metadata entry missing 'name' for table {target_table_name}. Skipping entry: {col_meta}")
             continue
         column_dtos.append(_metadata_column_dto(
-            idx, col_meta, key_lookup, source_node_info, target_node_info, source_agent_tag, target_agent_tag
+            idx, col_meta, key_lookup, source_node_info, target_node_info
         ))
     return column_dtos
 
 
-def _source_column_dtos(columns, key_lookup: _KeyLookup, source_node_info, target_node_info,
-                        source_agent_tag, target_agent_tag) -> list:
+def _source_column_dtos(columns, key_lookup: _KeyLookup, source_node_info, target_node_info) -> list:
     """When no metadata is provided, fall back to source column properties directly."""
     column_dtos = []
     for col in columns["columns"]:
@@ -712,8 +700,6 @@ def _source_column_dtos(columns, key_lookup: _KeyLookup, source_node_info, targe
             col.get("dataType"),
             source_node_info,
             target_node_info,
-            source_agent_tag=source_agent_tag,
-            target_agent_tag=target_agent_tag,
         )
         col_data_length = _normalize_data_length(mapped_type, col.get("charMaxLength", 0))
         # YAML-defined keys override source metadata so templates can
@@ -736,7 +722,7 @@ def _source_column_dtos(columns, key_lookup: _KeyLookup, source_node_info, targe
 
 
 def _mapped_column_dtos(column_entries, target_table_name: str, columns, key_lookup: _KeyLookup, source_node_info,
-                        target_node_info, source_agent_tag, target_agent_tag) -> Optional[list]:
+                        target_node_info) -> Optional[list]:
     """The target columns from the YAML column metadata, else from the source columns.
 
     ``None`` when the YAML columns are source→target mappings, which cannot describe a table to create.
@@ -751,17 +737,15 @@ def _mapped_column_dtos(column_entries, target_table_name: str, columns, key_loo
     column_dtos = []
     if metadata_columns:
         column_dtos = _metadata_column_dtos(metadata_columns, target_table_name, key_lookup, source_node_info,
-                                            target_node_info, source_agent_tag, target_agent_tag)
+                                            target_node_info)
 
     if not column_dtos:
-        column_dtos = _source_column_dtos(columns, key_lookup, source_node_info, target_node_info,
-                                          source_agent_tag, target_agent_tag)
+        column_dtos = _source_column_dtos(columns, key_lookup, source_node_info, target_node_info)
     return column_dtos
 
 
 def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_schema: str, keys: list, token: str,
-                          columns: list, custom_config, source_node_info, target_node_info,
-                          source_agent_tag=None, target_agent_tag=None):
+                          columns: list, custom_config, source_node_info, target_node_info):
     custom_config = custom_config or {}
 
     if table_exists(pipeline_id=pipeline_id, schema_name=yaml_target_schema, table_name=target_table_name,
@@ -782,11 +766,10 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
     # Check if targetOnlyColumns are defined - if so, use them instead of source columns
     if target_only_columns:
         logger.info(f"Using targetOnlyColumns definition for table {target_table_name}")
-        column_dtos = _target_only_column_dtos(target_only_columns, key_lookup, source_node_info, target_node_info,
-                                               source_agent_tag, target_agent_tag)
+        column_dtos = _target_only_column_dtos(target_only_columns, key_lookup, source_node_info, target_node_info)
     else:
         column_dtos = _mapped_column_dtos(column_entries, target_table_name, columns, key_lookup, source_node_info,
-                                          target_node_info, source_agent_tag, target_agent_tag)
+                                          target_node_info)
         if column_dtos is None:
             return
 
@@ -845,9 +828,7 @@ def main(pipeline_id, source_schema, target_schema, source_type, target_type, ya
         create_tables(
             token, pipeline_id, source_schema, target_schema,
             tables, source_agent['agentId'], target_agent['agentId'],
-            source_type, target_type, yaml_config, skip_errors,
-            source_agent_tag=source_agent.get('agentTag'),
-            target_agent_tag=target_agent.get('agentTag')
+            source_type, target_type, yaml_config, skip_errors
         )
 
     except Exception as e:
