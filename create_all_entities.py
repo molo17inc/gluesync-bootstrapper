@@ -1686,11 +1686,11 @@ def get_allowed_operations(target_custom_properties):
     return default_ops
 
 
-def resolve_group_id(custom_config, groupId_map, token, pipeline_id):
+def resolve_group_id(custom_config, group_id_map, token, pipeline_id):
     """The Core Hub group id for a table's YAML config, or '_default'.
 
     The YAML names the group under 'groupId' (older templates used 'group'). Groups are created
-    up front into groupId_map; a group missing there is created/fetched here and cached.
+    up front into group_id_map; a group missing there is created/fetched here and cached.
     """
     requested_group = str(custom_config.get('groupId') or custom_config.get('group') or '_default').strip()
     logger.debug(f"Requested group: '{requested_group}'")
@@ -1698,10 +1698,10 @@ def resolve_group_id(custom_config, groupId_map, token, pipeline_id):
         logger.debug("Using default group as no specific group was requested")
         return '_default'
 
-    # Use the pre-created group ID from the upfront groupId_map cache to avoid
+    # Use the pre-created group ID from the upfront group_id_map cache to avoid
     # making a redundant API call per entity (which causes the import to appear
     # to loop indefinitely when many entities share the same group).
-    group_id = groupId_map.get(requested_group)
+    group_id = group_id_map.get(requested_group)
     if group_id and group_id != '_default':
         logger.debug(f"Using cached group ID for '{requested_group}': {group_id}")
     else:
@@ -1709,7 +1709,7 @@ def resolve_group_id(custom_config, groupId_map, token, pipeline_id):
         group_id = create_group(token, pipeline_id, requested_group)
         if group_id != '_default':
             # Cache it so subsequent entities skip the API call
-            groupId_map[requested_group] = group_id
+            group_id_map[requested_group] = group_id
 
     if group_id != '_default':
         logger.info(f"Using group '{requested_group}' with ID: {group_id}")
