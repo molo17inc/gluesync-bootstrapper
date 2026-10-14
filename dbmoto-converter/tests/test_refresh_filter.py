@@ -29,6 +29,16 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import parse_dbmoto_metadata_xml as parser
 
 
+def _custom_table_defs(directory, yaml_files):
+    """Yield every custom table definition of the generated schema YAML files."""
+    for yf in yaml_files:
+        with open(os.path.join(directory, yf), 'r') as fh:
+            content = yaml.safe_load(fh)
+        for schema_data in content.values():
+            if isinstance(schema_data, dict) and 'tables' in schema_data:
+                yield from schema_data['tables'].get('custom', {}).values()
+
+
 class TestRefreshFilterExtraction(unittest.TestCase):
     """Test RefreshFilter -> whereClause extraction using mase_meta_simplified.xml."""
 
@@ -66,7 +76,7 @@ class TestRefreshFilterExtraction(unittest.TestCase):
         for repl_id, filt in refresh_filters.items():
             self.assertIsInstance(repl_id, str)
             self.assertIsInstance(filt, str)
-            self.assertTrue(len(filt) > 0)
+            self.assertGreater(len(filt), 0)
             # HTML entities should be decoded
             self.assertNotIn("&lt;", filt)
             self.assertNotIn("&gt;", filt)
@@ -87,21 +97,15 @@ class TestRefreshFilterExtraction(unittest.TestCase):
         self.assertGreater(len(yaml_files), 0, "At least one YAML file should be generated")
 
         found_where = False
-        for yf in yaml_files:
-            with open(os.path.join(self.temp_output_dir, yf), 'r') as fh:
-                content = yaml.safe_load(fh)
-            for schema_name, schema_data in content.items():
-                if isinstance(schema_data, dict) and 'tables' in schema_data:
-                    custom = schema_data['tables'].get('custom', {})
-                    for table_name, table_def in custom.items():
-                        if 'whereClause' in table_def:
-                            found_where = True
-                            wc = table_def['whereClause']
-                            self.assertIsInstance(wc, str)
-                            self.assertTrue(len(wc) > 0)
-                            # Must not contain XML entities
-                            self.assertNotIn("&lt;", wc)
-                            self.assertNotIn("&gt;", wc)
+        for table_def in _custom_table_defs(self.temp_output_dir, yaml_files):
+            if 'whereClause' in table_def:
+                found_where = True
+                wc = table_def['whereClause']
+                self.assertIsInstance(wc, str)
+                self.assertGreater(len(wc), 0)
+                # Must not contain XML entities
+                self.assertNotIn("&lt;", wc)
+                self.assertNotIn("&gt;", wc)
 
         self.assertTrue(found_where, "Expected at least one table with a whereClause in output YAML")
 
@@ -214,24 +218,18 @@ class TestRefreshFilterUnescaping(unittest.TestCase):
         yaml_files = [f for f in os.listdir(self.temp_dir) if f.endswith('.yaml')]
         self.assertGreater(len(yaml_files), 0)
 
-        for yf in yaml_files:
-            with open(os.path.join(self.temp_dir, yf), 'r') as fh:
-                content = yaml.safe_load(fh)
-            for schema_name, schema_data in content.items():
-                if isinstance(schema_data, dict) and 'tables' in schema_data:
-                    custom = schema_data['tables'].get('custom', {})
-                    for table_name, table_def in custom.items():
-                        if 'whereClause' in table_def:
-                            wc = table_def['whereClause']
-                            self.assertNotIn("&gt;", wc)
-                            self.assertNotIn("&lt;", wc)
-                            self.assertNotIn("\\=", wc)
-                            self.assertNotIn("\\;", wc)
-                            # Should contain actual operators
-                            self.assertTrue(
-                                '>=' in wc or '<=' in wc,
-                                f"whereClause should contain >= or <=, got: {wc}"
-                            )
+        for table_def in _custom_table_defs(self.temp_dir, yaml_files):
+            if 'whereClause' in table_def:
+                wc = table_def['whereClause']
+                self.assertNotIn("&gt;", wc)
+                self.assertNotIn("&lt;", wc)
+                self.assertNotIn("\\=", wc)
+                self.assertNotIn("\\;", wc)
+                # Should contain actual operators
+                self.assertTrue(
+                    '>=' in wc or '<=' in wc,
+                    f"whereClause should contain >= or <=, got: {wc}"
+                )
 
 
 if __name__ == '__main__':
