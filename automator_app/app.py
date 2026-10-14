@@ -552,6 +552,15 @@ _TEMPLATE_RESPONSES: Dict[Any, Dict[str, Any]] = {
     400: {"description": "The pipeline, the schemas or the tables are missing"},
     401: _NOT_LOGGED_IN_RESPONSE,
 }
+_DUPLICATE_RESPONSES: Dict[Any, Dict[str, Any]] = {
+    400: {"description": "An agent tag, password or override schema is missing, or the duplicate was cancelled"},
+    401: _NOT_LOGGED_IN_RESPONSE,
+    409: {"description": "Another pipeline duplicate is running"},
+    500: _FAILURE_RESPONSE,
+}
+_SESSION_RESPONSES: Dict[Any, Dict[str, Any]] = {
+    401: _NOT_LOGGED_IN_RESPONSE,
+}
 
 
 def _require_login() -> None:
@@ -1229,6 +1238,264 @@ def _register_bulk_routes(app: FastAPI) -> None:
     app.add_api_route("/api/bulk/template", bulk_export_template, methods=["POST"], responses=_TEMPLATE_RESPONSES)
 
 
+async def export_pipeline(pipeline_id: str, include_secrets: bool = False):
+    """Export entity metadata for a single pipeline.
+
+    Returns plain YAML when no entity-level UDFs are referenced. When UDFs
+    are present, returns a ZIP containing the YAML plus ``udf-<agentId>/``
+    source folders (same layout full backup / import already understand)
+    so entity-only export round-trips mapping-function sources (GSSD-1355).
+
+    Duplicate source tables are handled by creating unique keys (e.g., table@@2, table@@3)
+    within the same YAML file to avoid key conflicts.
+    """
+
+    _require_session()
+
+    try:
+        payload, media_type, filename = corehub.export_pipeline_entities_package(
+            token=state.token,
+            base_url=state.base_url,
+            pipeline_id=pipeline_id,
+            use_ssl=state.use_ssl,
+            skip_verify=state.skip_verify,
+            include_secrets=include_secrets,
+            chronos_token=state.chronos_token,
+        )
+    except PipelineInMaintenanceError as exc:
+        logger.info("Pipeline %s skipped from backup: %s", pipeline_id, exc)
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Failed to export pipeline %s", pipeline_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return _attachment(payload, media_type, filename)
+
+
+def _pipeline_backup_name(pipeline_id: str) -> str:
+    """File-safe name of a pipeline for its backup file name; the pipeline ID when it has none."""
+    safe_name = pipeline_id
+    try:
+        details = corehub.fetch_core_hub(f"/pipelines/{pipeline_id}", token=state.token)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("Failed to fetch pipeline %s metadata for filename: %s", pipeline_id, exc)
+        details = None
+    if isinstance(details, dict):
+        name = details.get("name")
+        if isinstance(name, str) and name:
+            cleaned = "".join(c for c in name if c.isalnum() or c in (" ", "-", "_")).rstrip()
+            if cleaned:
+                safe_name = cleaned
+    return safe_name
+
+
+async def export_pipeline_full_backup(pipeline_id: str, include_secrets: bool = False):
+    """Export a full backup (YAML + agents-config + UDFs) for a single pipeline."""
+
+    _require_session()
+
+    try:
+        zip_data = corehub.export_pipeline_full_backup(
+            token=state.token,
+            base_url=state.base_url,
+            pipeline_id=pipeline_id,
+            use_ssl=state.use_ssl,
+            skip_verify=state.skip_verify,
+            include_secrets=include_secrets,
+            chronos_token=state.chronos_token,
+        )
+    except PipelineInMaintenanceError as exc:
+        logger.info("Pipeline %s skipped from full backup: %s", pipeline_id, exc)
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Failed to export full backup for pipeline %s", pipeline_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    # Derive a human-friendly filename aligned with the internal YAML name:
+    # backup_<safePipelineName>_<pipelineId>.zip
+    safe_name = _pipeline_backup_name(pipeline_id)
+
+    timestamp = datetime.now().strftime(TIMESTAMP_FORMAT)
+    filename = f"backup_{safe_name}_{pipeline_id}_{timestamp}.zip"
+    return _attachment(zip_data, APPLICATION_ZIP, filename)
+
+
+def _check_duplicate_request(request: DuplicatePipelineRequest) -> None:
+    """Refuse a duplicate request that misses an agent tag or password, or the override schema."""
+    if not request.source_agent_tag:
+        raise HTTPException(status_code=400, detail="sourceAgentTag is required")
+    if not request.target_agent_tag:
+        raise HTTPException(status_code=400, detail="targetAgentTag is required")
+    if not request.source_agent_password:
+        raise HTTPException(status_code=400, detail="sourceAgentPassword is required")
+    if not request.target_agent_password:
+        raise HTTPException(status_code=400, detail="targetAgentPassword is required")
+    if request.override_schemas and not (
+        request.override_source_schema or request.override_target_schema
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="At least one of overrideSourceSchema or overrideTargetSchema must be provided when overrideSchemas is enabled",
+        )
+
+
+async def duplicate_pipeline(pipeline_id: str, request: DuplicatePipelineRequest):
+    """Duplicate a pipeline with new source and target agent configuration.
+
+    This endpoint allows users to clone an existing pipeline with different agents.
+    Agents are provisioned via CoreHub API during pipeline creation.
+    """
+
+    _require_session()
+    _check_duplicate_request(request)
+
+    try:
+        state.begin_duplicate()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    duplicate_started = True
+
+    logger.info("Duplicate request: clone_entities=%s", request.clone_entities)
+
+    try:
+        result = corehub.duplicate_pipeline(
+            token=state.token,
+            base_url=state.base_url,
+            pipeline_id=pipeline_id,
+            new_pipeline_name=request.new_pipeline_name,
+            source_agent_tag=request.source_agent_tag,
+            target_agent_tag=request.target_agent_tag,
+            source_agent_password=request.source_agent_password,
+            target_agent_password=request.target_agent_password,
+            clone_entities=request.clone_entities,
+            use_ssl=state.use_ssl,
+            skip_verify=state.skip_verify,
+            source_host_override=request.source_host_override,
+            target_host_override=request.target_host_override,
+            source_port_override=request.source_port_override,
+            target_port_override=request.target_port_override,
+            override_schemas=request.override_schemas,
+            override_source_schema=request.override_source_schema,
+            override_target_schema=request.override_target_schema,
+            cancel_checker=state.is_duplicate_cancelled,
+            chronos_token=state.chronos_token,
+        )
+    except corehub.DuplicateCancelledError as exc:
+        logger.info("Duplicate pipeline %s cancelled by user", pipeline_id)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Failed to duplicate pipeline %s", pipeline_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        if duplicate_started:
+            state.end_duplicate()
+
+    return DuplicatePipelineResponse(**result)
+
+
+async def cancel_duplicate() -> ApiMessage:
+    """Request cancellation of an in-flight duplicate pipeline operation."""
+
+    _require_session()
+
+    requested = state.request_duplicate_cancel()
+    if not requested:
+        return ApiMessage(success=False, message="No duplicate pipeline is currently running")
+    return ApiMessage(success=True, message="Duplicate cancellation requested")
+
+
+async def get_corehub_overview() -> dict:
+    _require_session()
+
+    try:
+        summary = corehub.get_environment_summary(
+            token=state.token,
+            base_url=state.base_url,
+            use_ssl=state.use_ssl,
+            skip_verify=state.skip_verify,
+            chronos_token=state.chronos_token,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Failed to gather CoreHub overview")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    prefs = state.preferences()
+    summary["environment"] = {
+        "baseUrl": state.base_url,
+        "useSsl": state.use_ssl,
+        "skipVerify": state.skip_verify,
+        "enableScheduling": prefs.get("enableScheduling"),
+        "createTables": prefs.get("createTables"),
+    }
+
+    state.set_corehub_overview(summary)
+    return summary
+
+
+async def get_pipeline_agents(pipeline_id: str) -> PipelineAgentsResponse:
+    """Get pipeline agent details for auto-populating duplicate form."""
+
+    _require_session()
+
+    try:
+        pipeline_config = corehub.fetch_core_hub(f"/pipelines/{pipeline_id}/config", token=state.token)
+        logger.info("Fetched pipeline config for pipeline %s", pipeline_id)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Failed to fetch pipeline config %s", pipeline_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    if not isinstance(pipeline_config, dict):
+        raise HTTPException(status_code=500, detail="Unexpected response from CoreHub")
+
+    agents = pipeline_config.get("agents")
+    if not isinstance(agents, list):
+        agents = []
+
+    source_agent = next(
+        (agent for agent in agents if isinstance(agent, dict) and agent.get("agentType") == "SOURCE"),
+        None,
+    )
+    target_agent = next(
+        (agent for agent in agents if isinstance(agent, dict) and agent.get("agentType") == "TARGET"),
+        None,
+    )
+
+    return PipelineAgentsResponse(
+        sourceAgentType=source_agent.get("agentType") if source_agent else None,
+        sourceAgentTag=source_agent.get("agentTag") if source_agent else None,
+        targetAgentType=target_agent.get("agentType") if target_agent else None,
+        targetAgentTag=target_agent.get("agentTag") if target_agent else None,
+    )
+
+
+def _register_pipeline_routes(app: FastAPI) -> None:
+    """The single pipeline export, duplicate, Core Hub overview and pipeline agents routes."""
+    app.add_api_route(
+        "/api/export/pipeline/{pipeline_id}", export_pipeline, methods=["GET"], responses=_PIPELINE_EXPORT_RESPONSES
+    )
+    app.add_api_route(
+        "/api/export/pipeline/{pipeline_id}/full",
+        export_pipeline_full_backup,
+        methods=["GET"],
+        responses=_PIPELINE_EXPORT_RESPONSES,
+    )
+    app.add_api_route(
+        "/api/duplicate/pipeline/{pipeline_id}",
+        duplicate_pipeline,
+        methods=["POST"],
+        response_model=DuplicatePipelineResponse,
+        responses=_DUPLICATE_RESPONSES,
+    )
+    app.add_api_route("/api/duplicate/cancel", cancel_duplicate, methods=["POST"], responses=_SESSION_RESPONSES)
+    app.add_api_route(
+        "/api/corehub/overview", get_corehub_overview, methods=["GET"], responses=_COREHUB_CALL_RESPONSES
+    )
+    app.add_api_route(
+        "/api/pipeline/{pipeline_id}/agents", get_pipeline_agents, methods=["GET"], responses=_COREHUB_CALL_RESPONSES
+    )
+
+
 def create_app() -> FastAPI:
     _ensure_static_assets()
     asset_rewrites = _fingerprint_static_assets()
@@ -1250,244 +1517,7 @@ def create_app() -> FastAPI:
 
     _register_bulk_routes(app)
 
-    @app.get("/api/export/pipeline/{pipeline_id}", responses=_PIPELINE_EXPORT_RESPONSES)
-    async def export_pipeline(pipeline_id: str, include_secrets: bool = False):
-        """Export entity metadata for a single pipeline.
-
-        Returns plain YAML when no entity-level UDFs are referenced. When UDFs
-        are present, returns a ZIP containing the YAML plus ``udf-<agentId>/``
-        source folders (same layout full backup / import already understand)
-        so entity-only export round-trips mapping-function sources (GSSD-1355).
-
-        Duplicate source tables are handled by creating unique keys (e.g., table@@2, table@@3)
-        within the same YAML file to avoid key conflicts.
-        """
-
-        if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
-
-        try:
-            payload, media_type, filename = corehub.export_pipeline_entities_package(
-                token=state.token,
-                base_url=state.base_url,
-                pipeline_id=pipeline_id,
-                use_ssl=state.use_ssl,
-                skip_verify=state.skip_verify,
-                include_secrets=include_secrets,
-                chronos_token=state.chronos_token,
-            )
-        except PipelineInMaintenanceError as exc:
-            logger.info("Pipeline %s skipped from backup: %s", pipeline_id, exc)
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.exception("Failed to export pipeline %s", pipeline_id)
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-        return StreamingResponse(
-            io.BytesIO(payload),
-            media_type=media_type,
-            headers={
-                "Content-Disposition": f'attachment; filename="{filename}"',
-            },
-        )
-
-    @app.get("/api/export/pipeline/{pipeline_id}/full", responses=_PIPELINE_EXPORT_RESPONSES)
-    async def export_pipeline_full_backup(pipeline_id: str, include_secrets: bool = False):
-        """Export a full backup (YAML + agents-config + UDFs) for a single pipeline."""
-
-        if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
-
-        try:
-            zip_data = corehub.export_pipeline_full_backup(
-                token=state.token,
-                base_url=state.base_url,
-                pipeline_id=pipeline_id,
-                use_ssl=state.use_ssl,
-                skip_verify=state.skip_verify,
-                include_secrets=include_secrets,
-                chronos_token=state.chronos_token,
-            )
-        except PipelineInMaintenanceError as exc:
-            logger.info("Pipeline %s skipped from full backup: %s", pipeline_id, exc)
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.exception("Failed to export full backup for pipeline %s", pipeline_id)
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-        # Derive a human-friendly filename aligned with the internal YAML name:
-        # backup_<safePipelineName>_<pipelineId>.zip
-        safe_name = pipeline_id
-        try:
-            details = corehub.fetch_core_hub(f"/pipelines/{pipeline_id}", token=state.token)
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.warning("Failed to fetch pipeline %s metadata for filename: %s", pipeline_id, exc)
-            details = None
-        if isinstance(details, dict):
-            name = details.get("name")
-            if isinstance(name, str) and name:
-                cleaned = "".join(c for c in name if c.isalnum() or c in (" ", "-", "_")).rstrip()
-                if cleaned:
-                    safe_name = cleaned
-
-        timestamp = datetime.now().strftime(TIMESTAMP_FORMAT)
-        filename = f"backup_{safe_name}_{pipeline_id}_{timestamp}.zip"
-        return StreamingResponse(
-            io.BytesIO(zip_data),
-            media_type=APPLICATION_ZIP,
-            headers={
-                "Content-Disposition": f'attachment; filename="{filename}"',
-            },
-        )
-
-    @app.post("/api/duplicate/pipeline/{pipeline_id}", response_model=DuplicatePipelineResponse)
-    async def duplicate_pipeline(pipeline_id: str, request: DuplicatePipelineRequest):
-        """Duplicate a pipeline with new source and target agent configuration.
-
-        This endpoint allows users to clone an existing pipeline with different agents.
-        Agents are provisioned via CoreHub API during pipeline creation.
-        """
-
-        if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
-
-        if not request.source_agent_tag:
-            raise HTTPException(status_code=400, detail="sourceAgentTag is required")
-        if not request.target_agent_tag:
-            raise HTTPException(status_code=400, detail="targetAgentTag is required")
-        if not request.source_agent_password:
-            raise HTTPException(status_code=400, detail="sourceAgentPassword is required")
-        if not request.target_agent_password:
-            raise HTTPException(status_code=400, detail="targetAgentPassword is required")
-        if request.override_schemas and not (
-            request.override_source_schema or request.override_target_schema
-        ):
-            raise HTTPException(
-                status_code=400,
-                detail="At least one of overrideSourceSchema or overrideTargetSchema must be provided when overrideSchemas is enabled",
-            )
-
-        try:
-            state.begin_duplicate()
-        except RuntimeError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-        duplicate_started = True
-
-        logger.info("Duplicate request: clone_entities=%s", request.clone_entities)
-        
-        try:
-            result = corehub.duplicate_pipeline(
-                token=state.token,
-                base_url=state.base_url,
-                pipeline_id=pipeline_id,
-                new_pipeline_name=request.new_pipeline_name,
-                source_agent_tag=request.source_agent_tag,
-                target_agent_tag=request.target_agent_tag,
-                source_agent_password=request.source_agent_password,
-                target_agent_password=request.target_agent_password,
-                clone_entities=request.clone_entities,
-                use_ssl=state.use_ssl,
-                skip_verify=state.skip_verify,
-                source_host_override=request.source_host_override,
-                target_host_override=request.target_host_override,
-                source_port_override=request.source_port_override,
-                target_port_override=request.target_port_override,
-                override_schemas=request.override_schemas,
-                override_source_schema=request.override_source_schema,
-                override_target_schema=request.override_target_schema,
-                cancel_checker=state.is_duplicate_cancelled,
-                chronos_token=state.chronos_token,
-            )
-        except corehub.DuplicateCancelledError as exc:
-            logger.info("Duplicate pipeline %s cancelled by user", pipeline_id)
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.exception("Failed to duplicate pipeline %s", pipeline_id)
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-        finally:
-            if duplicate_started:
-                state.end_duplicate()
-
-        return DuplicatePipelineResponse(**result)
-
-    @app.post("/api/duplicate/cancel", response_model=ApiMessage)
-    async def cancel_duplicate() -> ApiMessage:
-        """Request cancellation of an in-flight duplicate pipeline operation."""
-
-        if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
-
-        requested = state.request_duplicate_cancel()
-        if not requested:
-            return ApiMessage(success=False, message="No duplicate pipeline is currently running")
-        return ApiMessage(success=True, message="Duplicate cancellation requested")
-
-    @app.get("/api/corehub/overview")
-    async def get_corehub_overview() -> dict:
-        if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
-
-        try:
-            summary = corehub.get_environment_summary(
-                token=state.token,
-                base_url=state.base_url,
-                use_ssl=state.use_ssl,
-                skip_verify=state.skip_verify,
-                chronos_token=state.chronos_token,
-            )
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.exception("Failed to gather CoreHub overview")
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-        prefs = state.preferences()
-        summary["environment"] = {
-            "baseUrl": state.base_url,
-            "useSsl": state.use_ssl,
-            "skipVerify": state.skip_verify,
-            "enableScheduling": prefs.get("enableScheduling"),
-            "createTables": prefs.get("createTables"),
-        }
-
-        state.set_corehub_overview(summary)
-        return summary
-
-    @app.get("/api/pipeline/{pipeline_id}/agents", response_model=PipelineAgentsResponse)
-    async def get_pipeline_agents(pipeline_id: str) -> PipelineAgentsResponse:
-        """Get pipeline agent details for auto-populating duplicate form."""
-
-        if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
-
-        try:
-            pipeline_config = corehub.fetch_core_hub(f"/pipelines/{pipeline_id}/config", token=state.token)
-            logger.info("Fetched pipeline config for pipeline %s", pipeline_id)
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.exception("Failed to fetch pipeline config %s", pipeline_id)
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-        if not isinstance(pipeline_config, dict):
-            raise HTTPException(status_code=500, detail="Unexpected response from CoreHub")
-
-        agents = pipeline_config.get("agents")
-        if not isinstance(agents, list):
-            agents = []
-
-        source_agent = next(
-            (agent for agent in agents if isinstance(agent, dict) and agent.get("agentType") == "SOURCE"),
-            None,
-        )
-        target_agent = next(
-            (agent for agent in agents if isinstance(agent, dict) and agent.get("agentType") == "TARGET"),
-            None,
-        )
-
-        return PipelineAgentsResponse(
-            sourceAgentType=source_agent.get("agentType") if source_agent else None,
-            sourceAgentTag=source_agent.get("agentTag") if source_agent else None,
-            targetAgentType=target_agent.get("agentType") if target_agent else None,
-            targetAgentTag=target_agent.get("agentTag") if target_agent else None,
-        )
+    _register_pipeline_routes(app)
 
     @app.post("/api/import/all", response_model=ApiMessage)
     async def import_all(
