@@ -65,34 +65,7 @@ class TransactionsAuditClient:
             return
 
         # Try to resolve the target agent ID
-        resolved_target_id = None
-        
-        # Fetch pipeline config to look for agents
-        try:
-            pipeline_info = self.client.request(f"/pipelines/{pipeline_id}", method='GET', token=token)
-            target_agents = pipeline_info.get('targetAgentsInfo', [])
-            
-            if target_agent_identifier:
-                # 1. Try matching by agentId (UUID)
-                for agent in target_agents:
-                    if agent.get('agentId') == target_agent_identifier:
-                        resolved_target_id = agent.get('agentId')
-                        break
-                
-                # 2. Try matching by agentTag (alias)
-                if not resolved_target_id:
-                    for agent in target_agents:
-                        if agent.get('agentTag') == target_agent_identifier:
-                            resolved_target_id = agent.get('agentId')
-                            break
-            
-            # 3. Fallback: if only one target agent exists, use it
-            if not resolved_target_id and len(target_agents) == 1:
-                resolved_target_id = target_agents[0].get('agentId')
-                logger.info(f"Automatically selected the only available target agent for auditing: {resolved_target_id}")
-
-        except Exception as e:
-            logger.warning(f"Could not fetch pipeline info to resolve target agent: {e}")
+        resolved_target_id = self._resolve_target_agent_id(pipeline_id, token, target_agent_identifier)
 
         if not resolved_target_id:
             logger.error(f"Could not resolve target agent for auditing in pipeline {pipeline_id}. identifier: {target_agent_identifier}")
@@ -110,5 +83,41 @@ class TransactionsAuditClient:
             )
             logger.info(f"Successfully configured transactions auditing for pipeline {pipeline_id}")
         except Exception as e:
-            logger.error(f"Failed to configure transactions auditing for pipeline {pipeline_id}: {e}")
+            logger.exception(f"Failed to configure transactions auditing for pipeline {pipeline_id}: {e}")
             raise
+
+    def _resolve_target_agent_id(self, pipeline_id, token, target_agent_identifier):
+        """Return the ID of the target agent to audit into, or None when it cannot be resolved."""
+        resolved_target_id = None
+
+        # Fetch pipeline config to look for agents
+        try:
+            pipeline_info = self.client.request(f"/pipelines/{pipeline_id}", method='GET', token=token)
+            target_agents = pipeline_info.get('targetAgentsInfo', [])
+
+            if target_agent_identifier:
+                resolved_target_id = _find_target_agent_id(target_agents, target_agent_identifier)
+
+            # 3. Fallback: if only one target agent exists, use it
+            if not resolved_target_id and len(target_agents) == 1:
+                resolved_target_id = target_agents[0].get('agentId')
+                logger.info(f"Automatically selected the only available target agent for auditing: {resolved_target_id}")
+
+        except Exception as e:
+            logger.warning(f"Could not fetch pipeline info to resolve target agent: {e}")
+
+        return resolved_target_id
+
+
+def _find_target_agent_id(target_agents, target_agent_identifier):
+    """Return the agentId of the target agent matching the identifier, by agentId first, then by agentTag."""
+    # 1. Try matching by agentId (UUID)
+    for agent in target_agents:
+        if agent.get('agentId') == target_agent_identifier:
+            return agent.get('agentId')
+
+    # 2. Try matching by agentTag (alias)
+    for agent in target_agents:
+        if agent.get('agentTag') == target_agent_identifier:
+            return agent.get('agentId')
+    return None
