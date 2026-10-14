@@ -321,6 +321,9 @@ automator_build_windows:
   rules:
     - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
       when: always
+    # signing test tags: build + sign only, nothing is published (automator_publish matches release tags only)
+    - if: $CI_COMMIT_TAG =~ /^automator-sign-rc-\d+$/
+      when: always
     - when: never
   variables:
     PIP_DISABLE_PIP_VERSION_CHECK: "1"
@@ -347,6 +350,7 @@ automator_build_windows:
     - |
       $python = Join-Path $env:CI_PROJECT_DIR 'python\python.exe'
       $version = $env:CI_COMMIT_TAG -replace '^automator-', ''
+      if ($env:CI_COMMIT_TAG -match '^automator-sign-rc-(\d+)$') { $version = "0.0.0-sign-rc.$($Matches[1])" }
       Write-Host "Building Gluesync Automator version $version for Windows"
       $versionFile = Join-Path $env:CI_PROJECT_DIR 'automator_app\VERSION'
       $utf8 = New-Object System.Text.UTF8Encoding $false
@@ -363,6 +367,34 @@ automator_build_windows:
     name: "gluesync-automator-windows-${CI_COMMIT_TAG}"
     paths:
       - .automator-build/dist/gluesync-automator-windows.exe
+    expire_in: 2 weeks
+
+automator_sign_windows:
+  # Code signing (MOLO17 SRL, DigiCert KeyLocker): same protected runner and environment as the platform installer.
+  # The runner only takes protected refs; every tag in this project is protected.
+  stage: build
+  tags:
+    - hq-windows-sign
+  environment:
+    name: signing
+    action: prepare
+  needs:
+    - job: automator_build_windows
+      artifacts: true
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
+      when: always
+    - if: $CI_COMMIT_TAG =~ /^automator-sign-rc-\d+$/
+      when: always
+    - when: never
+  script:
+    - powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\sign-automator-windows.ps1
+  artifacts:
+    when: always
+    name: "gluesync-automator-windows-signed-${CI_COMMIT_TAG}"
+    paths:
+      - .automator-build/dist/gluesync-automator-windows.exe
+      - .automator-build/dist/automator-signatures.json
     expire_in: 2 weeks
 
 # automator_build_macos:
@@ -397,7 +429,7 @@ automator_publish:
   needs:
     - job: automator_build
       artifacts: true
-    - job: automator_build_windows
+    - job: automator_sign_windows
       artifacts: true
     - job: automator_build_macos # Uncomment when macOS CI is enabled
       artifacts: true
@@ -407,7 +439,7 @@ automator_publish:
       when: always
     - when: never
   before_script:
-    - apk add --no-cache aws-cli bash
+    - apk add --no-cache aws-cli bash python3
     - |
       if [ "${DUAL_WRITE_SG:-0}" = "1" ]; then
         apk add --no-cache lftp
@@ -438,6 +470,11 @@ automator_publish:
       FTP_ROOT="/molo17.com/public_html/gs-content/gluesync-automator"
 
       cd .automator-build/dist
+      # Code signing: publish only the exe automator_sign_windows verified (automator-signatures.json, Valid, no problems)
+      SIG_SHA=$(python3 -c "import json,sys; r=json.load(open('automator-signatures.json',encoding='utf-8-sig'))[0]; sys.exit('Automator exe not validly signed: '+str(r['status'])+' '+'; '.join(r['problems'])) if r['status']!='Valid' or r['problems'] else print(r['sha256'])")
+      EXE_SHA=$(sha256sum gluesync-automator-windows.exe | cut -d' ' -f1)
+      if [ "$SIG_SHA" != "$EXE_SHA" ]; then echo "gluesync-automator-windows.exe is not the file automator_sign_windows verified: refusing to publish"; exit 1; fi
+      echo "Automator exe signature verified (sha256 $EXE_SHA)"
       echo "Publishing Automator to ${S3_URI}/ (region ${REGION})"
 
       aws s3 cp gluesync-automator-windows.exe \
