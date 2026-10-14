@@ -1321,8 +1321,8 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                 schedules = template_schema.get('schedules', []) if template_schema else []
                 multiple_target_groups = len(schema_groups) > 1
                 group_keys = list(schema_groups.keys())
-                all_conns = set(k[0] for k in group_keys)
-                all_schemas = set(k[1] for k in group_keys)
+                all_conns = {k[0] for k in group_keys}
+                all_schemas = {k[1] for k in group_keys}
 
                 for (target_conn_name, target_schema_name), group_bucket in schema_groups.items():
                     # Create the schema structure that matches table-list-template.yaml
