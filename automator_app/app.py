@@ -59,12 +59,17 @@ from .version import get_version
 logger = logging.getLogger(__name__)
 
 LOGIN_REQUIRED = "Log in to a Core Hub first"
-ZIP_MEDIA_TYPE = mimetypes.types_map[".zip"]
+AUTH_REQUIRED = "Authentication required"
 APPLICATION_ZIP = "application/zip"
 UPLOADED_FILE_EMPTY = "Uploaded file is empty"
 IMPORT_ALL_PARSE_FAILED = "Failed to parse %s during import-all: %s"
 CLAUDE_DESKTOP_CONFIG = "claude_desktop_config.json"
 UDF_SOURCE_EXTENSIONS = (".java", ".kt", ".js", ".py", ".rb")
+YAML_SUFFIX = ".yaml"
+YAML_EXTENSIONS = (YAML_SUFFIX, ".yml")
+ZIP_SUFFIX = ".zip"
+ZIP_MEDIA_TYPE = mimetypes.types_map[ZIP_SUFFIX]
+TIMESTAMP_FORMAT = "%Y%m%d_%H%M%S"
 
 CHANGELOG_API_BASE_URL = "https://api.backoffice.molo17.com"
 
@@ -462,7 +467,7 @@ def _load_config_from_bytes(contents: bytes, filename: str) -> Any:
     text = contents.decode("utf-8")
     lower_name = (filename or "").lower()
 
-    if lower_name.endswith((".yaml", ".yml")):
+    if lower_name.endswith(YAML_EXTENSIONS):
         return yaml.safe_load(text)
     if lower_name.endswith(".json"):
         return json.loads(text)
@@ -533,11 +538,65 @@ _MCP_INSTALL_RESPONSES: Dict[Any, Dict[str, Any]] = {
     400: {"description": "No MCP client is selected"},
     500: {"description": "No selected MCP client could be configured"},
 }
+_UI_RESPONSES: Dict[Any, Dict[str, Any]] = {
+    500: {"description": "The UI assets are missing"},
+}
+_CHANGELOG_RESPONSES: Dict[Any, Dict[str, Any]] = {
+    404: {"description": "No changelog is published for this version"},
+    502: {"description": "The changelog service is unreachable or answered with an error"},
+}
+_LOGIN_RESPONSES: Dict[Any, Dict[str, Any]] = {
+    401: {"description": "Core Hub refused the credentials"},
+}
 
 
 def _require_login() -> None:
     if not state.token or not state.base_url:
         raise HTTPException(status_code=401, detail=LOGIN_REQUIRED)
+
+
+def _require_session() -> None:
+    """Refuse the request when no Core Hub session is active."""
+    if not state.token or not state.base_url:
+        raise HTTPException(status_code=401, detail=AUTH_REQUIRED)
+
+
+async def _read_nonempty_upload(file: UploadFile) -> bytes:
+    """Read an uploaded file, refusing it when it is empty."""
+    contents = await file.read()
+    if not contents:
+        raise HTTPException(status_code=400, detail=UPLOADED_FILE_EMPTY)
+    return contents
+
+
+def _attachment(payload: bytes, media_type: str, filename: str) -> StreamingResponse:
+    """Stream payload as a file download named filename."""
+    return StreamingResponse(
+        io.BytesIO(payload),
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+        },
+    )
+
+
+def _is_macos_metadata(member: str) -> bool:
+    """Tell the macOS resource-fork entries of a ZIP (__MACOSX/ or ._filename) apart."""
+    return member.startswith("__MACOSX/") or member.rsplit("/", 1)[-1].startswith("._")
+
+
+def _is_udf_source(member: str) -> bool:
+    """Tell a UDF source file of a backup ZIP (under a udf-* folder, known extension)."""
+    return ("udf-" in member or member.lstrip("/").startswith("udf-")) and member.lower().endswith(
+        UDF_SOURCE_EXTENSIONS
+    )
+
+
+def _extract_udf_source(zf: zipfile.ZipFile, member: str, root: Path) -> None:
+    """Extract one UDF source file under root, keeping its path inside the ZIP."""
+    dest = root / member
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    _copy_zip_member(zf, member, dest)
 
 
 def _summarize_restore(results: Dict[str, Any]) -> str:
@@ -579,7 +638,7 @@ def _export_full_backup_with_options(request: FullBackupRequest):
         logger.exception("Failed to export full CoreHub backup")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now().strftime(TIMESTAMP_FORMAT)
     return StreamingResponse(
         io.BytesIO(zip_data),
         media_type=ZIP_MEDIA_TYPE,
@@ -604,7 +663,7 @@ def _export_ai_settings(request: AiSettingsExportRequest):
         logger.exception("Failed to export AI settings")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now().strftime(TIMESTAMP_FORMAT)
     return Response(
         content=json.dumps(bundle, indent=2, ensure_ascii=False).encode("utf-8"),
         media_type="application/json",
@@ -651,6 +710,212 @@ def _register_ai_settings_routes(app: FastAPI) -> None:
     app.add_api_route("/api/import/ai-settings", _import_ai_settings, methods=["POST"], responses=_ERROR_RESPONSES)
 
 
+def _index_page_handler(asset_rewrites: Dict[str, str]):
+    """Build the handler of /, which serves index.html with the fingerprinted asset names."""
+
+    async def root() -> Response:
+        index_path = _static_dir() / "index.html"
+        if not index_path.exists():
+            raise HTTPException(status_code=500, detail="UI assets missing")
+
+        content = index_path.read_text(encoding="utf-8")
+        for original, hashed in asset_rewrites.items():
+            content = content.replace(original, hashed)
+
+        return Response(content=content, media_type="text/html")
+
+    return root
+
+
+async def healthcheck() -> dict:
+    return {"status": "ok"}
+
+
+async def version() -> VersionResponse:
+    try:
+        version = get_version()
+    except Exception as exc:
+        logger.exception("Failed to get version: %s", exc)
+        version = "unknown"
+    return VersionResponse(version=version)
+
+
+async def get_state() -> StateResponse:
+    snapshot = state.snapshot()
+    return StateResponse(**snapshot)
+
+
+def _fetch_automator_changelog(version: str) -> Any:
+    """Fetch the changelog of an Automator version from the changelog service."""
+    url = f"{CHANGELOG_API_BASE_URL}/changelog/automator/{version}"
+    try:
+        resp = requests.get(url, timeout=5)
+    except requests.RequestException as exc:  # type: ignore[attr-defined]
+        logger.exception("Failed to fetch automator changelog")
+        raise HTTPException(status_code=502, detail="Failed to reach changelog service") from exc
+
+    if resp.status_code == 404:
+        raise HTTPException(status_code=404, detail="Changelog not found")
+
+    if resp.status_code >= 400:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Changelog service error: {resp.status_code}",
+        )
+
+    try:
+        data = resp.json()
+    except ValueError as exc:
+        logger.exception("Invalid JSON from changelog service")
+        raise HTTPException(
+            status_code=502,
+            detail="Invalid response from changelog service",
+        ) from exc
+
+    return data
+
+
+async def get_automator_changelog(version: str):
+    return _fetch_automator_changelog(version)
+
+
+def _register_page_routes(app: FastAPI, asset_rewrites: Dict[str, str]) -> None:
+    """The UI page, health, version, state and changelog routes."""
+    app.add_api_route("/", _index_page_handler(asset_rewrites), methods=["GET"], responses=_UI_RESPONSES)
+    app.add_api_route("/api/healthz", healthcheck, methods=["GET"])
+    app.add_api_route("/api/version", version, methods=["GET"])
+    app.add_api_route("/api/state", get_state, methods=["GET"])
+    app.add_api_route(
+        "/api/changelog/automator/{version}", get_automator_changelog, methods=["GET"], responses=_CHANGELOG_RESPONSES
+    )
+
+
+async def login(payload: LoginRequest) -> ApiMessage:
+    try:
+        token = corehub.authenticate(
+            base_url=payload.base_url,
+            username=payload.username,
+            password=payload.password,
+            use_ssl=payload.use_ssl,
+            skip_verify=payload.skip_verify,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Authentication failed")
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+    state.set_auth(
+        token,
+        payload.base_url,
+        use_ssl=payload.use_ssl,
+        skip_verify=payload.skip_verify,
+    )
+    state.set_preferences(
+        enable_scheduling=payload.enable_scheduling,
+        create_tables=payload.create_tables,
+    )
+    return ApiMessage(message="Authentication successful")
+
+
+async def logout() -> ApiMessage:
+    state.clear_auth()
+    return ApiMessage(message="Logged out")
+
+
+def _is_entity_yaml(lower: str) -> bool:
+    """Tell an entity-creation YAML of an uploaded ZIP (not agents-config or global-config)."""
+    return lower.endswith(YAML_EXTENSIONS) and "agents-config" not in lower and "global-config" not in lower
+
+
+def _extract_upload_members(contents: bytes, extract_dir: Path) -> Optional[Path]:
+    """Extract the YAML and UDF source files of an uploaded ZIP; return the primary YAML, if any."""
+    yaml_path: Optional[Path] = None
+    with zipfile.ZipFile(io.BytesIO(contents)) as zf:
+        for member in zf.namelist():
+            if _is_macos_metadata(member):
+                continue
+            # Extract YAML files (skip agents-config and global-config
+            # which are not entity-creation YAMLs)
+            if _is_entity_yaml(member.lower()):
+                dest = extract_dir / Path(member).name
+                _copy_zip_member(zf, member, dest)
+                # Prefer backup_*.yaml as the primary YAML
+                if yaml_path is None or dest.name.startswith("backup_"):
+                    yaml_path = dest
+            # Extract UDF source files (under udf-* paths)
+            elif _is_udf_source(member):
+                _extract_udf_source(zf, member, extract_dir)
+    return yaml_path
+
+
+def _store_uploaded_zip(contents: bytes) -> Path:
+    """Extract an uploaded ZIP into a new session directory and return its primary YAML."""
+    # Extract YAML and UDF source files from the ZIP into a single
+    # self-contained, app-owned session directory (NOT the OS temp dir)
+    # so that both the YAML and its UDF source files live together and
+    # survive until the entity-creation run reads them.
+    extract_dir = new_session_dir("upload")
+    try:
+        yaml_path = _extract_upload_members(contents, extract_dir)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Failed to extract ZIP: {exc}") from exc
+
+    if yaml_path is None:
+        raise HTTPException(status_code=400, detail="ZIP does not contain a YAML configuration file")
+    # Set UDF_PATH so create_all_entities.main can find UDF source files
+    create_user_defined_functions.UDF_PATH = str(extract_dir)
+    return yaml_path
+
+
+def _store_uploaded_yaml(filename: str, contents: bytes) -> Path:
+    """Write an uploaded YAML into a new session directory and return its path."""
+    # Plain YAML upload: write it into its own session directory so any
+    # UDF files the user drops alongside it are found by the same lookup.
+    session_dir = new_session_dir("upload")
+    suffix = Path(filename).suffix or YAML_SUFFIX
+    temp_path = _write_session_file(session_dir, suffix, contents)
+    # Point UDF lookups at this session directory too, so a YAML-only
+    # upload still resolves UDF files placed next to the YAML.
+    create_user_defined_functions.UDF_PATH = str(session_dir)
+    return temp_path
+
+
+async def upload_yaml(file: UploadFile = File(...)) -> UploadResponse:
+    if not file.filename.lower().endswith(YAML_EXTENSIONS + (ZIP_SUFFIX,)):
+        raise HTTPException(status_code=400, detail="Only YAML or ZIP files are supported")
+
+    # Best-effort prune of stale sessions before creating a new one.
+    prune_workspace_sessions()
+
+    contents = await _read_nonempty_upload(file)
+
+    if file.filename.lower().endswith(ZIP_SUFFIX):
+        temp_path = _store_uploaded_zip(contents)
+    else:
+        temp_path = _store_uploaded_yaml(file.filename, contents)
+
+    file_id = state.register_upload(temp_path, file.filename)
+    return UploadResponse(fileId=file_id, filename=file.filename)
+
+
+async def current_run(include_logs: bool = False):
+    snapshot = state.current_run_snapshot()
+    if not snapshot:
+        return {"run": None}
+    response = RunSnapshot(**snapshot)
+    if include_logs:
+        logs = state.get_logs(response.id)
+        response.logs = logs or []
+    return response
+
+
+def _register_session_routes(app: FastAPI) -> None:
+    """The login, logout, YAML upload and current run routes."""
+    app.add_api_route("/api/login", login, methods=["POST"], responses=_LOGIN_RESPONSES)
+    app.add_api_route("/api/logout", logout, methods=["POST"])
+    app.add_api_route("/api/upload", upload_yaml, methods=["POST"], responses=_UPLOAD_RESPONSES)
+    app.add_api_route("/api/run/current", current_run, methods=["GET"])
+
+
 def create_app() -> FastAPI:
     _ensure_static_assets()
     asset_rewrites = _fingerprint_static_assets()
@@ -667,165 +932,8 @@ def create_app() -> FastAPI:
 
     app.mount("/static", StaticFiles(directory=_static_dir()), name="static")
 
-    @app.get("/")
-    async def root() -> Response:
-        index_path = _static_dir() / "index.html"
-        if not index_path.exists():
-            raise HTTPException(status_code=500, detail="UI assets missing")
-
-        content = index_path.read_text(encoding="utf-8")
-        for original, hashed in asset_rewrites.items():
-            content = content.replace(original, hashed)
-
-        return Response(content=content, media_type="text/html")
-
-    @app.get("/api/healthz")
-    async def healthcheck() -> dict:
-        return {"status": "ok"}
-
-    @app.get("/api/version", response_model=VersionResponse)
-    async def version() -> VersionResponse:
-        try:
-            version = get_version()
-        except Exception as exc:
-            logger.exception("Failed to get version: %s", exc)
-            version = "unknown"
-        return VersionResponse(version=version)
-
-    @app.get("/api/state", response_model=StateResponse)
-    async def get_state() -> StateResponse:
-        snapshot = state.snapshot()
-        return StateResponse(**snapshot)
-
-    @app.get("/api/changelog/automator/{version}")
-    async def get_automator_changelog(version: str):
-        url = f"{CHANGELOG_API_BASE_URL}/changelog/automator/{version}"
-        try:
-            resp = requests.get(url, timeout=5)
-        except requests.RequestException as exc:  # type: ignore[attr-defined]
-            logger.exception("Failed to fetch automator changelog")
-            raise HTTPException(status_code=502, detail="Failed to reach changelog service") from exc
-
-        if resp.status_code == 404:
-            raise HTTPException(status_code=404, detail="Changelog not found")
-
-        if resp.status_code >= 400:
-            raise HTTPException(
-                status_code=502,
-                detail=f"Changelog service error: {resp.status_code}",
-            )
-
-        try:
-            data = resp.json()
-        except ValueError as exc:
-            logger.exception("Invalid JSON from changelog service")
-            raise HTTPException(
-                status_code=502,
-                detail="Invalid response from changelog service",
-            ) from exc
-
-        return data
-
-    @app.post("/api/login", response_model=ApiMessage)
-    async def login(payload: LoginRequest) -> ApiMessage:
-        try:
-            token = corehub.authenticate(
-                base_url=payload.base_url,
-                username=payload.username,
-                password=payload.password,
-                use_ssl=payload.use_ssl,
-                skip_verify=payload.skip_verify,
-            )
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.exception("Authentication failed")
-            raise HTTPException(status_code=401, detail=str(exc)) from exc
-
-        state.set_auth(
-            token,
-            payload.base_url,
-            use_ssl=payload.use_ssl,
-            skip_verify=payload.skip_verify,
-        )
-        state.set_preferences(
-            enable_scheduling=payload.enable_scheduling,
-            create_tables=payload.create_tables,
-        )
-        return ApiMessage(message="Authentication successful")
-
-    @app.post("/api/logout", response_model=ApiMessage)
-    async def logout() -> ApiMessage:
-        state.clear_auth()
-        return ApiMessage(message="Logged out")
-
-    @app.post("/api/upload", response_model=UploadResponse, responses=_UPLOAD_RESPONSES)
-    async def upload_yaml(file: UploadFile = File(...)) -> UploadResponse:
-        if not file.filename.lower().endswith(('.yaml', '.yml', '.zip')):
-            raise HTTPException(status_code=400, detail="Only YAML or ZIP files are supported")
-
-        # Best-effort prune of stale sessions before creating a new one.
-        prune_workspace_sessions()
-
-        contents = await file.read()
-        if not contents:
-            raise HTTPException(status_code=400, detail=UPLOADED_FILE_EMPTY)
-
-        if file.filename.lower().endswith('.zip'):
-            # Extract YAML and UDF source files from the ZIP into a single
-            # self-contained, app-owned session directory (NOT the OS temp dir)
-            # so that both the YAML and its UDF source files live together and
-            # survive until the entity-creation run reads them.
-            extract_dir = new_session_dir("upload")
-            yaml_path: Optional[Path] = None
-            try:
-                with zipfile.ZipFile(io.BytesIO(contents)) as zf:
-                    for member in zf.namelist():
-                        if member.startswith("__MACOSX/") or member.rsplit("/", 1)[-1].startswith("._"):
-                            continue
-                        lower = member.lower()
-                        # Extract YAML files (skip agents-config and global-config
-                        # which are not entity-creation YAMLs)
-                        if lower.endswith((".yaml", ".yml")) and "agents-config" not in lower and "global-config" not in lower:
-                            dest = extract_dir / Path(member).name
-                            _copy_zip_member(zf, member, dest)
-                            # Prefer backup_*.yaml as the primary YAML
-                            if yaml_path is None or dest.name.startswith("backup_"):
-                                yaml_path = dest
-                        # Extract UDF source files (under udf-* paths)
-                        elif ("udf-" in member or member.lstrip("/").startswith("udf-")) and lower.endswith(UDF_SOURCE_EXTENSIONS):
-                            dest = extract_dir / member
-                            dest.parent.mkdir(parents=True, exist_ok=True)
-                            _copy_zip_member(zf, member, dest)
-            except Exception as exc:
-                raise HTTPException(status_code=400, detail=f"Failed to extract ZIP: {exc}") from exc
-
-            if yaml_path is None:
-                raise HTTPException(status_code=400, detail="ZIP does not contain a YAML configuration file")
-            temp_path = yaml_path
-            # Set UDF_PATH so create_all_entities.main can find UDF source files
-            create_user_defined_functions.UDF_PATH = str(extract_dir)
-        else:
-            # Plain YAML upload: write it into its own session directory so any
-            # UDF files the user drops alongside it are found by the same lookup.
-            session_dir = new_session_dir("upload")
-            suffix = Path(file.filename).suffix or ".yaml"
-            temp_path = _write_session_file(session_dir, suffix, contents)
-            # Point UDF lookups at this session directory too, so a YAML-only
-            # upload still resolves UDF files placed next to the YAML.
-            create_user_defined_functions.UDF_PATH = str(session_dir)
-
-        file_id = state.register_upload(temp_path, file.filename)
-        return UploadResponse(fileId=file_id, filename=file.filename)
-
-    @app.get("/api/run/current")
-    async def current_run(include_logs: bool = False):
-        snapshot = state.current_run_snapshot()
-        if not snapshot:
-            return {"run": None}
-        response = RunSnapshot(**snapshot)
-        if include_logs:
-            logs = state.get_logs(response.id)
-            response.logs = logs or []
-        return response
+    _register_page_routes(app, asset_rewrites)
+    _register_session_routes(app)
 
     @app.get("/api/pipelines", response_model=PipelinesResponse)
     async def list_pipelines() -> PipelinesResponse:
@@ -1095,7 +1203,7 @@ def create_app() -> FastAPI:
             allow_unicode=True,
         )
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now().strftime(TIMESTAMP_FORMAT)
         filename = f"template_{pipeline_id}_{source_schema}_{timestamp}.yaml"
         return StreamingResponse(
             io.BytesIO(yaml_text.encode("utf-8")),
@@ -1185,7 +1293,7 @@ def create_app() -> FastAPI:
                 if cleaned:
                     safe_name = cleaned
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now().strftime(TIMESTAMP_FORMAT)
         filename = f"backup_{safe_name}_{pipeline_id}_{timestamp}.zip"
         return StreamingResponse(
             io.BytesIO(zip_data),
@@ -2250,7 +2358,7 @@ def create_app() -> FastAPI:
             logger.exception("Failed to export all pipelines")
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now().strftime(TIMESTAMP_FORMAT)
         filename = f"pipeline_backups_{timestamp}.zip"
         return StreamingResponse(
             io.BytesIO(zip_data),
@@ -2413,7 +2521,7 @@ def create_app() -> FastAPI:
             logger.exception("Failed to export full CoreHub backup")
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now().strftime(TIMESTAMP_FORMAT)
         filename = f"corehub_full_backup_{timestamp}.zip"
         return StreamingResponse(
             io.BytesIO(zip_data),
