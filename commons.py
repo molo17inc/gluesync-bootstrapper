@@ -621,6 +621,62 @@ def extract_target_column_types(discovered_target_columns):
     return result
 
 
+def _find_source_matrix_item(source_matrix, source_type):
+    """Return the source matrix entry that supports ``source_type`` (or None)."""
+    return next(
+        (
+            item for item in source_matrix
+            if source_type in item.get('supportedTypes', [])
+            or item.get('gluesyncDataType') == source_type
+        ),
+        None
+    )
+
+
+def _target_string_default_type(target_matrix, source_type):
+    """Return the target's STRING defaultType, or ``source_type`` when there is none."""
+    target_item_fallback = next(
+        (item for item in target_matrix if item.get('gluesyncDataType') == 'STRING'),
+        None
+    )
+    if target_item_fallback:
+        return target_item_fallback.get('defaultType', source_type)
+    return source_type
+
+
+def _first_compatible_default_type(category, members, source_gluesync_type, target_types_by_gsd):
+    """Return the defaultType of the first other member of a compatibility group the target implements."""
+    for candidate_gsd in members:
+        if candidate_gsd == source_gluesync_type:
+            continue
+        candidate_item = target_types_by_gsd.get(candidate_gsd)
+        if candidate_item and candidate_item.get('defaultType'):
+            logger.debug(
+                f"map_data_type: no exact target mapping for "
+                f"gluesyncDataType '{source_gluesync_type}'; using "
+                f"compatibility group '{category}' member "
+                f"'{candidate_gsd}' -> '{candidate_item['defaultType']}'"
+            )
+            return candidate_item['defaultType']
+    return None
+
+
+def _compatibility_group_default_type(source_gluesync_type, target_node_info, target_matrix):
+    """Look up the target's compatibility group of ``source_gluesync_type`` (or None)."""
+    compatibility_matrix = target_node_info.get('dataTypeCompatibilityMatrix', {}) or {}
+    target_types_by_gsd = {
+        item.get('gluesyncDataType'): item
+        for item in target_matrix
+        if item.get('gluesyncDataType')
+    }
+    for category, members in compatibility_matrix.items():
+        if not isinstance(members, list) or source_gluesync_type not in members:
+            continue
+        # Only the first category containing the source type is considered.
+        return _first_compatible_default_type(category, members, source_gluesync_type, target_types_by_gsd)
+    return None
+
+
 def map_data_type(source_type, source_node_info, target_node_info,
                   source_agent_tag=None, target_agent_tag=None,
                   target_table_column_types=None):
@@ -655,27 +711,14 @@ def map_data_type(source_type, source_node_info, target_node_info,
         return source_type
 
     # Step 2: Resolve source -> gluesyncDataType
-    source_item = next(
-        (
-            item for item in source_matrix
-            if source_type in item.get('supportedTypes', [])
-            or item.get('gluesyncDataType') == source_type
-        ),
-        None
-    )
+    source_item = _find_source_matrix_item(source_matrix, source_type)
 
     if not source_item:
         logger.warning(
             f"map_data_type: no source mapping for '{source_type}'. "
             f"Falling back to target's STRING defaultType."
         )
-        target_item_fallback = next(
-            (item for item in target_matrix if item.get('gluesyncDataType') == 'STRING'),
-            None
-        )
-        if target_item_fallback:
-            return target_item_fallback.get('defaultType', source_type)
-        return source_type
+        return _target_string_default_type(target_matrix, source_type)
 
     source_gluesync_type = source_item.get('gluesyncDataType')
 
@@ -702,28 +745,9 @@ def map_data_type(source_type, source_node_info, target_node_info,
     # gluesyncDataType in that category that the target matrix implements.
     # This covers cases like source=double precision (DOUBLE) -> target Vertica
     # which exposes only FLOAT under the NUMBER group.
-    compatibility_matrix = target_node_info.get('dataTypeCompatibilityMatrix', {}) or {}
-    target_types_by_gsd = {
-        item.get('gluesyncDataType'): item
-        for item in target_matrix
-        if item.get('gluesyncDataType')
-    }
-    for category, members in compatibility_matrix.items():
-        if not isinstance(members, list) or source_gluesync_type not in members:
-            continue
-        for candidate_gsd in members:
-            if candidate_gsd == source_gluesync_type:
-                continue
-            candidate_item = target_types_by_gsd.get(candidate_gsd)
-            if candidate_item and candidate_item.get('defaultType'):
-                logger.debug(
-                    f"map_data_type: no exact target mapping for "
-                    f"gluesyncDataType '{source_gluesync_type}'; using "
-                    f"compatibility group '{category}' member "
-                    f"'{candidate_gsd}' -> '{candidate_item['defaultType']}'"
-                )
-                return candidate_item['defaultType']
-        break
+    compatible_type = _compatibility_group_default_type(source_gluesync_type, target_node_info, target_matrix)
+    if compatible_type is not None:
+        return compatible_type
 
     logger.warning(
         f"map_data_type: no target mapping for gluesyncDataType '{source_gluesync_type}'. "
