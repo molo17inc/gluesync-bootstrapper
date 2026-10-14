@@ -64,6 +64,7 @@ APPLICATION_ZIP = "application/zip"
 UPLOADED_FILE_EMPTY = "Uploaded file is empty"
 IMPORT_ALL_PARSE_FAILED = "Failed to parse %s during import-all: %s"
 CLAUDE_DESKTOP_CONFIG = "claude_desktop_config.json"
+UDF_SOURCE_EXTENSIONS = (".java", ".kt", ".js", ".py", ".rb")
 
 CHANGELOG_API_BASE_URL = "https://api.backoffice.molo17.com"
 
@@ -754,10 +755,7 @@ def create_app() -> FastAPI:
                             if yaml_path is None or dest.name.startswith("backup_"):
                                 yaml_path = dest
                         # Extract UDF source files (under udf-* paths)
-                        elif ("udf-" in member or member.lstrip("/").startswith("udf-")) and (
-                            lower.endswith(".java") or lower.endswith(".kt")
-                            or lower.endswith(".js") or lower.endswith(".py") or lower.endswith(".rb")
-                        ):
+                        elif ("udf-" in member or member.lstrip("/").startswith("udf-")) and lower.endswith(UDF_SOURCE_EXTENSIONS):
                             dest = extract_dir / member
                             dest.parent.mkdir(parents=True, exist_ok=True)
                             with zf.open(member) as src, open(dest, "wb") as dst:
@@ -1458,7 +1456,7 @@ def create_app() -> FastAPI:
                 if notification_cfg is None:
                     for name in zf_gc.namelist():
                         lower = name.lower()
-                        if not (lower.endswith(".yaml") or lower.endswith(".yml")):
+                        if not lower.endswith((".yaml", ".yml")):
                             continue
                         if "agents-config" in lower:
                             continue
