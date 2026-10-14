@@ -503,11 +503,35 @@ def _has_masked_password(value: Any) -> bool:
     return False
 
 
+_NOT_LOGGED_IN_RESPONSE: Dict[str, Any] = {"description": LOGIN_REQUIRED}
+_FAILURE_RESPONSE: Dict[str, Any] = {"description": "Core Hub or the Automator failed"}
+
 _ERROR_RESPONSES: Dict[Any, Dict[str, Any]] = {
     400: {"description": "The request or the bundle is refused (passphrase, format, references)"},
-    401: {"description": LOGIN_REQUIRED},
+    401: _NOT_LOGGED_IN_RESPONSE,
     409: {"description": "The Core Hub has no AI settings backup (older than 2.3.0.1)"},
-    500: {"description": "Core Hub or the Automator failed"},
+    500: _FAILURE_RESPONSE,
+}
+_UPLOAD_RESPONSES: Dict[Any, Dict[str, Any]] = {
+    400: {"description": "The file is not a YAML or ZIP configuration, is empty, or cannot be extracted"},
+}
+_EXPORT_RESPONSES: Dict[Any, Dict[str, Any]] = {
+    401: _NOT_LOGGED_IN_RESPONSE,
+    500: _FAILURE_RESPONSE,
+}
+_PIPELINE_EXPORT_RESPONSES: Dict[Any, Dict[str, Any]] = {
+    401: _NOT_LOGGED_IN_RESPONSE,
+    409: {"description": "The pipeline is in maintenance"},
+    500: _FAILURE_RESPONSE,
+}
+_FILE_IMPORT_RESPONSES: Dict[Any, Dict[str, Any]] = {
+    400: {"description": "The uploaded file is empty or cannot be read"},
+    401: _NOT_LOGGED_IN_RESPONSE,
+    500: _FAILURE_RESPONSE,
+}
+_MCP_INSTALL_RESPONSES: Dict[Any, Dict[str, Any]] = {
+    400: {"description": "No MCP client is selected"},
+    500: {"description": "No selected MCP client could be configured"},
 }
 
 
@@ -733,7 +757,7 @@ def create_app() -> FastAPI:
         state.clear_auth()
         return ApiMessage(message="Logged out")
 
-    @app.post("/api/upload", response_model=UploadResponse)
+    @app.post("/api/upload", response_model=UploadResponse, responses=_UPLOAD_RESPONSES)
     async def upload_yaml(file: UploadFile = File(...)) -> UploadResponse:
         if not file.filename.lower().endswith(('.yaml', '.yml', '.zip')):
             raise HTTPException(status_code=400, detail="Only YAML or ZIP files are supported")
@@ -1081,7 +1105,7 @@ def create_app() -> FastAPI:
             },
         )
 
-    @app.get("/api/export/pipeline/{pipeline_id}")
+    @app.get("/api/export/pipeline/{pipeline_id}", responses=_PIPELINE_EXPORT_RESPONSES)
     async def export_pipeline(pipeline_id: str, include_secrets: bool = False):
         """Export entity metadata for a single pipeline.
 
@@ -1122,7 +1146,7 @@ def create_app() -> FastAPI:
             },
         )
 
-    @app.get("/api/export/pipeline/{pipeline_id}/full")
+    @app.get("/api/export/pipeline/{pipeline_id}/full", responses=_PIPELINE_EXPORT_RESPONSES)
     async def export_pipeline_full_backup(pipeline_id: str, include_secrets: bool = False):
         """Export a full backup (YAML + agents-config + UDFs) for a single pipeline."""
 
@@ -2110,7 +2134,7 @@ def create_app() -> FastAPI:
 
         return ApiMessage(success=success, message="\n".join(logs))
 
-    @app.post("/api/import/full-backup", response_model=ApiMessage)
+    @app.post("/api/import/full-backup", responses=_FILE_IMPORT_RESPONSES)
     async def import_full_backup(
         file: UploadFile = File(...),
         ai_settings_passphrase: Optional[str] = Form(None),
@@ -2145,7 +2169,7 @@ def create_app() -> FastAPI:
 
         return ApiMessage(message="Full backup restore completed. " + _summarize_restore(results))
 
-    @app.post("/api/import/users", response_model=ApiMessage)
+    @app.post("/api/import/users", responses=_FILE_IMPORT_RESPONSES)
     async def import_users(file: UploadFile = File(...)) -> ApiMessage:
         """Restore user management configuration from a YAML backup."""
         if not state.token or not state.base_url:
@@ -2175,7 +2199,7 @@ def create_app() -> FastAPI:
         status = result.get("status", "unknown")
         return ApiMessage(message=f"Users import {status}")
 
-    @app.post("/api/import/oidc", response_model=ApiMessage)
+    @app.post("/api/import/oidc", responses=_FILE_IMPORT_RESPONSES)
     async def import_oidc(file: UploadFile = File(...)) -> ApiMessage:
         """Restore OIDC configuration from a YAML backup."""
         if not state.token or not state.base_url:
@@ -2236,7 +2260,7 @@ def create_app() -> FastAPI:
             },
         )
 
-    @app.get("/api/export/global-configs")
+    @app.get("/api/export/global-configs", responses=_EXPORT_RESPONSES)
     async def export_global_configs():
         """Export all global CoreHub configuration settings."""
         if not state.token or not state.base_url:
@@ -2255,7 +2279,7 @@ def create_app() -> FastAPI:
 
         return JSONResponse(configs)
 
-    @app.get("/api/export/smtp")
+    @app.get("/api/export/smtp", responses=_EXPORT_RESPONSES)
     async def export_smtp():
         """Export SMTP configuration from CoreHub."""
         if not state.token or not state.base_url:
@@ -2274,7 +2298,7 @@ def create_app() -> FastAPI:
 
         return JSONResponse(smtp_config)
 
-    @app.get("/api/export/webhooks")
+    @app.get("/api/export/webhooks", responses=_EXPORT_RESPONSES)
     async def export_webhooks():
         """Export webhooks configuration from CoreHub."""
         if not state.token or not state.base_url:
@@ -2293,7 +2317,7 @@ def create_app() -> FastAPI:
 
         return JSONResponse(webhooks_config)
 
-    @app.get("/api/export/thresholds")
+    @app.get("/api/export/thresholds", responses=_EXPORT_RESPONSES)
     async def export_thresholds():
         """Export thresholds configuration from CoreHub."""
         if not state.token or not state.base_url:
@@ -2312,7 +2336,7 @@ def create_app() -> FastAPI:
 
         return JSONResponse(thresholds_config)
 
-    @app.get("/api/export/schedules")
+    @app.get("/api/export/schedules", responses=_EXPORT_RESPONSES)
     async def export_schedules():
         """Export Chronos scheduler jobs and settings from CoreHub."""
         if not state.token or not state.base_url:
@@ -2332,7 +2356,7 @@ def create_app() -> FastAPI:
 
         return JSONResponse(schedules_config)
 
-    @app.get("/api/export/users")
+    @app.get("/api/export/users", responses=_EXPORT_RESPONSES)
     async def export_users():
         """Export user management configuration from CoreHub."""
         if not state.token or not state.base_url:
@@ -2351,7 +2375,7 @@ def create_app() -> FastAPI:
 
         return JSONResponse(users_config)
 
-    @app.get("/api/export/oidc")
+    @app.get("/api/export/oidc", responses=_EXPORT_RESPONSES)
     async def export_oidc():
         """Export OIDC configuration from CoreHub."""
         if not state.token or not state.base_url:
@@ -2370,7 +2394,7 @@ def create_app() -> FastAPI:
 
         return JSONResponse(oidc_config)
 
-    @app.get("/api/export/full-backup")
+    @app.get("/api/export/full-backup", responses=_EXPORT_RESPONSES)
     async def export_full_backup(include_secrets: bool = False):
         """Export a complete CoreHub backup including pipelines, global configs, SMTP, webhooks, thresholds, and schedules."""
         if not state.token or not state.base_url:
@@ -2629,7 +2653,7 @@ def create_app() -> FastAPI:
             result[client] = {"detected": detected, "installed": installed, "configPath": str(path)}
         return result
 
-    @app.post("/api/mcp/install", response_model=ApiMessage)
+    @app.post("/api/mcp/install", responses=_MCP_INSTALL_RESPONSES)
     async def mcp_install(payload: Dict[str, Any]) -> ApiMessage:
         """Install the gluesync MCP server entry into the selected clients' configs."""
         clients = payload.get("clients") or []
