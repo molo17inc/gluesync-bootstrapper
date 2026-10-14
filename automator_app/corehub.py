@@ -2301,6 +2301,20 @@ def export_thresholds(
     return configs
 
 
+def _normalize_paginated_response(response: Any) -> Any:
+    """Normalize a Chronos response for the backup.
+
+    A paginated ``{"items": [...], "total": N}`` becomes the plain list of items, any other
+    dict or a list is kept as is, and a scalar is wrapped as ``{"value": ...}``.
+    """
+    if isinstance(response, dict):
+        items = response.get("items")
+        return items if isinstance(items, list) else response
+    if isinstance(response, list):
+        return response
+    return {"value": response}
+
+
 def export_schedules(
     *,
     token: str,
@@ -2315,34 +2329,14 @@ def export_schedules(
     configs: Dict[str, Any] = {}
     try:
         jobs_response = fetch_core_hub("/chronos/api/jobs", token=chronos_token or token)
-        # Normalize paginated responses {"items": [...], "total": N} to a plain list
-        if isinstance(jobs_response, dict):
-            items = jobs_response.get("items")
-            if isinstance(items, list):
-                configs["jobs"] = items
-            else:
-                configs["jobs"] = jobs_response
-        elif isinstance(jobs_response, list):
-            configs["jobs"] = jobs_response
-        else:
-            configs["jobs"] = {"value": jobs_response}
+        configs["jobs"] = _normalize_paginated_response(jobs_response)
     except Exception as exc:  # pylint: disable=broad-except
         logger.warning("Failed to fetch scheduler jobs: %s", exc)
         configs["jobs"] = {"error": str(exc)}
 
     try:
         settings_response = fetch_core_hub("/chronos/api/settings", token=chronos_token or token)
-        # Normalize paginated settings responses too
-        if isinstance(settings_response, dict):
-            items = settings_response.get("items")
-            if isinstance(items, list):
-                configs["settings"] = items
-            else:
-                configs["settings"] = settings_response
-        elif isinstance(settings_response, list):
-            configs["settings"] = settings_response
-        else:
-            configs["settings"] = {"value": settings_response}
+        configs["settings"] = _normalize_paginated_response(settings_response)
     except Exception as exc:  # pylint: disable=broad-except
         logger.warning("Failed to fetch scheduler settings: %s", exc)
         configs["settings"] = {"error": str(exc)}
