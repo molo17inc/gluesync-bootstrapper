@@ -96,7 +96,7 @@ def wait_for_corehub_ready(max_retries=30, initial_delay=2):
         try:
             logger.info(f"Checking CoreHub connectivity (attempt {attempt}/{max_retries})...")
             # Simple health check - try to fetch pipelines endpoint
-            response = client.request(PIPELINES_PATH, 'GET', token=None, body=None, params=None)
+            client.request(PIPELINES_PATH, 'GET', token=None, body=None, params=None)
             logger.info("CoreHub is ready and responding")
             return True
         except Exception as e:
