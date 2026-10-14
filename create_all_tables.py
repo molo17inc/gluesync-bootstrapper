@@ -409,237 +409,299 @@ def create_tables(token, pipeline_id, source_schema, target_schema, tables, sour
                               source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
 
 
+def _to_int(value, default=0):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _to_bool(value, default=True):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y"}
+    if value is None:
+        return default
+    return bool(value)
+
+
+_LENGTH_TYPES = frozenset({
+    'varchar2',
+    'varchar',
+    'char',
+    'nchar',
+    'nvarchar2',
+    'raw',
+    'binary',
+    'varbinary',
+})
+
+
+def _normalize_data_length(col_type: str, data_length: int) -> int:
+    base_type = str(col_type or '').split('(')[0].strip().lower()
+    length_value = _to_int(data_length, 0)
+    if base_type in _LENGTH_TYPES:
+        return length_value if length_value > 0 else 1024
+    return length_value
+
+
+class _KeyLookup:
+    """The key names of a table (and their alias), matched as given or case-insensitively."""
+
+    def __init__(self, keys):
+        # Build key lookup from keys parameter (for backward compatibility)
+        # and from column isPrimaryKey property (preferred for Gluesync 2.2.6.0+)
+        self.key_names = set()
+        for key in (keys or []):
+            if isinstance(key, dict):
+                if key.get("name"):
+                    self.key_names.add(key["name"])
+                if key.get("alias"):
+                    self.key_names.add(key["alias"])
+            else:
+                self.key_names.add(key)
+        self.key_names_lower = {
+            key_name.lower() for key_name in self.key_names if isinstance(key_name, str)
+        }
+
+    def is_primary_key(self, column_name) -> bool:
+        # Keys-based check for backward compatibility
+        if column_name in self.key_names:
+            return True
+        return isinstance(column_name, str) and column_name.lower() in self.key_names_lower
+
+
+def _target_only_column_spec(target_col):
+    """``(name, type, dataLength, numPrec, numScale, isNullable)`` of a targetOnlyColumns entry."""
+    # Support both string format and object format
+    if isinstance(target_col, str):
+        # Simple string format: just the column name, with the default type, length, precision, scale and nullable
+        return target_col, 'varchar', 1024, 0, 0, False
+    # Object format with user-defined properties
+    return (
+        target_col.get('name'),
+        target_col.get('dataType') or target_col.get('type') or 'varchar',  # null-safe: treat explicit null as missing
+        target_col.get('dataLength', 1024),  # Default data length
+        target_col.get('numPrec', 0),  # Default numeric precision
+        target_col.get('numScale', 0),  # Default numeric scale
+        target_col.get('isNullable', False),  # Default nullable
+    )
+
+
+def _target_only_column_dtos(target_only_columns, key_lookup: _KeyLookup, source_node_info, target_node_info,
+                             source_agent_tag, target_agent_tag) -> list:
+    """The target columns of a targetOnlyColumns definition."""
+    column_dtos = []
+    for idx, target_col in enumerate(target_only_columns, 1):
+        col_name, col_type, col_data_length, col_numeric_precision, col_numeric_scale, col_is_nullable = \
+            _target_only_column_spec(target_col)
+
+        # Map the column type to target node type
+        mapped_type = map_data_type(
+            col_type,
+            source_node_info,
+            target_node_info,
+            source_agent_tag=source_agent_tag,
+            target_agent_tag=target_agent_tag,
+        )
+        col_data_length = _normalize_data_length(mapped_type, col_data_length)
+
+        column_dtos.append(Column(
+            name=col_name,
+            dataType=format_column_type(mapped_type, col_data_length, col_numeric_precision, col_numeric_scale),
+            id=idx,  # Use sequential IDs for target-only columns
+            tableId=0,
+            position=idx,
+            isPK=key_lookup.is_primary_key(col_name),
+            isNullable=col_is_nullable,
+            charMaxLength=col_data_length,
+            numPrec=col_numeric_precision,
+            numScale=col_numeric_scale
+        ))
+    return column_dtos
+
+
+def _split_column_entries(column_entries):
+    """``(metadata columns, source→target mappings)`` of the YAML column entries (null entries are dropped)."""
+    metadata_columns = []
+    simple_mappings = []
+    for entry in column_entries:
+        if isinstance(entry, dict) and 'name' in entry:
+            metadata_columns.append(entry)
+        elif entry is not None:
+            simple_mappings.append(entry)
+    return metadata_columns, simple_mappings
+
+
+def _metadata_column_dto(idx: int, col_meta: dict, key_lookup: _KeyLookup, source_node_info, target_node_info,
+                         source_agent_tag, target_agent_tag) -> Column:
+    """The target column of a YAML column metadata entry."""
+    col_name = col_meta.get('name')
+
+    # Use `or` rather than .get(key, default) so that an explicit
+    # null value (type: null in YAML) is treated the same as a
+    # missing key and falls through to the 'varchar' fallback.
+    col_type = col_meta.get('dataType') or col_meta.get('type') or 'varchar'
+    col_data_length = _to_int(col_meta.get('dataLength', col_meta.get('data_length')))
+    col_numeric_precision = _to_int(col_meta.get('numericPrecision', col_meta.get('numeric_precision')))
+    col_numeric_scale = _to_int(col_meta.get('numericScale', col_meta.get('numeric_scale')))
+    col_is_nullable = _to_bool(col_meta.get('isNullable', col_meta.get('is_nullable')))
+
+    # Use separate id and ordinalPosition from YAML metadata
+    column_id = _to_int(col_meta.get('id'), idx)
+    ordinal_position = _to_int(col_meta.get('ordinalPosition'), idx)
+
+    # User-declared targetDataType wins over both `type` and the
+    # automatic source->target mapping. When set, use it verbatim
+    # and skip map_data_type entirely so it lands in the CREATE TABLE
+    # statement exactly as declared (e.g. TIMESTAMP, DATE, DATETIME).
+    _override = col_meta.get('targetDataType')
+    if _override:
+        mapped_type = _override
+    else:
+        # Map source type to target type (e.g. CHARACTER -> varchar)
+        mapped_type = map_data_type(
+            col_type,
+            source_node_info,
+            target_node_info,
+            source_agent_tag=source_agent_tag,
+            target_agent_tag=target_agent_tag,
+        )
+    col_data_length = _normalize_data_length(mapped_type, col_data_length)
+    resolved_target_type = mapped_type
+
+    # YAML-defined keys are the bootstrapper source of truth for
+    # target table creation.  When source metadata says a column is
+    # not a PK (for example CUSTOMERS_NO_PKEY in demo-kits), still
+    # mark it as PK if the table-list-template declares it in keys.
+    col_is_pk = key_lookup.is_primary_key(col_name) or bool(col_meta.get('isPK', col_meta.get('is_primary_key')))
+    return Column(
+        name=col_name,
+        dataType=format_column_type(resolved_target_type, col_data_length, col_numeric_precision, col_numeric_scale),
+        id=column_id,
+        tableId=0,
+
+        position=ordinal_position,
+        isPK=col_is_pk,
+        isNullable=col_is_nullable,
+        charMaxLength=col_data_length,
+        numPrec=col_numeric_precision,
+        numScale=col_numeric_scale
+    )
+
+
+def _metadata_column_dtos(metadata_columns, target_table_name: str, key_lookup: _KeyLookup, source_node_info,
+                          target_node_info, source_agent_tag, target_agent_tag) -> list:
+    """The target columns of the YAML column metadata entries."""
+    logger.info(f"Using YAML column metadata for table {target_table_name}")
+    column_dtos = []
+    for idx, col_meta in enumerate(metadata_columns, 1):
+        if not col_meta.get('name'):
+            logger.info(
+                f"Warning: Column metadata entry missing 'name' for table {target_table_name}. Skipping entry: {col_meta}")
+            continue
+        column_dtos.append(_metadata_column_dto(
+            idx, col_meta, key_lookup, source_node_info, target_node_info, source_agent_tag, target_agent_tag
+        ))
+    return column_dtos
+
+
+def _source_column_dtos(columns, key_lookup: _KeyLookup, source_node_info, target_node_info,
+                        source_agent_tag, target_agent_tag) -> list:
+    """When no metadata is provided, fall back to source column properties directly."""
+    column_dtos = []
+    for col in columns["columns"]:
+        # Map source type to target type (e.g. CHARACTER -> varchar)
+        mapped_type = map_data_type(
+            col.get("dataType"),
+            source_node_info,
+            target_node_info,
+            source_agent_tag=source_agent_tag,
+            target_agent_tag=target_agent_tag,
+        )
+        col_data_length = _normalize_data_length(mapped_type, col.get("charMaxLength", 0))
+        # YAML-defined keys override source metadata so templates can
+        # create target PKs for source tables that do not expose one.
+        col_is_pk = key_lookup.is_primary_key(col["name"]) or bool(col.get("isPK"))
+        column_dtos.append(Column(
+            name=col["name"],
+            dataType=format_column_type(mapped_type, col_data_length,
+                                   col.get("numPrec", 0), col.get("numScale", 0)),
+            id=col.get("position", col.get("id", 1)),
+            tableId=0,
+            position=col.get("position", col.get("id", 1)),
+            isPK=col_is_pk,
+            isNullable=col.get("isNullable", False),
+            charMaxLength=col_data_length,
+            numPrec=col.get("numPrec", 0),
+            numScale=col.get("numScale", 0)
+        ))
+    return column_dtos
+
+
+def _mapped_column_dtos(column_entries, target_table_name: str, columns, key_lookup: _KeyLookup, source_node_info,
+                        target_node_info, source_agent_tag, target_agent_tag) -> Optional[list]:
+    """The target columns from the YAML column metadata, else from the source columns.
+
+    ``None`` when the YAML columns are source→target mappings, which cannot describe a table to create.
+    """
+    metadata_columns, simple_mappings = _split_column_entries(column_entries)
+
+    if simple_mappings:
+        logger.info(
+            f"Skipping table creation for {target_table_name}: column mappings use source→target format, which is not supported for CREATE_TABLE_IF_NOT_EXISTS.")
+        return None
+
+    column_dtos = []
+    if metadata_columns:
+        column_dtos = _metadata_column_dtos(metadata_columns, target_table_name, key_lookup, source_node_info,
+                                            target_node_info, source_agent_tag, target_agent_tag)
+
+    if not column_dtos:
+        column_dtos = _source_column_dtos(columns, key_lookup, source_node_info, target_node_info,
+                                          source_agent_tag, target_agent_tag)
+    return column_dtos
+
+
 def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_schema: str, keys: list, token: str,
                           columns: list, custom_config, source_node_info, target_node_info,
                           source_agent_tag=None, target_agent_tag=None):
     custom_config = custom_config or {}
 
-    if not table_exists(pipeline_id=pipeline_id, schema_name=yaml_target_schema, table_name=target_table_name,
-                        token=token):
-        if CREATE_TABLE_IF_NOT_EXISTS:
-            logger.info(f"table: {target_table_name} does not exists, creating it")
-            # Create ColumnDto objects
-            column_dtos = []
-            column_entries = custom_config.get('columns') or []
-            target_only_columns = custom_config.get('targetOnlyColumns', [])
-
-            # Build key lookup from keys parameter (for backward compatibility)
-            # and from column isPrimaryKey property (preferred for Gluesync 2.2.6.0+)
-            key_names = set()
-            key_names_lower = set()
-            for key in (keys or []):
-                if isinstance(key, dict):
-                    if key.get("name"):
-                        key_names.add(key["name"])
-                    if key.get("alias"):
-                        key_names.add(key["alias"])
-                else:
-                    key_names.add(key)
-            key_names_lower = {
-                key_name.lower() for key_name in key_names if isinstance(key_name, str)
-            }
-
-            def _is_primary_key(column_name: str, col_is_primary_key: bool = None) -> bool:
-                # Prefer isPrimaryKey from column if available (Gluesync 2.2.6.0+)
-                if col_is_primary_key is not None:
-                    return col_is_primary_key
-                # Fall back to keys-based check for backward compatibility
-                if column_name in key_names:
-                    return True
-                return isinstance(column_name, str) and column_name.lower() in key_names_lower
-
-            def _to_int(value, default=0):
-                try:
-                    return int(value)
-                except (TypeError, ValueError):
-                    return default
-
-            def _to_bool(value, default=True):
-                if isinstance(value, bool):
-                    return value
-                if isinstance(value, str):
-                    return value.strip().lower() in {"1", "true", "yes", "y"}
-                if value is None:
-                    return default
-                return bool(value)
-
-            def _normalize_data_length(col_type: str, data_length: int) -> int:
-                base_type = str(col_type or '').split('(')[0].strip().lower()
-                length_value = _to_int(data_length, 0)
-                length_types = {
-                    'varchar2',
-                    'varchar',
-                    'char',
-                    'nchar',
-                    'nvarchar2',
-                    'raw',
-                    'binary',
-                    'varbinary',
-                }
-                if base_type in length_types:
-                    return length_value if length_value > 0 else 1024
-                return length_value
-
-            # Check if targetOnlyColumns are defined - if so, use them instead of source columns
-            if target_only_columns:
-                logger.info(f"Using targetOnlyColumns definition for table {target_table_name}")
-                for idx, target_col in enumerate(target_only_columns, 1):
-                    # Support both string format and object format
-                    if isinstance(target_col, str):
-                        # Simple string format: just the column name
-                        col_name = target_col
-                        col_type = 'varchar'  # Default type
-                        col_data_length = 1024  # Default data length
-                        col_numeric_precision = 0  # Default numeric precision
-                        col_numeric_scale = 0  # Default numeric scale
-                        col_is_nullable = False  # Default nullable
-                    else:
-                        # Object format with user-defined properties
-                        col_name = target_col.get('name')
-                        col_type = target_col.get('dataType') or target_col.get('type') or 'varchar'  # null-safe: treat explicit null as missing
-                        col_data_length = target_col.get('dataLength', 1024)  # Default data length
-                        col_numeric_precision = target_col.get('numPrec', 0)  # Default numeric precision
-                        col_numeric_scale = target_col.get('numScale', 0)  # Default numeric scale
-                        col_is_nullable = target_col.get('isNullable', False)  # Default nullable
-                    
-                    # Map the column type to target node type
-                    mapped_type = map_data_type(
-                        col_type,
-                        source_node_info,
-                        target_node_info,
-                        source_agent_tag=source_agent_tag,
-                        target_agent_tag=target_agent_tag,
-                    )
-                    col_data_length = _normalize_data_length(mapped_type, col_data_length)
-                    
-                    column_dtos.append(Column(
-                        name=col_name,
-                        dataType=format_column_type(mapped_type, col_data_length, col_numeric_precision, col_numeric_scale),
-                        id=idx,  # Use sequential IDs for target-only columns
-                        tableId=0,
-                        position=idx,
-                        isPK=_is_primary_key(col_name),
-                        isNullable=col_is_nullable,
-                        charMaxLength=col_data_length,
-                        numPrec=col_numeric_precision,
-                        numScale=col_numeric_scale
-                    ))
-            else:
-                metadata_columns = []
-                simple_mappings = []
-                for entry in column_entries:
-                    if isinstance(entry, dict) and 'name' in entry:
-                        metadata_columns.append(entry)
-                    elif entry is None:
-                        continue
-                    else:
-                        simple_mappings.append(entry)
-
-                if simple_mappings:
-                    logger.info(
-                        f"Skipping table creation for {target_table_name}: column mappings use source→target format, which is not supported for CREATE_TABLE_IF_NOT_EXISTS.")
-                    return
-
-                if metadata_columns:
-                    logger.info(f"Using YAML column metadata for table {target_table_name}")
-                    for idx, col_meta in enumerate(metadata_columns, 1):
-                        col_name = col_meta.get('name')
-                        if not col_name:
-                            logger.info(
-                                f"Warning: Column metadata entry missing 'name' for table {target_table_name}. Skipping entry: {col_meta}")
-                            continue
-
-                        # Use `or` rather than .get(key, default) so that an explicit
-                        # null value (type: null in YAML) is treated the same as a
-                        # missing key and falls through to the 'varchar' fallback.
-                        col_type = col_meta.get('dataType') or col_meta.get('type') or 'varchar'
-                        col_data_length = _to_int(col_meta.get('dataLength', col_meta.get('data_length')))
-                        col_numeric_precision = _to_int(col_meta.get('numericPrecision', col_meta.get('numeric_precision')))
-                        col_numeric_scale = _to_int(col_meta.get('numericScale', col_meta.get('numeric_scale')))
-                        col_is_nullable = _to_bool(col_meta.get('isNullable', col_meta.get('is_nullable')))
-                        
-                        # Use separate id and ordinalPosition from YAML metadata
-                        column_id = _to_int(col_meta.get('id'), idx)
-                        ordinal_position = _to_int(col_meta.get('ordinalPosition'), idx)
-
-                        # User-declared targetDataType wins over both `type` and the
-                        # automatic source->target mapping. When set, use it verbatim
-                        # and skip map_data_type entirely so it lands in the CREATE TABLE
-                        # statement exactly as declared (e.g. TIMESTAMP, DATE, DATETIME).
-                        _override = col_meta.get('targetDataType')
-                        if _override:
-                            mapped_type = _override
-                        else:
-                            # Map source type to target type (e.g. CHARACTER -> varchar)
-                            mapped_type = map_data_type(
-                                col_type,
-                                source_node_info,
-                                target_node_info,
-                                source_agent_tag=source_agent_tag,
-                                target_agent_tag=target_agent_tag,
-                            )
-                        col_data_length = _normalize_data_length(mapped_type, col_data_length)
-                        resolved_target_type = mapped_type
-
-                        # YAML-defined keys are the bootstrapper source of truth for
-                        # target table creation.  When source metadata says a column is
-                        # not a PK (for example CUSTOMERS_NO_PKEY in demo-kits), still
-                        # mark it as PK if the table-list-template declares it in keys.
-                        col_is_pk = _is_primary_key(col_name) or bool(col_meta.get('isPK', col_meta.get('is_primary_key')))
-                        column_dtos.append(Column(
-                            name=col_name,
-                            dataType=format_column_type(resolved_target_type, col_data_length, col_numeric_precision, col_numeric_scale),
-                            id=column_id,
-                            tableId=0,
-                            
-                            position=ordinal_position,
-                            isPK=col_is_pk,
-                            isNullable=col_is_nullable,
-                            charMaxLength=col_data_length,
-                            numPrec=col_numeric_precision,
-                            numScale=col_numeric_scale
-                        ))
-
-                if not column_dtos:
-                    # When no metadata is provided, fall back to source column properties directly
-                    for col in columns["columns"]:
-                        # Map source type to target type (e.g. CHARACTER -> varchar)
-                        mapped_type = map_data_type(
-                            col.get("dataType"),
-                            source_node_info,
-                            target_node_info,
-                            source_agent_tag=source_agent_tag,
-                            target_agent_tag=target_agent_tag,
-                        )
-                        col_data_length = _normalize_data_length(mapped_type, col.get("charMaxLength", 0))
-                        # YAML-defined keys override source metadata so templates can
-                        # create target PKs for source tables that do not expose one.
-                        col_is_pk = _is_primary_key(col["name"]) or bool(col.get("isPK"))
-                        column_dtos.append(Column(
-                            name=col["name"],
-                            dataType=format_column_type(mapped_type, col_data_length,
-                                                   col.get("numPrec", 0), col.get("numScale", 0)),
-                            id=col.get("position", col.get("id", 1)),
-                            tableId=0,
-                            position=col.get("position", col.get("id", 1)),
-                            isPK=col_is_pk,
-                            isNullable=col.get("isNullable", False),
-                            charMaxLength=col_data_length,
-                            numPrec=col.get("numPrec", 0),
-                            numScale=col.get("numScale", 0)
-                        ))
-            
-            table_data = GenerateCreateTargetTableStatementRequest(columns=column_dtos)
-            statement = generate_create_table_statement(pipeline_id=pipeline_id, schema_name=yaml_target_schema,
-                                                        table_name=target_table_name, token=token,
-                                                        table_data=table_data)
-            logger.info(f"create table statement: {statement}")
-            create_target_table(pipeline_id=pipeline_id, create_table_request=CreateTableRequest(statement=statement),
-                                token=token)
-        else:
-            logger.info(f"table: {target_table_name} does not exists, skipping creation as CREATE_TABLE_IF_NOT_EXISTS is false")
-    else:
+    if table_exists(pipeline_id=pipeline_id, schema_name=yaml_target_schema, table_name=target_table_name,
+                    token=token):
         logger.info(f"table: {target_table_name} already exists")
+        return
+    if not CREATE_TABLE_IF_NOT_EXISTS:
+        logger.info(f"table: {target_table_name} does not exists, skipping creation as CREATE_TABLE_IF_NOT_EXISTS is false")
+        return
+
+    logger.info(f"table: {target_table_name} does not exists, creating it")
+    # Create ColumnDto objects
+    column_entries = custom_config.get('columns') or []
+    target_only_columns = custom_config.get('targetOnlyColumns', [])
+
+    key_lookup = _KeyLookup(keys)
+
+    # Check if targetOnlyColumns are defined - if so, use them instead of source columns
+    if target_only_columns:
+        logger.info(f"Using targetOnlyColumns definition for table {target_table_name}")
+        column_dtos = _target_only_column_dtos(target_only_columns, key_lookup, source_node_info, target_node_info,
+                                               source_agent_tag, target_agent_tag)
+    else:
+        column_dtos = _mapped_column_dtos(column_entries, target_table_name, columns, key_lookup, source_node_info,
+                                          target_node_info, source_agent_tag, target_agent_tag)
+        if column_dtos is None:
+            return
+
+    table_data = GenerateCreateTargetTableStatementRequest(columns=column_dtos)
+    statement = generate_create_table_statement(pipeline_id=pipeline_id, schema_name=yaml_target_schema,
+                                                table_name=target_table_name, token=token,
+                                                table_data=table_data)
+    logger.info(f"create table statement: {statement}")
+    create_target_table(pipeline_id=pipeline_id, create_table_request=CreateTableRequest(statement=statement),
+                        token=token)
 
 
 def main(pipeline_id, source_schema, target_schema, source_type, target_type, yaml_file, token, skip_errors=True):
