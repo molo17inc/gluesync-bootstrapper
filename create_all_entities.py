@@ -1295,7 +1295,7 @@ def _target_only_properties(target_col, target_columns, skip_errors, where=""):
 def _add_target_only_columns(tb):
     """Add the target-only columns of the YAML (only supported with unlocked schema)."""
     pair, ctx = tb.pair, tb.ctx
-    target_only_columns = pair.custom_config.get('targetOnlyColumns', [])
+    target_only_columns = pair.custom_config.get(_TARGET_ONLY_COLUMNS_KEY, [])
     if not target_only_columns:
         return
     if not pair.is_unlocked_schema:
@@ -1446,15 +1446,20 @@ def _append_mapped_target_keys(tb, target_keys, col, source_col_id, relations):
     for column_map in relations or []:
         for source_name, target_name in _relation_pairs([column_map]):
             if col["name"].lower() == str(source_name).lower() and _is_in_keys(col["name"], tb.pair.custom_config):
-                discovered_target_col = tb.target_col(target_name)
-                resolved_target_type, target_col_id = _discovered_or_mapped(tb, col, discovered_target_col,
-                                                                            source_col_id)
-                # User-declared targetDataType override takes highest priority
-                resolved_target_type = tb.overrides.get(col["name"].lower()) or resolved_target_type
-                target_keys.append(_target_key_def(target_col_id, target_name, resolved_target_type,
-                                                   discovered_target_col if discovered_target_col else col))
-                logger.debug(f"Target key: {source_name} -> {target_name} (source ID={source_col_id}, target ID={target_col_id})")
+                target_keys.append(_mapped_target_key(tb, col, source_col_id, source_name, target_name))
                 break
+
+
+def _mapped_target_key(tb, col, source_col_id, source_name, target_name):
+    """The target key a YAML mapping pair makes of the discovered source key column ``col``."""
+    discovered_target_col = tb.target_col(target_name)
+    resolved_target_type, target_col_id = _discovered_or_mapped(tb, col, discovered_target_col, source_col_id)
+    # User-declared targetDataType override takes highest priority
+    resolved_target_type = tb.overrides.get(col["name"].lower()) or resolved_target_type
+    target_key = _target_key_def(target_col_id, target_name, resolved_target_type,
+                                 discovered_target_col if discovered_target_col else col)
+    logger.debug(f"Target key: {source_name} -> {target_name} (source ID={source_col_id}, target ID={target_col_id})")
+    return target_key
 
 
 def _missed_target_key_source(tb, key_name):
@@ -1816,6 +1821,2448 @@ def get_allowed_operations(target_custom_properties):
     logger.info(f"Using default allowedOperations: {default_ops}")
     return default_ops
 
+_DEFAULT_GROUP = '_default'
+_ENTITIES_CONFIG_PATH = "/pipelines/{pipeline_id}/config/entities"
+_ENTITIES_PATH = "/pipelines/{pipeline_id}/entities"
+_UNKNOWN_ENTITY = 'unknown'
+_SOURCE_ROLE = "source"
+_TARGET_ROLE = "target"
+_TARGET_ONLY_COLUMNS_KEY = 'targetOnlyColumns'
+
+# customProperties.target keys the target entityType handles itself, excluded from the passthrough spread
+_TARGET_HANDLED_KEYS = frozenset({'allowedOperations', 'skipDeletion', 'snapshotWritingConcurrency',
+                                  'useBulkOperationsDuringCDC', 'useBulkOperationsWhileSnapshot', 'udf'})
+
+
+def _build_table_lookup(table_list, default_schema_name):
+    """Discovered tables by ``(schema, name)`` lower-cased; a bare string is a table of ``default_schema_name``."""
+    lookup = {}
+    for tbl in table_list or []:
+        if isinstance(tbl, dict):
+            name = tbl.get("name")
+            schema_name = tbl.get("schema") or default_schema_name
+            table_info = tbl
+        elif isinstance(tbl, str):
+            name = tbl
+            schema_name = default_schema_name
+            table_info = {"name": name, "schema": schema_name}
+        else:
+            continue
+
+        if not name or not schema_name:
+            continue
+
+        lookup[(schema_name.lower(), name.lower())] = table_info
+    return lookup
+
+
+def _find_discovered_table(lookup, schema_name, table_name):
+    if not lookup or not schema_name or not table_name:
+        return None
+    return lookup.get((schema_name.lower(), table_name.lower()))
+
+
+def _resolve_table_id(schema_name, table_name, lookup, table_role):
+    """Try to reuse discovery IDs before falling back to generated IDs."""
+    discovered_table = _find_discovered_table(lookup, schema_name, table_name)
+    if discovered_table:
+        discovered_id = discovered_table.get('id')
+        if discovered_id is not None:
+            logger.debug(
+                f"Using discovered {table_role} table ID for {schema_name}.{table_name}: {discovered_id}"
+            )
+            return discovered_id
+
+    generated_id = get_table_id(schema_name, table_name)
+    logger.debug(
+        f"Using generated {table_role} table ID for {schema_name}.{table_name}: {generated_id}"
+    )
+    return generated_id
+
+
+def _parse_partition_config(partition_value):
+    """Return (column_name, max_partitions) from YAML configuration."""
+
+    column_name = None
+    max_partitions = DEFAULT_MAX_LOGICAL_PARTITIONS
+
+    if isinstance(partition_value, dict):
+        column_name = partition_value.get('column') or partition_value.get('name')
+        raw_max = partition_value.get('maxPartitionsNumber') or partition_value.get('maxPartitions')
+        if raw_max is not None:
+            try:
+                max_partitions = max(1, int(raw_max))
+            except (TypeError, ValueError):
+                logger.warning(f"Invalid maxPartitionsNumber '{raw_max}'. Falling back to {DEFAULT_MAX_LOGICAL_PARTITIONS}.")
+    elif isinstance(partition_value, str):
+        column_name = partition_value
+    elif partition_value is not None:
+        logger.warning(f"Unsupported partitions configuration type: {type(partition_value)}. Expected string or dict.")
+
+    return column_name, max_partitions
+
+
+def _format_partition_object(partition_obj):
+    if not isinstance(partition_obj, dict):
+        return None
+
+    partition_id = partition_obj.get('id')
+    try:
+        partition_id = int(partition_id)
+    except (TypeError, ValueError):
+        pass
+
+    if 'startValue' not in partition_obj or 'endValue' not in partition_obj:
+        return None
+
+    return {
+        "id": partition_id,
+        "startValue": str(partition_obj.get('startValue')),
+        "endValue": str(partition_obj.get('endValue'))
+    }
+
+
+def _partition_of_list_entry(entry):
+    """The partition object of an entry of a ``partitions`` list: the entry itself, or its ``partition``."""
+    if not isinstance(entry, dict):
+        return None
+    if {'id', 'startValue', 'endValue'}.issubset(entry.keys()):
+        return entry
+    if 'partition' in entry and isinstance(entry['partition'], dict):
+        return entry['partition']
+    return None
+
+
+def _partition_of_dict_key(key):
+    """The partition object of a key of a ``partitions`` map: the key itself, or the JSON it holds."""
+    if isinstance(key, dict):
+        return key
+    if isinstance(key, str):
+        try:
+            return json.loads(key)
+        except json.JSONDecodeError:
+            logger.debug(f"Unable to decode partition key: {key}")
+    return None
+
+
+def _extract_computed_partitions(response):
+    """Normalize compute-logical-partitions API responses into Gluesync partition lists."""
+
+    partitions = []
+    if not isinstance(response, dict):
+        return partitions
+
+    raw_partitions = response.get('partitions')
+    if isinstance(raw_partitions, list):
+        partition_objects = [_partition_of_list_entry(entry) for entry in raw_partitions]
+    elif isinstance(raw_partitions, dict):
+        partition_objects = [_partition_of_dict_key(key) for key in raw_partitions.keys()]
+    else:
+        partition_objects = []
+    for partition_obj in partition_objects:
+        formatted = _format_partition_object(partition_obj)
+        if formatted:
+            partitions.append(formatted)
+
+    partitions.sort(key=lambda part: part.get('id') if isinstance(part.get('id'), int) else 0)
+    return partitions
+
+
+def _compute_logical_partitions(token, pipeline_id, entity_id, column_payload, max_partitions_number):
+    """Invoke CoreHub to compute logical partitions for a given column."""
+
+    endpoint = f"/pipelines/{pipeline_id}/config/entities/{entity_id}/compute-logical-partitions"
+    safe_column_payload = json.loads(json.dumps(column_payload))
+    body = {
+        "maxPartitionsNumber": max(1, max_partitions_number),
+        "column": safe_column_payload
+    }
+
+    logger.info(
+        "Computing logical partitions for entity %s (column=%s, max=%s)",
+        entity_id,
+        safe_column_payload.get('name'),
+        body["maxPartitionsNumber"]
+    )
+
+    response = fetch_core_hub(endpoint, method='POST', token=token, body=body)
+    partitions = _extract_computed_partitions(response)
+
+    if not partitions:
+        logger.warning(
+            "Logical partition computation returned no partitions for entity %s (column=%s)",
+            entity_id,
+            safe_column_payload.get('name')
+        )
+
+    return partitions
+
+
+def _entities_by_name(pipeline_entities):
+    """The entities of a pipeline listing by entityName."""
+    entity_map = {}
+    if not isinstance(pipeline_entities, list):
+        logger.warning("Unexpected response while fetching entities for logical partitions: %s", pipeline_entities)
+        return entity_map
+    for item in pipeline_entities:
+        entity_data = item.get('entity') if isinstance(item, dict) else None
+        if not entity_data:
+            continue
+        entity_name = entity_data.get('entityName')
+        if entity_name:
+            entity_map[entity_name] = entity_data
+    return entity_map
+
+
+def _skip_partition_request(skip_errors, warning, error_message):
+    """Log why a logical partition request is skipped, refusing it unless errors are skipped."""
+    logger.warning(warning)
+    if not skip_errors:
+        raise RuntimeError(error_message)
+
+
+def _partitioned_entity_payload(entity_name, entity_from_core, request, partitions, skip_errors):
+    """The entity listed by CoreHub with the partitionSettings of its source agent entity, None if it has none."""
+    entity_payload = json.loads(json.dumps(entity_from_core))
+    source_entity = next(
+        (agent for agent in entity_payload.get('agentEntities', [])
+         if agent.get('agentId') == request["source_agent_id"] or agent.get('entityType', {}).get('type') == 'Source'),
+        None
+    )
+
+    if not source_entity:
+        _skip_partition_request(skip_errors, f"Source agent entity not found in payload for {entity_name}",
+                                f"Source agent entity missing for {entity_name}")
+        return None
+
+    source_entity_type = source_entity.setdefault('entityType', {})
+    source_entity_type['partitionSettings'] = {
+        "column": request["column"],
+        "partitions": partitions
+    }
+    return entity_payload
+
+
+def _computed_partitions_of(token, pipeline_id, entity_name, entity_id, request, skip_errors):
+    """The logical partitions CoreHub computes for a request, None when there are none or the call failed."""
+    try:
+        partitions = _compute_logical_partitions(token, pipeline_id, entity_id, request["column"],
+                                                 request["max_partitions"])
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.error(f"Failed to compute logical partitions for {entity_name}: {exc}")
+        if not skip_errors:
+            raise
+        return None
+
+    if not partitions:
+        _skip_partition_request(skip_errors, f"No partitions returned for {entity_name}. Skipping partitionSettings update.",
+                                f"Logical partitions computation returned empty result for {entity_name}")
+        return None
+    return partitions
+
+
+def _apply_partition_request(token, pipeline_id, request, entity_map, skip_errors):
+    """Compute the logical partitions of one entity and save them on its source agent entity."""
+    entity_name = request["entity_name"]
+
+    entity_from_core = entity_map.get(entity_name)
+    if not entity_from_core:
+        _skip_partition_request(skip_errors, f"Cannot compute logical partitions: entity '{entity_name}' not found in pipeline",
+                                f"Entity '{entity_name}' not found for logical partition computation")
+        return
+
+    entity_id = entity_from_core.get('entityId')
+    if not entity_id:
+        _skip_partition_request(skip_errors, f"Entity '{entity_name}' from pipeline listing has no entityId",
+                                f"Entity '{entity_name}' missing ID in pipeline response")
+        return
+
+    partitions = _computed_partitions_of(token, pipeline_id, entity_name, entity_id, request, skip_errors)
+    if not partitions:
+        return
+
+    entity_payload = _partitioned_entity_payload(entity_name, entity_from_core, request, partitions, skip_errors)
+    if entity_payload is None:
+        return
+
+    update_body = {"entities": [entity_payload]}
+
+    try:
+        fetch_core_hub(
+            _ENTITIES_CONFIG_PATH.format(pipeline_id=pipeline_id),
+            method='PUT',
+            token=token,
+            body=update_body
+        )
+        logger.info(f"Applied logical partitions for entity {entity_name} (ID: {entity_id})")
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.error(f"Failed to update entity {entity_name} with logical partitions: {exc}")
+        if not skip_errors:
+            raise
+
+
+def _apply_logical_partitions(token, pipeline_id, partition_requests, skip_errors):
+    if not partition_requests:
+        return
+
+    try:
+        pipeline_entities = fetch_core_hub(_ENTITIES_PATH.format(pipeline_id=pipeline_id), token=token)
+    except Exception as exc:
+        logger.error(f"Failed to fetch entities for logical partitions: {exc}")
+        if not skip_errors:
+            raise
+        return
+
+    entity_map = _entities_by_name(pipeline_entities)
+
+    for request in partition_requests:
+        _apply_partition_request(token, pipeline_id, request, entity_map, skip_errors)
+
+
+def _build_partition_settings(column_name, table_columns, schema_name, table_name, table_id):
+    """Create PartitionSettings payload for the specified column."""
+
+    if not column_name:
+        return None
+
+    if not table_columns:
+        logger.warning(f"Partition column '{column_name}' requested for {schema_name}.{table_name} but no columns were discovered")
+        return None
+
+    normalized_column = str(column_name).strip()
+    if not normalized_column:
+        return None
+
+    matched_column = next((col for col in table_columns if col.get('name') == normalized_column), None)
+    if not matched_column:
+        logger.warning(f"Partition column '{normalized_column}' not found in discovery for {schema_name}.{table_name}. Skipping partitionSettings.")
+        return None
+
+    # Use the id field from CoreHub API as the column ID
+    column_id = _require_column_id(matched_column, f"{schema_name}.{table_name}", label=normalized_column)
+
+    partition_column = {
+        "id": column_id,
+        "name": normalized_column,
+        "tableId": int(table_id),
+        "position": matched_column.get('position', 0),
+        "dataType": matched_column.get('dataType'),
+    }
+
+    # Include optional fields from matched_column
+    for field in ['charMaxLength', 'charOctetLength', 'charSet', 'collation', 'numPrec', 'numPrecRadix', 'numScale', 'datetimePrec', 'isIdentity', 'isNullable', 'udtCategory', 'udtName']:
+        if field in matched_column:
+            partition_column[field] = matched_column[field]
+
+    partition_column["isPK"] = matched_column.get('isPK', False)
+    if 'default' in matched_column:
+        partition_column["default"] = matched_column['default']
+
+    partition_settings = {
+        "column": partition_column,
+        "partitions": []
+    }
+
+    logger.info(f"Configured partitionSettings for {schema_name}.{table_name} on column '{normalized_column}'")
+    return partition_settings
+
+
+def _yaml_schemas(yaml_config):
+    """The schema sections of the YAML: under ``schemas``, else every top-level mapping."""
+    schemas_dict = yaml_config.get('schemas', {})
+    if not schemas_dict:
+        schemas_dict = {k: v for k, v in yaml_config.items() if isinstance(v, dict)}
+    return schemas_dict
+
+
+def _schema_custom_tables(schema_config):
+    """The custom tables of a schema section, in both direct and nested 'tables.custom' structures."""
+    if 'tables' in schema_config and 'custom' in schema_config['tables']:
+        return schema_config['tables']['custom']
+    if 'custom' in schema_config:
+        return schema_config['custom']
+    return {}
+
+
+def _collect_table_group(group_names, schema_name, table_key, table_data):
+    """Add the groupId of a YAML table to ``group_names``."""
+    if 'groupId' in table_data and table_data['groupId'] != _DEFAULT_GROUP:
+        group_name = str(table_data['groupId']).strip()
+        if group_name:  # Only add non-empty group names
+            group_names.add(group_name)
+            logger.debug(f"Found group '{group_name}' for table {schema_name}.{table_key}")
+        else:
+            logger.warning(f"Empty group ID found for table {schema_name}.{table_key}")
+
+
+def _collect_groups_and_chains(yaml_config, source_schema):
+    """The group names of the whole YAML (groups belong to the pipeline) and the MultiTable chains of this schema.
+
+    create_entities runs once per schema, and a chain of another schema would otherwise be built from this
+    schema's tables. Returns ``(group_names, chained_tables)``, the tables of each chainId in YAML order.
+    """
+    group_names = set()
+    chained_tables = {}  # Dictionary to store tables by chainId
+    if not yaml_config:
+        return group_names, chained_tables
+
+    for schema_name, schema_config in _yaml_schemas(yaml_config).items():
+        # Process each table in the config
+        for table_key, table_data in _schema_custom_tables(schema_config).items():
+            _collect_table_group(group_names, schema_name, table_key, table_data)
+            # Collect chainId information (independent of groupId), for this schema only
+            if 'chainId' in table_data and schema_name == source_schema:
+                chained_tables.setdefault(table_data['chainId'], []).append((table_key, table_data))
+
+        # Note: Do NOT add group names from group-level schedules to group_names here,
+        # because keys might be group IDs and we must not try to create groups using IDs as names.
+        # We'll resolve schedule keys to IDs later, during schedule creation.
+    return group_names, chained_tables
+
+
+def _create_groups(token, pipeline_id, yaml_config, group_names):
+    """Create the groups before creating entities; returns the group ID of each group name."""
+    groups_config = {}
+    if yaml_config:
+        raw_groups = yaml_config.get('groups')
+        if isinstance(raw_groups, dict):
+            groups_config = raw_groups
+
+    group_id_map = {}
+    logger.debug(f"Groups to create: {group_names}")
+
+    for group_name in group_names:
+        logger.debug(f"Processing group: '{group_name}' (type: {type(group_name)})")
+
+        group_meta = groups_config.get(group_name)
+        description = None
+        color = None
+        if isinstance(group_meta, dict):
+            description = group_meta.get('description')
+            color = group_meta.get('color')
+
+        group_id = create_group(token, pipeline_id, group_name, description=description, color=color)
+        logger.debug(f"Group '{group_name}' creation result: {group_id}")
+
+        if group_id and group_id != _DEFAULT_GROUP:
+            # Map the group name to its ID for later use
+            group_id_map[group_name] = group_id
+            logger.info(f"Created/retrieved group '{group_name}' with ID: {group_id}")
+        else:
+            logger.warning(f"Failed to create/retrieve group '{group_name}'. Using default group.")
+            group_id_map[group_name] = _DEFAULT_GROUP
+
+    # Log all group mappings for debugging
+    logger.info(f"Group name to ID mappings: {json.dumps(group_id_map, indent=2)}")
+    return group_id_map
+
+
+def _node_infos(token, pipeline_id, source_agent_id, target_agent_id, yaml_config):
+    """The node info of both agents (for data type mapping), logged with the YAML."""
+    source_node_info = get_node_info(token, pipeline_id, source_agent_id)
+    target_node_info = get_node_info(token, pipeline_id, target_agent_id)
+
+    logger.info("Source Node Info:")
+    logger.info(json.dumps(source_node_info, indent=2))
+    logger.info("Target Node Info:")
+    logger.info(json.dumps(target_node_info, indent=2))
+
+    logger.debug(f"Full YAML config: {json.dumps(yaml_config, indent=2)}")
+    return source_node_info, target_node_info
+
+
+class _SchemaSettings:
+    """The YAML settings of the source schema a create_entities run works on."""
+
+    def __init__(self, yaml_config, source_schema, target_schema):
+        schemas_root = yaml_config.get('schemas', yaml_config)
+        schema_config = schemas_root.get(source_schema, {})
+        logger.debug(f"Schema config for {source_schema}: {json.dumps(schema_config, indent=2)}")
+
+        self.yaml_target_schema = schema_config.get('target', target_schema)
+        self.whitelist = schema_config.get('tables', {}).get('whitelist', [])
+        self.blacklist = schema_config.get('tables', {}).get('blacklist', [])
+        # Handle empty custom tables attribute - convert None to empty dict
+        tables_config = schema_config.get('tables', {})
+        self.custom_tables = tables_config.get('custom', {})
+        if self.custom_tables is None:
+            self.custom_tables = {}
+            logger.warning("Warning: 'custom' attribute is present but empty in YAML. Converting to empty dict.")
+
+        # Get schema-level custom properties
+        schema_custom_properties = schema_config.get('customProperties', {})
+        self.global_source_custom_properties = schema_custom_properties.get('source', {})
+        self.global_target_custom_properties = schema_custom_properties.get('target', {})
+
+        logger.debug(f"Target schema: {self.yaml_target_schema}")
+        logger.debug(f"Whitelist: {self.whitelist}")
+        logger.debug(f"Blacklist: {self.blacklist}")
+        logger.debug(f"Custom tables: {self.custom_tables}")
+        logger.debug(f"Global source custom properties: {self.global_source_custom_properties}")
+        logger.debug(f"Global target custom properties: {self.global_target_custom_properties}")
+
+
+class _EntityRun:
+    """One create_entities run: its pipeline context, the YAML settings of its schema, and what it builds.
+
+    ``last_table_name`` and ``last_col`` are the table name and the discovered column the table loops looked at
+    last: the chain loop names that table in some of its errors, and copies the optional fields of that column
+    onto some table headers, as it always has.
+    """
+
+    def __init__(self, ctx, schema, source_schema, target_schema, source_agent_id, source_type, target_type, grouped):
+        self.ctx = ctx
+        self.schema = schema
+        self.source_schema = source_schema
+        self.target_schema = target_schema
+        self.source_agent_id = source_agent_id
+        self.source_type = source_type
+        self.target_type = target_type
+        self.grouped = grouped
+        self.group_id_map = {}
+        self.source_tables_lookup = {}
+        self.target_tables_lookup = {}
+        self.entities = []
+        # Tables whose entity is refused before any request, with the reason logged; counted as failed.
+        self.refused_tables = []
+        # Every entity of the run that was not created, as "<entity>: <reason>", returned to the caller (BOP-18 A).
+        self.errors = []
+        self.pending_partition_requests = []
+        # Track which YAML keys have been processed to avoid duplicates
+        self.processed_yaml_keys = set()
+        # Track discovered table IDs for chain processing
+        self.chain_source_ids = {}
+        self.chain_target_ids = {}
+        self.last_table_name = None
+        self.last_col = None
+
+    def refuse_table(self, table_label, error):
+        logger.error(f"Entity for table {table_label} not created: {error}")
+        self.refused_tables.append(table_label)
+        self.errors.append(f"{table_label}: {error}")
+        if not self.ctx.skip_errors:
+            raise error
+
+    def table_columns(self, table_name):
+        """The source discovery of a table of the schema."""
+        ctx = self.ctx
+        return get_table_columns(ctx.token, ctx.pipeline_id, self.source_agent_id, self.source_schema, table_name)
+
+    def queue_partition_request(self, entity_name, partition_settings, max_partitions):
+        if partition_settings:
+            self.pending_partition_requests.append({
+                "entity_name": entity_name,
+                "column": partition_settings["column"],
+                "max_partitions": max_partitions,
+                "source_agent_id": self.source_agent_id
+            })
+
+
+def _discover_target_tables(ctx):
+    """The tables of the target schema by ``(schema, name)``, {} when they cannot be listed."""
+    target_tables_lookup = {}
+    try:
+        target_discovered_tables = get_agent_tables(ctx.token, ctx.pipeline_id, ctx.target_agent_id,
+                                                    ctx.yaml_target_schema)
+        target_tables_lookup = _build_table_lookup(target_discovered_tables, ctx.yaml_target_schema)
+        logger.info(f"Discovered {len(target_tables_lookup)} tables in target schema {ctx.yaml_target_schema}")
+    except Exception as e:
+        logger.warning(f"Could not retrieve target tables for schema {ctx.yaml_target_schema}: {str(e)}")
+    return target_tables_lookup
+
+
+@dataclass
+class _TableProperties:
+    """The custom properties of a YAML table merged over the schema ones, and what is taken out of them."""
+    source: Any
+    target: Any
+    partition_column: Any
+    partition_max: Any
+    udf_config: Any
+    is_unlocked_schema: Any
+
+
+def _log_snapshot_write_method(custom_config, label, duplicate):
+    """Log the snapshot write method (UPSERT or INSERT, default is UPSERT) of a table.
+
+    It is kept separately and NOT added to custom properties: it is read directly from the YAML config when
+    needed during sync operations.
+    """
+    snapshot_write_method = custom_config.get('snapshotWriteMethod', 'UPSERT').upper()
+    if snapshot_write_method not in ['UPSERT', 'INSERT']:
+        if duplicate:
+            logger.warning(f"Invalid snapshotWriteMethod '{snapshot_write_method}' for {label}. Using 'UPSERT'")
+        else:
+            logger.warning(f"Warning: Invalid snapshotWriteMethod '{snapshot_write_method}' for {label}. Using default 'UPSERT'")
+    logger.info(f"Snapshot write method for {label}: {snapshot_write_method}")
+
+
+def _table_properties(run, custom_config, label, duplicate=False):
+    """The merged custom properties of a table, None when it is refused (unlocked schema without UDF)."""
+    _log_snapshot_write_method(custom_config, label, duplicate)
+
+    # Get table-specific custom properties and merge with global properties
+    table_custom_properties = custom_config.get('customProperties', {})
+    source_custom_properties = {**run.schema.global_source_custom_properties, **table_custom_properties.get('source', {})}
+    target_custom_properties = {**run.schema.global_target_custom_properties, **table_custom_properties.get('target', {})}
+
+    partition_config = source_custom_properties.pop('partitions', None)
+    partition_column_name, partition_max_partitions = _parse_partition_config(partition_config)
+
+    # Store UDF configuration separately (will be added to entityType, not customProperties)
+    udf_config = target_custom_properties.pop('udf', None)
+
+    # Check if this table is configured for unlocked schema
+    is_unlocked_schema = custom_config.get('unlockedSchema', False)
+
+    # Validate: UDF is mandatory for unlocked schema
+    if is_unlocked_schema and not udf_config:
+        if duplicate:
+            logger.error(f"Table {label} has unlockedSchema=true but no UDF. Skipping.")
+        else:
+            logger.error(f"Table {label} is configured with unlockedSchema=true but no UDF is defined. UDF is mandatory for unlocked schema.")
+        if not run.ctx.skip_errors:
+            raise ValueError(f"UDF is mandatory for table {label} with unlocked schema")
+        return None
+
+    return _TableProperties(source_custom_properties, target_custom_properties, partition_column_name,
+                            partition_max_partitions, udf_config, is_unlocked_schema)
+
+
+def _document_key_column_id(run, columns, key_name, table_label, duplicate):
+    """The id of the discovered column a documentKey key names, None if there is none."""
+    for col in columns["columns"]:
+        run.last_col = col
+        if col.get('name') == key_name:
+            # Use the id field from CoreHub API as the column ID
+            column_id = col.get('id')
+            if column_id is None and duplicate:
+                error_msg = f"Column '{key_name}' in {table_label} missing 'id' field"
+                logger.error(error_msg)
+                raise ValueError(error_msg)
+            if column_id is None:
+                _raise_missing_column_id(col.get('name'), table_label)
+            return column_id
+    return None
+
+
+def _document_key(run, custom_config, columns, table_label, duplicate=False):
+    """The document key configuration of a table, with its key column names converted to column IDs."""
+    if not (custom_config and 'documentKey' in custom_config):
+        return None
+    doc_key_config = custom_config['documentKey']
+
+    key_ids = []
+    for key_name in doc_key_config['keys'] if 'keys' in doc_key_config else []:
+        column_id = _document_key_column_id(run, columns, key_name, table_label, duplicate)
+        if column_id is not None:
+            key_ids.append(column_id)
+        elif not duplicate:
+            logger.warning(f"Warning: Column '{key_name}' not found in table columns for document key")
+
+    document_key = {
+        "prefix": doc_key_config.get('prefix', ''),
+        "suffix": doc_key_config.get('suffix', ''),
+        "separator": doc_key_config.get('separator', '-'),
+        "keys": key_ids  # Use column IDs instead of names
+    }
+    if not duplicate:
+        logger.debug(f"Document key configuration for {table_label}: {document_key}")
+    return document_key
+
+
+def _process_filters(run, custom_config, columns, target_table_id, label):
+    """The filter and snapshot delete filter of a table (they live in the target entityType)."""
+    ctx = run.ctx
+    filter_config = custom_config.get('filter')
+    snapshot_delete_filter_config = custom_config.get('snapshotDeleteFilter')
+    processed_filters = process_filter_clauses(filter_config, columns, table_id=target_table_id,
+        source_node_info=ctx.source_node_info, target_node_info=ctx.target_node_info) if filter_config else None
+    logger.debug(f"Processed filters for {label}: {processed_filters}")
+    processed_snapshot_delete_filters = process_filter_clauses(snapshot_delete_filter_config, columns, table_id=target_table_id,
+        source_node_info=ctx.source_node_info, target_node_info=ctx.target_node_info) if snapshot_delete_filter_config else None
+    if processed_snapshot_delete_filters:
+        logger.debug(f"Processed snapshot delete filters for {label}: {processed_snapshot_delete_filters}")
+    return processed_filters, processed_snapshot_delete_filters
+
+
+def _where_clause_properties(table_config, source_table_key=None):
+    """The tablesProperties of a source table: its ``whereClause``, logged unless ``source_table_key`` is None."""
+    table_properties = {}
+    if table_config and 'whereClause' in table_config:
+        where_clause = table_config['whereClause']
+        if where_clause:
+            table_properties["whereClause"] = str(where_clause)
+            if source_table_key is not None:
+                logger.info(f"Added whereClause for {source_table_key}: {where_clause}")
+    return table_properties
+
+
+def _source_entity(run, pair, columns_def, source_custom_properties, verbose):
+    """The source agent entity of a SingleTable entity; ``verbose`` logs its type and whereClause."""
+    source_schema, table_name = run.source_schema, pair.table_name
+    source_table_key = f"{source_schema}.{table_name}"
+    source_entity_type = {**source_custom_properties, "type": "Source"}
+
+    # Determine source entity type based on source_type
+    # Check if source_type indicates NoSQL (case-insensitive)
+    is_source_nosql = run.source_type and "nosql" in run.source_type.lower()
+    source_entity_type_name = "NoSqlEntity" if is_source_nosql else "SingleTable"
+    if verbose:
+        logger.debug(f"Source entity type determination: source_type='{run.source_type}', is_source_nosql={is_source_nosql}, selected type='{source_entity_type_name}'")
+
+    # Build source table properties with optional whereClause
+    source_table_properties = _where_clause_properties(pair.custom_config, source_table_key if verbose else None)
+
+    return {
+        "type": source_entity_type_name,
+        "entityType": source_entity_type,
+        "agentId": run.source_agent_id,
+        "entityObject": {
+            "id": str(pair.source_table_id),
+            "scope": source_schema,
+            "collection": table_name
+        },
+        "table": {
+            "id": str(pair.source_table_id),
+            "name": table_name,
+            "schema": source_schema
+        },
+        "columns": columns_def,
+        "customProperties": source_custom_properties,
+        "tablesProperties": {source_table_key: source_table_properties}
+    }
+
+
+def _target_entity_type(target_custom_properties, processed_filters, processed_snapshot_delete_filters, udf_config):
+    """The target entityType of a SingleTable entity, before its columns are assembled.
+
+    Holds allowedOperations and the bulk operations settings; any unknown customProperties.target keys are
+    spread in dynamically. UDFs must be in entityType, not in customProperties.
+    """
+    # Get allowed operations for the target entity
+    allowed_operations = get_allowed_operations(target_custom_properties)
+
+    _target_extra = {k: v for k, v in target_custom_properties.items() if k not in _TARGET_HANDLED_KEYS}
+
+    target_entity_type = {
+        **_target_extra,
+        "type": "Target",
+        "allowedOperations": allowed_operations,
+        "snapshotWritingConcurrency": target_custom_properties.get('snapshotWritingConcurrency', 1),
+        "useBulkOperationsDuringCDC": target_custom_properties.get('useBulkOperationsDuringCDC', False),
+        "useBulkOperationsWhileSnapshot": target_custom_properties.get('useBulkOperationsWhileSnapshot', False)
+    }
+
+    # Add filters if they exist
+    if processed_filters:
+        target_entity_type["filter"] = processed_filters
+    if processed_snapshot_delete_filters:
+        target_entity_type["snapshotDeleteFilter"] = processed_snapshot_delete_filters
+
+    # Add UDFs to entityType if they exist
+    if udf_config:
+        target_entity_type["udf"] = udf_config
+        # Also add mappingFunctionInfo for the first UDF
+        target_entity_type["mappingFunctionInfo"] = udf_config[0]
+    return target_entity_type
+
+
+def _target_entity(run, pair, target_columns_def, target_custom_properties, target_entity_type, table_obj,
+                   table_properties, verbose):
+    """The target agent entity of a SingleTable entity; ``verbose`` logs its type."""
+    yaml_target_schema = run.ctx.yaml_target_schema
+    # Determine target entity type based on target_type
+    # Check if target_type indicates NoSQL (case-insensitive)
+    is_target_nosql = run.target_type and "nosql" in run.target_type.lower()
+    target_entity_type_name = "NoSqlEntity" if is_target_nosql else "SingleTable"
+    if verbose:
+        logger.debug(f"Target entity type determination: target_type='{run.target_type}', is_target_nosql={is_target_nosql}, selected type='{target_entity_type_name}'")
+
+    return {
+        "type": target_entity_type_name,
+        "entityType": target_entity_type,
+        "agentId": run.ctx.target_agent_id,
+        "entityObject": {
+            "id": str(pair.target_table_id),
+            "scope": yaml_target_schema,
+            "collection": pair.target_table_name
+        },
+        "table": table_obj,
+        "columns": target_columns_def,  # Use target columns definition
+        "customProperties": target_custom_properties,
+        "tablesProperties": {f"{yaml_target_schema}.{pair.target_table_name}": table_properties}
+    }
+
+
+def _define_table_udfs(run, table_name, table_udfs, label):
+    """Process the UDFs defined for a table (``label`` names it in the logs)."""
+    logger.info(f"Found UDFs for {label}: {table_udfs}")
+    try:
+        handle_udf_function_definition(table_name, run.ctx.pipeline_id, table_udfs, run.ctx.token)
+        logger.info(f"Successfully processed UDFs for {label}")
+    except Exception as e:
+        logger.error(f"Failed to process UDFs for {label}: {str(e)}")
+        if not run.ctx.skip_errors:
+            raise
+
+
+def _table_name_and_schema(table):
+    """The name and the schema (None when unknown, for string-only tables) of a discovered table."""
+    if isinstance(table, str):
+        return table, None
+    return table.get("name"), table.get("schema")
+
+
+def _bare_table_name(table_name):
+    """The table name without the library qualifier an AS/400 agent may return (FILELIB.TABLE → TABLE)."""
+    return table_name.rsplit('.', 1)[-1] if '.' in table_name else table_name
+
+
+def _in_schema_whitelist(run, table_name, bare_table_name):
+    """STRICT WHITELIST ENFORCEMENT: if a whitelist is defined, ONLY the tables it lists are processed.
+
+    If the agent returns FILELIB.TABLE but the whitelist has TABLE, the bare name is checked as a fallback so
+    tables are not silently dropped when the source uses qualified names.
+    """
+    whitelist = run.schema.whitelist
+    if not whitelist:
+        logger.debug(f"No whitelist defined for schema {run.source_schema}, allowing table {table_name}")
+        return True
+    if table_name not in whitelist and bare_table_name not in whitelist:
+        logger.info(f"Skipping table {table_name}: not in whitelist for schema {run.source_schema}")
+        return False
+    logger.debug(f"Table {table_name} is in whitelist for schema {run.source_schema} - processing")
+    return True
+
+
+def _skip_discovered_table(run, table_name, table_schema):
+    """Whether a discovered table gets no entity: no name, another schema, a system, blacklisted or not whitelisted table."""
+    if not table_name:
+        logger.warning("Warning: Table without name encountered. Skipping.")
+        return True
+
+    # Validate that the table belongs to the requested source schema
+    # The API may return tables from all schemas, so we need to filter
+    if table_schema and table_schema.lower() != run.source_schema.lower():
+        logger.debug(f"Skipping table {table_name}: belongs to schema '{table_schema}' but processing schema '{run.source_schema}'")
+        return True
+
+    # Skip system tables
+    if table_name.startswith("sys"):
+        logger.info(f"Skipping system table: {table_name}")
+        return True
+
+    # Skip blacklisted tables, the bare table name included (a blacklist entry 'TABLE' still matches
+    # 'FILELIB.TABLE' from discovery).
+    bare_table_name = _bare_table_name(table_name)
+    blacklist = run.schema.blacklist
+    if blacklist and (table_name in blacklist or bare_table_name in blacklist):
+        logger.info(f"Skipping blacklisted table: {table_name}")
+        return True
+
+    return not _in_schema_whitelist(run, table_name, bare_table_name)
+
+
+def _discover_source_table(run, table_name):
+    """The source discovery of a table, None (refused unless errors are skipped) when it has no columns."""
+    columns = run.table_columns(table_name)
+
+    # Debug logging for column discovery
+    if columns and columns.get('columns'):
+        logger.info(f"Discovered {len(columns['columns'])} columns for table {table_name}: {[col.get('name') for col in columns['columns']]}")
+        return columns
+    logger.warning(f"No columns discovered for table {table_name}. columns={columns}")
+
+    # Validate that columns were discovered
+    error_msg = f"Cannot create entity for table {table_name}: No columns discovered from source. Please verify the table exists and is accessible."
+    logger.error(error_msg)
+    if not run.ctx.skip_errors:
+        raise ValueError(error_msg)
+    return None
+
+
+def _custom_config_of(custom_tables, table_name):
+    """``(custom_config, yaml_table_key)``: the YAML entry of a discovered table and the key it is under.
+
+    Handles both a direct key match and a ``sourceTableName`` match (duplicate table), then, for a
+    library-qualified name (e.g. AS/400 FILELIB.TABLE), the bare table name as the YAML key: the backup YAML uses
+    the unqualified name as the key but the source agent returns the library-prefixed form during discovery.
+    """
+    custom_config = custom_tables.get(table_name, {})
+    yaml_table_key = table_name  # Track which YAML key we're using
+
+    if not custom_config:
+        for key, config in custom_tables.items():
+            if isinstance(config, dict) and config.get('sourceTableName') == table_name:
+                custom_config = config
+                yaml_table_key = key
+                logger.info(f"Found custom config for table {table_name} under YAML key '{key}' (duplicate table)")
+                break
+
+    bare_table_name = _bare_table_name(table_name)
+    if not custom_config and '.' in table_name and bare_table_name in custom_tables:
+        custom_config = custom_tables[bare_table_name]
+        yaml_table_key = bare_table_name
+        logger.info(
+            f"Matched library-qualified table '{table_name}' to YAML key '{bare_table_name}' "
+            "via bare-name fallback"
+        )
+
+    if custom_config is None:
+        custom_config = {}
+        logger.warning(f"Warning: Custom config for table {table_name} is present but empty in YAML. Converting to empty dict.")
+    logger.debug(f"Custom config for {table_name}: {custom_config}")
+    return custom_config, yaml_table_key
+
+
+def _create_target_table(run, pair, keys):
+    """Create the target table of a discovered table when CREATE_TABLE_IF_NOT_EXISTS is on (RDBMS targets only)."""
+    if not CREATE_TABLE_IF_NOT_EXISTS:
+        return
+    ctx = run.ctx
+    # Only create tables for RDBMS targets; skip for NoSQL, Object Store,
+    # and any other non-RDBMS category. target_type is normalized upstream.
+    if is_no_create_table_target(run.target_type):
+        logger.info(f"Skipping table creation for {pair.target_table_name} - target is {run.target_type}")
+        return
+    logger.info(f"CREATE_TABLE_IF_NOT_EXISTS is enabled - creating table {pair.target_table_name}")
+    handle_table_creation(
+        ctx.pipeline_id,
+        pair.target_table_name,
+        ctx.yaml_target_schema,
+        keys,
+        ctx.token,
+        pair.columns,
+        pair.custom_config,
+        ctx.source_node_info,
+        ctx.target_node_info,
+        source_agent_tag=ctx.source_agent_tag,
+        target_agent_tag=ctx.target_agent_tag,
+    )
+
+
+def _discovered_source_table_id(run, table, table_name):
+    """The source table ID of a discovered table: its own, else the one discovery lists, else a generated one."""
+    if isinstance(table, dict) and table.get('id') is not None:
+        source_table_id = table.get('id')
+        logger.debug(f"Using discovered source table ID for {run.source_schema}.{table_name}: {source_table_id}")
+        return source_table_id
+    return _resolve_table_id(run.source_schema, table_name, run.source_tables_lookup, _SOURCE_ROLE)
+
+
+def _requested_group_id(run, custom_config):
+    """The group ID of the group a table requests ('_default' when none, or when it cannot be used)."""
+    # Get the requested group from config, default to '_default'
+    requested_group = str(custom_config.get('groupId', _DEFAULT_GROUP)).strip()
+    group_id = _DEFAULT_GROUP
+
+    # Log the requested group for debugging
+    logger.debug(f"Requested group: '{requested_group}' (type: {type(requested_group)})")
+
+    if not requested_group or requested_group == _DEFAULT_GROUP:
+        logger.debug("Using default group as no specific group was requested")
+        return group_id
+
+    # Use the pre-created group ID from the upfront group ID cache to avoid making a redundant API call per
+    # entity (which causes the import to appear to loop indefinitely when many entities share the same group).
+    cached_id = run.group_id_map.get(requested_group)
+    if cached_id and cached_id != _DEFAULT_GROUP:
+        group_id = cached_id
+        logger.debug(f"Using cached group ID for '{requested_group}': {group_id}")
+    else:
+        # Fallback: try to create/get the group (e.g. if upfront pre-creation failed)
+        group_id = create_group(run.ctx.token, run.ctx.pipeline_id, requested_group)
+        if group_id != _DEFAULT_GROUP:
+            # Cache it so subsequent entities skip the API call
+            run.group_id_map[requested_group] = group_id
+
+    if group_id != _DEFAULT_GROUP:
+        logger.info(f"Using group '{requested_group}' with ID: {group_id}")
+    else:
+        logger.warning(f"Could not use group '{requested_group}'. Using default group.")
+    return group_id
+
+
+def _entity_payload(entity_name, source_entity, target_entity, group_id):
+    """A SingleTable entity; the groupId is only added for a valid group ID."""
+    entity = {
+        "entityName": entity_name,
+        "agentEntities": [source_entity, target_entity],
+    }
+    if group_id and group_id != _DEFAULT_GROUP:
+        entity["groupId"] = group_id
+    return entity
+
+
+def _discovered_table_source_columns(run, pair):
+    """The source assembly of a discovered table (see :func:`_assemble_source_columns`), None when refused.
+
+    A table of a MultiTable chain gets its entity from the chain loop; the SingleTable entity built here for it
+    is not sent, so it keeps the payload of older CoreHubs.
+    """
+    custom_config, table_name = pair.custom_config, pair.table_name
+    chain_id = custom_config.get('chainId')
+    try:
+        return _assemble_source_columns(pair.columns, custom_config, table_name, run.source_schema,
+                                        grouped=run.grouped and not chain_id, check_forms=not chain_id)
+    except EntityMappingError as error:
+        if chain_id:
+            # Its chain is refused for the same reason by the chain loop below.
+            logger.debug(f"Table {table_name} of chain {chain_id}: {error}")
+        else:
+            run.refuse_table(table_name, error)
+        return None
+
+
+def _discovered_table_target_side(run, pair, source, target_entity_type):
+    """The target side assembly of a discovered table: ``(target_columns_def, target_keys)``, None when refused.
+
+    A table of a chain is written, or refused, by the chain loop; the rest of the first loop (partitions, UDFs)
+    still runs for it, whose SingleTable entity is not sent.
+    """
+    columns_def, _keys, has_column_mappings, is_column_whitelist, discovery_type_by_source, relations = source
+    chain_id = pair.custom_config.get('chainId')
+    try:
+        return _assemble_target_side(
+            run.ctx, pair, columns_def, has_column_mappings or is_column_whitelist, discovery_type_by_source,
+            target_entity_type, relations=relations, grouped=run.grouped and not chain_id,
+        )
+    except EntityMappingError as error:
+        if not chain_id:
+            run.refuse_table(pair.table_name, error)
+            return None
+        logger.debug(f"Table {pair.table_name} of chain {chain_id}: {error}")
+        return [], []
+
+
+def _add_discovered_table_entity(run, table, pair, props, document_key):
+    """Build the SingleTable entity of a discovered table (queued unless the table belongs to a chain)."""
+    custom_config, table_name, ctx = pair.custom_config, pair.table_name, run.ctx
+    source = _discovered_table_source_columns(run, pair)
+    if source is None:
+        return
+    columns_def, keys = source[0], source[1]
+    if not keys:
+        logger.warning(f"Warning: No keys specified for {table_name}. Table will have no keys.")
+
+    _create_target_table(run, pair, keys)
+
+    # Generate table IDs for use in entities (prefer discovered IDs)
+    pair.source_table_id = _discovered_source_table_id(run, table, table_name)
+    pair.target_table_id = _resolve_table_id(ctx.yaml_target_schema, pair.target_table_name,
+                                             run.target_tables_lookup, _TARGET_ROLE)
+
+    # Process filter clauses using target_table_id (filters live in the target entityType)
+    processed_filters, processed_snapshot_delete_filters = _process_filters(
+        run, custom_config, pair.columns, pair.target_table_id, table_name)
+
+    partition_settings = None
+    if props.partition_column:
+        partition_settings = _build_partition_settings(props.partition_column, pair.columns.get("columns"),
+                                                       run.source_schema, table_name, pair.source_table_id)
+
+    source_entity = _source_entity(run, pair, columns_def, props.source, verbose=True)
+    target_entity_type = _target_entity_type(props.target, processed_filters, processed_snapshot_delete_filters,
+                                             props.udf_config)
+
+    target_side = _discovered_table_target_side(run, pair, source, target_entity_type)
+    if target_side is None:
+        return
+    target_columns_def, _target_keys = target_side
+
+    table_obj = {"id": str(pair.target_table_id), "schema": ctx.yaml_target_schema, "name": pair.target_table_name}
+    target_entity = _target_entity(run, pair, target_columns_def, props.target, target_entity_type, table_obj, {},
+                                   verbose=True)
+    # Add document key mapping if configured
+    if document_key:
+        target_entity["keyMapping"] = document_key
+
+    group_id = _requested_group_id(run, custom_config)
+
+    # Create the entity
+    # Use custom entityName from YAML if provided, otherwise fall back to schema.table format
+    entity = _entity_payload(custom_config.get('entityName', f"{run.source_schema}.{table_name}"),
+                             source_entity, target_entity, group_id)
+
+    # A table of a MultiTable chain is written by its chain's entity (below), not as a SingleTable entity of
+    # its own; the rest of this loop (table creation, partitions, UDFs) still runs for it.
+    if custom_config.get('chainId'):
+        logger.debug(f"Table {table_name} belongs to chain {custom_config.get('chainId')}: no SingleTable entity")
+    else:
+        run.entities.append(entity)
+
+    run.queue_partition_request(entity["entityName"], partition_settings, props.partition_max)
+
+    # Process UDFs if defined for this table
+    table_udfs = custom_config.get('customProperties', {}).get('target', {}).get('udf', [])
+    if table_udfs:
+        _define_table_udfs(run, table_name, table_udfs, f"table {table_name}")
+    else:
+        logger.debug(f"No UDFs defined for table {table_name}")
+
+
+def _process_discovered_table(run, table):
+    """The first loop of :func:`create_entities`: the SingleTable entity of a table discovery returns."""
+    table_name, table_schema = _table_name_and_schema(table)
+    run.last_table_name = table_name
+    if _skip_discovered_table(run, table_name, table_schema):
+        return
+
+    columns = _discover_source_table(run, table_name)
+    if columns is None:
+        return
+
+    custom_config, yaml_table_key = _custom_config_of(run.schema.custom_tables, table_name)
+    # Mark this YAML key as processed
+    run.processed_yaml_keys.add(yaml_table_key)
+
+    props = _table_properties(run, custom_config, table_name)
+    if props is None:
+        return
+
+    logger.debug(f"Source custom properties for {table_name}: {props.source}")
+    logger.debug(f"Target custom properties for {table_name}: {props.target}")
+
+    target_table_name = _target_table_name(custom_config, table_name, yaml_table_key)
+    logger.info(f"Using target table name: {target_table_name} for source table: {table_name}")
+
+    # Get document key configuration if it exists
+    document_key = _document_key(run, custom_config, columns, table_name)
+
+    pair = _TablePair(table_name, target_table_name, columns, custom_config, None, None, props.is_unlocked_schema)
+    _add_discovered_table_entity(run, table, pair, props, document_key)
+
+
+def _duplicate_table_label(run, yaml_table_key, custom_config):
+    """The source table name of a YAML table the first loop did not process, None when it gets no entity."""
+    # Skip if already processed in first loop
+    if yaml_table_key in run.processed_yaml_keys:
+        return None
+
+    # Skip if not a dict
+    if not isinstance(custom_config, dict):
+        logger.warning(f"Skipping {yaml_table_key}: not a dict")
+        return None
+
+    # Get the actual source table name (should have sourceTableName for @@ tables)
+    table_name = custom_config.get('sourceTableName', yaml_table_key)
+    run.last_table_name = table_name
+
+    # Skip system tables and blacklisted tables
+    blacklist, whitelist = run.schema.blacklist, run.schema.whitelist
+    if table_name.startswith("sys") or (blacklist and table_name in blacklist):
+        logger.info(f"Skipping duplicate table {yaml_table_key}: system or blacklisted")
+        return None
+
+    # Check whitelist using the actual table name
+    if whitelist and table_name not in whitelist:
+        logger.info(f"Skipping duplicate table {yaml_table_key}: not in whitelist")
+        return None
+
+    # Check if this is part of a chain - if so, skip (will be processed in chain loop)
+    if custom_config.get('chainId'):
+        logger.info(f"Skipping duplicate table {yaml_table_key}: part of chain {custom_config.get('chainId')}")
+        run.processed_yaml_keys.add(yaml_table_key)
+        return None
+    return table_name
+
+
+def _duplicate_table_columns(run, yaml_table_key, table_name):
+    """``(discovered, columns)``: the source discovery of a duplicate table, by its actual source table name."""
+    try:
+        return True, run.table_columns(table_name)
+    except Exception as e:
+        logger.error(f"Failed to get columns for duplicate table {yaml_table_key}: {str(e)}")
+        if not run.ctx.skip_errors:
+            raise
+        return False, None
+
+
+def _duplicate_group_id(custom_config, yaml_table_key):
+    """The group ID of the ``group`` a duplicate table names."""
+    group_name = custom_config.get('group')
+    group_id = None
+    if group_name and groups_by_name:
+        group_id = groups_by_name.get(group_name, {}).get('id')
+        if not group_id:
+            logger.warning(f"Group '{group_name}' not found for duplicate table {yaml_table_key}")
+    return group_id
+
+
+def _add_duplicate_table_entity(run, pair, props, document_key, yaml_table_key):
+    """Build the SingleTable entity of a duplicate table, with the same logic as the first loop."""
+    ctx, custom_config, table_name = run.ctx, pair.custom_config, pair.table_name
+    try:
+        columns_def, keys, has_column_mappings, is_column_whitelist, _discovery_type_by_source, relations = \
+            _assemble_source_columns(pair.columns, custom_config, yaml_table_key, run.source_schema,
+                                     grouped=run.grouped)
+    except EntityMappingError as error:
+        run.refuse_table(yaml_table_key, error)
+        return
+
+    if not keys:
+        logger.warning(f"No keys specified for duplicate table {yaml_table_key}")
+
+    # Generate table IDs
+    pair.source_table_id = _resolve_table_id(run.source_schema, table_name, run.source_tables_lookup, _SOURCE_ROLE)
+    pair.target_table_id = _resolve_table_id(ctx.yaml_target_schema, pair.target_table_name,
+                                             run.target_tables_lookup, _TARGET_ROLE)
+
+    # Process filter clauses using target_table_id (filters live in the target entityType)
+    processed_filters, processed_snapshot_delete_filters = _process_filters(
+        run, custom_config, pair.columns, pair.target_table_id, f"duplicate {yaml_table_key}")
+
+    partition_settings = None
+    if props.partition_column:
+        partition_settings = _build_partition_settings(props.partition_column, pair.columns.get("columns"),
+                                                       run.source_schema, table_name, pair.source_table_id)
+
+    source_entity = _source_entity(run, pair, columns_def, props.source, verbose=False)
+    target_entity_type = _target_entity_type(props.target, processed_filters, processed_snapshot_delete_filters,
+                                             props.udf_config)
+
+    try:
+        side_pair = _TablePair(yaml_table_key, pair.target_table_name, pair.columns, custom_config,
+                               pair.source_table_id, pair.target_table_id, pair.is_unlocked_schema)
+        target_columns_def, _target_keys = _assemble_target_side(
+            ctx, side_pair, columns_def, has_column_mappings or is_column_whitelist, _discovery_type_by_source,
+            target_entity_type, relations=relations, grouped=run.grouped,
+        )
+    except EntityMappingError as error:
+        run.refuse_table(yaml_table_key, error)
+        return
+
+    target_table_properties = {}
+    if document_key:
+        target_table_properties["documentKey"] = document_key
+
+    table_obj = {"id": str(pair.target_table_id), "name": pair.target_table_name, "schema": ctx.yaml_target_schema}
+    target_entity = _target_entity(run, pair, target_columns_def, props.target, target_entity_type, table_obj,
+                                   target_table_properties, verbose=False)
+
+    # Get entity name from custom config
+    entity_name = custom_config.get('entityName', f"{pair.target_table_name} - {run.source_schema}.{table_name}")
+
+    entity = _entity_payload(entity_name, source_entity, target_entity, _duplicate_group_id(custom_config, yaml_table_key))
+    run.entities.append(entity)
+    logger.info(f"Created entity for duplicate table {yaml_table_key}: {entity_name}")
+
+    run.queue_partition_request(entity["entityName"], partition_settings, props.partition_max)
+
+    # Process UDFs
+    table_udfs = props.target.get('udf', [])
+    if table_udfs:
+        _define_table_udfs(run, table_name, table_udfs, f"duplicate table {yaml_table_key}")
+
+    # Mark as processed
+    run.processed_yaml_keys.add(yaml_table_key)
+
+
+def _process_duplicate_table(run, yaml_table_key, custom_config, unprocessed_count):
+    """The second loop of :func:`create_entities`: a YAML table (``@@`` duplicate) the first loop did not process.
+
+    Returns the number of duplicate tables processed so far.
+    """
+    table_name = _duplicate_table_label(run, yaml_table_key, custom_config)
+    if table_name is None:
+        return unprocessed_count
+
+    unprocessed_count += 1
+    logger.info(f"Processing duplicate table #{unprocessed_count}: {yaml_table_key} (source table: {table_name})")
+
+    discovered, columns = _duplicate_table_columns(run, yaml_table_key, table_name)
+    if not discovered:
+        return unprocessed_count
+
+    props = _table_properties(run, custom_config, yaml_table_key, duplicate=True)
+    if props is None:
+        return unprocessed_count
+
+    target_table_name = custom_config.get('name', table_name)
+    logger.info(f"Using target table name: {target_table_name} for duplicate table {yaml_table_key}")
+
+    # Process document key if exists
+    document_key = _document_key(run, custom_config, columns, yaml_table_key, duplicate=True)
+
+    pair = _TablePair(table_name, target_table_name, columns, custom_config, None, None, props.is_unlocked_schema)
+    _add_duplicate_table_entity(run, pair, props, document_key, yaml_table_key)
+    return unprocessed_count
+
+
+class _ChainBuild:
+    """The MultiTable entity of one chain being built: its source and target tables, columns and keys.
+
+    Table headers and lists alternate in the ``columns`` and ``keys`` arrays: [header, [col, ...], header, ...].
+    """
+
+    def __init__(self, run, chain_id):
+        self.run = run
+        self.chain_id = chain_id
+        # Gluesync 2.3: the grouped entries and the field functions of each table pair, and why the chain is refused.
+        self.mt_entries = []
+        self.mt_field_functions = []
+        self.chain_refusals = []
+        self.multi_tables = []
+        self.multi_columns = []
+        self.multi_keys = []
+        self.tables_properties = {}
+        # The source columns of each table, whose key flags the 2.3 key rules of its pair set (BOP-16 A).
+        self.chain_source_columns = {}
+        self.target_tables = []
+        self.target_tables_properties = {}
+        self.target_columns = []
+        self.target_keys = []
+
+
+def _actual_table_name(table_key, table_data):
+    """The source table of a chain table: its sourceTableName (duplicate tables with unique YAML keys), else the key."""
+    return table_data.get('sourceTableName', table_key) if table_data else table_key
+
+
+def _chain_table_ref(table_id, table_key, schema):
+    """The ``table`` reference of a MultiTable key, or the header of a table in the keys array."""
+    return {
+        "id": str(table_id),
+        "name": table_key,
+        "schema": schema
+    }
+
+
+def _match_column_tracking(run, columns, key_name):
+    """The discovered column spelt ``key_name`` case-insensitively, remembering each column looked at."""
+    for col in columns["columns"]:
+        run.last_col = col
+        if col["name"].lower() == key_name.lower():
+            return col
+    return None
+
+
+def _chain_source_columns(run, columns, table_data):
+    """The source columns of a chain table: every discovered column."""
+    table_columns = []
+    for col in columns["columns"]:
+        run.last_col = col
+        # Use the id field from CoreHub API as the column ID
+        col_id = _require_column_id(col, run.last_table_name)
+        table_columns.append(_source_column_def(col, col_id, col["name"], col["name"],
+                                                col.get("isPK", False) or _is_in_keys(col["name"], table_data)))
+    return table_columns
+
+
+def _chain_key_spec(key_def):
+    """``(key_name, key_alias, key_type)`` of a YAML key: a key name, or a dict with name/alias."""
+    if not isinstance(key_def, dict):
+        return key_def, key_def, None
+    key_name = next(iter(key_def)) if not key_def.get('name') else key_def['name']
+    key_config = key_def.get(key_name, {}) if isinstance(key_def.get(key_name), dict) else {}
+
+    key_name = key_name or key_config.get('name')
+    key_alias = key_config.get('name', key_name)
+    return key_name, key_alias, key_config.get('dataType')
+
+
+def _chain_source_key(run, columns, key_def, table_columns, table_key, source_table_id):
+    """The source key of a chain table a YAML key names, found in discovery, else in its columns."""
+    key_name, key_alias, key_type = _chain_key_spec(key_def)
+    source_schema = run.source_schema
+
+    # Try to find the key in the columns to get its type and ID if not specified (case-insensitive)
+    col = _match_column_tracking(run, columns, key_name)
+    if col is not None:
+        # Use the id field from CoreHub API as the column ID
+        col_id = _require_column_id(col, table_key, label=key_name)
+        return _enrich_column({
+            "id": col_id,  # Use actual ordinal position from database
+            "position": col.get("position", 0),
+            "name": col["name"],
+            "alias": key_alias if key_alias.lower() != key_name.lower() else col["name"],
+            "table": _chain_table_ref(source_table_id, table_key, source_schema),
+            "type": key_type or col.get("dataType")
+        }, col)
+
+    logger.warning(f"Warning: Key '{key_name}' not found in columns for table '{table_key}'. Searching in table_columns...")
+    col_def = next((c for c in table_columns if c.get('name', '').lower() == key_name.lower()), None)
+    if col_def is not None:
+        key_entry = copy.deepcopy(col_def)
+        key_entry['table'] = _chain_table_ref(source_table_id, table_key, source_schema)
+        return key_entry
+
+    error_msg = f"CRITICAL ERROR: Key '{key_name}' not found in discovery or table_columns for MultiTable component '{table_key}' in schema '{source_schema}'."
+    logger.error(error_msg)
+    raise ValueError(error_msg)
+
+
+def _chain_source_keys(run, columns, table_data, table_columns, table_key, source_table_id):
+    """The source keys of a chain table: the YAML ``keys:`` when given, else discovery's primary key."""
+    if table_data and 'keys' in table_data and table_data['keys'] is not None:
+        return [_chain_source_key(run, columns, key_def, table_columns, table_key, source_table_id)
+                for key_def in table_data['keys']]
+    keys = []
+    for col in columns["columns"]:
+        run.last_col = col
+        if _coerce_is_pk(col.get("isPK")):
+            # Use the id field from CoreHub API as the column ID
+            col_id = col.get('id')
+            if col_id is None:
+                error_msg = f"CRITICAL ERROR: Primary key column '{col.get('name')}' in table {table_key} is missing 'id' field in CoreHub API response.{_MISSING_ID_DETAIL}"
+                logger.error(error_msg)
+                raise ValueError(error_msg)
+
+            keys.append(_enrich_column({
+                "id": col_id,  # Use actual ordinal position from database
+                "position": col.get("position", 0),
+                "name": col["name"],
+                "alias": col["name"],
+                "table": _chain_table_ref(source_table_id, table_key, run.source_schema),
+                "type": col.get("dataType")
+            }, col))
+    return keys
+
+
+def _add_chain_source_table(cb, table_key, table_data):
+    """Add a chain table to the MultiTable source: its table, tablesProperties, columns and keys."""
+    run = cb.run
+    source_schema = run.source_schema
+    actual_table_name = _actual_table_name(table_key, table_data)
+
+    source_table_id = _resolve_table_id(source_schema, actual_table_name, run.source_tables_lookup, _SOURCE_ROLE)
+    # Get columns for this table using the actual table name
+    columns = run.table_columns(actual_table_name)
+
+    # Add table to the list (use actual table name, not YAML key)
+    cb.multi_tables.append({
+        "id": int(source_table_id),
+        "name": actual_table_name,
+        "schema": source_schema
+    })
+    run.chain_source_ids[table_key] = source_table_id
+
+    # Add table to tables_properties with optional whereClause, under the actual table name
+    source_table_key = f"{source_schema}.{actual_table_name}"
+    cb.tables_properties[source_table_key] = _where_clause_properties(table_data, source_table_key)
+
+    table_columns = _chain_source_columns(run, columns, table_data)
+
+    # Add table header metadata followed by the columns for this table
+    cb.multi_columns.append({
+        "id": int(source_table_id),
+        "name": table_key,
+        "schema": source_schema
+    })
+    cb.multi_columns.append(table_columns)
+    cb.chain_source_columns[table_key] = table_columns
+
+    keys = _chain_source_keys(run, columns, table_data, table_columns, table_key, source_table_id)
+
+    # Apply the charSet declared in the YAML on this component's source columns.
+    # table_columns is already referenced by multi_columns, so patching it in place
+    # is enough.
+    _apply_char_set_overrides(
+        table_columns,
+        _build_char_set_overrides((table_data or {}).get('columns', [])),
+        table_key
+    )
+
+    # Add keys for this table
+    cb.multi_keys.append(_enrich_column(_chain_table_ref(source_table_id, table_key, source_schema), run.last_col))
+    cb.multi_keys.append(keys)
+
+
+def _chain_source_entity(cb, entity_name, last_table_data):
+    """The source agent entity of a MultiTable entity."""
+    source_custom_properties = last_table_data.get('customProperties', {}).get('source', {})
+    return {
+        "type": "MultiTable",
+        "entityId": "",
+        "entityName": entity_name,
+        "agentEntityId": "",
+        "entityType": {
+            "type": "Source",
+            "maxFetchItemsCountPerIteration": source_custom_properties.get('maxItemsCountPerIteration', 1000),
+            "maxTransactionMessageKbSize": source_custom_properties.get('maxTransactionMessageKbSize', 1024),
+            "pollingIntervalMilliseconds": source_custom_properties.get('pollingIntervalMilliseconds', 100),
+            "unchangedDataFilterType": "ENTIRE_ROW"
+        },
+        "agentId": cb.run.source_agent_id,
+        "orderIndex": 0,
+        "customProperties": {},
+        "tablesProperties": cb.tables_properties,
+        "tables": cb.multi_tables,
+        "columns": cb.multi_columns
+    }
+
+
+def _chain_target_discovery(run, pair_target_name):
+    """The discovered columns of a chain target table (for the type-mapping fallback), None when it has none."""
+    ctx = run.ctx
+    try:
+        return get_table_columns(ctx.token, ctx.pipeline_id, ctx.target_agent_id, run.target_schema, pair_target_name)
+    except Exception as e:
+        logger.debug(f"Could not get target columns for {run.target_schema}.{pair_target_name}: {str(e)}")
+        return None
+
+
+def _grouped_chain_pair_columns(cb, pair):
+    """Gluesync 2.3: the pair goes through the SingleTable assembly, so its keys follow the R12 rules and it takes
+    every 2.3 form (BOP-16 A).
+
+    On 2.3 it replaces the target columns built from the YAML mapping, the refusal of the 2.3 forms in a chain and
+    the 1:1 entries of every mapped column. Returns ``(target_table_columns, pair_relations, max_target_col_id)``.
+    """
+    run = cb.run
+    try:
+        target_table_columns, pair_relations, pair_field_functions, source_key_names = \
+            _assemble_chain_pair(run.ctx, pair, run.source_schema)
+    except EntityMappingError as error:
+        cb.chain_refusals.append(str(error))
+        target_table_columns, pair_relations, pair_field_functions, source_key_names = [], [], [], set()
+    cb.mt_field_functions.extend(pair_field_functions)
+    for col in cb.chain_source_columns[pair.table_name]:
+        run.last_col = col
+        col["isPK"] = col["name"] in source_key_names
+    max_target_col_id = max([c["id"] for c in target_table_columns if isinstance(c.get("id"), int)] + [0])
+    return target_table_columns, pair_relations, max_target_col_id
+
+
+def _chain_source_to_target_mapping(table_has_mappings, table_has_whitelist, table_relations, table_yaml_columns):
+    """Lookup from source column name -> (target_name, yaml_type) of a chain table's YAML columns."""
+    source_to_target_mapping = {}
+    if table_has_mappings:
+        for relation in table_relations or []:
+            for source_name, target_name in _relation_pairs([relation]):
+                source_to_target_mapping[source_name.lower()] = {
+                    'target_name': target_name,
+                    'yaml_type': relation["row"].get('type')
+                }
+    elif table_has_whitelist:
+        for yaml_col in table_yaml_columns:
+            source_name = yaml_col.get('sourceName') or yaml_col.get('name')
+            target_name = yaml_col.get('name')
+            if source_name:
+                source_to_target_mapping[source_name.lower()] = {
+                    'target_name': target_name,
+                    'yaml_type': yaml_col.get('type')
+                }
+    return source_to_target_mapping
+
+
+def _legacy_chain_target_column(run, col, col_id, mapping_info, table_data, overrides, column_types):
+    """A target column of a chain table pair for a CoreHub before Gluesync 2.3."""
+    # Use target name from mapping if available, otherwise source name
+    target_name = mapping_info['target_name'] if mapping_info else col["name"]
+    _resolved_dt = overrides.get(col["name"].lower()) or _map_target_type(run.ctx, col.get("dataType"), column_types)
+    return _enrich_column({
+        "id": col_id,  # Use actual ordinal position from database
+        "position": col.get("position", 0),
+        "name": target_name,
+        "dataType": _resolved_dt,
+        "isPK": col.get("isPK", False) or _is_in_keys(col["name"], table_data), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
+    }, col)
+
+
+def _legacy_chain_pair_columns(cb, table_key, table_data, columns, overrides, column_types):
+    """The target columns of a chain table pair for a CoreHub before Gluesync 2.3, from its YAML mapping.
+
+    Returns ``(target_table_columns, source_to_target_mapping, max_target_col_id)``.
+    """
+    run = cb.run
+    target_table_columns = []
+    max_target_col_id = 0
+
+    # Check if this table has column mappings or whitelist
+    table_yaml_columns = table_data.get('columns', []) if table_data else []
+    table_has_mappings = _is_column_mappings(table_yaml_columns)
+    table_has_whitelist = _is_column_whitelist(table_yaml_columns)
+
+    try:
+        table_relations = yaml_relations(table_yaml_columns, label=table_key)
+    except EntityMappingError as error:
+        cb.chain_refusals.append(str(error))
+        table_relations = None
+
+    source_to_target_mapping = _chain_source_to_target_mapping(table_has_mappings, table_has_whitelist,
+                                                               table_relations, table_yaml_columns)
+
+    has_filter = table_has_mappings or table_has_whitelist
+    try:
+        _refuse_forms_of_gluesync_23(table_relations, table_data, table_key)
+    except EntityMappingError as error:
+        cb.chain_refusals.append(str(error))
+
+    # First add source columns mapped to target with their actual ordinal positions
+    for col in columns["columns"]:
+        run.last_col = col
+        # Use the id field from CoreHub API as the column ID
+        col_id = _require_column_id(col, run.last_table_name)
+
+        # When filter is active, skip columns not in the whitelist/mapping
+        mapping_info = source_to_target_mapping.get(col["name"].lower())
+        if has_filter and not mapping_info:
+            logger.debug(f"Skipping column {col['name']} for MultiTable target: not in whitelist/mapping for table {table_key}")
+            continue
+
+        max_target_col_id = max(max_target_col_id, col_id)
+        target_table_columns.append(_legacy_chain_target_column(run, col, col_id, mapping_info, table_data,
+                                                                overrides, column_types))
+    return target_table_columns, source_to_target_mapping, max_target_col_id
+
+
+def _add_chain_target_only_columns(cb, table_key, table_data, discovered, target_table_columns, max_target_col_id,
+                                   column_types):
+    """Add the target-only columns of a chain table, if specified; returns them as the YAML declares them."""
+    run = cb.run
+    table_custom_config = table_data.get('customProperties', {}).get('target', {}) if table_data else {}
+    table_target_only_columns = table_custom_config.get(_TARGET_ONLY_COLUMNS_KEY, [])
+    if not table_target_only_columns:
+        return table_target_only_columns
+
+    logger.info(f"Adding {len(table_target_only_columns)} target-only columns for table {table_key} in MultiTable entity")
+    # Reuse table_target_columns already fetched above for type-mapping fallback
+    if discovered and 'columns' in discovered:
+        logger.debug(f"Reusing {len(discovered.get('columns', []))} existing columns in target table {run.target_schema}.{table_key}")
+
+    for target_col in table_target_only_columns:
+        # Increment from the maximum target column ID
+        max_target_col_id += 1
+        col_name, col_type, col_data_length, col_numeric_precision, col_numeric_scale, col_is_nullable = \
+            _target_only_properties(target_col, discovered, run.ctx.skip_errors, where=f" in table '{table_key}'")
+
+        # Map the column type to target node type
+        mapped_type = _map_target_type(run.ctx, col_type, column_types)
+
+        target_table_columns.append(_enrich_column({
+            "id": max_target_col_id,  # Continue from last target column ID
+            "position": 0,
+            "name": col_name,
+            "type": mapped_type,
+            "charMaxLength": col_data_length,
+            "numPrec": col_numeric_precision,
+            "numScale": col_numeric_scale,
+            "isNullable": col_is_nullable, "isIdentity": False,
+            "isPK": False  # Target-only columns are not primary keys
+        }, run.last_col))
+        logger.debug(f"Added target-only column to MultiTable: {col_name} (type: {mapped_type}, id: {max_target_col_id})")
+    return table_target_only_columns
+
+
+def _add_grouped_chain_entries(cb, pair, table_target_only_columns, target_table_columns, pair_relations):
+    """Every column of a 2.3 pair in one entry, with the field function of each target-only column.
+
+    The pair's relations, every discovered source column the MultiTable source holds (a filtered one read and
+    never written, BOP-17.4), and each target-only column fed by no source, which needs a field function that
+    produces it (P12, BOP-12 A).
+    """
+    run, table_key = cb.run, pair.table_name
+    target_ids_by_name = {c["name"]: c["id"] for c in target_table_columns}
+    for target_col in table_target_only_columns:
+        col_name = target_col if isinstance(target_col, str) else target_col.get('name')
+        expression = normalize_expression_for_corehub(target_col.get('expression')) \
+            if isinstance(target_col, dict) else None
+        if not expression:
+            cb.chain_refusals.append(
+                f"target-only column {col_name} of {table_key} is fed by no source column and has no "
+                f"expression: a Gluesync 2.3 CoreHub needs a field function that produces it (P12)"
+            )
+            continue
+        cb.mt_field_functions.append({
+            "columnId": target_ids_by_name.get(col_name),
+            "tableOrObjectId": int(pair.target_table_id),
+            "expression": expression,
+        })
+    try:
+        cb.mt_entries.extend(build_entries(
+            run.chain_source_ids[table_key], pair.target_table_id, pair_relations, pair.columns["columns"],
+            target_table_columns, grouped=True, label=table_key,
+        ))
+    except EntityMappingError as error:
+        cb.chain_refusals.append(str(error))
+
+
+def _legacy_chain_target_key(cb, key_def, columns, table_key, source_to_target_mapping, target_table_columns,
+                             overrides, column_types):
+    """The target key of a chain table a YAML key names, for a CoreHub before Gluesync 2.3."""
+    run = cb.run
+    if isinstance(key_def, dict):
+        key_name = next(iter(key_def)) if not key_def.get('name') else key_def['name']
+    else:
+        key_name = key_def
+
+    # Try to find the key in the columns to get its type and ID (case-insensitive)
+    col = _match_column_tracking(run, columns, key_name)
+    if col is not None:
+        # Use the id field from CoreHub API as the column ID
+        col_id = _require_column_id(col, table_key, label=key_name)
+
+        # Use target name from mapping if available, otherwise source name
+        key_mapping_info = source_to_target_mapping.get(col["name"].lower())
+        target_key_name = key_mapping_info['target_name'] if key_mapping_info else col["name"]
+
+        _resolved_dt = overrides.get(col["name"].lower()) or _map_target_type(run.ctx, col.get("dataType"), column_types)
+        return _enrich_column({
+            "id": col_id,  # Use actual ordinal position from database
+            "position": col.get("position", 0),
+            "name": target_key_name,
+            "type": _resolved_dt
+        }, col)
+
+    logger.warning(f"Warning: Target key '{key_name}' not found in columns for table '{table_key}'. Searching in target_table_columns...")
+    col_def = next((c for c in target_table_columns if c.get('name', '').lower() == key_name.lower()), None)
+    if col_def is not None:
+        return copy.deepcopy(col_def)
+
+    error_msg = f"CRITICAL ERROR: Target key '{key_name}' not found in discovery or target_table_columns for MultiTable component '{table_key}' in schema '{run.ctx.yaml_target_schema}'."
+    logger.error(error_msg)
+    raise ValueError(error_msg)
+
+
+def _legacy_chain_target_pk_keys(run, columns, overrides, column_types):
+    """The target keys of the source columns of a chain table discovery flags as primary key."""
+    keys = []
+    for col in columns["columns"]:
+        run.last_col = col
+        if _coerce_is_pk(col.get("isPK")):
+            # Use ordinalPosition from API if available
+            col_id = col.get('position', col.get('id'))
+            if col_id is None:
+                # Fallback to finding position if not provided
+                col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
+
+            _resolved_dt = overrides.get(col["name"].lower()) or _map_target_type(run.ctx, col.get("dataType"), column_types)
+            keys.append(_enrich_column({
+                "id": col_id,  # Use actual ordinal position from database
+                "position": col.get("position", 0),
+                "name": col["name"],
+                "type": _resolved_dt
+            }, col))
+    return keys
+
+
+def _add_chain_target_table(cb, table_key, table_data):
+    """Add a chain table to the MultiTable target: its table, tablesProperties, columns and keys."""
+    run = cb.run
+    target_schema = run.target_schema
+    actual_table_name = _actual_table_name(table_key, table_data)
+    # On 2.3 the target table is the one the YAML `name` gives, which the first loop creates and the export
+    # writes; older CoreHubs keep the YAML key (BOP-19 B).
+    pair_target_name = _target_table_name(table_data or {}, actual_table_name, table_key) if run.grouped else table_key
+
+    target_table_id = _resolve_table_id(run.ctx.yaml_target_schema, pair_target_name, run.target_tables_lookup,
+                                        _TARGET_ROLE)
+    cb.target_tables.append({
+        "id": int(target_table_id),
+        "name": pair_target_name,
+        "schema": target_schema
+    })
+    run.chain_target_ids[table_key] = target_table_id
+
+    # Add table to tables_properties
+    cb.target_tables_properties[f"{target_schema}.{pair_target_name}"] = {}
+
+    # Get columns for this table using actual source table name
+    columns = run.table_columns(actual_table_name)
+
+    # Discover target columns for this specific table to enable type-mapping fallback
+    table_target_columns = _chain_target_discovery(run, pair_target_name)
+    target_table_column_types = extract_target_column_types(table_target_columns)
+
+    # Per-table user-declared targetDataType overrides (by source column name, lower-cased)
+    overrides = _build_target_data_type_overrides(table_data.get('columns', []) if table_data else [])
+
+    pair = _TablePair(table_key, pair_target_name, columns, table_data or {}, run.chain_source_ids[table_key],
+                      target_table_id)
+    pair_relations, source_to_target_mapping = None, None
+    if run.grouped:
+        target_table_columns, pair_relations, max_target_col_id = _grouped_chain_pair_columns(cb, pair)
+    else:
+        target_table_columns, source_to_target_mapping, max_target_col_id = _legacy_chain_pair_columns(
+            cb, table_key, table_data, columns, overrides, target_table_column_types)
+
+    table_target_only_columns = _add_chain_target_only_columns(
+        cb, table_key, table_data, table_target_columns, target_table_columns, max_target_col_id,
+        target_table_column_types)
+
+    if run.grouped:
+        _add_grouped_chain_entries(cb, pair, table_target_only_columns, target_table_columns, pair_relations)
+
+    # Add columns for this table
+    cb.target_columns.append({
+        "id": int(target_table_id),
+        "name": pair_target_name,
+        "schema": target_schema
+    })
+    cb.target_columns.append(target_table_columns)
+
+    # The target keys of a 2.3 pair are its assembled target columns flagged isPK (above).
+    if run.grouped:
+        keys = [col for col in target_table_columns if col.get("isPK")]
+    elif table_data and 'keys' in table_data and table_data['keys'] is not None:
+        # Process keys for target with IDs
+        keys = [_legacy_chain_target_key(cb, key_def, columns, table_key, source_to_target_mapping,
+                                         target_table_columns, overrides, target_table_column_types)
+                for key_def in table_data['keys']]
+    else:
+        keys = _legacy_chain_target_pk_keys(run, columns, overrides, target_table_column_types)
+
+    # Add keys for this table
+    cb.target_keys.append(_enrich_column(_chain_table_ref(target_table_id, table_key, target_schema), run.last_col))
+    cb.target_keys.append(keys)
+
+
+def _legacy_chain_matrix(run, tables_list):
+    """The table mapping matrix of a MultiTable entity for a CoreHub before Gluesync 2.3: one pair per column."""
+    columns_mapping_matrix = []
+    for table_key, table_data in tables_list:
+        actual_table_name = _actual_table_name(table_key, table_data)
+
+        source_table_id = run.chain_source_ids.get(table_key) or _resolve_table_id(
+            run.source_schema, actual_table_name, run.source_tables_lookup, _SOURCE_ROLE
+        )
+        target_table_id = run.chain_target_ids.get(table_key) or _resolve_table_id(
+            run.ctx.yaml_target_schema, table_key, run.target_tables_lookup, _TARGET_ROLE
+        )
+        logger.info(f"Table mapping for {table_key}: source_id={source_table_id}, target_id={target_table_id}")
+
+        # Get columns for this table to create mappings for each column (use actual table name)
+        columns = run.table_columns(actual_table_name)
+        if not (columns and 'columns' in columns):
+            continue
+        for col in columns['columns']:
+            run.last_col = col
+            # Use the id field from CoreHub API as the column ID
+            col_id = _require_column_id(col, table_key)
+            columns_mapping_matrix.append({
+                "sourceTableObjectId": source_table_id,
+                "targetTableObjectId": target_table_id,
+                "sourceColumnId": col_id,
+                "targetColumnId": col_id
+            })
+    return columns_mapping_matrix
+
+
+def _chain_target_custom_properties(last_table_data):
+    """The customProperties of a MultiTable target: ttlValue and the pre/post snapshot commands."""
+    table_target_properties = last_table_data.get('customProperties', {}).get('target', {})
+    target_custom_properties = {
+        "ttlValue": table_target_properties.get('ttlValue', 0)
+    }
+
+    post_snapshot_cmd = last_table_data.get('customProperties', {}).get('target', {}).get('postSnapshotCommand', {})
+    if isinstance(post_snapshot_cmd, dict) and post_snapshot_cmd:
+        target_custom_properties["postSnapshotCommand"] = post_snapshot_cmd
+
+    pre_snapshot_cmd = last_table_data.get('customProperties', {}).get('target', {}).get('preSnapshotCommand', {})
+    if isinstance(pre_snapshot_cmd, dict) and pre_snapshot_cmd:
+        target_custom_properties["preSnapshotCommand"] = pre_snapshot_cmd
+    return target_custom_properties
+
+
+def _chain_target_entity(cb, entity_name, tables_list, last_table_data):
+    """The target agent entity of a MultiTable entity."""
+    run = cb.run
+    # Get allowed operations and other target settings
+    mt_target_props = last_table_data.get('customProperties', {}).get('target', {}) if last_table_data else {}
+    allowed_operations = get_allowed_operations(mt_target_props)
+
+    # Create table mapping matrix for MultiTable entities
+    if run.grouped:
+        columns_mapping_matrix = encode_entries(cb.mt_entries, grouped=True)
+    else:
+        columns_mapping_matrix = _legacy_chain_matrix(run, tables_list)
+
+    target_entity = {
+        "type": "MultiTable",
+        "entityId": "",
+        "entityName": entity_name,
+        "agentEntityId": "",
+        "entityType": {
+            "type": "Target",
+            "allowedOperations": allowed_operations,
+            "snapshotWritingConcurrency": mt_target_props.get('snapshotWritingConcurrency', 1),
+            "columnsMappingMatrix": columns_mapping_matrix,
+            "tablesWithUnlockedSchema": [],
+            "tablesWithUnlockedDataTypes": [],
+            "useBulkOperationsDuringCDC": mt_target_props.get('useBulkOperationsDuringCDC', False),
+            "useBulkOperationsWhileSnapshot": mt_target_props.get('useBulkOperationsWhileSnapshot', False)
+        },
+        "agentId": run.ctx.target_agent_id,
+        "orderIndex": 0,
+        "customProperties": _chain_target_custom_properties(last_table_data),
+        "tablesProperties": cb.target_tables_properties,
+        "tables": cb.target_tables,
+        "columns": cb.target_columns
+    }
+
+    if cb.mt_field_functions:
+        target_entity["entityType"]["fieldFunctions"] = cb.mt_field_functions
+    return target_entity
+
+
+def _chain_tables_in_whitelist(run, chain_id, tables_list):
+    """FILTER: only the chain's tables that are in the schema's whitelist; None when it has none."""
+    whitelist = run.schema.whitelist
+    if not whitelist:
+        return tables_list
+    filtered_tables_list = [(table_key, table_data) for table_key, table_data in tables_list if table_key in whitelist]
+    if not filtered_tables_list:
+        logger.info(f"Skipping chain '{chain_id}' - no tables in whitelist for schema '{run.source_schema}'")
+        return None
+    if len(filtered_tables_list) != len(tables_list):
+        skipped_tables = [tk for tk, _ in tables_list if tk not in whitelist]
+        logger.info(f"For chain '{chain_id}', filtered out tables not in whitelist for schema '{run.source_schema}': {skipped_tables}")
+        logger.info(f"Remaining tables in chain: {[tk for tk, _ in filtered_tables_list]}")
+    return filtered_tables_list
+
+
+def _build_multi_table_entity(run, chain_id, tables_list):
+    """The MultiTable entity of a chain (``{"entities": [...]}``), None when the chain gets none."""
+    if not tables_list:
+        return None
+    tables_list = _chain_tables_in_whitelist(run, chain_id, tables_list)
+    if tables_list is None:
+        return None
+
+    # Tables are processed in the order they appear in the YAML file
+    # Log table ordering for debugging
+    logger.info(f"Creating MultiTable entity for chainId: {chain_id} with {len(tables_list)} tables in YAML order:")
+    for idx, (table_key, _) in enumerate(tables_list):
+        logger.info(f"  {idx+1}. Table {table_key}")
+
+    # We'll reuse the entity name captured during export if available
+    first_table_key, first_table_data = tables_list[0]
+    entity_name = first_table_data.get("entityName") or f"{run.source_schema}.{first_table_key}"
+
+    cb = _ChainBuild(run, chain_id)
+    # Process each table in the chain (in YAML order)
+    for table_key, table_data in tables_list:
+        _add_chain_source_table(cb, table_key, table_data)
+    # The chain settings are read from its last table, as they always have been.
+    last_table_data = tables_list[-1][1]
+    source_entity = _chain_source_entity(cb, entity_name, last_table_data)
+
+    # Process each table for the target (in YAML order)
+    for table_key, table_data in tables_list:
+        _add_chain_target_table(cb, table_key, table_data)
+    target_entity = _chain_target_entity(cb, entity_name, tables_list, last_table_data)
+
+    # Get group info for multi-table entity
+    group_id = run.group_id_map.get(last_table_data.get('groupId', _DEFAULT_GROUP), last_table_data.get('groupId', _DEFAULT_GROUP))
+    group_name = next((name for name, gid in run.group_id_map.items() if gid == group_id), group_id)
+    logger.info(f"Assigning multi-table entity '{entity_name}' to group: {group_name} (ID: {group_id})")
+
+    # Create the MultiTable entity
+    entity_payload = {
+        "entityId": "",
+        "entityName": entity_name,
+        "agentEntities": [source_entity, target_entity],
+    }
+
+    # Only add groupId if it's not the default
+    if group_id and group_id != _DEFAULT_GROUP:
+        entity_payload["groupId"] = group_id
+
+    if cb.chain_refusals:
+        run.refuse_table(f"MultiTable chain {chain_id}", EntityMappingError("; ".join(cb.chain_refusals)))
+        return None
+    return {"entities": [entity_payload]}
+
+
+def _log_tables_order(entity_name, agent_entities):
+    """Log the final tables ordering in the payload of each agent entity before sending."""
+    for idx, agent_entity in enumerate(agent_entities):
+        agent_type = "source" if idx == 0 else "target"
+        if 'tables' in agent_entity:
+            logger.info(f"Final tables order in payload for {entity_name} ({agent_type}):")
+            for table_idx, table in enumerate(agent_entity.get('tables', [])):
+                logger.info(f"  {table_idx+1}. {table.get('schema')}.{table.get('name')}")
+
+
+def _strip_multi_table_columns(multi_entity):
+    """Clean up a MultiTable payload before sending: strip 'alias' and inject 'tableId' into columns.
+
+    MultiTable 'columns' is an alternating list: [header_dict, [col, col, ...], header_dict, [col, ...], ...]
+    """
+    for entity_payload in multi_entity.get('entities', []):
+        for agent_entity in entity_payload.get('agentEntities', []):
+            current_table_id = 0
+            for item in agent_entity.get('columns', []):
+                if isinstance(item, dict):
+                    # Table header: capture the table id for the columns that follow
+                    current_table_id = _header_table_id(item)
+                elif isinstance(item, list):
+                    _strip_columns([col for col in item if isinstance(col, dict)], current_table_id)
+
+
+def _header_table_id(header):
+    """The table id of a MultiTable table header, 0 when it is not a number."""
+    try:
+        return int(header.get('id', 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _strip_columns(columns, table_id):
+    """Strip 'alias' from columns and inject their 'tableId' (when known)."""
+    for col in columns:
+        col.pop('alias', None)
+        if table_id:
+            col['tableId'] = table_id
+
+
+def _strip_single_table_columns(chunk_data):
+    """Clean up a chunk of entities before sending: strip 'alias' and inject 'tableId' into columns."""
+    for entity_payload in chunk_data.get('entities', []):
+        for agent_entity in entity_payload.get('agentEntities', []):
+            # Handle SingleTable (columns are at agent_entity level)
+            _strip_table_item_columns(agent_entity)
+
+            # Handle MultiTable/NoSql (columns are inside tables array)
+            for table_item in agent_entity.get('tables', []):
+                _strip_table_item_columns(table_item)
+
+
+def _strip_table_item_columns(item):
+    """Strip the columns of an item holding its ``table`` and ``columns`` (see :func:`_strip_columns`)."""
+    if 'table' in item and 'columns' in item:
+        _strip_columns(item['columns'], int(item['table'].get('id', 0)))
+
+
+def _put_entities(ctx, body):
+    """Save entities on CoreHub."""
+    return fetch_core_hub(
+        _ENTITIES_CONFIG_PATH.format(pipeline_id=ctx.pipeline_id),
+        method="PUT",
+        token=ctx.token,
+        body=body
+    )
+
+
+def _send_multi_table_entity(run, index, total_multi_tables, multi_entity):
+    """Create one MultiTable entity; whether it was created."""
+    ctx = run.ctx
+    try:
+        entity_name = multi_entity['entities'][0]['entityName']
+        logger.info(f"Creating MultiTable entity {index+1}/{total_multi_tables}: {entity_name}")
+
+        # Log entities being sent
+        _log_tables_order(entity_name, multi_entity['entities'][0].get('agentEntities', []))
+
+        _strip_multi_table_columns(multi_entity)
+
+        logger.debug(f"MultiTable payload sent to /pipelines/{ctx.pipeline_id}/config/entities:")
+        logger.debug(json.dumps(multi_entity, indent=2))
+
+        _put_entities(ctx, multi_entity)
+        logger.info(f"Successfully created MultiTable entity {index+1}/{total_multi_tables}")
+        return True
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"Error creating MultiTable entity {index+1}/{total_multi_tables}: {error_msg}")
+        run.errors.append(f"{multi_entity['entities'][0].get('entityName', _UNKNOWN_ENTITY)}: {error_msg}")
+        if not ctx.skip_errors:
+            raise
+        logger.warning("Skipping MultiTable entity due to skip_errors=True")
+        return False
+
+
+def _send_multi_table_entities(run, multi_table_entities):
+    """Create the MultiTable entities first; returns ``(successful, failed, total)``."""
+    successful_multi_tables = 0
+    failed_multi_tables = 0
+    total_multi_tables = len(multi_table_entities)
+
+    if total_multi_tables > 0:
+        logger.info(f"Processing {total_multi_tables} MultiTable entities...")
+
+        for i, multi_entity in enumerate(multi_table_entities):
+            if _send_multi_table_entity(run, i, total_multi_tables, multi_entity):
+                successful_multi_tables += 1
+            else:
+                failed_multi_tables += 1
+    return successful_multi_tables, failed_multi_tables, total_multi_tables
+
+
+def _send_entities_one_by_one(run, chunk):
+    """Send the entities of a refused chunk one at a time; returns ``(successful, failed)``."""
+    successful_entities = 0
+    failed_entities = 0
+    for entity_payload in chunk:
+        try:
+            _put_entities(run.ctx, {"entities": [entity_payload]})
+            successful_entities += 1
+        except Exception as entity_error:  # pylint: disable=broad-except
+            logger.error(f"Entity {entity_payload.get('entityName', _UNKNOWN_ENTITY)} refused by CoreHub: {entity_error}")
+            failed_entities += 1
+            run.errors.append(f"{entity_payload.get('entityName', _UNKNOWN_ENTITY)}: {entity_error}")
+    return successful_entities, failed_entities
+
+
+def _send_entity_chunk(run, chunk, chunk_start, chunk_end, total_entities):
+    """Create one chunk of regular entities; returns ``(successful, failed)``."""
+    ctx = run.ctx
+    chunk_data = {"entities": chunk}
+
+    logger.info(f"\nProcessing chunk {chunk_start}-{chunk_end} of {total_entities} entities...")
+
+    # Log entities being sent
+    for entity_payload in chunk_data.get('entities', []):
+        entity_name = entity_payload.get('entityName', _UNKNOWN_ENTITY)
+        logger.info(f"Entity: {entity_name}")
+        _log_tables_order(entity_name, entity_payload.get('agentEntities', []))
+
+    # Clean up payload before sending
+    _strip_single_table_columns(chunk_data)
+
+    try:
+        logger.debug(f"Payload sent to /pipelines/{ctx.pipeline_id}/config/entities:")
+        logger.debug(json.dumps(chunk_data, indent=2))
+
+        _put_entities(ctx, chunk_data)
+        logger.info(f"Successfully created entities {chunk_start}-{chunk_end}")
+        return len(chunk), 0
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"Error creating entities {chunk_start}-{chunk_end}: {error_msg}")
+        if not ctx.skip_errors:
+            raise
+        if _http_status(e) == 400 and len(chunk) > 1:
+            # A Gluesync 2.3 CoreHub refuses the whole request at the first entity its mapping stage
+            # refuses: send the chunk again one entity at a time, so the valid ones are saved (C-6).
+            logger.warning(f"Chunk {chunk_start}-{chunk_end} refused; sending its {len(chunk)} entities one by one")
+            return _send_entities_one_by_one(run, chunk)
+        run.errors.extend(f"{entity_payload.get('entityName', _UNKNOWN_ENTITY)}: {error_msg}" for entity_payload in chunk)
+        logger.warning("Skipping chunk due to skip_errors=True")
+        return 0, len(chunk)
+
+
+def _send_entity_chunks(run, chunk_size):
+    """Create the regular entities in chunks; returns ``(total, successful, failed)``."""
+    entities = run.entities
+    total_entities = len(entities)
+    successful_entities = 0
+    failed_entities = 0
+
+    if total_entities > 0:
+        logger.info(f"Processing {total_entities} regular entities in chunks of {chunk_size}...")
+
+        for i in range(0, total_entities, chunk_size):
+            successful, failed = _send_entity_chunk(run, entities[i:i + chunk_size], i + 1,
+                                                    min(i + chunk_size, total_entities), total_entities)
+            successful_entities += successful
+            failed_entities += failed
+    return total_entities, successful_entities, failed_entities
+
+
+def _entity_group_id(run, group_id):
+    """The group ID of the group an entity names: a group name mapped to its ID, else the group ID itself."""
+    # If group_id is a name, try to get the mapped ID
+    if group_id in run.group_id_map:
+        mapped_group_id = run.group_id_map[group_id]
+        logger.debug(f"Mapped group name '{group_id}' to ID: {mapped_group_id}")
+        group_id = mapped_group_id
+    return group_id
+
+
+def _created_entities_by_group(run, response):
+    """The created entities of a pipeline listing by the group they belong to."""
+    entities_by_group = {}
+    if not isinstance(response, list):
+        return entities_by_group
+    for entity in response:
+        if 'entity' not in entity or 'entityId' not in entity['entity']:
+            continue
+        entity_id = entity['entity']['entityId']
+        group_id = entity['entity'].get('groupId', _DEFAULT_GROUP)
+
+        # Skip if no group is specified (will use _default)
+        if not group_id or group_id == _DEFAULT_GROUP:
+            logger.debug(f"Entity {entity_id} has no group specified, will use _default")
+            continue
+
+        entities_by_group.setdefault(_entity_group_id(run, group_id), []).append(entity_id)
+    return entities_by_group
+
+
+def _assign_group(run, group_id, entity_ids):
+    """Assign entities to a group (never the default one)."""
+    if not entity_ids:  # Only proceed if we have entities to assign
+        return
+    # Skip if group_id is _default or None
+    if not group_id or group_id == _DEFAULT_GROUP:
+        logger.debug("Skipping assignment for default group")
+        return
+
+    logger.info(f"Assigning {len(entity_ids)} entities to group ID: {group_id}")
+    success = assign_entities_to_group(run.ctx.token, run.ctx.pipeline_id, group_id, entity_ids)
+    if not success and not run.ctx.skip_errors:
+        raise RuntimeError(f"Failed to assign entities to group {group_id}")
+    elif success:
+        logger.info(f"Successfully assigned {len(entity_ids)} entities to group {group_id}")
+
+
+def _assign_entities_to_groups(run):
+    """Assign the created entities to their groups."""
+    try:
+        # Get all created entities, grouped by their target group
+        response = fetch_core_hub(_ENTITIES_PATH.format(pipeline_id=run.ctx.pipeline_id), token=run.ctx.token)
+        entities_by_group = _created_entities_by_group(run, response)
+
+        # Make assignment requests for each group
+        for group_id, entity_ids in entities_by_group.items():
+            _assign_group(run, group_id, entity_ids)
+
+    except Exception as e:
+        logger.error(f"Error during group assignment: {str(e)}")
+        if not run.ctx.skip_errors:
+            raise
+
+
+def _group_schedules_declared(group_scheds):
+    """Whether a ``group_schedules`` section declares a schedule."""
+    if isinstance(group_scheds, dict):
+        return any(isinstance(v, list) and v for v in group_scheds.values())
+    return isinstance(group_scheds, list) and bool(group_scheds)
+
+
+def _declares_schedules(schema_config):
+    """Whether a schema section declares pipeline-level, group-level or entity-level schedules."""
+    # Pipeline-level schedules
+    has_schedules = 'schedules' in schema_config
+    # Group-level schedules
+    if 'group_schedules' in schema_config and _group_schedules_declared(schema_config['group_schedules']):
+        has_schedules = True
+    # Entity-level schedules
+    if 'tables' in schema_config and 'custom' in schema_config['tables'] \
+            and any('schedules' in table_data for table_data in schema_config['tables']['custom'].values()):
+        has_schedules = True
+    return has_schedules
+
+
+def _schedules_schema_config(yaml_config, source_schema):
+    """``(has_schedules, schema_config)``: whether the YAML defines schedules for the current source_schema."""
+    if not yaml_config:
+        return False, None
+    schemas_dict = _yaml_schemas(yaml_config)
+
+    current_schema_config = schemas_dict.get(source_schema)
+    if not current_schema_config:
+        logger.debug(f"Schema '{source_schema}' not found in schemas_dict keys: {list(schemas_dict.keys())}")
+        # As a fallback, try direct lookup
+        current_schema_config = yaml_config.get(source_schema, {})
+
+    if not isinstance(current_schema_config, dict):
+        return False, current_schema_config
+    return _declares_schedules(current_schema_config), current_schema_config
+
+
+def _entity_ids_by_table(response):
+    """The entity ID of each entity of a pipeline listing, by the table name its entity name ends with."""
+    entities_map = {}
+    for item in response:
+        if 'entity' in item and isinstance(item['entity'], dict) \
+                and 'entityId' in item['entity'] and 'entityName' in item['entity']:
+            entity = item['entity']
+            entity_id = entity['entityId']
+            entity_name = entity['entityName']
+            # Extract table name from entity name (typically schema.table)
+            # Split at first dot only to preserve dots inside table names.
+            parts = entity_name.split('.', 1)
+            table_name = parts[-1] if len(parts) > 1 else entity_name
+            entities_map[table_name] = entity_id
+            logger.info(f"Found entity: {entity_name} (ID: {entity_id})")
+    return entities_map
+
+
+def _create_entity_level_schedules(run, schema_config, entities_map, chronos_token):
+    """Create the schedules of each entity found in the YAML config (only for the current source_schema)."""
+    if not ('tables' in schema_config and 'custom' in schema_config['tables']):
+        return
+    for table_key, table_data in schema_config['tables']['custom'].items():
+        # Use the table_key directly instead of looking for 'name' field
+        table_name = table_key
+
+        if table_name in entities_map and 'schedules' in table_data:
+            entity_id = entities_map[table_name]
+            logger.info(f"Creating schedules for table {table_name} (Entity ID: {entity_id})")
+            create_entity_schedules(run.ctx.token, run.ctx.pipeline_id, entity_id, table_name,
+                                    table_data['schedules'], chronos_token=chronos_token)
+        else:
+            logger.warning(
+                f"Unable to create schedules for {table_name}. Entity not found or no schedules defined.")
+
+
+def _resolve_group_reference(candidate, known_ids, group_id_map):
+    """The group IDs a schedule's group reference names: '*' for every group of the run, a group name or ID."""
+    candidate_str = str(candidate).strip()
+    if not candidate_str:
+        return []
+    if candidate_str == '*':
+        if known_ids:
+            return list(known_ids)
+        logger.warning("Wildcard group_ids requested but no groups were created in this run")
+        return []
+    if candidate_str in group_id_map and group_id_map[candidate_str] and group_id_map[candidate_str] != _DEFAULT_GROUP:
+        return [group_id_map[candidate_str]]
+    if candidate_str in known_ids:
+        return [candidate_str]
+    logger.warning(f"Skipping unknown group reference '{candidate_str}' in schedule configuration")
+    return []
+
+
+def _expand_group_ids(raw_ids, known_ids, group_id_map):
+    """The group IDs, without duplicates and in order, that the group references of a schedule resolve to."""
+    if raw_ids is None:
+        return []
+    candidates = [raw_ids] if isinstance(raw_ids, str) else list(raw_ids)
+    resolved = []
+    for candidate in candidates:
+        resolved.extend(_resolve_group_reference(candidate, known_ids, group_id_map))
+    # Deduplicate while preserving order
+    return list(dict.fromkeys(resolved))
+
+
+def _group_keyed_schedules(group_scheds_cfg):
+    """The schedules of a ``group_schedules`` mapping, each for the group it is listed under."""
+    base_schedule_list = []
+    for grp_key, schedules_cfg in group_scheds_cfg.items():
+        if not isinstance(schedules_cfg, list):
+            logger.warning(
+                f"Skipping group schedule block for '{grp_key}': expected a list of schedule objects"
+            )
+            continue
+        for schedule_cfg in schedules_cfg:
+            if isinstance(schedule_cfg, dict):
+                schedule_copy = copy.deepcopy(schedule_cfg)
+                schedule_copy['group_ids'] = [grp_key]
+                base_schedule_list.append(schedule_copy)
+    return base_schedule_list
+
+
+def _base_group_schedules(group_scheds_cfg):
+    """The schedules of a ``group_schedules`` section: a mapping by group, or a list naming their groups."""
+    if isinstance(group_scheds_cfg, dict):
+        return _group_keyed_schedules(group_scheds_cfg)
+    if isinstance(group_scheds_cfg, list):
+        return [copy.deepcopy(schedule_cfg) for schedule_cfg in group_scheds_cfg if isinstance(schedule_cfg, dict)]
+    return []
+
+
+def _prepare_group_schedules(base_schedule_list, known_ids, group_id_map):
+    """The group schedules with their group references resolved to group IDs; one with none is skipped."""
+    prepared_schedules = []
+    for schedule_cfg in base_schedule_list:
+        raw_ids = schedule_cfg.get('group_ids')
+        if not raw_ids and 'groups' in schedule_cfg:
+            raw_ids = schedule_cfg['groups']
+        resolved_ids = _expand_group_ids(raw_ids, known_ids, group_id_map)
+        if not resolved_ids:
+            logger.warning("No valid group IDs resolved for schedule; skipping entry")
+            continue
+        schedule_copy = copy.deepcopy(schedule_cfg)
+        schedule_copy['group_ids'] = resolved_ids
+        schedule_copy.pop('groups', None)
+        prepared_schedules.append(schedule_copy)
+    return prepared_schedules
+
+
+def _create_group_level_schedules(run, schema_config, chronos_token):
+    """Create the group-level schedules if defined (only for the current source_schema)."""
+    group_scheds_cfg = schema_config.get('group_schedules')
+    if not group_scheds_cfg:
+        return
+    logger.info("Creating group-level schedules...")
+    try:
+        known_ids = {gid for gid in run.group_id_map.values() if gid and gid != _DEFAULT_GROUP}
+        prepared_schedules = _prepare_group_schedules(_base_group_schedules(group_scheds_cfg), known_ids,
+                                                      run.group_id_map)
+        if prepared_schedules:
+            create_group_schedules(run.ctx.token, run.ctx.pipeline_id, prepared_schedules, chronos_token=chronos_token)
+        else:
+            logger.debug("No valid group schedules to create after resolving targets")
+    except Exception as e:
+        logger.error(f"Error creating group-level schedules: {str(e)}")
+
+
+def _create_schedules(run, yaml_config, chronos_token):
+    """Create the entity, group and pipeline schedules the YAML defines for the current source_schema."""
+    has_schedules, current_schema_config = _schedules_schema_config(yaml_config, run.source_schema)
+    if not has_schedules:
+        logger.debug("No schedules defined in YAML config, skipping schedule creation")
+        return
+
+    logger.info("Creating schedules for current schema...")
+
+    # Get updated entity IDs from the pipeline config
+    try:
+        response = fetch_core_hub(_ENTITIES_PATH.format(pipeline_id=run.ctx.pipeline_id), token=run.ctx.token)
+        logger.info(f"Retrieved the following entities: {response}")
+
+        if not isinstance(response, list) or not response:
+            logger.warning(f"Unexpected response when fetching entities: {response}")
+            return
+
+        # Process entities in the format used in main.py
+        entities_map = _entity_ids_by_table(response)
+
+        _create_entity_level_schedules(run, current_schema_config, entities_map, chronos_token)
+
+        if 'group_schedules' in current_schema_config:
+            _create_group_level_schedules(run, current_schema_config, chronos_token)
+
+        # Create pipeline-level schedules if defined
+        if 'schedules' in current_schema_config:
+            logger.info(f"Creating pipeline-level schedules for schema {run.source_schema}")
+            create_pipeline_schedules(run.ctx.token, run.ctx.pipeline_id, current_schema_config['schedules'],
+                                      chronos_token=chronos_token)
+
+    except Exception as e:
+        logger.error(f"Error creating schedules: {str(e)}")
+        # Don't fail the whole process just because scheduling failed
+
+
+def _process_duplicate_tables(run):
+    """Second loop: the duplicate table configurations with @@ the first loop did not process."""
+    logger.info(f"First loop completed. Processed {len(run.processed_yaml_keys)} YAML keys.")
+    logger.info("Checking for unprocessed duplicate tables with @@ separator...")
+
+    unprocessed_count = 0
+    for yaml_table_key, custom_config in run.schema.custom_tables.items():
+        unprocessed_count = _process_duplicate_table(run, yaml_table_key, custom_config, unprocessed_count)
+
+    logger.info(f"Second loop completed. Processed {unprocessed_count} duplicate tables with @@ separator.")
+    logger.info(f"Total YAML keys processed: {len(run.processed_yaml_keys)}")
+
+
+def _print_summary(counts):
+    print("\nProcessing complete:")
+    print(f"- Total regular entities: {counts['total']}")
+    print(f"- Successfully created regular entities: {counts['successful']}")
+    print(f"- Failed regular entities: {counts['failed']}")
+    print(f"- Total MultiTable entities: {counts['total_multi']}")
+    print(f"- Successfully created MultiTable entities: {counts['successful_multi']}")
+    print(f"- Failed MultiTable entities: {counts['failed_multi']}")
+
+
+def _start_entity_run(token, pipeline_id, yaml_config, source_schema, target_schema, source_agent_id, target_agent_id,
+                      source_type, target_type, skip_errors, source_agent_tag, target_agent_tag):
+    """The run state of create_entities, once the node infos and the CoreHub version are read."""
+    # Get node info for data type mapping
+    source_node_info, target_node_info = _node_infos(token, pipeline_id, source_agent_id, target_agent_id, yaml_config)
+
+    # A Gluesync 2.3 CoreHub takes the grouped column mapping matrix and runs its whole mapping stage (matrix,
+    # producer and key rules) on every entity saved here, since none carries an entityId: read once (BOP-5 A).
+    grouped = corehub_takes_grouped_matrix(token, fetch=fetch_core_hub)
+    logger.info(f"Column mapping matrix: {'grouped (Gluesync 2.3)' if grouped else 'single pairs (CoreHub before 2.3)'}")
+    is_source_nosql_type = bool(source_type and "nosql" in source_type.lower())
+    is_target_nosql_type = bool(target_type and "nosql" in target_type.lower())
+
+    schema = _SchemaSettings(yaml_config, source_schema, target_schema)
+    ctx = _PipelineContext(token, pipeline_id, target_agent_id, schema.yaml_target_schema, source_node_info,
+                           target_node_info, source_agent_tag, target_agent_tag, skip_errors, is_source_nosql_type,
+                           is_target_nosql_type)
+    return _EntityRun(ctx, schema, source_schema, target_schema, source_agent_id, source_type, target_type, grouped)
+
+
 
 def resolve_group_id(custom_config, group_id_map, token, pipeline_id):
     """The Core Hub group id for a table's YAML config, or '_default'.
@@ -1850,2232 +4297,79 @@ def resolve_group_id(custom_config, group_id_map, token, pipeline_id):
 
 
 def create_entities(token, pipeline_id, source_schema, target_schema, tables, source_agent_id, target_agent_id, source_type, target_type, yaml_config, skip_errors=True, chunk_size=50, source_agent_tag=None, target_agent_tag=None, chronos_token=None):
+    """Create entities for the pipeline.
+
+    Returns the successful, failed and total entity counts, and under ``errors`` each entity not created with its
+    reason (BOP-18 A).
+    """
     # Debug logging to see what source_type and target_type values are received
     logger.debug(f"create_entities called with: source_type='{source_type}', target_type='{target_type}'")
     logger.debug(f"source_type type: {type(source_type)}, target_type type: {type(target_type)}")
-    
+
     # Log CREATE_TABLE_IF_NOT_EXISTS status for debugging
     if CREATE_TABLE_IF_NOT_EXISTS:
         logger.info("CREATE_TABLE_IF_NOT_EXISTS is enabled - will create missing tables during entity discovery")
     else:
         logger.info("CREATE_TABLE_IF_NOT_EXISTS is disabled - assuming all tables exist")
-        
-    # First, collect the group names of the whole YAML (groups belong to the pipeline) and the MultiTable
-    # chains of this source schema: create_entities runs once per schema, and a chain of another schema
-    # would otherwise be built from this schema's tables.
-    group_names = set()
-    chained_tables = {}  # Dictionary to store tables by chainId
 
-    if yaml_config:
-        schemas_dict = yaml_config.get('schemas', {})
-        if not schemas_dict:
-            schemas_dict = {k: v for k, v in yaml_config.items() if isinstance(v, dict)}
+    # First, collect the group names of the whole YAML and the MultiTable chains of this source schema, and
+    # create the groups before creating entities.
+    group_names, chained_tables = _collect_groups_and_chains(yaml_config, source_schema)
+    group_id_map = _create_groups(token, pipeline_id, yaml_config, group_names)
 
-        for schema_name, schema_config in schemas_dict.items():
-            # Look for tables in both direct and nested 'tables.custom' structures
-            tables_config = {}
-            if 'tables' in schema_config and 'custom' in schema_config['tables']:
-                tables_config = schema_config['tables']['custom']
-            elif 'custom' in schema_config:
-                tables_config = schema_config['custom']
-            
-            # Process each table in the config
-            for table_key, table_data in tables_config.items():
-                # Process groupId
-                if 'groupId' in table_data and table_data['groupId'] != '_default':
-                    group_name = str(table_data['groupId']).strip()
-                    if group_name:  # Only add non-empty group names
-                        group_names.add(group_name)
-                        logger.debug(f"Found group '{group_name}' for table {schema_name}.{table_key}")
-                    else:
-                        logger.warning(f"Empty group ID found for table {schema_name}.{table_key}")
-
-                # Collect chainId information (independent of groupId), for this schema only
-                if 'chainId' in table_data and schema_name == source_schema:
-                    chain_id = table_data['chainId']
-
-                    if chain_id not in chained_tables:
-                        chained_tables[chain_id] = []
-                    chained_tables[chain_id].append((table_key, table_data))
-
-            # Note: Do NOT add group names from group-level schedules to group_names here,
-            # because keys might be group IDs and we must not try to create groups using IDs as names.
-            # We'll resolve schedule keys to IDs later, during schedule creation.
-
-    # Create groups before creating entities
-    groups_config = {}
-    if yaml_config:
-        raw_groups = yaml_config.get('groups')
-        if isinstance(raw_groups, dict):
-            groups_config = raw_groups
-
-    groupId_map = {}
-    logger.debug(f"Groups to create: {group_names}")
-    
-    for group_name in group_names:
-        logger.debug(f"Processing group: '{group_name}' (type: {type(group_name)})")
-
-        group_meta = groups_config.get(group_name) if isinstance(groups_config, dict) else None
-        description = None
-        color = None
-        if isinstance(group_meta, dict):
-            description = group_meta.get('description')
-            color = group_meta.get('color')
-
-        group_id = create_group(token, pipeline_id, group_name, description=description, color=color)
-        logger.debug(f"Group '{group_name}' creation result: {group_id}")
-        
-        if group_id and group_id != '_default':
-            # Map the group name to its ID for later use
-            groupId_map[group_name] = group_id
-            logger.info(f"Created/retrieved group '{group_name}' with ID: {group_id}")
-        else:
-            logger.warning(f"Failed to create/retrieve group '{group_name}'. Using default group.")
-            groupId_map[group_name] = '_default'
-    
-    # Log all group mappings for debugging
-    logger.info(f"Group name to ID mappings: {json.dumps(groupId_map, indent=2)}")
-
-    """Create entities for the pipeline."""
     if not yaml_config:
         yaml_config = {}
 
-    entities = []
+    run = _start_entity_run(token, pipeline_id, yaml_config, source_schema, target_schema, source_agent_id,
+                            target_agent_id, source_type, target_type, skip_errors, source_agent_tag,
+                            target_agent_tag)
+    run.group_id_map = group_id_map
 
-    # Get node info for data type mapping
-    source_node_info = get_node_info(token, pipeline_id, source_agent_id)
-    target_node_info = get_node_info(token, pipeline_id, target_agent_id)
-
-    logger.info("Source Node Info:")
-    logger.info(json.dumps(source_node_info, indent=2))
-    logger.info("Target Node Info:")
-    logger.info(json.dumps(target_node_info, indent=2))
-
-    logger.debug(f"Full YAML config: {json.dumps(yaml_config, indent=2)}")
-
-    # A Gluesync 2.3 CoreHub takes the grouped column mapping matrix and runs its whole mapping stage (matrix,
-    # producer and key rules) on every entity saved here, since none carries an entityId: read once (BOP-5 A).
-    grouped = corehub_takes_grouped_matrix(token, fetch=fetch_core_hub)
-    logger.info(f"Column mapping matrix: {'grouped (Gluesync 2.3)' if grouped else 'single pairs (CoreHub before 2.3)'}")
-    is_source_nosql_type = bool(source_type and "nosql" in source_type.lower())
-    is_target_nosql_type = bool(target_type and "nosql" in target_type.lower())
-
-    # Tables whose entity is refused before any request, with the reason logged; counted as failed.
-    refused_tables = []
-    # Every entity of the run that was not created, as "<entity>: <reason>", returned to the caller (BOP-18 A).
-    errors = []
-
-    def refuse_table(table_label, error):
-        logger.error(f"Entity for table {table_label} not created: {error}")
-        refused_tables.append(table_label)
-        errors.append(f"{table_label}: {error}")
-        if not skip_errors:
-            raise error
-
-    schemas_root = yaml_config.get('schemas', yaml_config)
-    schema_config = schemas_root.get(source_schema, {})
-    logger.debug(f"Schema config for {source_schema}: {json.dumps(schema_config, indent=2)}")
-
-    yaml_target_schema = schema_config.get('target', target_schema)
-    whitelist = schema_config.get('tables', {}).get('whitelist', [])
-    blacklist = schema_config.get('tables', {}).get('blacklist', [])
-    # Handle empty custom tables attribute - convert None to empty dict
-    tables_config = schema_config.get('tables', {})
-    custom_tables = tables_config.get('custom', {})
-    if custom_tables is None:
-        custom_tables = {}
-        logger.warning("Warning: 'custom' attribute is present but empty in YAML. Converting to empty dict.")
-
-    # Get schema-level custom properties
-    schema_custom_properties = schema_config.get('customProperties', {})
-    global_source_custom_properties = schema_custom_properties.get('source', {})
-    global_target_custom_properties = schema_custom_properties.get('target', {})
-
-    logger.debug(f"Target schema: {yaml_target_schema}")
-    logger.debug(f"Whitelist: {whitelist}")
-    logger.debug(f"Blacklist: {blacklist}")
-    logger.debug(f"Custom tables: {custom_tables}")
-    logger.debug(f"Global source custom properties: {global_source_custom_properties}")
-    logger.debug(f"Global target custom properties: {global_target_custom_properties}")
-
-    ctx = _PipelineContext(token, pipeline_id, target_agent_id, yaml_target_schema, source_node_info, target_node_info,
-                           source_agent_tag, target_agent_tag, skip_errors, is_source_nosql_type, is_target_nosql_type)
-
-    def build_table_lookup(table_list, default_schema_name):
-        lookup = {}
-        for tbl in table_list or []:
-            if isinstance(tbl, dict):
-                name = tbl.get("name")
-                schema_name = tbl.get("schema") or default_schema_name
-                table_info = tbl
-            elif isinstance(tbl, str):
-                name = tbl
-                schema_name = default_schema_name
-                table_info = {"name": name, "schema": schema_name}
-            else:
-                continue
-
-            if not name or not schema_name:
-                continue
-
-            lookup[(schema_name.lower(), name.lower())] = table_info
-        return lookup
-
-    def find_discovered_table(lookup, schema_name, table_name):
-        if not lookup or not schema_name or not table_name:
-            return None
-        return lookup.get((schema_name.lower(), table_name.lower()))
-
-    def resolve_table_id(schema_name, table_name, lookup, table_role):
-        """Try to reuse discovery IDs before falling back to generated IDs."""
-        discovered_table = find_discovered_table(lookup, schema_name, table_name)
-        if discovered_table:
-            discovered_id = discovered_table.get('id')
-            if discovered_id is not None:
-                logger.debug(
-                    f"Using discovered {table_role} table ID for {schema_name}.{table_name}: {discovered_id}"
-                )
-                return discovered_id
-
-        generated_id = get_table_id(schema_name, table_name)
-        logger.debug(
-            f"Using generated {table_role} table ID for {schema_name}.{table_name}: {generated_id}"
-        )
-        return generated_id
-
-    def parse_partition_config(partition_value):
-        """Return (column_name, max_partitions) from YAML configuration."""
-
-        column_name = None
-        max_partitions = DEFAULT_MAX_LOGICAL_PARTITIONS
-
-        if isinstance(partition_value, dict):
-            column_name = partition_value.get('column') or partition_value.get('name')
-            raw_max = partition_value.get('maxPartitionsNumber') or partition_value.get('maxPartitions')
-            if raw_max is not None:
-                try:
-                    max_partitions = max(1, int(raw_max))
-                except (TypeError, ValueError):
-                    logger.warning(f"Invalid maxPartitionsNumber '{raw_max}'. Falling back to {DEFAULT_MAX_LOGICAL_PARTITIONS}.")
-        elif isinstance(partition_value, str):
-            column_name = partition_value
-        elif partition_value is not None:
-            logger.warning(f"Unsupported partitions configuration type: {type(partition_value)}. Expected string or dict.")
-
-        return column_name, max_partitions
-
-    def _format_partition_object(partition_obj):
-        if not isinstance(partition_obj, dict):
-            return None
-
-        partition_id = partition_obj.get('id')
-        try:
-            partition_id = int(partition_id)
-        except (TypeError, ValueError):
-            pass
-
-        if 'startValue' not in partition_obj or 'endValue' not in partition_obj:
-            return None
-
-        return {
-            "id": partition_id,
-            "startValue": str(partition_obj.get('startValue')),
-            "endValue": str(partition_obj.get('endValue'))
-        }
-
-    def extract_computed_partitions(response):
-        """Normalize compute-logical-partitions API responses into Gluesync partition lists."""
-
-        partitions = []
-        if not isinstance(response, dict):
-            return partitions
-
-        raw_partitions = response.get('partitions')
-        if isinstance(raw_partitions, list):
-            for entry in raw_partitions:
-                partition_obj = None
-                if isinstance(entry, dict):
-                    if {'id', 'startValue', 'endValue'}.issubset(entry.keys()):
-                        partition_obj = entry
-                    elif 'partition' in entry and isinstance(entry['partition'], dict):
-                        partition_obj = entry['partition']
-
-                formatted = _format_partition_object(partition_obj)
-                if formatted:
-                    partitions.append(formatted)
-        elif isinstance(raw_partitions, dict):
-            for key in raw_partitions.keys():
-                partition_obj = None
-                if isinstance(key, dict):
-                    partition_obj = key
-                elif isinstance(key, str):
-                    try:
-                        partition_obj = json.loads(key)
-                    except json.JSONDecodeError:
-                        logger.debug(f"Unable to decode partition key: {key}")
-
-                formatted = _format_partition_object(partition_obj)
-                if formatted:
-                    partitions.append(formatted)
-
-        partitions.sort(key=lambda part: part.get('id') if isinstance(part.get('id'), int) else 0)
-        return partitions
-
-    def compute_logical_partitions(token, pipeline_id, entity_id, column_payload, max_partitions_number):
-        """Invoke CoreHub to compute logical partitions for a given column."""
-
-        endpoint = f"/pipelines/{pipeline_id}/config/entities/{entity_id}/compute-logical-partitions"
-        safe_column_payload = json.loads(json.dumps(column_payload))
-        body = {
-            "maxPartitionsNumber": max(1, max_partitions_number),
-            "column": safe_column_payload
-        }
-
-        logger.info(
-            "Computing logical partitions for entity %s (column=%s, max=%s)",
-            entity_id,
-            safe_column_payload.get('name'),
-            body["maxPartitionsNumber"]
-        )
-
-        response = fetch_core_hub(endpoint, method='POST', token=token, body=body)
-        partitions = extract_computed_partitions(response)
-
-        if not partitions:
-            logger.warning(
-                "Logical partition computation returned no partitions for entity %s (column=%s)",
-                entity_id,
-                safe_column_payload.get('name')
-            )
-
-        return partitions
-
-    def apply_logical_partitions(token, pipeline_id, partition_requests, skip_errors):
-        if not partition_requests:
-            return
-
-        try:
-            pipeline_entities = fetch_core_hub(f"/pipelines/{pipeline_id}/entities", token=token)
-        except Exception as exc:
-            logger.error(f"Failed to fetch entities for logical partitions: {exc}")
-            if not skip_errors:
-                raise
-            return
-
-        entity_map = {}
-        if isinstance(pipeline_entities, list):
-            for item in pipeline_entities:
-                entity_data = item.get('entity') if isinstance(item, dict) else None
-                if not entity_data:
-                    continue
-                entity_name = entity_data.get('entityName')
-                if entity_name:
-                    entity_map[entity_name] = entity_data
-        else:
-            logger.warning("Unexpected response while fetching entities for logical partitions: %s", pipeline_entities)
-
-        for request in partition_requests:
-            entity_name = request["entity_name"]
-            column_info = request["column"]
-            max_partitions = request["max_partitions"]
-            source_agent_id = request["source_agent_id"]
-
-            entity_from_core = entity_map.get(entity_name)
-            if not entity_from_core:
-                logger.warning(f"Cannot compute logical partitions: entity '{entity_name}' not found in pipeline")
-                if not skip_errors:
-                    raise RuntimeError(f"Entity '{entity_name}' not found for logical partition computation")
-                continue
-
-            entity_id = entity_from_core.get('entityId')
-            if not entity_id:
-                logger.warning(f"Entity '{entity_name}' from pipeline listing has no entityId")
-                if not skip_errors:
-                    raise RuntimeError(f"Entity '{entity_name}' missing ID in pipeline response")
-                continue
-
-            try:
-                partitions = compute_logical_partitions(token, pipeline_id, entity_id, column_info, max_partitions)
-            except Exception as exc:  # pylint: disable=broad-except
-                logger.error(f"Failed to compute logical partitions for {entity_name}: {exc}")
-                if not skip_errors:
-                    raise
-                continue
-
-            if not partitions:
-                logger.warning(f"No partitions returned for {entity_name}. Skipping partitionSettings update.")
-                if not skip_errors:
-                    raise RuntimeError(f"Logical partitions computation returned empty result for {entity_name}")
-                continue
-
-            partition_settings = {
-                "column": column_info,
-                "partitions": partitions
-            }
-
-            entity_payload = json.loads(json.dumps(entity_from_core))
-            source_entity = next(
-                (agent for agent in entity_payload.get('agentEntities', [])
-                 if agent.get('agentId') == source_agent_id or agent.get('entityType', {}).get('type') == 'Source'),
-                None
-            )
-
-            if not source_entity:
-                logger.warning(f"Source agent entity not found in payload for {entity_name}")
-                if not skip_errors:
-                    raise RuntimeError(f"Source agent entity missing for {entity_name}")
-                continue
-
-            source_entity_type = source_entity.setdefault('entityType', {})
-            source_entity_type['partitionSettings'] = partition_settings
-
-            update_body = {"entities": [entity_payload]}
-
-            try:
-                fetch_core_hub(
-                    f"/pipelines/{pipeline_id}/config/entities",
-                    method='PUT',
-                    token=token,
-                    body=update_body
-                )
-                logger.info(f"Applied logical partitions for entity {entity_name} (ID: {entity_id})")
-            except Exception as exc:  # pylint: disable=broad-except
-                logger.error(f"Failed to update entity {entity_name} with logical partitions: {exc}")
-                if not skip_errors:
-                    raise
-
-    def build_partition_settings(column_name, table_columns, schema_name, table_name, table_id):
-        """Create PartitionSettings payload for the specified column."""
-
-        if not column_name:
-            return None
-
-        if not table_columns:
-            logger.warning(f"Partition column '{column_name}' requested for {schema_name}.{table_name} but no columns were discovered")
-            return None
-
-        normalized_column = str(column_name).strip()
-        if not normalized_column:
-            return None
-
-        matched_column = next((col for col in table_columns if col.get('name') == normalized_column), None)
-        if not matched_column:
-            logger.warning(f"Partition column '{normalized_column}' not found in discovery for {schema_name}.{table_name}. Skipping partitionSettings.")
-            return None
-
-        # Use the id field from CoreHub API as the column ID
-        column_id = matched_column.get('id')
-        if column_id is None:
-            error_msg = f"CRITICAL ERROR: Column '{normalized_column}' in table {schema_name}.{table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
-            logger.error(error_msg)
-            raise ValueError(error_msg)
-
-        partition_column = {
-            "id": column_id,
-            "name": normalized_column,
-            "tableId": int(table_id),
-            "position": matched_column.get('position', 0),
-            "dataType": matched_column.get('dataType'),
-        }
-        
-        # Include optional fields from matched_column
-        for field in ['charMaxLength', 'charOctetLength', 'charSet', 'collation', 'numPrec', 'numPrecRadix', 'numScale', 'datetimePrec', 'isIdentity', 'isNullable', 'udtCategory', 'udtName']:
-            if field in matched_column:
-                partition_column[field] = matched_column[field]
-                
-        partition_column["isPK"] = matched_column.get('isPK', False)
-        if 'default' in matched_column:
-            partition_column["default"] = matched_column['default']
-
-        partition_settings = {
-            "column": partition_column,
-            "partitions": []
-        }
-
-        logger.info(f"Configured partitionSettings for {schema_name}.{table_name} on column '{normalized_column}'")
-        return partition_settings
-
-    source_tables_lookup = build_table_lookup(tables, source_schema)
-
-    target_tables_lookup = {}
-    try:
-        target_discovered_tables = get_agent_tables(token, pipeline_id, target_agent_id, yaml_target_schema)
-        target_tables_lookup = build_table_lookup(target_discovered_tables, yaml_target_schema)
-        logger.info(f"Discovered {len(target_tables_lookup)} tables in target schema {yaml_target_schema}")
-    except Exception as e:
-        logger.warning(f"Could not retrieve target tables for schema {yaml_target_schema}: {str(e)}")
-
-    pending_partition_requests = []
-    
-    # Track which YAML keys have been processed to avoid duplicates
-    processed_yaml_keys = set()
+    run.source_tables_lookup = _build_table_lookup(tables, source_schema)
+    run.target_tables_lookup = _discover_target_tables(run.ctx)
 
     for table in tables:
-        if isinstance(table, str):
-            table_name = table
-            table_schema = None  # Unknown schema for string-only tables
-        else:
-            table_name = table.get("name")
-            table_schema = table.get("schema")  # Get schema from table object if available
+        _process_discovered_table(run, table)
 
-        if not table_name:
-            logger.warning(f"Warning: Table without name encountered. Skipping.")
-            continue
+    _process_duplicate_tables(run)
 
-        # Validate that the table belongs to the requested source schema
-        # The API may return tables from all schemas, so we need to filter
-        if table_schema and table_schema.lower() != source_schema.lower():
-            logger.debug(f"Skipping table {table_name}: belongs to schema '{table_schema}' but processing schema '{source_schema}'")
-            continue
-
-        # Skip system tables
-        if table_name.startswith("sys"):
-            logger.info(f"Skipping system table: {table_name}")
-            continue
-
-        # Skip blacklisted tables.
-        # When the agent returns library-qualified names (e.g. AS/400 FILELIB.TABLE),
-        # also check the bare table name (part after the last dot) so that a
-        # blacklist entry 'TABLE' still matches 'FILELIB.TABLE' from discovery.
-        bare_table_name = table_name.rsplit('.', 1)[-1] if '.' in table_name else table_name
-        if blacklist and (table_name in blacklist or bare_table_name in blacklist):
-            logger.info(f"Skipping blacklisted table: {table_name}")
-            continue
-
-        # STRICT WHITELIST ENFORCEMENT:
-        # If whitelist is defined and not empty, ONLY process tables in the whitelist.
-        # Same library-qualifier awareness: if the agent returns FILELIB.TABLE but the
-        # whitelist has TABLE, the bare name is checked as a fallback so tables are
-        # not silently dropped when the source uses qualified names.
-        if whitelist:
-            if table_name not in whitelist and bare_table_name not in whitelist:
-                logger.info(f"Skipping table {table_name}: not in whitelist for schema {source_schema}")
-                continue
-            else:
-                logger.debug(f"Table {table_name} is in whitelist for schema {source_schema} - processing")
-        else:
-            logger.debug(f"No whitelist defined for schema {source_schema}, allowing table {table_name}")
-
-        columns = get_table_columns(token, pipeline_id, source_agent_id, source_schema, table_name)
-        
-        # Debug logging for column discovery
-        if columns and columns.get('columns'):
-            logger.info(f"Discovered {len(columns['columns'])} columns for table {table_name}: {[col.get('name') for col in columns['columns']]}")
-        else:
-            logger.warning(f"No columns discovered for table {table_name}. columns={columns}")
-        
-        # Validate that columns were discovered
-        if not columns or not columns.get('columns') or len(columns.get('columns', [])) == 0:
-            error_msg = f"Cannot create entity for table {table_name}: No columns discovered from source. Please verify the table exists and is accessible."
-            logger.error(error_msg)
-            if not skip_errors:
-                raise ValueError(error_msg)
-            continue
-
-        # Find custom config - handle both direct key match and sourceTableName match
-        custom_config = custom_tables.get(table_name, {})
-        yaml_table_key = table_name  # Track which YAML key we're using
-        
-        # If no direct match, check if any custom config has sourceTableName matching this table
-        if not custom_config:
-            for key, config in custom_tables.items():
-                if isinstance(config, dict) and config.get('sourceTableName') == table_name:
-                    custom_config = config
-                    yaml_table_key = key
-                    logger.info(f"Found custom config for table {table_name} under YAML key '{key}' (duplicate table)")
-                    break
-
-        # If still no match and the discovered name is library-qualified (e.g. AS/400
-        # FILELIB.TABLE), try the bare table name as the YAML key.  This handles the
-        # common case where the backup YAML uses the unqualified name as the key but the
-        # source agent returns the library-prefixed form during discovery.
-        if not custom_config and '.' in table_name:
-            if bare_table_name in custom_tables:
-                custom_config = custom_tables[bare_table_name]
-                yaml_table_key = bare_table_name
-                logger.info(
-                    f"Matched library-qualified table '{table_name}' to YAML key '{bare_table_name}' "
-                    "via bare-name fallback"
-                )
-        
-        if custom_config is None:
-            custom_config = {}
-            logger.warning(f"Warning: Custom config for table {table_name} is present but empty in YAML. Converting to empty dict.")
-        logger.debug(f"Custom config for {table_name}: {custom_config}")
-        
-        # Mark this YAML key as processed
-        processed_yaml_keys.add(yaml_table_key)
-
-        # Get snapshot write method configuration (UPSERT or INSERT, default is UPSERT)
-        snapshot_write_method = custom_config.get('snapshotWriteMethod', 'UPSERT').upper()
-        if snapshot_write_method not in ['UPSERT', 'INSERT']:
-            logger.warning(f"Warning: Invalid snapshotWriteMethod '{snapshot_write_method}' for {table_name}. Using default 'UPSERT'")
-        logger.info(f"Snapshot write method for {table_name}: {snapshot_write_method}")
-        
-        # Get table-specific custom properties and merge with global properties
-        table_custom_properties = custom_config.get('customProperties', {})
-        source_custom_properties = {**global_source_custom_properties, **table_custom_properties.get('source', {})}
-        target_custom_properties = {**global_target_custom_properties, **table_custom_properties.get('target', {})}
-
-        partition_config = source_custom_properties.pop('partitions', None)
-        partition_column_name, partition_max_partitions = parse_partition_config(partition_config)
-        
-        # Store UDF configuration separately (will be added to entityType, not customProperties)
-        udf_config = target_custom_properties.pop('udf', None)
-        
-        # Check if this table is configured for unlocked schema
-        is_unlocked_schema = custom_config.get('unlockedSchema', False)
-        
-        # Validate: UDF is mandatory for unlocked schema
-        if is_unlocked_schema and not udf_config:
-            logger.error(f"Table {table_name} is configured with unlockedSchema=true but no UDF is defined. UDF is mandatory for unlocked schema.")
-            if not skip_errors:
-                raise ValueError(f"UDF is mandatory for table {table_name} with unlocked schema")
-            continue
-        
-        # Note: snapshotWriteMethod is kept separately and NOT added to custom properties
-        # It will be read directly from YAML config when needed during sync operations
-
-        logger.debug(f"Source custom properties for {table_name}: {source_custom_properties}")
-        logger.debug(f"Target custom properties for {table_name}: {target_custom_properties}")
-
-        target_table_name = _target_table_name(custom_config, table_name, yaml_table_key)
-        logger.info(f"Using target table name: {target_table_name} for source table: {table_name}")
-
-        # Get filter configurations (processed later after target_table_id is resolved)
-        filter_config = custom_config.get('filter')
-        snapshot_delete_filter_config = custom_config.get('snapshotDeleteFilter')
-
-        # Get document key configuration if it exists
-        document_key = None
-        if custom_config and 'documentKey' in custom_config:
-            doc_key_config = custom_config['documentKey']
-
-            # Convert column names to column IDs
-            key_ids = []
-            if 'keys' in doc_key_config:
-                for key_name in doc_key_config['keys']:
-                    # Find the column ID from the columns list
-                    column_id = None
-                    for col in columns["columns"]:
-                        if col.get('name') == key_name:
-                            # Use the id field from CoreHub API as the column ID
-                            column_id = col.get('id')
-                            if column_id is None:
-                                error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
-                                logger.error(error_msg)
-                                raise ValueError(error_msg)
-                            break
-
-                    if column_id is not None:
-                        key_ids.append(column_id)
-                    else:
-                        logger.warning(f"Warning: Column '{key_name}' not found in table columns for document key")
-
-            document_key = {
-                "prefix": doc_key_config.get('prefix', ''),
-                "suffix": doc_key_config.get('suffix', ''),
-                "separator": doc_key_config.get('separator', '-'),
-                "keys": key_ids  # Use column IDs instead of names
-            }
-            logger.debug(f"Document key configuration for {table_name}: {document_key}")
-
-        # A table of a MultiTable chain gets its entity from the chain loop below; the SingleTable entity built
-        # here for it is not sent, so it keeps the payload of older CoreHubs.
-        table_grouped = grouped and not custom_config.get('chainId')
-        try:
-            columns_def, keys, has_column_mappings, is_column_whitelist, _discovery_type_by_source, relations = \
-                _assemble_source_columns(columns, custom_config, table_name, source_schema, grouped=table_grouped,
-                                         check_forms=not custom_config.get('chainId'))
-        except EntityMappingError as error:
-            if custom_config.get('chainId'):
-                # Its chain is refused for the same reason by the chain loop below.
-                logger.debug(f"Table {table_name} of chain {custom_config.get('chainId')}: {error}")
-            else:
-                refuse_table(table_name, error)
-            continue
-
-        if not keys:
-            logger.warning(f"Warning: No keys specified for {table_name}. Table will have no keys.")
-
-        if CREATE_TABLE_IF_NOT_EXISTS:
-            # Only create tables for RDBMS targets; skip for NoSQL, Object Store,
-            # and any other non-RDBMS category. target_type is normalized upstream.
-            if is_no_create_table_target(target_type):
-                logger.info(f"Skipping table creation for {target_table_name} - target is {target_type}")
-            else:
-                logger.info(f"CREATE_TABLE_IF_NOT_EXISTS is enabled - creating table {target_table_name}")
-                handle_table_creation(
-                    pipeline_id,
-                    target_table_name,
-                    yaml_target_schema,
-                    keys,
-                    token,
-                    columns,
-                    custom_config,
-                    source_node_info,
-                    target_node_info,
-                    source_agent_tag=source_agent_tag,
-                    target_agent_tag=target_agent_tag,
-                )
-
-        # Generate table IDs for use in entities (prefer discovered IDs)
-        source_table_id = None
-        if isinstance(table, dict):
-            source_table_id = table.get('id')
-        if source_table_id is None:
-            discovered_source_table = find_discovered_table(source_tables_lookup, source_schema, table_name)
-            if discovered_source_table:
-                source_table_id = discovered_source_table.get('id')
-
-        if source_table_id is None:
-            source_table_id = get_table_id(source_schema, table_name)
-            logger.debug(f"Using generated source table ID for {source_schema}.{table_name}: {source_table_id}")
-        else:
-            logger.debug(f"Using discovered source table ID for {source_schema}.{table_name}: {source_table_id}")
-
-        target_table_id = None
-        discovered_target_table = find_discovered_table(target_tables_lookup, yaml_target_schema, target_table_name)
-        if discovered_target_table:
-            target_table_id = discovered_target_table.get('id')
-
-        if target_table_id is None:
-            target_table_id = get_table_id(yaml_target_schema, target_table_name)
-            logger.debug(f"Using generated target table ID for {yaml_target_schema}.{target_table_name}: {target_table_id}")
-        else:
-            logger.debug(f"Using discovered target table ID for {yaml_target_schema}.{target_table_name}: {target_table_id}")
-
-        # Create source and target table property keys
-        source_table_key = f"{source_schema}.{table_name}"
-        target_table_key = f"{yaml_target_schema}.{target_table_name}"
-
-        # Process filter clauses using target_table_id (filters live in the target entityType)
-        processed_filters = process_filter_clauses(filter_config, columns, table_id=target_table_id,
-            source_node_info=source_node_info, target_node_info=target_node_info) if filter_config else None
-        logger.debug(f"Processed filters for {table_name}: {processed_filters}")
-        processed_snapshot_delete_filters = process_filter_clauses(snapshot_delete_filter_config, columns, table_id=target_table_id,
-            source_node_info=source_node_info, target_node_info=target_node_info) if snapshot_delete_filter_config else None
-        if processed_snapshot_delete_filters:
-            logger.debug(f"Processed snapshot delete filters for {table_name}: {processed_snapshot_delete_filters}")
-
-        partition_settings = None
-        if partition_column_name:
-            partition_settings = build_partition_settings(
-                partition_column_name,
-                columns.get("columns"),
-                source_schema,
-                table_name,
-                source_table_id
-            )
-
-        source_entity_type = {**source_custom_properties, "type": "Source"}
-
-        # Determine source entity type based on source_type
-        # Check if source_type indicates NoSQL (case-insensitive)
-        is_source_nosql = source_type and "nosql" in source_type.lower()
-        source_entity_type_name = "NoSqlEntity" if is_source_nosql else "SingleTable"
-        logger.debug(f"Source entity type determination: source_type='{source_type}', is_source_nosql={is_source_nosql}, selected type='{source_entity_type_name}'")
-
-        # Build source table properties with optional whereClause
-        source_table_properties = {}
-        if custom_config and 'whereClause' in custom_config:
-            where_clause = custom_config['whereClause']
-            if where_clause:
-                source_table_properties["whereClause"] = str(where_clause)
-                logger.info(f"Added whereClause for {source_table_key}: {where_clause}")
-        
-        source_entity = {
-            "type": source_entity_type_name,
-            "entityType": source_entity_type,
-            "agentId": source_agent_id,
-            "entityObject": {
-                "id": str(source_table_id),
-                "scope": source_schema,
-                "collection": table_name
-            },
-            "table": {
-                "id": str(source_table_id),
-                "name": table_name,
-                "schema": source_schema
-            },
-            "columns": columns_def,
-            "customProperties": source_custom_properties,
-            "tablesProperties": {source_table_key: source_table_properties}
-        }
-
-        # Get allowed operations for the target entity
-        allowed_operations = get_allowed_operations(target_custom_properties)
-
-        # Keys explicitly handled - exclude them from the passthrough spread
-        _target_handled_keys = {'allowedOperations', 'skipDeletion', 'snapshotWritingConcurrency',
-                                'useBulkOperationsDuringCDC', 'useBulkOperationsWhileSnapshot', 'udf'}
-        _target_extra = {k: v for k, v in target_custom_properties.items() if k not in _target_handled_keys}
-
-        # Create target entity type with allowedOperations and bulk operations settings
-        # Any unknown customProperties.target keys are spread in dynamically
-        target_entity_type = {
-            **_target_extra,
-            "type": "Target",
-            "allowedOperations": allowed_operations,
-            "snapshotWritingConcurrency": target_custom_properties.get('snapshotWritingConcurrency', 1),
-            "useBulkOperationsDuringCDC": target_custom_properties.get('useBulkOperationsDuringCDC', False),
-            "useBulkOperationsWhileSnapshot": target_custom_properties.get('useBulkOperationsWhileSnapshot', False)
-        }
-
-        # Add filters if they exist
-        if processed_filters:
-            target_entity_type["filter"] = processed_filters
-        if processed_snapshot_delete_filters:
-            target_entity_type["snapshotDeleteFilter"] = processed_snapshot_delete_filters
-        
-        # Add UDFs to entityType if they exist
-        # UDFs must be in entityType, not in customProperties
-        if udf_config:
-            target_entity_type["udf"] = udf_config
-            # Also add mappingFunctionInfo for the first UDF
-            target_entity_type["mappingFunctionInfo"] = udf_config[0]
-        
-        try:
-            pair = _TablePair(table_name, target_table_name, columns, custom_config, source_table_id, target_table_id,
-                              is_unlocked_schema)
-            target_columns_def, target_keys = _assemble_target_side(
-                ctx, pair, columns_def, has_column_mappings or is_column_whitelist, _discovery_type_by_source,
-                target_entity_type, relations=relations, grouped=table_grouped,
-            )
-        except EntityMappingError as error:
-            if not custom_config.get('chainId'):
-                refuse_table(table_name, error)
-                continue
-            # Its chain is written, or refused, by the chain loop below; the rest of this loop (partitions, UDFs)
-            # still runs for the table, whose SingleTable entity is not sent.
-            logger.debug(f"Table {table_name} of chain {custom_config.get('chainId')}: {error}")
-            target_columns_def, target_keys = [], []
-
-
-        # Determine target entity type based on target_type
-        # Check if target_type indicates NoSQL (case-insensitive)
-        is_target_nosql = target_type and "nosql" in target_type.lower()
-        target_entity_type_name = "NoSqlEntity" if is_target_nosql else "SingleTable"
-        logger.debug(f"Target entity type determination: target_type='{target_type}', is_target_nosql={is_target_nosql}, selected type='{target_entity_type_name}'")
-
-        target_entity = {
-            "type": target_entity_type_name,
-            "entityType": target_entity_type,
-            "agentId": target_agent_id,
-            "entityObject": {
-                "id": str(target_table_id),
-                "scope": yaml_target_schema,
-                "collection": target_table_name
-            },
-            "table": {
-                "id": str(target_table_id),
-                "schema": yaml_target_schema,
-                "name": target_table_name
-            },
-            "columns": target_columns_def,  # Use target columns definition
-            "customProperties": target_custom_properties,
-            "tablesProperties": {target_table_key: {}}
-        }
-
-        # Add document key mapping if configured
-        if document_key:
-            target_entity["keyMapping"] = document_key
-
-        group_id = resolve_group_id(custom_config, groupId_map, token, pipeline_id)
-        
-        # Create the entity
-        # Use custom entityName from YAML if provided, otherwise fall back to schema.table format
-        custom_entity_name = custom_config.get('entityName', f"{source_schema}.{table_name}")
-        entity = {
-            "entityName": custom_entity_name,
-            "agentEntities": [source_entity, target_entity]
-        }
-        
-        # Only add groupId to the entity if we have a valid group ID
-        if group_id and group_id != '_default':
-            entity["groupId"] = group_id
-        
-        # A table of a MultiTable chain is written by its chain's entity (below), not as a SingleTable entity of
-        # its own; the rest of this loop (table creation, partitions, UDFs) still runs for it.
-        if custom_config.get('chainId'):
-            logger.debug(f"Table {table_name} belongs to chain {custom_config.get('chainId')}: no SingleTable entity")
-        else:
-            entities.append(entity)
-
-        if partition_settings:
-            pending_partition_requests.append({
-                "entity_name": entity["entityName"],
-                "column": partition_settings["column"],
-                "max_partitions": partition_max_partitions,
-                "source_agent_id": source_agent_id
-            })
-        
-        # Process UDFs if defined for this table
-        table_custom_properties = custom_config.get('customProperties', {})
-        target_custom_properties = table_custom_properties.get('target', {})
-        table_udfs = target_custom_properties.get('udf', [])
-        
-        if table_udfs:
-            logger.info(f"Found UDFs for table {table_name}: {table_udfs}")
-            try:
-                handle_udf_function_definition(table_name, pipeline_id, table_udfs, token)
-                logger.info(f"Successfully processed UDFs for table {table_name}")
-            except Exception as e:
-                logger.error(f"Failed to process UDFs for table {table_name}: {str(e)}")
-                if not skip_errors:
-                    raise
-        else:
-            logger.debug(f"No UDFs defined for table {table_name}")
-
-    # Second loop: process duplicate table configurations with @@ that weren't processed in first loop
-    logger.info(f"First loop completed. Processed {len(processed_yaml_keys)} YAML keys.")
-    logger.info(f"Checking for unprocessed duplicate tables with @@ separator...")
-    
-    unprocessed_count = 0
-    for yaml_table_key, custom_config in custom_tables.items():
-        # Skip if already processed in first loop
-        if yaml_table_key in processed_yaml_keys:
-            continue
-        
-        # Skip if not a dict
-        if not isinstance(custom_config, dict):
-            logger.warning(f"Skipping {yaml_table_key}: not a dict")
-            continue
-        
-        # Get the actual source table name (should have sourceTableName for @@ tables)
-        table_name = custom_config.get('sourceTableName', yaml_table_key)
-        
-        # Skip system tables and blacklisted tables
-        if table_name.startswith("sys") or (blacklist and table_name in blacklist):
-            logger.info(f"Skipping duplicate table {yaml_table_key}: system or blacklisted")
-            continue
-        
-        # Check whitelist using the actual table name
-        if whitelist and table_name not in whitelist:
-            logger.info(f"Skipping duplicate table {yaml_table_key}: not in whitelist")
-            continue
-        
-        # Check if this is part of a chain - if so, skip (will be processed in chain loop)
-        if custom_config.get('chainId'):
-            logger.info(f"Skipping duplicate table {yaml_table_key}: part of chain {custom_config.get('chainId')}")
-            processed_yaml_keys.add(yaml_table_key)
-            continue
-        
-        unprocessed_count += 1
-        logger.info(f"Processing duplicate table #{unprocessed_count}: {yaml_table_key} (source table: {table_name})")
-        
-        # Get columns using the actual source table name
-        try:
-            columns = get_table_columns(token, pipeline_id, source_agent_id, source_schema, table_name)
-        except Exception as e:
-            logger.error(f"Failed to get columns for duplicate table {yaml_table_key}: {str(e)}")
-            if not skip_errors:
-                raise
-            continue
-        
-        # Process this duplicate table with the same logic as the first loop
-        # (The rest of the entity creation logic is identical to the first loop)
-        
-        # Get snapshot write method configuration
-        snapshot_write_method = custom_config.get('snapshotWriteMethod', 'UPSERT').upper()
-        if snapshot_write_method not in ['UPSERT', 'INSERT']:
-            logger.warning(f"Invalid snapshotWriteMethod '{snapshot_write_method}' for {yaml_table_key}. Using 'UPSERT'")
-        logger.info(f"Snapshot write method for {yaml_table_key}: {snapshot_write_method}")
-        
-        # Get table-specific custom properties
-        table_custom_properties = custom_config.get('customProperties', {})
-        source_custom_properties = {**global_source_custom_properties, **table_custom_properties.get('source', {})}
-        target_custom_properties = {**global_target_custom_properties, **table_custom_properties.get('target', {})}
-
-        partition_config = source_custom_properties.pop('partitions', None)
-        partition_column_name, partition_max_partitions = parse_partition_config(partition_config)
-        
-        udf_config = target_custom_properties.pop('udf', None)
-        is_unlocked_schema = custom_config.get('unlockedSchema', False)
-        
-        if is_unlocked_schema and not udf_config:
-            logger.error(f"Table {yaml_table_key} has unlockedSchema=true but no UDF. Skipping.")
-            if not skip_errors:
-                raise ValueError(f"UDF is mandatory for table {yaml_table_key} with unlocked schema")
-            continue
-        
-        target_table_name = custom_config.get('name', table_name)
-        logger.info(f"Using target table name: {target_table_name} for duplicate table {yaml_table_key}")
-
-        # Get filter configurations
-        filter_config = custom_config.get('filter')
-        snapshot_delete_filter_config = custom_config.get('snapshotDeleteFilter')
-
-        # Process document key if exists
-        document_key = None
-        if custom_config and 'documentKey' in custom_config:
-            doc_key_config = custom_config['documentKey']
-            key_ids = []
-            if 'keys' in doc_key_config:
-                for key_name in doc_key_config['keys']:
-                    column_id = None
-                    for col in columns["columns"]:
-                        if col.get('name') == key_name:
-                            column_id = col.get('id')
-                            if column_id is None:
-                                error_msg = f"Column '{key_name}' in {yaml_table_key} missing 'id' field"
-                                logger.error(error_msg)
-                                raise ValueError(error_msg)
-                            break
-                    if column_id is not None:
-                        key_ids.append(column_id)
-            
-            document_key = {
-                "prefix": doc_key_config.get('prefix', ''),
-                "suffix": doc_key_config.get('suffix', ''),
-                "separator": doc_key_config.get('separator', '-'),
-                "keys": key_ids
-            }
-
-        try:
-            columns_def, keys, has_column_mappings, is_column_whitelist, _discovery_type_by_source, relations = \
-                _assemble_source_columns(columns, custom_config, yaml_table_key, source_schema, grouped=grouped)
-        except EntityMappingError as error:
-            refuse_table(yaml_table_key, error)
-            continue
-
-
-        if not keys:
-            logger.warning(f"No keys specified for duplicate table {yaml_table_key}")
-
-        # Generate table IDs
-        source_table_id = resolve_table_id(source_schema, table_name, source_tables_lookup, "source")
-        target_table_id = resolve_table_id(yaml_target_schema, target_table_name, target_tables_lookup, "target")
-
-        source_table_key = f"{source_schema}.{table_name}"
-        target_table_key = f"{yaml_target_schema}.{target_table_name}"
-
-        # Process filter clauses using target_table_id (filters live in the target entityType)
-        processed_filters = process_filter_clauses(filter_config, columns, table_id=target_table_id,
-            source_node_info=source_node_info, target_node_info=target_node_info) if filter_config else None
-        logger.debug(f"Processed filters for duplicate {yaml_table_key}: {processed_filters}")
-        processed_snapshot_delete_filters = process_filter_clauses(snapshot_delete_filter_config, columns, table_id=target_table_id,
-            source_node_info=source_node_info, target_node_info=target_node_info) if snapshot_delete_filter_config else None
-        if processed_snapshot_delete_filters:
-            logger.debug(f"Processed snapshot delete filters for duplicate {yaml_table_key}: {processed_snapshot_delete_filters}")
-
-        partition_settings = None
-        if partition_column_name:
-            partition_settings = build_partition_settings(
-                partition_column_name,
-                columns.get("columns"),
-                source_schema,
-                table_name,
-                source_table_id
-            )
-
-        source_entity_type = {**source_custom_properties, "type": "Source"}
-        is_source_nosql = source_type and "nosql" in source_type.lower()
-        source_entity_type_name = "NoSqlEntity" if is_source_nosql else "SingleTable"
-
-        source_table_properties = {}
-        if custom_config and 'whereClause' in custom_config:
-            where_clause = custom_config['whereClause']
-            if where_clause:
-                source_table_properties["whereClause"] = str(where_clause)
-        
-        source_entity = {
-            "type": source_entity_type_name,
-            "entityType": source_entity_type,
-            "agentId": source_agent_id,
-            "entityObject": {
-                "id": str(source_table_id),
-                "scope": source_schema,
-                "collection": table_name
-            },
-            "table": {
-                "id": str(source_table_id),
-                "name": table_name,
-                "schema": source_schema
-            },
-            "columns": columns_def,
-            "customProperties": source_custom_properties,
-            "tablesProperties": {source_table_key: source_table_properties}
-        }
-
-        allowed_operations = get_allowed_operations(target_custom_properties)
-
-        # Keys explicitly handled - exclude them from the passthrough spread
-        _target_handled_keys = {'allowedOperations', 'skipDeletion', 'snapshotWritingConcurrency',
-                                'useBulkOperationsDuringCDC', 'useBulkOperationsWhileSnapshot', 'udf'}
-        _target_extra = {k: v for k, v in target_custom_properties.items() if k not in _target_handled_keys}
-
-        # Any unknown customProperties.target keys are spread in dynamically
-        target_entity_type = {
-            **_target_extra,
-            "type": "Target",
-            "allowedOperations": allowed_operations,
-            "snapshotWritingConcurrency": target_custom_properties.get('snapshotWritingConcurrency', 1),
-            "useBulkOperationsDuringCDC": target_custom_properties.get('useBulkOperationsDuringCDC', False),
-            "useBulkOperationsWhileSnapshot": target_custom_properties.get('useBulkOperationsWhileSnapshot', False)
-        }
-
-        if processed_filters:
-            target_entity_type["filter"] = processed_filters
-        if processed_snapshot_delete_filters:
-            target_entity_type["snapshotDeleteFilter"] = processed_snapshot_delete_filters
-        
-        if udf_config:
-            target_entity_type["udf"] = udf_config
-            target_entity_type["mappingFunctionInfo"] = udf_config[0]
-        
-        try:
-            pair = _TablePair(yaml_table_key, target_table_name, columns, custom_config, source_table_id,
-                              target_table_id, is_unlocked_schema)
-            target_columns_def, target_keys = _assemble_target_side(
-                ctx, pair, columns_def, has_column_mappings or is_column_whitelist, _discovery_type_by_source,
-                target_entity_type, relations=relations, grouped=grouped,
-            )
-        except EntityMappingError as error:
-            refuse_table(yaml_table_key, error)
-            continue
-
-        is_target_nosql = target_type and "nosql" in target_type.lower()
-        target_entity_type_name = "NoSqlEntity" if is_target_nosql else "SingleTable"
-
-        target_table_properties = {}
-        if document_key:
-            target_table_properties["documentKey"] = document_key
-
-
-        target_entity = {
-            "type": target_entity_type_name,
-            "entityType": target_entity_type,
-            "agentId": target_agent_id,
-            "entityObject": {
-                "id": str(target_table_id),
-                "scope": yaml_target_schema,
-                "collection": target_table_name
-            },
-            "table": {
-                "id": str(target_table_id),
-                "name": target_table_name,
-                "schema": yaml_target_schema
-            },
-            "columns": target_columns_def,
-            "customProperties": target_custom_properties,
-            "tablesProperties": {target_table_key: target_table_properties}
-        }
-
-        # Get entity name from custom config
-        entity_name = custom_config.get('entityName', f"{target_table_name} - {source_schema}.{table_name}")
-        
-        group_id = resolve_group_id(custom_config, groupId_map, token, pipeline_id)
-
-        entity = {
-            "entityName": entity_name,
-            "agentEntities": [source_entity, target_entity],
-        }
-        
-        if group_id and group_id != '_default':
-            entity["groupId"] = group_id
-        
-        entities.append(entity)
-        logger.info(f"Created entity for duplicate table {yaml_table_key}: {entity_name}")
-
-        if partition_settings:
-            pending_partition_requests.append({
-                "entity_name": entity["entityName"],
-                "column": partition_settings["column"],
-                "max_partitions": partition_max_partitions,
-                "source_agent_id": source_agent_id
-            })
-        
-        # Process UDFs: 'udf' was popped from target_custom_properties above, so read the table's own config
-        table_udfs = table_custom_properties.get('target', {}).get('udf', [])
-        if table_udfs:
-            logger.info(f"Found UDFs for duplicate table {yaml_table_key}: {table_udfs}")
-            try:
-                handle_udf_function_definition(table_name, pipeline_id, table_udfs, token)
-                logger.info(f"Successfully processed UDFs for duplicate table {yaml_table_key}")
-            except Exception as e:
-                logger.error(f"Failed to process UDFs for duplicate table {yaml_table_key}: {str(e)}")
-                if not skip_errors:
-                    raise
-        
-        # Mark as processed
-        processed_yaml_keys.add(yaml_table_key)
-    
-    logger.info(f"Second loop completed. Processed {unprocessed_count} duplicate tables with @@ separator.")
-    logger.info(f"Total YAML keys processed: {len(processed_yaml_keys)}")
-
-    # Track discovered table IDs for chain processing
-    chain_source_ids = {}
-    chain_target_ids = {}
-
-    # Process MultiTable entities first
-    multi_table_entities = []
     # For each chainId, create a MultiTable entity
+    multi_table_entities = []
     for chain_id, tables_list in chained_tables.items():
-        if not tables_list:
-            continue
-
-        # Gluesync 2.3: the grouped entries and the field functions of each table pair, and why the chain is refused.
-        mt_entries = []
-        mt_field_functions = []
-        chain_refusals = []
-
-        # FILTER: Only include the chain's tables that are in the schema's whitelist
-        if whitelist:
-            filtered_tables_list = [(table_key, table_data) for table_key, table_data in tables_list if table_key in whitelist]
-            if not filtered_tables_list:
-                logger.info(f"Skipping chain '{chain_id}' - no tables in whitelist for schema '{source_schema}'")
-                continue
-            if len(filtered_tables_list) != len(tables_list):
-                skipped_tables = [tk for tk, _ in tables_list if tk not in whitelist]
-                logger.info(f"For chain '{chain_id}', filtered out tables not in whitelist for schema '{source_schema}': {skipped_tables}")
-                logger.info(f"Remaining tables in chain: {[tk for tk, _ in filtered_tables_list]}")
-            tables_list = filtered_tables_list
-
-        # Tables are processed in the order they appear in the YAML file
-        # Log table ordering for debugging
-        logger.info(f"Creating MultiTable entity for chainId: {chain_id} with {len(tables_list)} tables in YAML order:")
-        for idx, (table_key, _) in enumerate(tables_list):
-            logger.info(f"  {idx+1}. Table {table_key}")
-
-
-        # We'll reuse the entity name captured during export if available
-        first_table_key, first_table_data = tables_list[0]
-        entity_name = first_table_data.get("entityName") or f"{source_schema}.{first_table_key}"
-
-        # Initialize tables, columns, and keys for the MultiTable entity
-        multi_tables = []
-        multi_columns = []
-        multi_keys = []
-        tables_properties = {}
-        # The source columns of each table, whose key flags the 2.3 key rules of its pair set (BOP-16 A).
-        chain_source_columns = {}
-
-        # Process each table in the chain (in YAML order)
-        for table_key, table_data in tables_list:
-            # Use sourceTableName if present (for duplicate tables with unique YAML keys)
-            # Otherwise use table_key as the actual table name
-            actual_table_name = table_data.get('sourceTableName', table_key) if table_data else table_key
-            
-            source_table_id = resolve_table_id(source_schema, actual_table_name, source_tables_lookup, "source")
-            # Get columns for this table using the actual table name
-            columns = get_table_columns(token, pipeline_id, source_agent_id, source_schema, actual_table_name)
-
-            # Add table to the list (use actual table name, not YAML key)
-            table_obj = {
-                "id": int(source_table_id),
-                "name": actual_table_name,
-                "schema": source_schema
-            }
-            multi_tables.append(table_obj)
-            chain_source_ids[table_key] = source_table_id
-
-            # Add table to tables_properties with optional whereClause
-            # Use actual table name for the key
-            source_table_key = f"{source_schema}.{actual_table_name}"
-            table_properties = {}
-            if table_data and 'whereClause' in table_data:
-                where_clause = table_data['whereClause']
-                if where_clause:
-                    table_properties["whereClause"] = str(where_clause)
-                    logger.info(f"Added whereClause for {source_table_key}: {where_clause}")
-            tables_properties[source_table_key] = table_properties
-
-            # Process columns
-            table_columns = []
-            for col in columns["columns"]:
-                # Use the id field from CoreHub API as the column ID
-                col_id = col.get('id')
-                if col_id is None:
-                    error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
-                    logger.error(error_msg)
-                    raise ValueError(error_msg)
-
-                table_columns.append(_enrich_column({
-                    "id": col_id,
-                    "position": col.get("position", 0),
-                    "name": col["name"],
-                    "alias": col["name"],
-                    "dataType": col.get("dataType"),
-                    "isPK": col.get("isPK", False) or _is_in_keys(col["name"], table_data), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
-                }, col))
-
-            # Add table header metadata followed by the columns for this table
-            multi_columns.append({
-                "id": int(source_table_id),
-                "name": table_key,
-                "schema": source_schema
-            })
-            multi_columns.append(table_columns)
-            chain_source_columns[table_key] = table_columns
-
-            # Process keys
-            custom_config = table_data
-            if custom_config and 'keys' in custom_config and custom_config['keys'] is not None:
-                keys = []
-                for key_def in custom_config['keys']:
-                    # Handle both string (key name) and dict (key with name/alias) formats
-                    if isinstance(key_def, dict):
-                        key_name = next(iter(key_def)) if not key_def.get('name') else key_def['name']
-                        key_config = key_def.get(key_name, {}) if isinstance(key_def.get(key_name), dict) else {}
-
-                        key_name = key_name or key_config.get('name')
-                        key_alias = key_config.get('name', key_name)
-                        key_type = key_config.get('dataType')
-                    else:
-                        key_name = key_def
-                        key_alias = key_def
-                        key_type = None
-
-                    # Try to find the key in the columns to get its type and ID if not specified (case-insensitive)
-                    found = False
-                    for col in columns["columns"]:
-                        if col["name"].lower() == key_name.lower():
-                            # Use the id field from CoreHub API as the column ID
-                            col_id = col.get('id')
-                            if col_id is None:
-                                error_msg = f"CRITICAL ERROR: Column '{key_name}' in table {table_key} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
-                                logger.error(error_msg)
-                                raise ValueError(error_msg)
-
-                            keys.append(_enrich_column({
-                                "id": col_id,  # Use actual ordinal position from database
-                                "position": col.get("position", 0),
-                                "name": col["name"],
-                                "alias": key_alias if key_alias.lower() != key_name.lower() else col["name"],
-                                "table": {
-                                    "id": str(source_table_id),
-                                    "name": table_key,
-                                    "schema": source_schema
-                                },
-                                "type": key_type or col.get("dataType")
-                            }, col))
-                            found = True
-                            break
-                    
-                    if not found:
-                        logger.warning(f"Warning: Key '{key_name}' not found in columns for table '{table_key}'. Searching in table_columns...")
-                        for col_def in table_columns:
-                            if col_def.get('name', '').lower() == key_name.lower():
-                                key_entry = copy.deepcopy(col_def)
-                                key_entry['table'] = {
-                                    "id": str(source_table_id),
-                                    "name": table_key,
-                                    "schema": source_schema
-                                }
-                                keys.append(key_entry)
-                                found = True
-                                break
-                    
-                    if not found:
-                        error_msg = f"CRITICAL ERROR: Key '{key_name}' not found in discovery or table_columns for MultiTable component '{table_key}' in schema '{source_schema}'."
-                        logger.error(error_msg)
-                        raise ValueError(error_msg)
-
-            else:
-                keys = []
-                for col in columns["columns"]:
-                    if _coerce_is_pk(col.get("isPK")):
-                        # Use the id field from CoreHub API as the column ID
-                        col_id = col.get('id')
-                        if col_id is None:
-                            error_msg = f"CRITICAL ERROR: Primary key column '{col.get('name')}' in table {table_key} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
-                            logger.error(error_msg)
-                            raise ValueError(error_msg)
-                            
-                        keys.append(_enrich_column({
-                            "id": col_id,  # Use actual ordinal position from database
-                            "position": col.get("position", 0),
-                            "name": col["name"],
-                            "alias": col["name"],
-                            "table": {
-                                "id": str(source_table_id),
-                                "name": table_key,
-                                "schema": source_schema
-                            },
-                            "type": col.get("dataType")
-                        }, col))
-
-            # Apply the charSet declared in the YAML on this component's source columns.
-            # table_columns is already referenced by multi_columns, so patching it in place
-            # is enough.
-            _apply_char_set_overrides(
-                table_columns,
-                _build_char_set_overrides((custom_config or {}).get('columns', [])),
-                table_key
-            )
-
-            # Add keys for this table
-            multi_keys.append(_enrich_column({
-                "id": str(source_table_id),
-                "name": table_key,
-                "schema": source_schema
-            }, col))
-            multi_keys.append(keys)
-
-        # Create source entity for MultiTable
-        source_custom_properties = table_data.get('customProperties', {}).get('source', {})
-        source_entity = {
-            "type": "MultiTable",
-            "entityId": "",
-            "entityName": entity_name,
-            "agentEntityId": "",
-            "entityType": {
-                "type": "Source",
-                "maxFetchItemsCountPerIteration": source_custom_properties.get('maxItemsCountPerIteration', 1000),
-                "maxTransactionMessageKbSize": source_custom_properties.get('maxTransactionMessageKbSize', 1024),
-                "pollingIntervalMilliseconds": source_custom_properties.get('pollingIntervalMilliseconds', 100),
-                "unchangedDataFilterType": "ENTIRE_ROW"
-            },
-            "agentId": source_agent_id,
-            "orderIndex": 0,
-            "customProperties": {},
-            "tablesProperties": tables_properties,
-            "tables": multi_tables,
-            "columns": multi_columns
-        }
-
-        # Initialize target tables and properties
-        target_tables = []
-        target_tables_properties = {}
-        target_columns = []
-        target_keys = []
-
-        # Process each table for the target (in YAML order)
-        for table_key, table_data in tables_list:
-            # Use sourceTableName if present (for duplicate tables with unique YAML keys)
-            actual_table_name = table_data.get('sourceTableName', table_key) if table_data else table_key
-            # On 2.3 the target table is the one the YAML `name` gives, which the first loop creates and the export
-            # writes; older CoreHubs keep the YAML key (BOP-19 B).
-            pair_target_name = _target_table_name(table_data or {}, actual_table_name, table_key) if grouped else table_key
-
-            target_table_id = resolve_table_id(yaml_target_schema, pair_target_name, target_tables_lookup, "target")
-            target_table_obj = {
-                "id": int(target_table_id),
-                "name": pair_target_name,
-                "schema": target_schema
-            }
-            target_tables.append(target_table_obj)
-            chain_target_ids[table_key] = target_table_id
-
-            # Add table to tables_properties
-            target_tables_properties[f"{target_schema}.{pair_target_name}"] = {}
-
-            # Get columns for this table using actual source table name
-            columns = get_table_columns(token, pipeline_id, source_agent_id, source_schema, actual_table_name)
-
-            # Discover target columns for this specific table to enable type-mapping fallback
-            try:
-                table_target_columns = get_table_columns(token, pipeline_id, target_agent_id, target_schema, pair_target_name)
-            except Exception as e:
-                logger.debug(f"Could not get target columns for {target_schema}.{pair_target_name}: {str(e)}")
-                table_target_columns = None
-            target_table_column_types = extract_target_column_types(table_target_columns)
-
-            # Per-table user-declared targetDataType overrides (by source column name, lower-cased)
-            table_target_data_type_overrides = _build_target_data_type_overrides(
-                table_data.get('columns', []) if table_data else []
-            )
-
-            if grouped:
-                # Gluesync 2.3: the pair goes through the SingleTable assembly, so its keys follow the R12 rules and it
-                # takes every 2.3 form (BOP-16 A). On 2.3 it replaces the target columns built below from the YAML
-                # mapping, the refusal of the 2.3 forms in a chain and the 1:1 entries of every mapped column.
-                try:
-                    pair = _TablePair(table_key, pair_target_name, columns, table_data or {},
-                                      chain_source_ids[table_key], target_table_id)
-                    target_table_columns, pair_relations, pair_field_functions, source_key_names =                         _assemble_chain_pair(ctx, pair, source_schema)
-                except EntityMappingError as error:
-                    chain_refusals.append(str(error))
-                    target_table_columns, pair_relations, pair_field_functions, source_key_names = [], [], [], set()
-                mt_field_functions.extend(pair_field_functions)
-                for col in chain_source_columns[table_key]:
-                    col["isPK"] = col["name"] in source_key_names
-                max_target_col_id = max([c["id"] for c in target_table_columns if isinstance(c.get("id"), int)] + [0])
-            else:
-                # Process columns for target
-                target_table_columns = []
-                max_target_col_id = 0
-            
-                # Check if this table has column mappings or whitelist
-                table_yaml_columns = table_data.get('columns', []) if table_data else []
-                table_has_mappings = _is_column_mappings(table_yaml_columns)
-                table_has_whitelist = _is_column_whitelist(table_yaml_columns)
-            
-                try:
-                    table_relations = yaml_relations(table_yaml_columns, label=table_key)
-                except EntityMappingError as error:
-                    chain_refusals.append(str(error))
-                    table_relations = None
-
-                # Build lookup from source column name -> (target_name, yaml_type)
-                source_to_target_mapping = {}
-                if table_has_mappings:
-                    for relation in table_relations or []:
-                        for source_name, target_name in _relation_pairs([relation]):
-                            source_to_target_mapping[source_name.lower()] = {
-                                'target_name': target_name,
-                                'yaml_type': relation["row"].get('type')
-                            }
-                elif table_has_whitelist:
-                    for yaml_col in table_yaml_columns:
-                        source_name = yaml_col.get('sourceName') or yaml_col.get('name')
-                        target_name = yaml_col.get('name')
-                        if source_name:
-                            source_to_target_mapping[source_name.lower()] = {
-                                'target_name': target_name,
-                                'yaml_type': yaml_col.get('type')
-                            }
-            
-                has_filter = table_has_mappings or table_has_whitelist
-                try:
-                    _refuse_forms_of_gluesync_23(table_relations, table_data, table_key)
-                except EntityMappingError as error:
-                    chain_refusals.append(str(error))
-            
-                # First add source columns mapped to target with their actual ordinal positions
-                for col in columns["columns"]:
-                    # Use the id field from CoreHub API as the column ID
-                    col_id = col.get('id')
-                    if col_id is None:
-                        error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
-                        logger.error(error_msg)
-                        raise ValueError(error_msg)
-                
-                    # When filter is active, skip columns not in the whitelist/mapping
-                    mapping_info = source_to_target_mapping.get(col["name"].lower())
-                    if has_filter and not mapping_info:
-                        logger.debug(f"Skipping column {col['name']} for MultiTable target: not in whitelist/mapping for table {table_key}")
-                        continue
-                
-                    # Use target name from mapping if available, otherwise source name
-                    target_name = mapping_info['target_name'] if mapping_info else col["name"]
-                    
-                    max_target_col_id = max(max_target_col_id, col_id)
-                    _resolved_dt = table_target_data_type_overrides.get(col["name"].lower()) or map_data_type(
-                        col.get("dataType"), source_node_info, target_node_info,
-                        source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
-                        target_table_column_types=target_table_column_types)
-                    target_table_columns.append(_enrich_column({
-                        "id": col_id,  # Use actual ordinal position from database
-                        "position": col.get("position", 0),
-                        "name": target_name,
-                        "dataType": _resolved_dt,
-                        "isPK": col.get("isPK", False) or _is_in_keys(col["name"], table_data), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
-                    }, col))
-
-            # Add target-only columns for this table if specified
-            table_custom_config = table_data.get('customProperties', {}).get('target', {}) if table_data else {}
-            table_target_only_columns = table_custom_config.get('targetOnlyColumns', [])
-
-            if table_target_only_columns:
-                logger.info(f"Adding {len(table_target_only_columns)} target-only columns for table {table_key} in MultiTable entity")
-                # Reuse table_target_columns already fetched above for type-mapping fallback
-                if table_target_columns and 'columns' in table_target_columns:
-                    logger.debug(f"Reusing {len(table_target_columns.get('columns', []))} existing columns in target table {target_schema}.{table_key}")
-
-                for target_col in table_target_only_columns:
-                    # Increment from the maximum target column ID
-                    max_target_col_id += 1
-
-                    # Support both string format and object format
-                    if isinstance(target_col, str):
-                        # Simple string format: just the column name
-                        col_name = target_col
-                        col_type = 'varchar'  # Default type
-                        col_data_length = 1024  # Default data length
-                        col_numeric_precision = 0  # Default numeric precision
-                        col_numeric_scale = 0  # Default numeric scale
-                        col_is_nullable = False  # Default nullable
-                    else:
-                        # Object format with user-defined properties
-                        col_name = target_col.get('name')
-                        col_type = target_col.get('dataType') or target_col.get('type') or 'varchar'  # null-safe: treat explicit null as missing
-                        col_data_length = target_col.get('dataLength', 1024)  # Default data length
-                        col_numeric_precision = target_col.get('numPrec', 0)  # Default numeric precision
-                        col_numeric_scale = target_col.get('numScale', 0)  # Default numeric scale
-                        col_is_nullable = target_col.get('isNullable', False)  # Default nullable
-
-                    # Check if this column already exists in the target table
-                    discovered_column = None
-                    if table_target_columns and 'columns' in table_target_columns:
-                        discovered_column = next(
-                            (col for col in table_target_columns['columns'] if col.get('name') == col_name),
-                            None
-                        )
-
-                    if discovered_column:
-                        # Use discovered column properties (priority over user-defined)
-                        logger.info(f"Using discovered properties for target-only column '{col_name}' from target table")
-                        col_type = discovered_column.get('dataType', discovered_column.get('type', col_type))
-                        col_data_length = discovered_column.get('charMaxLength', col_data_length)
-                        col_numeric_precision = discovered_column.get('numPrec', col_numeric_precision)
-                        col_numeric_scale = discovered_column.get('numScale', col_numeric_scale)
-                        col_is_nullable = discovered_column.get('isNullable', col_is_nullable)
-                    else:
-                        # Column doesn't exist in target table, use user-defined properties
-                        logger.debug(f"Using user-defined properties for target-only column '{col_name}' (not found in target table)")
-
-                        # Validate that required properties are provided for user-defined target-only columns
-                        if isinstance(target_col, dict):
-                            required_props = ['name', 'type', 'dataLength', 'numericPrecision', 'numericScale', 'isNullable']
-                            missing_props = [prop for prop in required_props if prop not in target_col or target_col.get(prop) is None]
-                            if missing_props:
-                                error_msg = f"Target-only column '{col_name}' in table '{table_key}' is missing required properties: {missing_props}. All properties (name, type, dataLength, numericPrecision, numericScale, isNullable) must be specified when the column doesn't exist in the target table."
-                                logger.error(error_msg)
-                                if not skip_errors:
-                                    raise ValueError(error_msg)
-
-                    # Map the column type to target node type
-                    mapped_type = map_data_type(col_type, source_node_info, target_node_info,
-                                               source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
-                                               target_table_column_types=target_table_column_types)
-
-                    target_table_columns.append(_enrich_column({
-                        "id": max_target_col_id,  # Continue from last target column ID
-                        "position": 0,
-                        "name": col_name,
-                        "type": mapped_type,
-                        "charMaxLength": col_data_length,
-                        "numPrec": col_numeric_precision,
-                        "numScale": col_numeric_scale,
-                        "isNullable": col_is_nullable, "isIdentity": False,
-                        "isPK": False  # Target-only columns are not primary keys
-                    }, col))
-                    logger.debug(f"Added target-only column to MultiTable: {col_name} (type: {mapped_type}, id: {max_target_col_id})")
-
-            if grouped:
-                # Every column of the pair in one entry: the pair's relations, every discovered source column the
-                # MultiTable source holds (a filtered one read and never written, BOP-17.4), and each target-only
-                # column fed by no source, which needs a field function that produces it (P12, BOP-12 A).
-                target_ids_by_name = {c["name"]: c["id"] for c in target_table_columns}
-                for target_col in table_target_only_columns:
-                    col_name = target_col if isinstance(target_col, str) else target_col.get('name')
-                    expression = normalize_expression_for_corehub(target_col.get('expression')) \
-                        if isinstance(target_col, dict) else None
-                    if not expression:
-                        chain_refusals.append(
-                            f"target-only column {col_name} of {table_key} is fed by no source column and has no "
-                            f"expression: a Gluesync 2.3 CoreHub needs a field function that produces it (P12)"
-                        )
-                        continue
-                    mt_field_functions.append({
-                        "columnId": target_ids_by_name.get(col_name),
-                        "tableOrObjectId": int(target_table_id),
-                        "expression": expression,
-                    })
-                try:
-                    mt_entries.extend(build_entries(
-                        chain_source_ids[table_key], target_table_id, pair_relations, columns["columns"],
-                        target_table_columns, grouped=True, label=table_key,
-                    ))
-                except EntityMappingError as error:
-                    chain_refusals.append(str(error))
-
-            # Add columns for this table
-            target_columns.append({
-                "id": int(target_table_id),
-                "name": pair_target_name,
-                "schema": target_schema
-            })
-            target_columns.append(target_table_columns)
-
-            # The target keys of a 2.3 pair are its assembled target columns flagged isPK (above).
-            if not grouped:
-                # Process keys for target with IDs
-                custom_config = table_data
-                if custom_config and 'keys' in custom_config and custom_config['keys'] is not None:
-                    keys = []
-                    for key_def in custom_config['keys']:
-                        if isinstance(key_def, dict):
-                            key_name = next(iter(key_def)) if not key_def.get('name') else key_def['name']
-                        else:
-                            key_name = key_def
-
-                        # Try to find the key in the columns to get its type and ID (case-insensitive)
-                        found = False
-                        for col in columns["columns"]:
-                            if col["name"].lower() == key_name.lower():
-                                # Use the id field from CoreHub API as the column ID
-                                col_id = col.get('id')
-                                if col_id is None:
-                                    error_msg = f"CRITICAL ERROR: Column '{key_name}' in table {table_key} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
-                                    logger.error(error_msg)
-                                    raise ValueError(error_msg)
-                            
-                                # Use target name from mapping if available, otherwise source name
-                                key_mapping_info = source_to_target_mapping.get(col["name"].lower())
-                                target_key_name = key_mapping_info['target_name'] if key_mapping_info else col["name"]
-                                
-                                _resolved_dt = table_target_data_type_overrides.get(col["name"].lower()) or map_data_type(
-                                    col.get("dataType"), source_node_info, target_node_info,
-                                    source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
-                                    target_table_column_types=target_table_column_types)
-                                keys.append(_enrich_column({
-                                    "id": col_id,  # Use actual ordinal position from database
-                                    "position": col.get("position", 0),
-                                    "name": target_key_name,
-                                    "type": _resolved_dt
-                                }, col))
-                                found = True
-                                break
-                    
-                        if not found:
-                            logger.warning(f"Warning: Target key '{key_name}' not found in columns for table '{table_key}'. Searching in target_table_columns...")
-                            for col_def in target_table_columns:
-                                if col_def.get('name', '').lower() == key_name.lower():
-                                    keys.append(copy.deepcopy(col_def))
-                                    found = True
-                                    break
-                    
-                        if not found:
-                            error_msg = f"CRITICAL ERROR: Target key '{key_name}' not found in discovery or target_table_columns for MultiTable component '{table_key}' in schema '{yaml_target_schema}'."
-                            logger.error(error_msg)
-                            raise ValueError(error_msg)
-
-
-                else:
-                    keys = []
-                    for col in columns["columns"]:
-                        if _coerce_is_pk(col.get("isPK")):
-                            # Use ordinalPosition from API if available
-                            col_id = col.get('position', col.get('id'))
-                            if col_id is None:
-                                # Fallback to finding position if not provided
-                                col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
-                            
-                            _resolved_dt = table_target_data_type_overrides.get(col["name"].lower()) or map_data_type(
-                                col.get("dataType"), source_node_info, target_node_info,
-                                source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag,
-                                target_table_column_types=target_table_column_types)
-                            keys.append(_enrich_column({
-                                "id": col_id,  # Use actual ordinal position from database
-                                "position": col.get("position", 0),
-                                "name": col["name"],
-                                "type": _resolved_dt
-                            }, col))
-
-            else:
-                keys = [col for col in target_table_columns if col.get("isPK")]
-
-            # Add keys for this table
-            target_keys.append(_enrich_column({
-                "id": str(target_table_id),
-                "name": table_key,
-                "schema": target_schema
-            }, col))
-            target_keys.append(keys)
-
-        # Get allowed operations and other target settings
-        mt_target_props = table_data.get('customProperties', {}).get('target', {}) if table_data else {}
-        allowed_operations = get_allowed_operations(mt_target_props)
-        
-        # Create table mapping matrix for MultiTable entities
-        columns_mapping_matrix = []
-        for table_key, table_data in ([] if grouped else tables_list):
-            # Use sourceTableName if present (for duplicate tables with unique YAML keys)
-            actual_table_name = table_data.get('sourceTableName', table_key) if table_data else table_key
-            
-            source_table_id = chain_source_ids.get(table_key) or resolve_table_id(
-                source_schema, actual_table_name, source_tables_lookup, "source"
-            )
-            target_table_id = chain_target_ids.get(table_key) or resolve_table_id(
-                yaml_target_schema, table_key, target_tables_lookup, "target"
-            )
-            logger.info(f"Table mapping for {table_key}: source_id={source_table_id}, target_id={target_table_id}")
-
-            # Get columns for this table to create mappings for each column (use actual table name)
-            columns = get_table_columns(token, pipeline_id, source_agent_id, source_schema, actual_table_name)
-            if columns and 'columns' in columns:
-                for col in columns['columns']:
-                    # Use the id field from CoreHub API as the column ID
-                    col_id = col.get('id')
-                    if col_id is None:
-                        error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_key} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
-                        logger.error(error_msg)
-                        raise ValueError(error_msg)
-                    columns_mapping_matrix.append({
-                        "sourceTableObjectId": source_table_id,
-                        "targetTableObjectId": target_table_id,
-                        "sourceColumnId": col_id,
-                        "targetColumnId": col_id
-                    })
-        
-        if grouped:
-            columns_mapping_matrix = encode_entries(mt_entries, grouped=True)
-
-        target_custom_properties = {
-            "ttlValue": table_data.get('customProperties', {}).get('target', {}).get('ttlValue', 0)
-        }
-
-        post_snapshot_cmd = table_data.get('customProperties', {}).get('target', {}).get('postSnapshotCommand', {})
-        if isinstance(post_snapshot_cmd, dict) and post_snapshot_cmd:
-            target_custom_properties["postSnapshotCommand"] = post_snapshot_cmd
-
-        pre_snapshot_cmd = table_data.get('customProperties', {}).get('target', {}).get('preSnapshotCommand', {})
-        if isinstance(pre_snapshot_cmd, dict) and pre_snapshot_cmd:
-            target_custom_properties["preSnapshotCommand"] = pre_snapshot_cmd
-
-        # Create the target entity for MultiTable
-        target_entity = {
-            "type": "MultiTable",
-            "entityId": "",
-            "entityName": entity_name,
-            "agentEntityId": "",
-            "entityType": {
-                "type": "Target",
-                "allowedOperations": allowed_operations,
-                "snapshotWritingConcurrency": mt_target_props.get('snapshotWritingConcurrency', 1),
-                "columnsMappingMatrix": columns_mapping_matrix,
-                "tablesWithUnlockedSchema": [],
-                "tablesWithUnlockedDataTypes": [],
-                "useBulkOperationsDuringCDC": mt_target_props.get('useBulkOperationsDuringCDC', False),
-                "useBulkOperationsWhileSnapshot": mt_target_props.get('useBulkOperationsWhileSnapshot', False)
-            },
-            "agentId": target_agent_id,
-            "orderIndex": 0,
-            "customProperties": target_custom_properties,
-            "tablesProperties": target_tables_properties,
-            "tables": target_tables,
-            "columns": target_columns
-        }
-
-        if mt_field_functions:
-            target_entity["entityType"]["fieldFunctions"] = mt_field_functions
-
-        # Get group info for multi-table entity
-        group_id = groupId_map.get(table_data.get('groupId', '_default'), table_data.get('groupId', '_default'))
-        group_name = next((name for name, gid in groupId_map.items() if gid == group_id), group_id)
-        logger.info(f"Assigning multi-table entity '{entity_name}' to group: {group_name} (ID: {group_id})")
-        
-        # Create the MultiTable entity
-        entity_payload = {
-            "entityId": "",
-            "entityName": entity_name,
-            "agentEntities": [source_entity, target_entity],
-        }
-        
-        # Only add groupId if it's not the default
-        if group_id and group_id != '_default':
-            entity_payload["groupId"] = group_id
-            
-        multi_table_entity = {
-            "entities": [entity_payload]
-        }
-
-        if chain_refusals:
-            refuse_table(f"MultiTable chain {chain_id}", EntityMappingError("; ".join(chain_refusals)))
-            continue
-
-        # Add to multi_table_entities for separate processing
-        multi_table_entities.append(multi_table_entity)
-
-    # Process standard entities in chunks
-    # Now process MultiTable entities first
-    successful_multi_tables = 0
-    failed_multi_tables = 0
-    total_multi_tables = len(multi_table_entities)
-
-    if total_multi_tables > 0:
-        logger.info(f"Processing {total_multi_tables} MultiTable entities...")
-
-        for i, multi_entity in enumerate(multi_table_entities):
-            try:
-                entity_name = multi_entity['entities'][0]['entityName']
-                logger.info(f"Creating MultiTable entity {i+1}/{total_multi_tables}: {entity_name}")
-
-                # Log entities being sent
-                for idx, agent_entity in enumerate(multi_entity['entities'][0].get('agentEntities', [])):
-                    agent_type = "source" if idx == 0 else "target"
-                    
-                    # Log the final tables ordering in payload before sending
-                    if 'tables' in agent_entity:
-                        logger.info(f"Final tables order in payload for {entity_name} ({agent_type}):")
-                        for table_idx, table in enumerate(agent_entity.get('tables', [])):
-                            logger.info(f"  {table_idx+1}. {table.get('schema')}.{table.get('name')}")
-
-                # Clean up payload before sending: strip 'alias' and inject 'tableId' into columns
-                # MultiTable 'columns' is an alternating list: [header_dict, [col, col, ...], header_dict, [col, ...], ...]
-                for entity_payload in multi_entity.get('entities', []):
-                    for agent_entity in entity_payload.get('agentEntities', []):
-                        mt_columns = agent_entity.get('columns', [])
-                        current_table_id = 0
-                        for item in mt_columns:
-                            if isinstance(item, dict):
-                                # Table header: capture the table id for the columns that follow
-                                try:
-                                    current_table_id = int(item.get('id', 0))
-                                except (TypeError, ValueError):
-                                    current_table_id = 0
-                            elif isinstance(item, list):
-                                for col in item:
-                                    if isinstance(col, dict):
-                                        col.pop('alias', None)
-                                        if current_table_id:
-                                            col['tableId'] = current_table_id
-
-                logger.debug(f"MultiTable payload sent to /pipelines/{pipeline_id}/config/entities:")
-                logger.debug(json.dumps(multi_entity, indent=2))
-
-                response = fetch_core_hub(
-                    f"/pipelines/{pipeline_id}/config/entities",
-                    method="PUT",
-                    token=token,
-                    body=multi_entity
-                )
-                logger.info(f"Successfully created MultiTable entity {i+1}/{total_multi_tables}")
-                successful_multi_tables += 1
-            except Exception as e:
-                error_msg = str(e)
-                logger.error(f"Error creating MultiTable entity {i+1}/{total_multi_tables}: {error_msg}")
-                failed_multi_tables += 1
-                errors.append(f"{multi_entity['entities'][0].get('entityName', 'unknown')}: {error_msg}")
-                if not skip_errors:
-                    raise
-                logger.warning("Skipping MultiTable entity due to skip_errors=True")
-
-    # Process regular entities in chunks
-    total_entities = len(entities)
-    successful_entities = 0
-    failed_entities = 0
-
-    if total_entities > 0:
-        logger.info(f"Processing {total_entities} regular entities in chunks of {chunk_size}...")
-
-        for i in range(0, total_entities, chunk_size):
-            chunk = entities[i:i + chunk_size]
-            chunk_data = {"entities": chunk}
-            chunk_start = i + 1
-            chunk_end = min(i + chunk_size, total_entities)
-
-            logger.info(f"\nProcessing chunk {chunk_start}-{chunk_end} of {total_entities} entities...")
-
-            # Log entities being sent
-            for entity_payload in chunk_data.get('entities', []):
-                entity_name = entity_payload.get('entityName', 'unknown')
-                logger.info(f"Entity: {entity_name}")
-                for idx, agent_entity in enumerate(entity_payload.get('agentEntities', [])):
-                    agent_type = "source" if idx == 0 else "target"
-                    
-                    # Log the final tables ordering in payload before sending
-                    if 'tables' in agent_entity:
-                        logger.info(f"Final tables order in payload for {entity_name} ({agent_type}):")
-                        for table_idx, table in enumerate(agent_entity.get('tables', [])):
-                            logger.info(f"  {table_idx+1}. {table.get('schema')}.{table.get('name')}")
-
-            # Clean up payload before sending
-            for entity_payload in chunk_data.get('entities', []):
-                for agent_entity in entity_payload.get('agentEntities', []):
-                    # Handle SingleTable (columns are at agent_entity level)
-                    if 'table' in agent_entity and 'columns' in agent_entity:
-                        table_id = int(agent_entity['table'].get('id', 0))
-                        for col in agent_entity['columns']:
-                            col.pop('alias', None)
-                            if table_id:
-                                col['tableId'] = table_id
-                    
-                    # Handle MultiTable/NoSql (columns are inside tables array)
-                    for table_item in agent_entity.get('tables', []):
-                        if 'table' in table_item and 'columns' in table_item:
-                            table_id = int(table_item['table'].get('id', 0))
-                            for col in table_item['columns']:
-                                col.pop('alias', None)
-                                if table_id:
-                                    col['tableId'] = table_id
-
-            try:
-                logger.debug(f"Payload sent to /pipelines/{pipeline_id}/config/entities:")
-                logger.debug(json.dumps(chunk_data, indent=2))
-                
-                response = fetch_core_hub(
-                    f"/pipelines/{pipeline_id}/config/entities",
-                    method="PUT",
-                    token=token,
-                    body=chunk_data
-                )
-                logger.info(f"Successfully created entities {chunk_start}-{chunk_end}")
-                successful_entities += len(chunk)
-            except Exception as e:
-                error_msg = str(e)
-                logger.error(f"Error creating entities {chunk_start}-{chunk_end}: {error_msg}")
-                if not skip_errors:
-                    raise
-                if _http_status(e) == 400 and len(chunk) > 1:
-                    # A Gluesync 2.3 CoreHub refuses the whole request at the first entity its mapping stage
-                    # refuses: send the chunk again one entity at a time, so the valid ones are saved (C-6).
-                    logger.warning(f"Chunk {chunk_start}-{chunk_end} refused; sending its {len(chunk)} entities one by one")
-                    for entity_payload in chunk:
-                        try:
-                            fetch_core_hub(
-                                f"/pipelines/{pipeline_id}/config/entities",
-                                method="PUT",
-                                token=token,
-                                body={"entities": [entity_payload]}
-                            )
-                            successful_entities += 1
-                        except Exception as entity_error:  # pylint: disable=broad-except
-                            logger.error(f"Entity {entity_payload.get('entityName', 'unknown')} refused by CoreHub: {entity_error}")
-                            failed_entities += 1
-                            errors.append(f"{entity_payload.get('entityName', 'unknown')}: {entity_error}")
-                    continue
-                failed_entities += len(chunk)
-                errors.extend(f"{entity_payload.get('entityName', 'unknown')}: {error_msg}" for entity_payload in chunk)
-                logger.warning("Skipping chunk due to skip_errors=True")
-
-    if refused_tables:
-        logger.error(f"{len(refused_tables)} entities refused before any request: {', '.join(refused_tables)}")
-        failed_entities += len(refused_tables)
-        total_entities += len(refused_tables)
-
-    apply_logical_partitions(token, pipeline_id, pending_partition_requests, skip_errors)
-
-    print(f"\nProcessing complete:")
-    print(f"- Total regular entities: {total_entities}")
-    print(f"- Successfully created regular entities: {successful_entities}")
-    print(f"- Failed regular entities: {failed_entities}")
-    print(f"- Total MultiTable entities: {total_multi_tables}")
-    print(f"- Successfully created MultiTable entities: {successful_multi_tables}")
-    print(f"- Failed MultiTable entities: {failed_multi_tables}")
+        multi_table_entity = _build_multi_table_entity(run, chain_id, tables_list)
+        if multi_table_entity is not None:
+            multi_table_entities.append(multi_table_entity)
+
+    # Process MultiTable entities first, then the regular entities in chunks
+    successful_multi_tables, failed_multi_tables, total_multi_tables = \
+        _send_multi_table_entities(run, multi_table_entities)
+    total_entities, successful_entities, failed_entities = _send_entity_chunks(run, chunk_size)
+
+    if run.refused_tables:
+        logger.error(f"{len(run.refused_tables)} entities refused before any request: {', '.join(run.refused_tables)}")
+        failed_entities += len(run.refused_tables)
+        total_entities += len(run.refused_tables)
+
+    _apply_logical_partitions(token, pipeline_id, run.pending_partition_requests, skip_errors)
+
+    _print_summary({
+        "total": total_entities, "successful": successful_entities, "failed": failed_entities,
+        "total_multi": total_multi_tables, "successful_multi": successful_multi_tables,
+        "failed_multi": failed_multi_tables,
+    })
 
     # MultiTable entities count with the regular ones, as their chains refused before any request already do.
     result = {
         "successful": successful_entities + successful_multi_tables,
         "failed": failed_entities + failed_multi_tables,
         "total": total_entities + total_multi_tables,
-        "errors": errors,
+        "errors": run.errors,
     }
 
-    # Assign entities to their groups if successful
+    # Assign entities to their groups and create schedules if successful
     if successful_entities > 0:
-        # Group entities by their target group
-        entities_by_group = {}
-        
-        # Get all created entities
-        try:
-            response = fetch_core_hub(f"/pipelines/{pipeline_id}/entities", token=token)
-            if isinstance(response, list):
-                for entity in response:
-                    if 'entity' in entity and 'entityId' in entity['entity']:
-                        entity_id = entity['entity']['entityId']
-                        group_id = entity['entity'].get('groupId', '_default')
-                        
-                        # Skip if no group is specified (will use _default)
-                        if not group_id or group_id == '_default':
-                            logger.debug(f"Entity {entity_id} has no group specified, will use _default")
-                            continue
-                        
-                        # If group_id is a name, try to get the mapped ID
-                        if group_id in groupId_map:
-                            mapped_group_id = groupId_map[group_id]
-                            logger.debug(f"Mapped group name '{group_id}' to ID: {mapped_group_id}")
-                            group_id = mapped_group_id
-                        
-                        if group_id not in entities_by_group:
-                            entities_by_group[group_id] = []
-                        entities_by_group[group_id].append(entity_id)
-            
-            # Make assignment requests for each group
-            for group_id, entity_ids in entities_by_group.items():
-                if entity_ids:  # Only proceed if we have entities to assign
-                    # Skip if group_id is _default or None
-                    if not group_id or group_id == '_default':
-                        logger.debug(f"Skipping assignment for default group")
-                        continue
-                        
-                    logger.info(f"Assigning {len(entity_ids)} entities to group ID: {group_id}")
-                    success = assign_entities_to_group(token, pipeline_id, group_id, entity_ids)
-                    if not success and not skip_errors:
-                        raise Exception(f"Failed to assign entities to group {group_id}")
-                    elif success:
-                        logger.info(f"Successfully assigned {len(entity_ids)} entities to group {group_id}")
-                    
-        except Exception as e:
-            logger.error(f"Error during group assignment: {str(e)}")
-            if not skip_errors:
-                raise
-
-    # Create schedules if successful
-    if successful_entities > 0:
-        # Check if any schedules are defined in the YAML config for the current source_schema
-        has_schedules = False
-        current_schema_config = None
-        if yaml_config:
-            schemas_dict = yaml_config.get('schemas', {})
-            if not schemas_dict:
-                # Check if top-level keys are schemas
-                schemas_dict = {k: v for k, v in yaml_config.items() if isinstance(v, dict)}
-                
-            current_schema_config = schemas_dict.get(source_schema)
-            if not current_schema_config:
-                logger.debug(f"Schema '{source_schema}' not found in schemas_dict keys: {list(schemas_dict.keys())}")
-                # As a fallback, try direct lookup
-                current_schema_config = yaml_config.get(source_schema, {})
-
-            if isinstance(current_schema_config, dict):
-                # Pipeline-level schedules
-                if 'schedules' in current_schema_config:
-                    has_schedules = True
-                # Group-level schedules
-                if 'group_schedules' in current_schema_config:
-                    group_scheds = current_schema_config['group_schedules']
-                    if isinstance(group_scheds, dict):
-                        if any(isinstance(v, list) and v for v in group_scheds.values()):
-                            has_schedules = True
-                    elif isinstance(group_scheds, list) and group_scheds:
-                        has_schedules = True
-                # Entity-level schedules
-                if 'tables' in current_schema_config and 'custom' in current_schema_config['tables']:
-                    for table_data in current_schema_config['tables']['custom'].values():
-                        if 'schedules' in table_data:
-                            has_schedules = True
-                            break
-
-        if not has_schedules:
-            logger.debug("No schedules defined in YAML config, skipping schedule creation")
-            return result
-            
-        logger.info("Creating schedules for current schema...")
-
-        # Get updated entity IDs from the pipeline config
-        try:
-            response = fetch_core_hub(f"/pipelines/{pipeline_id}/entities", token=token)
-            logger.info(f"Retrieved the following entities: {response}")
-
-            if not isinstance(response, list) or not response:
-                logger.warning(f"Unexpected response when fetching entities: {response}")
-                return result
-
-            # Process entities in the format used in main.py
-            entities_map = {}
-            for item in response:
-                if 'entity' in item and isinstance(item['entity'], dict):
-                    entity = item['entity']
-                    if 'entityId' in entity and 'entityName' in entity:
-                        entity_id = entity['entityId']
-                        entity_name = entity['entityName']
-                        # Extract table name from entity name (typically schema.table)
-                        # Split at first dot only to preserve dots inside table names.
-                        parts = entity_name.split('.', 1)
-                        table_name = parts[-1] if len(parts) > 1 else entity_name
-                        entities_map[table_name] = entity_id
-                        logger.info(f"Found entity: {entity_name} (ID: {entity_id})")
-
-            # Create schedules for each entity found in the YAML config (only for current source_schema)
-            if yaml_config and isinstance(current_schema_config, dict):
-                # Track which tables we've already processed to avoid duplicates
-                processed_tables = set()
-
-                if 'tables' in current_schema_config and 'custom' in current_schema_config['tables']:
-                    custom_tables = current_schema_config['tables']['custom']
-                    for table_key, table_data in custom_tables.items():
-                        # Skip if we've already processed this table
-                        if table_key in processed_tables:
-                            continue
-
-                        processed_tables.add(table_key)
-
-                        # Use the table_key directly instead of looking for 'name' field
-                        table_name = table_key
-
-                        if table_name in entities_map and 'schedules' in table_data:
-                            entity_id = entities_map[table_name]
-                            logger.info(f"Creating schedules for table {table_name} (Entity ID: {entity_id})")
-                            create_entity_schedules(token, pipeline_id, entity_id, table_name,
-                                                    table_data['schedules'], chronos_token=chronos_token)
-                        else:
-                            logger.warning(
-                                f"Unable to create schedules for {table_name}. Entity not found or no schedules defined.")
-
-            # Create group-level schedules if defined (only for current source_schema)
-            if yaml_config and isinstance(current_schema_config, dict) and 'group_schedules' in current_schema_config:
-                group_scheds_cfg = current_schema_config.get('group_schedules')
-                if group_scheds_cfg:
-                    logger.info("Creating group-level schedules...")
-                    try:
-                        known_ids = {gid for gid in groupId_map.values() if gid and gid != '_default'}
-
-                        def _expand_group_ids(raw_ids):
-                            if raw_ids is None:
-                                return []
-                            if isinstance(raw_ids, str):
-                                candidates = [raw_ids]
-                            else:
-                                candidates = list(raw_ids)
-                            resolved = []
-                            for candidate in candidates:
-                                candidate_str = str(candidate).strip()
-                                if not candidate_str:
-                                    continue
-                                if candidate_str == '*':
-                                    if known_ids:
-                                        resolved.extend(list(known_ids))
-                                    else:
-                                        logger.warning("Wildcard group_ids requested but no groups were created in this run")
-                                    continue
-                                if candidate_str in groupId_map and groupId_map[candidate_str] and groupId_map[candidate_str] != '_default':
-                                    resolved.append(groupId_map[candidate_str])
-                                elif candidate_str in known_ids:
-                                    resolved.append(candidate_str)
-                                else:
-                                    logger.warning(f"Skipping unknown group reference '{candidate_str}' in schedule configuration")
-                            # Deduplicate while preserving order
-                            seen = set()
-                            ordered = []
-                            for gid in resolved:
-                                if gid not in seen:
-                                    seen.add(gid)
-                                    ordered.append(gid)
-                            return ordered
-
-                        base_schedule_list = []
-                        if isinstance(group_scheds_cfg, dict):
-                            for grp_key, schedules_cfg in group_scheds_cfg.items():
-                                if not isinstance(schedules_cfg, list):
-                                    logger.warning(
-                                        f"Skipping group schedule block for '{grp_key}': expected a list of schedule objects"
-                                    )
-                                    continue
-                                for schedule_cfg in schedules_cfg:
-                                    if not isinstance(schedule_cfg, dict):
-                                        continue
-                                    schedule_copy = copy.deepcopy(schedule_cfg)
-                                    schedule_copy['group_ids'] = [grp_key]
-                                    base_schedule_list.append(schedule_copy)
-                        elif isinstance(group_scheds_cfg, list):
-                            for schedule_cfg in group_scheds_cfg:
-                                if isinstance(schedule_cfg, dict):
-                                    base_schedule_list.append(copy.deepcopy(schedule_cfg))
-
-                        prepared_schedules = []
-                        for schedule_cfg in base_schedule_list:
-                            raw_ids = schedule_cfg.get('group_ids')
-                            if not raw_ids and 'groups' in schedule_cfg:
-                                raw_ids = schedule_cfg['groups']
-                            resolved_ids = _expand_group_ids(raw_ids)
-                            if not resolved_ids:
-                                logger.warning("No valid group IDs resolved for schedule; skipping entry")
-                                continue
-                            schedule_copy = copy.deepcopy(schedule_cfg)
-                            schedule_copy['group_ids'] = resolved_ids
-                            schedule_copy.pop('groups', None)
-                            prepared_schedules.append(schedule_copy)
-
-                        if prepared_schedules:
-                            create_group_schedules(token, pipeline_id, prepared_schedules, chronos_token=chronos_token)
-                        else:
-                            logger.debug("No valid group schedules to create after resolving targets")
-                    except Exception as e:
-                        logger.error(f"Error creating group-level schedules: {str(e)}")
-
-            # Create pipeline-level schedules if defined
-            if yaml_config and isinstance(current_schema_config, dict):
-                if 'schedules' in current_schema_config:
-                    logger.info(f"Creating pipeline-level schedules for schema {source_schema}")
-                    create_pipeline_schedules(token, pipeline_id, current_schema_config['schedules'], chronos_token=chronos_token)
-
-        except Exception as e:
-            logger.error(f"Error creating schedules: {str(e)}")
-            # Don't fail the whole process just because scheduling failed
+        _assign_entities_to_groups(run)
+        _create_schedules(run, yaml_config, chronos_token)
 
     return result
 
