@@ -81,18 +81,20 @@ def _build_target_data_type_overrides(yaml_columns):
         override_value = entry.get('targetDataType')
         if not override_value:
             continue
-        # Export/explicit mapping shape
-        if 'source' in entry:
-            src = entry.get('source')
-            if src:
-                overrides[str(src).lower()] = override_value
-            continue
-        # Whitelist shape
-        if 'name' in entry:
-            src = entry.get('sourceName') or entry.get('name')
-            if src:
-                overrides[str(src).lower()] = override_value
+        src = _yaml_row_source_name(entry)
+        if src:
+            overrides[str(src).lower()] = override_value
     return overrides
+
+
+def _yaml_row_source_name(entry):
+    """The source column a YAML ``columns:`` row names: ``source`` (export/explicit mapping shape), else
+    ``sourceName`` or ``name`` (whitelist shape); None for a row of neither shape."""
+    if 'source' in entry:
+        return entry.get('source')
+    if 'name' in entry:
+        return entry.get('sourceName') or entry.get('name')
+    return None
 
 
 def _build_char_set_overrides(yaml_columns):
@@ -126,12 +128,7 @@ def _build_char_set_overrides(yaml_columns):
         if not isinstance(entry, dict) or 'charSet' not in entry:
             continue
         # Export/explicit mapping shape, then whitelist shape
-        if 'source' in entry:
-            src = entry.get('source')
-        elif 'name' in entry:
-            src = entry.get('sourceName') or entry.get('name')
-        else:
-            continue
+        src = _yaml_row_source_name(entry)
         if not src:
             continue
         value = entry.get('charSet')
@@ -148,20 +145,25 @@ def _apply_char_set_overrides(columns, overrides, table_name=None):
     """
     if not overrides or not columns:
         return
+    where = f' of table {table_name}' if table_name else ''
     for col in columns:
         if not isinstance(col, dict):
             continue
         override = overrides.get(str(col.get('name', '')).lower())
-        if override is None:
-            continue
-        if override is _CHAR_SET_CLEARED:
-            # Omitted rather than sent as null: that is how a column with no character set
-            # is represented in the entity payload.
-            col.pop('charSet', None)
-            logger.info(f"Column '{col.get('name')}'{f' of table {table_name}' if table_name else ''}: charSet cleared by YAML")
-        else:
-            col['charSet'] = override
-            logger.info(f"Column '{col.get('name')}'{f' of table {table_name}' if table_name else ''}: charSet overridden to '{override}' by YAML")
+        if override is not None:
+            _apply_char_set_override(col, override, where)
+
+
+def _apply_char_set_override(col, override, where):
+    """Set (or clear, for :data:`_CHAR_SET_CLEARED`) the ``charSet`` of one source column, logging it."""
+    if override is _CHAR_SET_CLEARED:
+        # Omitted rather than sent as null: that is how a column with no character set
+        # is represented in the entity payload.
+        col.pop('charSet', None)
+        logger.info(f"Column '{col.get('name')}'{where}: charSet cleared by YAML")
+    else:
+        col['charSet'] = override
+        logger.info(f"Column '{col.get('name')}'{where}: charSet overridden to '{override}' by YAML")
 
 
 def _is_target_known_type(data_type, target_node_info):
@@ -197,10 +199,17 @@ def _canonicalize_target_type(data_type, target_node_info):
         default_type = entry.get('defaultType')
         if default_type and str(default_type).strip().lower() == needle:
             return str(default_type)
-        for st in entry.get('supportedTypes') or []:
-            if st and str(st).strip().lower() == needle and supported_match is None:
-                supported_match = str(st)
+        if supported_match is None:
+            supported_match = _supported_type_match(entry, needle)
     return supported_match
+
+
+def _supported_type_match(matrix_entry, needle):
+    """The first of the ``supportedTypes`` of a ``dataTypesMatrix`` entry spelt ``needle`` case-insensitively."""
+    for st in matrix_entry.get('supportedTypes') or []:
+        if st and str(st).strip().lower() == needle:
+            return str(st)
+    return None
 
 
 def _is_in_keys(col_name, custom_config):
@@ -442,6 +451,328 @@ def _paint_is_pk_on_columns(columns_def, key_column_dicts):
             col["isPK"] = True
 
 
+_MISSING_ID_DETAIL = " This indicates a serious issue with the discovery API."
+
+
+def _raise_missing_column_id(column_name, table_name, detail=True):
+    """Log and raise the error of a discovered column that CoreHub returned without its ``id``."""
+    error_msg = f"CRITICAL ERROR: Column '{column_name}' in table {table_name} is missing 'id' field in CoreHub API response."
+    if detail:
+        error_msg += _MISSING_ID_DETAIL
+    logger.error(error_msg)
+    raise ValueError(error_msg)
+
+
+def _require_column_id(col, table_name, label=None, detail=True):
+    """The ``id`` of a discovered column, refused (see :func:`_raise_missing_column_id`) when CoreHub left it out.
+
+    ``label`` names the column in the error, the discovered name when None.
+    """
+    col_id = col.get('id')
+    if col_id is None:
+        _raise_missing_column_id(col.get('name') if label is None else label, table_name, detail)
+    return col_id
+
+
+def _source_is_pk(col, name, custom_config):
+    """Whether a discovered source column is a key: discovery flags it, or the YAML ``keys:`` name ``name``."""
+    return _coerce_is_pk(col.get("isPK")) or _is_in_keys(name, custom_config)
+
+
+def _source_column_def(col, col_id, name, alias, is_pk, nullable_default=False):
+    """A source (or target) column of a SingleTable entity built from the discovered column ``col``."""
+    return _enrich_column({
+        "id": col_id,
+        "position": col.get("position", 0),
+        "name": name,
+        "alias": alias,
+        "dataType": col.get("dataType"),
+        "isPK": is_pk,
+        "isIdentity": col.get("isIdentity", False),
+        "isNullable": col.get("isNullable", nullable_default),
+    }, col)
+
+
+def _source_key_def(col, col_id, alias):
+    """A source key of a SingleTable entity built from the discovered column ``col``."""
+    return _enrich_column({
+        "id": col_id,  # Use actual ordinal position from database
+        "position": col.get("position", 0),
+        "name": col["name"],
+        "alias": alias,
+        "dataType": col.get("dataType")
+    }, col)
+
+
+def _legacy_discovery_types(columns, custom_config, table_name):
+    """The discovered type of each source column, when every YAML column type is null (legacy backup), else {}.
+
+    An old Gluesync version stored Column with a DataTypeInterface field that was not registered for
+    serialisation, so null was written to SQLite and propagated to exports. The discovery-based lookup lets the
+    entity creation resolve types without relying on the (broken) YAML type field.
+    """
+    _yaml_cols = custom_config.get('columns') or []
+    _null_type_cols = [
+        c for c in _yaml_cols
+        if isinstance(c, dict) and "source" in c and c.get("type") is None
+    ]
+    _discovery_type_by_source = {}
+    if not (_null_type_cols and len(_null_type_cols) == len(_yaml_cols) and _yaml_cols):
+        return _discovery_type_by_source
+    logger.warning(
+        f"Table {table_name}: all {len(_yaml_cols)} YAML column type fields are null – "
+        f"this backup was exported from a Gluesync instance with legacy entity storage. "
+        f"Falling back to live CoreHub discovery for column type resolution."
+    )
+    for disc_col in (columns.get("columns") or []):
+        _disc_name = disc_col.get("name") or ""
+        _disc_dt = disc_col.get("dataType") or disc_col.get("type")
+        if _disc_name and _disc_dt:
+            _discovery_type_by_source[_disc_name] = _disc_dt
+    if _discovery_type_by_source:
+        logger.info(
+            f"Table {table_name}: resolved {len(_discovery_type_by_source)} column types "
+            f"from live source discovery (will be used as fallback for null YAML types)"
+        )
+    return _discovery_type_by_source
+
+
+def _mapped_source_column(matched_col, target_name, columns_def, custom_config, table_name, grouped):
+    """The source column of a YAML mapping pair whose source discovery found; None for a repeat on 2.3."""
+    col_id = _require_column_id(matched_col, table_name, detail=False)
+    if grouped and any(str(c.get("name", "")).lower() == str(matched_col["name"]).lower() for c in columns_def):
+        return None
+    return _source_column_def(matched_col, col_id, matched_col["name"], target_name,
+                              _source_is_pk(matched_col, matched_col["name"], custom_config))
+
+
+def _unmatched_mapping_column(source_name, target_name, idx, custom_config, table_name, source_schema, grouped):
+    """The source column of a YAML mapping pair whose source discovery did not find (refused on 2.3)."""
+    if grouped:
+        raise EntityMappingError(
+            f"Table {table_name}: column {source_name} of the YAML columns is not a column of the source "
+            f"table discovery returns, and a Gluesync 2.3 CoreHub refuses a mapping onto no column"
+        )
+    logger.warning(f"Warning: Column '{source_name}' from YAML mapping not found in discovery for table {table_name}. Using YAML metadata.")
+    # Fallback for when discovery didn't find the column
+    # (e.g. table creation pending or discovery glitch)
+    return {
+        "id": get_table_id(source_schema, source_name), # Generated ID
+        "position": idx,
+        "name": source_name,
+        "alias": target_name,
+        "dataType": "VARCHAR", # Fallback type
+        "isPK": _is_in_keys(source_name, custom_config),
+        "isIdentity": False,
+        "isNullable": True
+    }
+
+
+def _source_columns_from_mappings(columns, custom_config, relations, table_name, source_schema, grouped):
+    """The source columns of custom column mappings (source→target)."""
+    columns_def = []
+    yaml_columns = custom_config.get('columns', [])
+    row_index = {id(row): idx for idx, row in enumerate(yaml_columns, 1)}
+    for relation in relations or []:
+        idx = row_index.get(id(relation["row"]), 0)
+        for source_name, target_name in _relation_pairs([relation]):
+            # Find the matching column from discovered columns
+            matched_col = next((c for c in columns["columns"] if str(c.get("name","")).lower() == str(source_name).lower()), None)
+            if matched_col:
+                col_def = _mapped_source_column(matched_col, target_name, columns_def, custom_config, table_name, grouped)
+            else:
+                col_def = _unmatched_mapping_column(source_name, target_name, idx, custom_config, table_name,
+                                                    source_schema, grouped)
+            if col_def is not None:
+                columns_def.append(col_def)
+    return columns_def
+
+
+def _source_columns_from_whitelist(columns, custom_config, relations, table_name, grouped):
+    """The source columns of a column whitelist, and the relations of the rows the source holds.
+
+    Only the specified columns are used, not all discovered ones.
+    Format: [{name: "col", type: "VARCHAR", sourceName: "SOURCE_COL"}, ...]
+    """
+    columns_def = []
+    yaml_columns = custom_config.get('columns', [])
+    unmatched_rows = set()
+    for yaml_col in yaml_columns:
+        # sourceName is the source column name; name is the target column name
+        source_col_name = yaml_col.get('sourceName') or yaml_col.get('name')
+        # Find the matching column from discovered columns
+        col = next((c for c in columns["columns"] if str(c["name"]).lower() == str(source_col_name).lower()), None)
+        if col is None:
+            logger.warning(f"Column '{source_col_name}' from YAML whitelist not found in discovered columns for table {table_name}")
+            unmatched_rows.add(id(yaml_col))
+            continue
+        col_id = _require_column_id(col, table_name, detail=False)
+        # Source columns MUST reflect the discovered native type from the
+        # source database. The YAML `type:` / `targetDataType:` keys describe
+        # the TARGET column and must never bleed into the source payload.
+        # Discovered columns expose their native type under `dataType`.
+        # On 2.3 the key rules compare names case-sensitively: the spelling discovery reports (BOP-15).
+        columns_def.append(_source_column_def(
+            col, col_id, col["name"] if grouped else source_col_name, yaml_col.get('name'),
+            _source_is_pk(col, source_col_name, custom_config), nullable_default=True,
+        ))
+
+    logger.info(f"Using column whitelist for {table_name}: {len(columns_def)} of {len(yaml_columns)} specified columns matched")
+    # A whitelist row the source does not hold is left out of the entity (it may still define a column of the
+    # target table created from the YAML), so it states no relation either, as before Gluesync 2.3.
+    if relations is not None and unmatched_rows:
+        relations = [r for r in relations if id(r.get("row")) not in unmatched_rows]
+    return columns_def, relations
+
+
+def _source_columns_from_discovery(columns, custom_config, table_name):
+    """Every discovered column as-is (one-to-one source→target mapping)."""
+    columns_def = []
+    for col in columns["columns"]:
+        # Use the id field from CoreHub API as the column ID
+        col_id = _require_column_id(col, table_name)
+        columns_def.append(_source_column_def(col, col_id, col["name"], col["name"],
+                                              _source_is_pk(col, col["name"], custom_config)))
+    return columns_def
+
+
+def _append_mapped_source_keys(keys, col, col_id, relations, custom_config):
+    """Append the keys the YAML mapping pairs make of the discovered column ``col``."""
+    for column_map in relations or []:
+        for source_name, target_name in _relation_pairs([column_map]):
+            name_match = col["name"].lower() == str(source_name).lower()
+            in_keys = _is_in_keys(col["name"], custom_config)
+            if name_match and in_keys:
+                keys.append(_source_key_def(col, col_id, target_name))
+                logger.info(f"Key matched: col={col['name']!r}, source_name={source_name!r}, target_name={target_name!r}")
+            elif _is_in_keys(col["name"], custom_config):
+                logger.warning(f"Key col={col['name']!r} is in keys list but source_name={source_name!r} did not match (name_match={name_match}, in_keys={in_keys})")
+
+
+def _source_key_from_columns_def(key_name, columns_def, keys, found_key_names, table_name, source_schema):
+    """Resolve a YAML key discovery does not hold from the columns already built, else refuse it."""
+    matched_def = next(
+        (c for c in columns_def if str(c.get("name", "")).lower() == str(key_name).lower()),
+        None,
+    )
+    if matched_def:
+        keys.append(copy.deepcopy(matched_def))
+        found_key_names.add(str(key_name).lower())
+        logger.info(
+            f"Key {key_name!r} resolved from columns_def after mapping miss for {table_name}"
+        )
+        return
+    error_msg = (
+        f"CRITICAL ERROR: Key '{key_name}' not found in discovery or columns_def "
+        f"for table '{table_name}' in schema '{source_schema}'. This key is required "
+        f"by the YAML configuration but does not exist in the source database discovery."
+    )
+    logger.error(error_msg)
+    raise ValueError(error_msg)
+
+
+def _resolve_missed_source_key(key_name, columns, columns_def, keys, found_key_names, table_name, source_schema):
+    """Resolve from discovery a YAML key the mapping pairs did not find (e.g. historical id-as-metadata skip, or
+    key omitted from ``columns:``), re-adding its column to ``columns_def`` when the mapping dropped it."""
+    if isinstance(key_name, dict):
+        key_name = key_name.get("name") or (next(iter(key_name)) if key_name else None)
+    if key_name is None or str(key_name).lower() in found_key_names:
+        return
+    matched = next(
+        (c for c in columns["columns"] if str(c.get("name", "")).lower() == str(key_name).lower()),
+        None,
+    )
+    if not matched:
+        _source_key_from_columns_def(key_name, columns_def, keys, found_key_names, table_name, source_schema)
+        return
+    col_id = _require_column_id(matched, table_name, label=key_name)
+    keys.append(_source_key_def(matched, col_id, matched["name"]))
+    found_key_names.add(str(matched["name"]).lower())
+    logger.info(
+        f"Key {key_name!r} resolved from discovery after mapping miss for {table_name}"
+    )
+    # Ensure the PK column is present on columns_def (mapping may have dropped it)
+    if not any(str(c.get("name", "")).lower() == str(matched["name"]).lower() for c in columns_def):
+        columns_def.append(_source_column_def(matched, col_id, matched["name"], matched["name"], True))
+        logger.info(
+            f"Re-added key column {matched['name']!r} to columns_def for {table_name}"
+        )
+
+
+def _source_keys_from_mappings(columns, custom_config, relations, columns_def, table_name, source_schema):
+    """The source keys of a table with column mappings: the YAML keys through the mapping pairs."""
+    logger.info(f"Key extraction via column mappings for {table_name}. Keys to find: {custom_config['keys']}")
+    keys = []
+    for col in columns["columns"]:
+        # Use the id field from CoreHub API as the column ID
+        col_id = _require_column_id(col, table_name)
+        _append_mapped_source_keys(keys, col, col_id, relations, custom_config)
+    # If YAML keys: were not paired via mappings, resolve remaining keys from discovery.
+    found_key_names = {
+        str(k.get("name")).lower()
+        for k in keys
+        if isinstance(k, dict) and k.get("name") is not None
+    }
+    for key_name in custom_config["keys"]:
+        _resolve_missed_source_key(key_name, columns, columns_def, keys, found_key_names, table_name, source_schema)
+    return keys
+
+
+def _append_named_source_key(keys, key_name, columns, columns_def, table_name, source_schema):
+    """Append the source key a YAML key names, found in discovery, else in the columns already built."""
+    # Find the column (case-insensitive to handle cross-db scenarios like pgsql→oracle)
+    col = next((c for c in columns["columns"] if c["name"].lower() == key_name.lower()), None)
+    if col is not None:
+        # Use the id field from CoreHub API as the column ID
+        col_id = _require_column_id(col, table_name, label=key_name)
+        keys.append(_source_key_def(col, col_id, col["name"]))
+        logger.debug(f"Found key '{key_name}' in columns with id={col_id}")
+        return
+    logger.warning(f"Warning: Key '{key_name}' not found in columns for table '{table_name}'. Searching in columns_def...")
+    # Try to find it in the already built columns_def (which might have come from YAML metadata)
+    col_def = next((c for c in columns_def if c.get('name', '').lower() == key_name.lower()), None)
+    if col_def is not None:
+        keys.append(copy.deepcopy(col_def))
+        logger.info(f"Found key '{key_name}' in columns_def")
+        return
+    error_msg = f"CRITICAL ERROR: Key '{key_name}' not found in discovery or columns_def for table '{table_name}' in schema '{source_schema}'. This key is required by the YAML configuration but does not exist in the source database discovery."
+    logger.error(error_msg)
+    raise ValueError(error_msg)
+
+
+def _source_keys_from_pk(columns, table_name):
+    """The source keys discovery flags as primary key."""
+    keys = []
+    for col in columns["columns"]:
+        if _coerce_is_pk(col.get("isPK")):
+            # Use the id field from CoreHub API as the column ID
+            col_id = _require_column_id(col, table_name)
+            keys.append(_source_key_def(col, col_id, col["name"]))
+    return keys
+
+
+def _assemble_source_keys(columns, custom_config, relations, columns_def, table_name, source_schema):
+    """The source keys of a SingleTable entity: the YAML ``keys:`` when given, else discovery's primary key."""
+    if not (custom_config and 'keys' in custom_config and custom_config['keys'] is not None):
+        keys = _source_keys_from_pk(columns, table_name)
+        logger.debug(f"Using primary keys for {table_name}: {keys}")
+        return keys
+    logger.info(f"Processing keys for table {table_name}. Requested keys: {custom_config['keys']}")
+    logger.info(f"Has columns section: {bool(custom_config.get('columns'))}")
+    if _is_column_mappings(custom_config.get('columns', [])):
+        # Use column mappings for keys
+        keys = _source_keys_from_mappings(columns, custom_config, relations, columns_def, table_name, source_schema)
+    else:
+        # No column mappings, use keys directly from source columns
+        logger.debug(f"Processing keys for {table_name}: {custom_config['keys']}")
+        logger.debug(f"Available columns: {[col['name'] for col in columns['columns']]}")
+        keys = []
+        for key_name in custom_config['keys']:
+            _append_named_source_key(keys, key_name, columns, columns_def, table_name, source_schema)
+    logger.info(f"Final keys array for {table_name}: {keys} (count: {len(keys)})")
+    return keys
+
+
 def _assemble_source_columns(columns, custom_config, table_name, source_schema, grouped=False, check_forms=True):
     """The source columns and keys of a SingleTable entity, from discovery and the YAML ``columns:`` and ``keys:``.
 
@@ -459,159 +790,25 @@ def _assemble_source_columns(columns, custom_config, table_name, source_schema, 
     if not grouped and check_forms:
         _refuse_forms_of_gluesync_23(relations, custom_config, table_name)
 
-    # Build columns definition with IDs
-    columns_def = []
-
-    # ---------------------------------------------------------------
     # Detect legacy backup YAML where all column types are null.
-    # This is caused by an old Gluesync version that stored Column with
-    # a DataTypeInterface field that was not registered for serialisation,
-    # resulting in null being written to SQLite and propagated to exports.
-    # Build a discovery-based type lookup so we can resolve types during
-    # entity creation without relying on the (broken) YAML type field.
-    # ---------------------------------------------------------------
-    _yaml_cols = custom_config.get('columns') or []
-    _null_type_cols = [
-        c for c in _yaml_cols
-        if isinstance(c, dict) and "source" in c and c.get("type") is None
-    ]
-    _discovery_type_by_source: Dict[str, str] = {}
-    if _null_type_cols and len(_null_type_cols) == len(_yaml_cols) and _yaml_cols:
-        logger.warning(
-            f"Table {table_name}: all {len(_yaml_cols)} YAML column type fields are null – "
-            f"this backup was exported from a Gluesync instance with legacy entity storage. "
-            f"Falling back to live CoreHub discovery for column type resolution."
-        )
-        for disc_col in (columns.get("columns") or []):
-            _disc_name = disc_col.get("name") or ""
-            _disc_dt = disc_col.get("dataType") or disc_col.get("type")
-            if _disc_name and _disc_dt:
-                _discovery_type_by_source[_disc_name] = _disc_dt
-        if _discovery_type_by_source:
-            logger.info(
-                f"Table {table_name}: resolved {len(_discovery_type_by_source)} column types "
-                f"from live source discovery (will be used as fallback for null YAML types)"
-            )
+    _discovery_type_by_source = _legacy_discovery_types(columns, custom_config, table_name)
 
     has_column_mappings = _is_column_mappings(custom_config.get('columns', []))
     is_column_whitelist = _is_column_whitelist(custom_config.get('columns', []))
-    
+
     if has_column_mappings:
-        # Custom column mappings (source→target)
-        yaml_columns = custom_config.get('columns', [])
-        row_index = {id(row): idx for idx, row in enumerate(yaml_columns, 1)}
-        for relation in relations or []:
-            idx = row_index.get(id(relation["row"]), 0)
-            for source_name, target_name in _relation_pairs([relation]):
-                # Find the matching column from discovered columns
-                matched_col = next((c for c in columns["columns"] if str(c.get("name","")).lower() == str(source_name).lower()), None)
-                
-                if matched_col:
-                    col_id = matched_col.get('id')
-                    if col_id is None:
-                        error_msg = f"CRITICAL ERROR: Column '{matched_col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response."
-                        logger.error(error_msg)
-                        raise ValueError(error_msg)
-                    if grouped and any(str(c.get("name", "")).lower() == str(matched_col["name"]).lower() for c in columns_def):
-                        continue
-
-                    columns_def.append(_enrich_column({
-                        "id": col_id,  # Use actual ordinal position from database
-                        "position": matched_col.get("position", 0),
-                        "name": matched_col["name"],
-                        "alias": target_name,
-                        "dataType": matched_col.get("dataType"),
-                        "isPK": _coerce_is_pk(matched_col.get("isPK")) or _is_in_keys(matched_col["name"], custom_config), 
-                        "isIdentity": matched_col.get("isIdentity", False), 
-                        "isNullable": matched_col.get("isNullable", False)
-                    }, matched_col))
-                else:
-                    if grouped:
-                        raise EntityMappingError(
-                            f"Table {table_name}: column {source_name} of the YAML columns is not a column of the source "
-                            f"table discovery returns, and a Gluesync 2.3 CoreHub refuses a mapping onto no column"
-                        )
-                    logger.warning(f"Warning: Column '{source_name}' from YAML mapping not found in discovery for table {table_name}. Using YAML metadata.")
-                    # Fallback for when discovery didn't find the column
-                    # (e.g. table creation pending or discovery glitch)
-                    columns_def.append({
-                        "id": get_table_id(source_schema, source_name), # Generated ID
-                        "position": idx,
-                        "name": source_name,
-                        "alias": target_name,
-                        "dataType": "VARCHAR", # Fallback type
-                        "isPK": _is_in_keys(source_name, custom_config),
-                        "isIdentity": False,
-                        "isNullable": True
-                    })
+        columns_def = _source_columns_from_mappings(columns, custom_config, relations, table_name, source_schema,
+                                                    grouped)
     elif is_column_whitelist:
-        # Column whitelist format: only use specified columns, not all discovered
-        # Format: [{name: "col", type: "VARCHAR", sourceName: "SOURCE_COL"}, ...]
-        yaml_columns = custom_config.get('columns', [])
-        unmatched_rows = set()
-        for yaml_col in yaml_columns:
-            # sourceName is the source column name; name is the target column name
-            source_col_name = yaml_col.get('sourceName') or yaml_col.get('name')
-            target_col_name = yaml_col.get('name')
-            
-            # Find the matching column from discovered columns
-            for col in columns["columns"]:
-                if str(col["name"]).lower() == str(source_col_name).lower():
-                    col_id = col.get('id')
-                    if col_id is None:
-                        error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response."
-                        logger.error(error_msg)
-                        raise ValueError(error_msg)
-                    
-                    # Source columns MUST reflect the discovered native type from the
-                    # source database. The YAML `type:` / `targetDataType:` keys describe
-                    # the TARGET column and must never bleed into the source payload.
-                    # Discovered columns expose their native type under `dataType`.
-                    columns_def.append(_enrich_column({
-                        "id": col_id,
-                        "position": col.get("position", 0),
-                        # On 2.3 the key rules compare names case-sensitively: the spelling discovery reports (BOP-15).
-                        "name": col["name"] if grouped else source_col_name,
-                        "alias": target_col_name,
-                        "dataType": col.get("dataType"),
-                        "isPK": _coerce_is_pk(col.get("isPK")) or _is_in_keys(source_col_name, custom_config),
-                        "isIdentity": col.get("isIdentity", False),
-                        "isNullable": col.get("isNullable", True),
-                    }, col))
-                    break
-            else:
-                logger.warning(f"Column '{source_col_name}' from YAML whitelist not found in discovered columns for table {table_name}")
-                unmatched_rows.add(id(yaml_col))
-        
-        logger.info(f"Using column whitelist for {table_name}: {len(columns_def)} of {len(yaml_columns)} specified columns matched")
-        # A whitelist row the source does not hold is left out of the entity (it may still define a column of the
-        # target table created from the YAML), so it states no relation either, as before Gluesync 2.3.
-        if relations is not None and unmatched_rows:
-            relations = [r for r in relations if id(r.get("row")) not in unmatched_rows]
-
-    # If there are no column mappings or whitelist, fall back to
-    # using discovery columns as-is (one-to-one source→target mapping).
-    # IMPORTANT: Only fall back when NO filter was specified. If a whitelist
-    # or mapping was explicitly specified but columns_def is empty, do NOT
-    # fall back to all columns - that would silently include unwanted columns.
-    if not has_column_mappings and not is_column_whitelist:
-        columns_def = []
-        for col in columns["columns"]:
-            # Use the id field from CoreHub API as the column ID
-            col_id = col.get('id')
-            if col_id is None:
-                error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
-                logger.error(error_msg)
-                raise ValueError(error_msg)
-
-            columns_def.append(_enrich_column({
-                "id": col_id,  # Use actual ordinal position from database
-                "position": col.get("position", 0),
-                "name": col["name"],
-                "alias": col["name"],
-                "dataType": col.get("dataType"),
-                "isPK": _coerce_is_pk(col.get("isPK")) or _is_in_keys(col["name"], custom_config), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
-            }, col))
+        columns_def, relations = _source_columns_from_whitelist(columns, custom_config, relations, table_name,
+                                                                grouped)
+    else:
+        # If there are no column mappings or whitelist, fall back to
+        # using discovery columns as-is (one-to-one source→target mapping).
+        # IMPORTANT: Only fall back when NO filter was specified. If a whitelist
+        # or mapping was explicitly specified but columns_def is empty, do NOT
+        # fall back to all columns - that would silently include unwanted columns.
+        columns_def = _source_columns_from_discovery(columns, custom_config, table_name)
 
     # GSSD-1355 regression guard: target-only Field Function entries make
     # _is_column_mappings() true but give no source column. Without
@@ -622,193 +819,11 @@ def _assemble_source_columns(columns, custom_config, table_name, source_schema, 
             f"Table {table_name}: column mappings produced no source columns "
             f"(likely target-only Field Function entries). Falling back to discovery."
         )
-        for col in columns["columns"]:
-            col_id = col.get('id')
-            if col_id is None:
-                error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
-                logger.error(error_msg)
-                raise ValueError(error_msg)
-            columns_def.append(_enrich_column({
-                "id": col_id,
-                "position": col.get("position", 0),
-                "name": col["name"],
-                "alias": col["name"],
-                "dataType": col.get("dataType"),
-                "isPK": _coerce_is_pk(col.get("isPK")) or _is_in_keys(col["name"], custom_config),
-                "isIdentity": col.get("isIdentity", False),
-                "isNullable": col.get("isNullable", False)
-            }, col))
+        columns_def = _source_columns_from_discovery(columns, custom_config, table_name)
 
     logger.debug(f"Columns definition for {table_name}: {columns_def}")
 
-    # Process keys and other configurations as before...
-    if custom_config and 'keys' in custom_config and custom_config['keys'] is not None:
-        logger.info(f"Processing keys for table {table_name}. Requested keys: {custom_config['keys']}")
-        logger.info(f"Has columns section: {bool(custom_config.get('columns'))}")
-        keys = []
-        
-        has_column_mappings = _is_column_mappings(custom_config.get('columns', []))
-        
-        if has_column_mappings:
-            # Use column mappings for keys
-            logger.info(f"Key extraction via column mappings for {table_name}. Keys to find: {custom_config['keys']}")
-            for col in columns["columns"]:
-                # Use the id field from CoreHub API as the column ID
-                col_id = col.get('id')
-                if col_id is None:
-                    error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
-                    logger.error(error_msg)
-                    raise ValueError(error_msg)
-                    
-                for column_map in relations or []:
-                    for source_name, target_name in _relation_pairs([column_map]):
-                        name_match = col["name"].lower() == str(source_name).lower()
-                        in_keys = _is_in_keys(col["name"], custom_config)
-                        if name_match and in_keys:
-                            keys.append(_enrich_column({
-                                "id": col_id,  # Use actual ordinal position from database
-                                "position": col.get("position", 0),
-                                "name": col["name"],
-                                "alias": target_name,
-                                "dataType": col.get("dataType")
-                            }, col))
-                            logger.info(f"Key matched: col={col['name']!r}, source_name={source_name!r}, target_name={target_name!r}")
-                        elif _is_in_keys(col["name"], custom_config):
-                            logger.warning(f"Key col={col['name']!r} is in keys list but source_name={source_name!r} did not match (name_match={name_match}, in_keys={in_keys})")
-            # If YAML keys: were not paired via mappings (e.g. historical id-as-metadata
-            # skip, or key omitted from columns:), resolve remaining keys from discovery.
-            found_key_names = {
-                str(k.get("name")).lower()
-                for k in keys
-                if isinstance(k, dict) and k.get("name") is not None
-            }
-            for key_name in custom_config["keys"]:
-                if isinstance(key_name, dict):
-                    key_name = key_name.get("name") or (next(iter(key_name)) if key_name else None)
-                if key_name is None:
-                    continue
-                if str(key_name).lower() in found_key_names:
-                    continue
-                matched = next(
-                    (c for c in columns["columns"] if str(c.get("name", "")).lower() == str(key_name).lower()),
-                    None,
-                )
-                if not matched:
-                    matched_def = next(
-                        (c for c in columns_def if str(c.get("name", "")).lower() == str(key_name).lower()),
-                        None,
-                    )
-                    if matched_def:
-                        keys.append(copy.deepcopy(matched_def))
-                        found_key_names.add(str(key_name).lower())
-                        logger.info(
-                            f"Key {key_name!r} resolved from columns_def after mapping miss for {table_name}"
-                        )
-                        continue
-                    error_msg = (
-                        f"CRITICAL ERROR: Key '{key_name}' not found in discovery or columns_def "
-                        f"for table '{table_name}' in schema '{source_schema}'. This key is required "
-                        f"by the YAML configuration but does not exist in the source database discovery."
-                    )
-                    logger.error(error_msg)
-                    raise ValueError(error_msg)
-                col_id = matched.get("id")
-                if col_id is None:
-                    error_msg = (
-                        f"CRITICAL ERROR: Column '{key_name}' in table {table_name} is missing "
-                        f"'id' field in CoreHub API response. This indicates a serious issue "
-                        f"with the discovery API."
-                    )
-                    logger.error(error_msg)
-                    raise ValueError(error_msg)
-                keys.append(_enrich_column({
-                    "id": col_id,
-                    "position": matched.get("position", 0),
-                    "name": matched["name"],
-                    "alias": matched["name"],
-                    "dataType": matched.get("dataType"),
-                }, matched))
-                found_key_names.add(str(matched["name"]).lower())
-                logger.info(
-                    f"Key {key_name!r} resolved from discovery after mapping miss for {table_name}"
-                )
-                # Ensure the PK column is present on columns_def (mapping may have dropped it)
-                if not any(str(c.get("name", "")).lower() == str(matched["name"]).lower() for c in columns_def):
-                    columns_def.append(_enrich_column({
-                        "id": col_id,
-                        "position": matched.get("position", 0),
-                        "name": matched["name"],
-                        "alias": matched["name"],
-                        "dataType": matched.get("dataType"),
-                        "isPK": True,
-                        "isIdentity": matched.get("isIdentity", False),
-                        "isNullable": matched.get("isNullable", False),
-                    }, matched))
-                    logger.info(
-                        f"Re-added key column {matched['name']!r} to columns_def for {table_name}"
-                    )
-        else:
-            # No column mappings, use keys directly from source columns
-            logger.debug(f"Processing keys for {table_name}: {custom_config['keys']}")
-            logger.debug(f"Available columns: {[col['name'] for col in columns['columns']]}")
-            for key_name in custom_config['keys']:
-                # Find the column and its index (case-insensitive to handle cross-db scenarios like pgsql→oracle)
-                found = False
-                for col in columns["columns"]:
-                    if col["name"].lower() == key_name.lower():
-                        # Use the id field from CoreHub API as the column ID
-                        col_id = col.get('id')
-                        if col_id is None:
-                            error_msg = f"CRITICAL ERROR: Column '{key_name}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
-                            logger.error(error_msg)
-                            raise ValueError(error_msg)
-
-                        keys.append(_enrich_column({
-                            "id": col_id,  # Use actual ordinal position from database
-                            "position": col.get("position", 0),
-                            "name": col["name"],
-                            "alias": col["name"],
-                            "dataType": col.get("dataType")
-                        }, col))
-                        found = True
-                        logger.debug(f"Found key '{key_name}' in columns with id={col_id}")
-                        break
-                if not found:
-                    logger.warning(f"Warning: Key '{key_name}' not found in columns for table '{table_name}'. Searching in columns_def...")
-                    # Try to find it in the already built columns_def (which might have come from YAML metadata)
-                    for col_def in columns_def:
-                        if col_def.get('name', '').lower() == key_name.lower():
-                            keys.append(copy.deepcopy(col_def))
-                            found = True
-                            logger.info(f"Found key '{key_name}' in columns_def")
-                            break
-                
-                if not found:
-                    error_msg = f"CRITICAL ERROR: Key '{key_name}' not found in discovery or columns_def for table '{table_name}' in schema '{source_schema}'. This key is required by the YAML configuration but does not exist in the source database discovery."
-                    logger.error(error_msg)
-                    raise ValueError(error_msg)
-
-        
-        logger.info(f"Final keys array for {table_name}: {keys} (count: {len(keys)})")
-    else:
-        keys = []
-        for col in columns["columns"]:
-            if _coerce_is_pk(col.get("isPK")):
-                # Use the id field from CoreHub API as the column ID
-                col_id = col.get('id')
-                if col_id is None:
-                    error_msg = f"CRITICAL ERROR: Column '{col.get('name')}' in table {table_name} is missing 'id' field in CoreHub API response. This indicates a serious issue with the discovery API."
-                    logger.error(error_msg)
-                    raise ValueError(error_msg)
-                    
-                keys.append(_enrich_column({
-                    "id": col_id,  # Use actual ordinal position from database
-                    "position": col.get("position", 0),
-                    "name": col["name"],
-                    "alias": col["name"],
-                    "dataType": col.get("dataType")
-                }, col))
-        logger.debug(f"Using primary keys for {table_name}: {keys}")
+    keys = _assemble_source_keys(columns, custom_config, relations, columns_def, table_name, source_schema)
 
     # Keep column isPK flags aligned with the resolved keys list (CoreHub reads isPK).
     _paint_is_pk_on_columns(columns_def, keys)
