@@ -397,6 +397,53 @@ automator_sign_windows:
       - .automator-build/dist/automator-signatures.json
     expire_in: 2 weeks
 
+automator_smoke_signed_windows:
+  # Runs the signed exe that automator_publish uploads: it must start and serve the UI (signing must not break the
+  # PyInstaller one-file archive). Same check as automator_smoke_windows, against the frozen app.
+  stage: build
+  tags:
+    - hq-windows-shell-2022
+  needs:
+    - job: automator_sign_windows
+      artifacts: true
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
+      when: always
+    - if: $CI_COMMIT_TAG =~ /^automator-sign-rc-\d+$/
+      when: always
+    - when: never
+  script:
+    - |
+      $ErrorActionPreference = 'Stop'
+      $exe = Join-Path $env:CI_PROJECT_DIR '.automator-build\dist\gluesync-automator-windows.exe'
+      $sig = Get-AuthenticodeSignature -LiteralPath $exe
+      Write-Host "Signature: $($sig.Status) $($sig.SignerCertificate.Subject)"
+      if ($sig.Status -ne 'Valid') { throw "Signed Automator exe does not verify on this runner: $($sig.Status)" }
+      $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+      $listener.Start(); $port = $listener.LocalEndpoint.Port; $listener.Stop()
+      $logFile = Join-Path $env:CI_PROJECT_DIR 'automator-signed-smoke.log'
+      $errorLogFile = Join-Path $env:CI_PROJECT_DIR 'automator-signed-smoke.err.log'
+      $process = Start-Process -FilePath $exe -ArgumentList @('--host', '127.0.0.1', '--port', "$port", '--no-open-browser') -RedirectStandardOutput $logFile -RedirectStandardError $errorLogFile -PassThru
+      try {
+        $deadline = (Get-Date).AddSeconds(180); $ok = $false
+        while ((Get-Date) -lt $deadline -and -not $process.HasExited) {
+          try { $r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 "http://127.0.0.1:$port/api/healthz"; if ($r.StatusCode -eq 200 -and ($r.Content | ConvertFrom-Json).status -eq 'ok') { $ok = $true; break } } catch { }
+          Start-Sleep -Seconds 2
+        }
+        if (-not $ok) {
+          Write-Host "=== STDOUT ==="; Get-Content $logFile -EA SilentlyContinue
+          Write-Host "=== STDERR ==="; Get-Content $errorLogFile -EA SilentlyContinue
+          throw "Signed Automator exe did not answer /api/healthz (exited: $($process.HasExited))"
+        }
+        $root = Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 "http://127.0.0.1:$port/"
+        if ($root.StatusCode -ne 200 -or $root.Headers['Content-Type'] -notlike 'text/html*') { throw "UI root returned $($root.StatusCode) $($root.Headers['Content-Type'])" }
+        Write-Host "Signed Automator exe smoke test passed (healthz ok, UI served on port $port)"
+      }
+      finally {
+        if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
+        Get-Process -Name 'gluesync-automator-windows' -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
+      }
+
 # automator_build_macos:
 #   stage: build
 #   image: python:3.9-bullseye
@@ -431,6 +478,8 @@ automator_publish:
       artifacts: true
     - job: automator_sign_windows
       artifacts: true
+    - job: automator_smoke_signed_windows
+      artifacts: false
     - job: automator_build_macos # Uncomment when macOS CI is enabled
       artifacts: true
       optional: true # Make it optional since macOS build might be disabled
