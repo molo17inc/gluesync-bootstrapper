@@ -145,6 +145,19 @@ def prune_workspace_sessions(max_age_hours: int = 48) -> None:
         pass
 
 
+def _copy_zip_member(zf: zipfile.ZipFile, member: str, dest: Path) -> None:
+    """Write one member of an open ZIP archive to dest."""
+    with zf.open(member) as src, open(dest, "wb") as dst:
+        shutil.copyfileobj(src, dst)
+
+
+def _write_session_file(directory: Path, suffix: str, data: bytes) -> Path:
+    """Write data to a new uniquely named file in directory and return its path."""
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, dir=directory) as tmp:
+        tmp.write(data)
+        return Path(tmp.name)
+
+
 def _extract_pipeline_id_from_backup_stem(stem_no_ext: str) -> Optional[str]:
     """Extract the original pipeline ID from a backup YAML filename stem.
 
@@ -749,8 +762,7 @@ def create_app() -> FastAPI:
                         # which are not entity-creation YAMLs)
                         if lower.endswith((".yaml", ".yml")) and "agents-config" not in lower and "global-config" not in lower:
                             dest = extract_dir / Path(member).name
-                            with zf.open(member) as src, open(dest, "wb") as dst:
-                                shutil.copyfileobj(src, dst)
+                            _copy_zip_member(zf, member, dest)
                             # Prefer backup_*.yaml as the primary YAML
                             if yaml_path is None or dest.name.startswith("backup_"):
                                 yaml_path = dest
@@ -758,8 +770,7 @@ def create_app() -> FastAPI:
                         elif ("udf-" in member or member.lstrip("/").startswith("udf-")) and lower.endswith(UDF_SOURCE_EXTENSIONS):
                             dest = extract_dir / member
                             dest.parent.mkdir(parents=True, exist_ok=True)
-                            with zf.open(member) as src, open(dest, "wb") as dst:
-                                shutil.copyfileobj(src, dst)
+                            _copy_zip_member(zf, member, dest)
             except Exception as exc:
                 raise HTTPException(status_code=400, detail=f"Failed to extract ZIP: {exc}") from exc
 
@@ -773,9 +784,7 @@ def create_app() -> FastAPI:
             # UDF files the user drops alongside it are found by the same lookup.
             session_dir = new_session_dir("upload")
             suffix = Path(file.filename).suffix or ".yaml"
-            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, dir=session_dir) as tmp:
-                tmp.write(contents)
-                temp_path = Path(tmp.name)
+            temp_path = _write_session_file(session_dir, suffix, contents)
             # Point UDF lookups at this session directory too, so a YAML-only
             # upload still resolves UDF files placed next to the YAML.
             create_user_defined_functions.UDF_PATH = str(session_dir)
@@ -1784,9 +1793,7 @@ def create_app() -> FastAPI:
                     try:
                         restore_dir = udf_root if udf_root is not None else new_session_dir("import")
                         restore_dir.mkdir(parents=True, exist_ok=True)
-                        with tempfile.NamedTemporaryFile(delete=False, suffix=".yaml", dir=restore_dir) as tmp:
-                            tmp.write(yaml_text.encode("utf-8"))
-                            yaml_path = Path(tmp.name)
+                        yaml_path = _write_session_file(restore_dir, ".yaml", yaml_text.encode("utf-8"))
                     except Exception as exc:  # pylint: disable=broad-except
                         logger.exception("Failed to materialize YAML %s to disk", name)
                         errors.append(f"{name}: failed to materialize YAML to disk: {exc}")
