@@ -288,6 +288,66 @@ def authenticate(
     return token
 
 
+class _CallbackLogHandler(logging.Handler):
+    """Logging handler that forwards every non-empty log message to a callback."""
+
+    def __init__(self, callback: Callable[[str], None], level: int = logging.NOTSET) -> None:
+        super().__init__(level=level)
+        self._callback = callback
+
+    def emit(self, record: logging.LogRecord) -> None:  # type: ignore[override]
+        message = record.getMessage()
+        if message:
+            self._callback(message)
+
+
+def _is_nosql_target(target_type: Optional[str]) -> bool:
+    """True when the inferred target type is a non-RDBMS (NoSQL) one."""
+    return bool(target_type) and target_type.upper() == "NOSQL"
+
+
+def _apply_create_tables_setting(create_tables: bool) -> None:
+    """Set the CREATE_TABLE_IF_NOT_EXISTS flag and env variable read by create_all_entities."""
+    set_create_table_if_not_exists(create_tables)
+    os.environ['CREATE_TABLE_IF_NOT_EXISTS'] = 'true' if create_tables else 'false'
+
+
+def _restore_create_tables_setting(prev_env_value: Optional[str], prev_flag_value: bool) -> None:
+    """Put back the CREATE_TABLE_IF_NOT_EXISTS env variable and flag saved before a run."""
+    if prev_env_value is not None:
+        os.environ['CREATE_TABLE_IF_NOT_EXISTS'] = prev_env_value
+    else:
+        os.environ.pop('CREATE_TABLE_IF_NOT_EXISTS', None)
+    set_create_table_if_not_exists(prev_flag_value)
+
+
+def _replay_logs(log_callback: Optional[Callable[[str], None]], logs: list) -> None:
+    """Send each captured stdout line to ``log_callback``, when there is one."""
+    if log_callback is not None:
+        for line in logs:
+            log_callback(line)
+
+
+def _create_entities_outcome(result_payload: Dict[str, Any], logs: list) -> Dict[str, Any]:
+    """Build the response of run_create_entities from the create_all_entities result."""
+    success = bool(result_payload.get("success", True))
+    errors = result_payload.get("errors") or []
+    if errors:
+        success = False
+    payload: Dict[str, Any] = {
+        "success": success,
+        "logs": logs,
+        "result": result_payload,
+    }
+    if not success:
+        summary_error = result_payload.get("error")
+        if not summary_error and errors:
+            summary_error = "; ".join(errors)
+        if summary_error:
+            payload["error"] = summary_error
+    return payload
+
+
 def run_create_entities(
     *,
     token: str,
@@ -324,33 +384,24 @@ def run_create_entities(
         use_ssl=use_ssl,
         skip_verify=skip_verify,
     )
-    if inferred_target_type and inferred_target_type.upper() == "NOSQL":
+    if _is_nosql_target(inferred_target_type):
         logger.info(
             "Pipeline %s has a non-RDBMS target (%s) - disabling table creation",
             pipeline_id,
             inferred_target_type,
         )
         create_tables = False
-    if inferred_source_type:
-        source_type = inferred_source_type
-    if inferred_target_type:
-        target_type = inferred_target_type
+    source_type = inferred_source_type or source_type
+    target_type = inferred_target_type or target_type
 
     prev_env_create_tables = os.environ.get('CREATE_TABLE_IF_NOT_EXISTS')
     prev_flag_create_tables = CREATE_TABLE_IF_NOT_EXISTS
-    set_create_table_if_not_exists(create_tables)
-    os.environ['CREATE_TABLE_IF_NOT_EXISTS'] = 'true' if create_tables else 'false'
+    _apply_create_tables_setting(create_tables)
 
     handler = None
     root_logger = logging.getLogger()
     if log_callback is not None:
-        class CallbackHandler(logging.Handler):
-            def emit(self, record: logging.LogRecord) -> None:  # type: ignore[override]
-                message = record.getMessage()
-                if message:
-                    log_callback(message)
-
-        handler = CallbackHandler(level=logging.INFO)
+        handler = _CallbackLogHandler(log_callback, level=logging.INFO)
         root_logger.addHandler(handler)
 
     buffer = io.StringIO()
@@ -381,34 +432,12 @@ def run_create_entities(
     finally:
         if handler:
             root_logger.removeHandler(handler)
-        if prev_env_create_tables is not None:
-            os.environ['CREATE_TABLE_IF_NOT_EXISTS'] = prev_env_create_tables
-        else:
-            os.environ.pop('CREATE_TABLE_IF_NOT_EXISTS', None)
-        set_create_table_if_not_exists(prev_flag_create_tables)
+        _restore_create_tables_setting(prev_env_create_tables, prev_flag_create_tables)
 
     logs = buffer.getvalue().splitlines()
-    if log_callback is not None:
-        for line in logs:
-            log_callback(line)
+    _replay_logs(log_callback, logs)
 
-    result_payload = result_payload or {}
-    success = bool(result_payload.get("success", True))
-    errors = result_payload.get("errors") or []
-    if errors:
-        success = False
-    payload: Dict[str, Any] = {
-        "success": success,
-        "logs": logs,
-        "result": result_payload,
-    }
-    if not success:
-        summary_error = result_payload.get("error")
-        if not summary_error and errors:
-            summary_error = "; ".join(errors)
-        if summary_error:
-            payload["error"] = summary_error
-    return payload
+    return _create_entities_outcome(result_payload or {}, logs)
 
 
 def run_create_entities_for_tables(
