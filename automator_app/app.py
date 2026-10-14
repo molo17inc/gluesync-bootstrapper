@@ -33,9 +33,10 @@ import sys
 import tempfile
 import uuid
 import zipfile
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Any, Dict, Optional
+from typing import Annotated, Any, Callable, Dict, Optional
 import hashlib
 import re
 
@@ -560,6 +561,11 @@ _DUPLICATE_RESPONSES: Dict[Any, Dict[str, Any]] = {
 }
 _SESSION_RESPONSES: Dict[Any, Dict[str, Any]] = {
     401: _NOT_LOGGED_IN_RESPONSE,
+}
+_ARCHIVE_IMPORT_RESPONSES: Dict[Any, Dict[str, Any]] = {
+    400: {"description": "The archive is empty, is not a ZIP, or has no usable agents-config.yaml"},
+    401: _NOT_LOGGED_IN_RESPONSE,
+    500: _FAILURE_RESPONSE,
 }
 
 
@@ -1496,6 +1502,1057 @@ def _register_pipeline_routes(app: FastAPI) -> None:
     )
 
 
+@dataclass
+class _ArchiveImport:
+    """What an Export All import shares across the pipelines of the archive."""
+
+    contents: bytes
+    agents_list: list
+    meta_by_old_id: Dict[str, Any]
+    udf_root: Optional[Path]
+    errors: list[str] = field(default_factory=list)
+    created_pipelines: list[dict] = field(default_factory=list)
+
+
+@dataclass
+class _PipelineEntities:
+    """One imported pipeline whose entities are recreated from its YAML."""
+
+    name: str
+    yaml_path: Path
+    pipeline_id: Any
+    pipeline_name: Any
+    source_type: str
+    target_type: str
+    enable_scheduling: Any
+    create_tables: Any
+
+
+def _member_stem(name: str) -> str:
+    """File name of a ZIP member without its folders and its extension."""
+    return name.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+
+
+def _pipeline_yaml_stem(name: str) -> Optional[str]:
+    """Stem of a per-pipeline YAML of a backup ZIP; None for any other member."""
+    lower = name.lower()
+    # Skip macOS resource-fork entries (e.g. __MACOSX/ or ._filename)
+    if _is_macos_metadata(name):
+        return None
+    if not lower.endswith(YAML_EXTENSIONS):
+        return None
+    if "agents-config" in lower:
+        return None
+
+    # Skip global config YAMLs from full CoreHub backup format
+    # (these are backed up separately and not pipeline configs)
+    stem_no_ext = _member_stem(name)
+    if stem_no_ext in GLOBAL_CONFIG_NAMES:
+        return None
+    return stem_no_ext
+
+
+def _resolve_pipeline_identity(yaml_text: str, stem_no_ext: str) -> tuple[Optional[str], Optional[str]]:
+    """Original pipeline ID and name of a backup YAML.
+
+    Prefer the exportMetadata key embedded in the YAML (current exports); fall
+    back to parsing the backup filename for legacy backups.
+    """
+    old_pipeline_id, embedded_name = _extract_export_metadata_from_yaml_text(yaml_text)
+    if not old_pipeline_id:
+        old_pipeline_id = _extract_pipeline_id_from_backup_stem(stem_no_ext)
+    return old_pipeline_id, embedded_name
+
+
+def _default_pipeline_name(old_pipeline_id: Optional[str]) -> str:
+    return f"Imported pipeline {old_pipeline_id}" if old_pipeline_id else "Imported pipeline"
+
+
+def _read_agents_config_text(contents: bytes, operation: str, logs: Optional[list[str]] = None) -> str:
+    """Text of the agents-config.yaml of a backup ZIP; 400 when there is none or the ZIP is invalid."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(contents)) as zf:
+            names = zf.namelist()
+            if logs is not None:
+                logs.append(f"Archive contains {len(names)} entries.")
+
+            agents_name = next(
+                (name for name in names if name.lower().endswith(("agents-config.yaml", "agents-config.yml"))),
+                None,
+            )
+            if not agents_name:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Archive does not contain agents-config.yaml",
+                )
+
+            if logs is not None:
+                logs.append(f"Found agents config: {agents_name}")
+            return zf.read(agents_name).decode("utf-8")
+    except HTTPException:
+        raise
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Failed to process uploaded ZIP during %s", operation)
+        raise HTTPException(status_code=400, detail=f"Invalid ZIP archive: {exc}") from exc
+
+
+def _parse_agents_config(agents_text: str, operation: str) -> tuple[Any, list]:
+    """Parsed agents-config.yaml and its agents list; 400 when it cannot be imported."""
+    try:
+        agents_config = yaml.safe_load(agents_text)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Failed to parse agents-config.yaml during %s", operation)
+        raise HTTPException(status_code=400, detail=f"Failed to parse agents-config.yaml: {exc}") from exc
+
+    if _has_masked_password(agents_config):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Config contains masked passwords (*******). "
+                "Please replace them with real passwords before importing."
+            ),
+        )
+
+    agents_list = agents_config.get("agents")
+    if not isinstance(agents_list, list) or not agents_list:
+        raise HTTPException(status_code=400, detail="agents-config.yaml does not contain a non-empty 'agents' list")
+    return agents_config, agents_list
+
+
+def _extract_import_udf_sources(contents: bytes) -> Optional[Path]:
+    """Extract the UDF source files of a backup ZIP into a new session directory and point UDF_PATH at it."""
+    # Extract UDF source files (if present) into an app-owned session
+    # directory so they can be compiled automatically during import. Both
+    # Export All and single-pipeline Full backup ZIPs place UDFs under
+    # folders named 'udf-<agentId>' (optionally nested under pipeline_<id>/
+    # for single pipeline backups).
+    udf_root: Optional[Path] = None
+    try:
+        udf_root = new_session_dir("import")
+
+        with zipfile.ZipFile(io.BytesIO(contents)) as zf_udf:
+            for member in zf_udf.namelist():
+                # Skip macOS resource-fork entries; only extract recognized UDF
+                # source extensions found under udf-* folders
+                if _is_macos_metadata(member) or not _is_udf_source(member):
+                    continue
+                _extract_udf_source(zf_udf, member, udf_root)
+
+        # Point the UDF helper module to this directory so it can resolve
+        # files via UDF_NAME + extension lookups.
+        create_user_defined_functions.UDF_PATH = str(udf_root)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception(
+            "Failed to extract UDF source files from backup; UDF compilation will be skipped: %s",
+            exc,
+        )
+        # Still set UDF_PATH to the (possibly empty) directory so that
+        # create_all_entities.main doesn't fall back to the YAML temp dir
+        # (where UDF files are never present) and produce confusing errors.
+        if udf_root is not None and udf_root.is_dir():
+            create_user_defined_functions.UDF_PATH = str(udf_root)
+    return udf_root
+
+
+def _pipeline_meta_by_old_id(agents_config: Any) -> Dict[str, Any]:
+    """Original pipeline metadata of agents-config.yaml, by original pipeline ID."""
+    pipelines_meta = agents_config.get("pipelines") or []
+    meta_by_old_id = {}
+    if isinstance(pipelines_meta, list):
+        for item in pipelines_meta:
+            if not isinstance(item, dict):
+                continue
+            old_id = item.get("pipelineId")
+            if old_id is not None:
+                meta_by_old_id[str(old_id)] = item
+    return meta_by_old_id
+
+
+def _global_config_notifications(zf_gc: zipfile.ZipFile) -> Optional[Dict[str, Any]]:
+    """Notification settings of the dedicated global-config.yaml of a backup ZIP."""
+    for name in zf_gc.namelist():
+        if _is_macos_metadata(name):
+            continue
+        if _member_stem(name) != "global-config":
+            continue
+        try:
+            parsed = yaml.safe_load(zf_gc.read(name).decode("utf-8"))
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning(IMPORT_ALL_PARSE_FAILED, name, exc)
+    return None
+
+
+def _embedded_notifications(zf_gc: zipfile.ZipFile) -> Optional[Dict[str, Any]]:
+    """The globalNotifications key embedded in a per-pipeline YAML of a backup ZIP."""
+    for name in zf_gc.namelist():
+        lower = name.lower()
+        if not lower.endswith(YAML_EXTENSIONS) or "agents-config" in lower or _is_macos_metadata(name):
+            continue
+        try:
+            parsed = yaml.safe_load(zf_gc.read(name).decode("utf-8"))
+        except Exception:  # pylint: disable=broad-except
+            continue
+        if isinstance(parsed, dict) and isinstance(parsed.get("globalNotifications"), dict):
+            return {"globalNotifications": parsed["globalNotifications"]}
+    return None
+
+
+def _find_notification_config(contents: bytes) -> Optional[Dict[str, Any]]:
+    """Global notification settings (SMTP) of a backup ZIP, if any.
+
+    Prefer a dedicated global-config.yaml file; otherwise fall back to a
+    globalNotifications key embedded in any per-pipeline YAML.
+    """
+    with zipfile.ZipFile(io.BytesIO(contents)) as zf_gc:
+        notification_cfg = _global_config_notifications(zf_gc)
+
+        # Fallback: scan per-pipeline YAMLs for an embedded globalNotifications key
+        if notification_cfg is None:
+            notification_cfg = _embedded_notifications(zf_gc)
+    return notification_cfg
+
+
+def _find_config_by_stem(contents: bytes, stem: str) -> Any:
+    """Parsed content of the first readable backup ZIP member named stem (any folder, any extension)."""
+    found = None
+    with zipfile.ZipFile(io.BytesIO(contents)) as zf:
+        for name in zf.namelist():
+            if _member_stem(name) == stem:
+                try:
+                    found = yaml.safe_load(zf.read(name).decode("utf-8"))
+                    break
+                except Exception as exc:  # pylint: disable=broad-except
+                    logger.warning(IMPORT_ALL_PARSE_FAILED, name, exc)
+    return found
+
+
+def _restore_from_archive(
+    find: Callable[[], Any],
+    restore: Callable[[Any], Dict[str, Any]],
+    label: str,
+    restored_message: str,
+    failure_message: str,
+    errors: list[str],
+) -> None:
+    """Restore one global configuration found in a backup ZIP; a failure is logged, never raised."""
+    try:
+        config = find()
+        if config:
+            result = restore(config)
+            if result.get("status") == "restored":
+                logger.info(restored_message)
+            elif result.get("status") == "failed":
+                errors.append(f"{label}: {result.get('error')}")
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning(failure_message, exc)
+
+
+def _restore_archive_globals(contents: bytes, errors: list[str]) -> None:
+    """Restore the global notifications, users and OIDC configuration of a backup ZIP."""
+    # Restore global notification settings (SMTP) if present in the backup.
+    _restore_from_archive(
+        lambda: _find_notification_config(contents),
+        lambda notification_cfg: corehub.import_global_notifications(
+            token=state.token,
+            base_url=state.base_url,
+            use_ssl=state.use_ssl,
+            skip_verify=state.skip_verify,
+            notification_cfg=notification_cfg,
+        ),
+        "global notifications",
+        "Restored global notification settings during import-all",
+        "Failed to restore global notifications during import-all: %s",
+        errors,
+    )
+    # Restore users config (full CoreHub backup) if present.
+    _restore_from_archive(
+        lambda: _find_config_by_stem(contents, "users"),
+        lambda users_cfg: corehub.import_users(
+            token=state.token,
+            base_url=state.base_url,
+            use_ssl=state.use_ssl,
+            skip_verify=state.skip_verify,
+            users_data=users_cfg,
+        ),
+        "users",
+        "Restored users config during import-all",
+        "Failed to restore users during import-all: %s",
+        errors,
+    )
+    # Restore OIDC config (full CoreHub backup) if present.
+    _restore_from_archive(
+        lambda: _find_config_by_stem(contents, "oidc"),
+        lambda oidc_cfg: corehub.import_oidc_config(
+            token=state.token,
+            base_url=state.base_url,
+            use_ssl=state.use_ssl,
+            skip_verify=state.skip_verify,
+            oidc_data=oidc_cfg,
+        ),
+        "oidc",
+        "Restored OIDC config during import-all",
+        "Failed to restore OIDC during import-all: %s",
+        errors,
+    )
+
+
+def _agent_matches(candidate: Any, a_type: Any, a_tag: Any, a_id: Any) -> bool:
+    if not isinstance(candidate, dict):
+        return False
+    if candidate.get("agentType") != a_type or candidate.get("agentTag") != a_tag:
+        return False
+    if not a_id:
+        return True
+    cand_id = candidate.get("agentId") or candidate.get("id")
+    return cand_id is not None and str(cand_id) == str(a_id)
+
+
+def _find_mapped_agent(agents_list: list, a_type: Any, a_tag: Any, a_id: Any) -> Any:
+    """The agents-config.yaml agent a per-pipeline agents mapping entry points at."""
+    # Prefer matching by agentId when present to avoid merging distinct
+    # agents that share the same tag/type. Fall back to tag/type only
+    # for backwards compatibility with older exports.
+    match = next((a for a in agents_list if _agent_matches(a, a_type, a_tag, a_id)), None)
+    if not match and a_id is not None:
+        match = next(
+            (
+                a
+                for a in agents_list
+                if isinstance(a, dict)
+                and a.get("agentType") == a_type
+                and a.get("agentTag") == a_tag
+            ),
+            None,
+        )
+    return match
+
+
+def _select_mapped_agents(job: _ArchiveImport, name: str, pipeline_agents_meta: list) -> list[dict]:
+    """The agents of the per-pipeline agents mapping that agents-config.yaml declares."""
+    selected: list[dict] = []
+    for want in pipeline_agents_meta:
+        if not isinstance(want, dict):
+            continue
+
+        a_type = want.get("agentType")
+        a_tag = want.get("agentTag")
+        a_id = want.get("agentId") or want.get("id")
+
+        if not a_type or not a_tag:
+            job.errors.append(
+                f"{name}: pipeline agents mapping has an entry without agentType/agentTag; skipping that entry."
+            )
+            continue
+
+        match = _find_mapped_agent(job.agents_list, a_type, a_tag, a_id)
+
+        if not match:
+            job.errors.append(
+                f"{name}: agents-config.yaml declares agentType={a_type!r}, agentTag={a_tag!r} for this pipeline "
+                "but it is not present in the top-level agents list."
+            )
+        else:
+            selected.append(match)
+    return selected
+
+
+def _dedupe_agents(selected: list[dict]) -> list[dict]:
+    """Deduplicate agents by type and tag in case of repeated mappings."""
+    seen_local: set[tuple] = set()
+    deduped: list[dict] = []
+    for a in selected:
+        key = (a.get("agentType"), a.get("agentTag"))
+        if key in seen_local:
+            continue
+        seen_local.add(key)
+        deduped.append(a)
+    return deduped
+
+
+def _agents_for_pipeline(job: _ArchiveImport, name: str, meta: Any) -> Optional[list]:
+    """Agents to bind to one imported pipeline; None when its agents mapping resolves to none."""
+    # Select agents for this pipeline: use per-pipeline mapping when present,
+    # otherwise fall back to the full agents list from agents-config.yaml.
+    pipeline_agents_meta = meta.get("agents") if isinstance(meta, dict) else None
+    if not isinstance(pipeline_agents_meta, list) or not pipeline_agents_meta:
+        return job.agents_list
+
+    selected = _select_mapped_agents(job, name, pipeline_agents_meta)
+    if not selected:
+        # If mapping exists but nothing could be resolved, skip this pipeline
+        job.errors.append(
+            f"{name}: no valid agents could be resolved from the per-pipeline agents mapping; skipping this pipeline."
+        )
+        return None
+    return _dedupe_agents(selected)
+
+
+def _read_archive_certificate(
+    zf_cert: zipfile.ZipFile, name: str, cert_path: str, agent_id: Any, errors: list[str]
+) -> Optional[bytes]:
+    """Certificate file an agent of a backup ZIP points at; None (and an error) when it is missing."""
+    # Try to find the certificate file in the ZIP
+    # Support both absolute and relative paths
+    cert_filename = cert_path.lstrip("./")
+    logger.debug(f"Looking for certificate file: {cert_filename}")
+    logger.debug(f"Available files in ZIP: {zf_cert.namelist()}")
+    cert_data = None
+
+    # Try exact match first
+    if cert_filename in zf_cert.namelist():
+        cert_data = zf_cert.read(cert_filename)
+        logger.debug(f"Found certificate via exact match: {cert_filename}")
+    else:
+        # Try with pipeline folder prefix (e.g., pipeline_xxx/certificate.txt)
+        # Extract pipeline folder from the YAML name
+        pipeline_folder = name.split('/')[0] if '/' in name else None
+        cert_data = _find_certificate_near_pipeline(zf_cert, pipeline_folder, cert_filename)
+
+    if not cert_data:
+        error_msg = f"{name}: Certificate file '{cert_path}' not found in ZIP for agent {agent_id}"
+        logger.error(error_msg)
+        logger.error(f"Searched for: {cert_filename}, {pipeline_folder}/{cert_filename if pipeline_folder else 'N/A'}")
+        errors.append(error_msg)
+        return None
+    return cert_data
+
+
+def _find_certificate_near_pipeline(
+    zf_cert: zipfile.ZipFile, pipeline_folder: Optional[str], cert_filename: str
+) -> Optional[bytes]:
+    """Certificate under the pipeline folder of the ZIP, else the one with the same file name."""
+    cert_data = None
+    if pipeline_folder:
+        prefixed_path = f"{pipeline_folder}/{cert_filename}"
+        if prefixed_path in zf_cert.namelist():
+            cert_data = zf_cert.read(prefixed_path)
+            logger.debug(f"Found certificate with pipeline prefix: {prefixed_path}")
+
+    # Try case-insensitive search as fallback
+    if not cert_data:
+        cert_data = _find_certificate_by_file_name(zf_cert, cert_filename)
+    return cert_data
+
+
+def _find_certificate_by_file_name(zf_cert: zipfile.ZipFile, cert_filename: str) -> Optional[bytes]:
+    """Certificate whose ZIP path ends with cert_filename, ignoring case."""
+    for zip_name in zf_cert.namelist():
+        # Match by filename only (ignore path)
+        if zip_name.lower().endswith(cert_filename.lower()):
+            cert_data = zf_cert.read(zip_name)
+            logger.debug(f"Found certificate via filename match: {zip_name}")
+            return cert_data
+    return None
+
+
+def _send_agent_credentials(agent_cfg: dict, agent_id: Any, new_pipeline_id: Any) -> None:
+    """Send the credentials of an agent, which must follow its certificate upload."""
+    host_creds = agent_cfg.get("_host_credentials")
+    custom_host_creds = agent_cfg.get("_custom_host_credentials")
+    if host_creds is not None or custom_host_creds is not None:
+        logger.info(
+            f"Sending credentials for agent {agent_id} after certificate upload"
+        )
+        corehub.fetch_core_hub(
+            f"/pipelines/{new_pipeline_id}/agents/{agent_id}/config/credentials",
+            method="PUT",
+            token=state.token,
+            body={
+                "hostCredentials": host_creds or {},
+                "customHostCredentials": custom_host_creds or {},
+            },
+        )
+        logger.info(
+            f"Successfully sent credentials for agent {agent_id}"
+        )
+
+
+def _upload_archive_certificate(job: _ArchiveImport, name: str, agent_cfg: dict, new_pipeline_id: Any) -> None:
+    """Upload the certificate of one agent from the backup ZIP, then send its credentials."""
+    cert_path = agent_cfg.get("_certificate_path")
+    cert_type = agent_cfg.get("_certificate_type")
+    agent_id = agent_cfg.get("_agent_id")
+    # Extract certificate from ZIP
+    with zipfile.ZipFile(io.BytesIO(job.contents)) as zf_cert:
+        cert_data = _read_archive_certificate(zf_cert, name, cert_path, agent_id, job.errors)
+        if cert_data is None:
+            return
+
+        # Determine certificate extension
+        cert_ext = Path(cert_path.lstrip("./")).suffix.lstrip('.').lower() or 'crt'
+        logger.debug(
+            f"Certificate extracted: {len(cert_data)} bytes, extension: {cert_ext}"
+        )
+
+        # Upload certificate to CoreHub
+        corehub.upload_agent_certificate(
+            token=state.token,
+            pipeline_id=new_pipeline_id,
+            agent_id=agent_id,
+            certificate_type=cert_type,
+            certificate_data=cert_data,
+            certificate_ext=cert_ext,
+        )
+        logger.info(
+            f"Successfully uploaded {cert_type} certificate ({len(cert_data)} bytes) "
+            f"for agent {agent_id} in pipeline {new_pipeline_id}"
+        )
+
+        # Now send credentials AFTER certificate upload
+        _send_agent_credentials(agent_cfg, agent_id, new_pipeline_id)
+
+
+def _upload_pipeline_certificates(job: _ArchiveImport, name: str, agents_for_pipeline: list, new_pipeline_id: Any) -> None:
+    """Upload the certificates the agents of one imported pipeline point at."""
+    logger.debug(f"Checking {len(agents_for_pipeline)} agents for certificate uploads")
+    for agent_cfg in agents_for_pipeline:
+        cert_path = agent_cfg.get("_certificate_path")
+        cert_type = agent_cfg.get("_certificate_type")
+        agent_id = agent_cfg.get("_agent_id")
+
+        if cert_path and cert_type and agent_id:
+            logger.info(
+                f"Processing certificate upload for agent {agent_id}: "
+                f"path={cert_path}, type={cert_type}"
+            )
+            try:
+                _upload_archive_certificate(job, name, agent_cfg, new_pipeline_id)
+            except Exception as cert_exc:  # pylint: disable=broad-except
+                logger.exception(
+                    "Failed to upload certificate for agent %s in pipeline %s",
+                    agent_id,
+                    new_pipeline_id,
+                )
+                job.errors.append(
+                    f"{name}: Failed to upload certificate for agent {agent_id}: {cert_exc}"
+                )
+
+
+def _materialize_import_yaml(job: _ArchiveImport, name: str, yaml_text: str) -> Optional[Path]:
+    """Write a pipeline YAML next to the extracted UDF sources; None (and an error) when it fails."""
+    # Write YAML for schema extraction and entity creation into
+    # the SAME session directory where this import's UDF files
+    # were extracted (udf_root), so YAML and UDFs share one root
+    # and UDF lookups resolve without spanning sibling folders.
+    try:
+        restore_dir = job.udf_root if job.udf_root is not None else new_session_dir("import")
+        restore_dir.mkdir(parents=True, exist_ok=True)
+        return _write_session_file(restore_dir, YAML_SUFFIX, yaml_text.encode("utf-8"))
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Failed to materialize YAML %s to disk", name)
+        job.errors.append(f"{name}: failed to materialize YAML to disk: {exc}")
+        return None
+
+
+def _compile_imported_udfs(job: _ArchiveImport, entities: _PipelineEntities, src_schema: Any, tgt_schema: Any) -> bool:
+    """Compile and register the UDFs a schema pair references; False when that fails."""
+    try:
+        create_user_defined_functions.main(
+            entities.pipeline_id,
+            src_schema,
+            tgt_schema,
+            entities.source_type,
+            entities.target_type,
+            str(entities.yaml_path),
+            state.token,
+            True,  # skip_errors
+            50,  # chunk_size
+        )
+    except Exception as exc_udf:  # pylint: disable=broad-except
+        logger.exception(
+            "Failed to process UDFs for pipeline %s (%s) schema %s->%s from %s",
+            entities.pipeline_name,
+            entities.pipeline_id,
+            src_schema,
+            tgt_schema,
+            entities.name,
+        )
+        job.errors.append(
+            f"{entities.name}: UDF compilation error for {src_schema}->{tgt_schema}: {exc_udf}"
+        )
+        return False
+    return True
+
+
+def _create_schema_pair_entities(job: _ArchiveImport, entities: _PipelineEntities, src_schema: Any, tgt_schema: Any) -> bool:
+    """Create the entities of one schema pair of an imported pipeline; False when anything failed."""
+    success = True
+    name = entities.name
+    try:
+        result_run = corehub.run_create_entities(
+            token=state.token,
+            base_url=state.base_url,
+            pipeline_id=entities.pipeline_id,
+            source_schema=src_schema,
+            target_schema=tgt_schema,
+            source_type=entities.source_type,
+            target_type=entities.target_type,
+            yaml_file=str(entities.yaml_path),
+            skip_errors=True,
+            chunk_size=50,
+            enable_scheduling=entities.enable_scheduling,
+            create_tables=entities.create_tables,
+            use_ssl=state.use_ssl,
+            skip_verify=state.skip_verify,
+            log_callback=None,
+            chronos_token=state.chronos_token,
+        )
+        if not result_run.get("success"):
+            success = False
+            if result_run.get("error"):
+                job.errors.append(
+                    f"{name}: entity creation error for {src_schema}->{tgt_schema}: {result_run['error']}"
+                )
+
+        # After entities are created for this schema pair, automatically
+        # compile and register any UDFs referenced in the YAML using the
+        # exported source files from the backup.
+        if job.udf_root is not None and not _compile_imported_udfs(job, entities, src_schema, tgt_schema):
+            success = False
+    except Exception as exc:  # pylint: disable=broad-except
+        success = False
+        logger.exception(
+            "Failed to create entities for pipeline %s (%s) from %s", entities.pipeline_name, entities.pipeline_id, name
+        )
+        job.errors.append(
+            f"{name}: exception during entity creation for {src_schema}->{tgt_schema}: {exc}"
+        )
+    return success
+
+
+def _mark_configuration_completed(new_pipeline_id: Any, new_pipeline_name: Any) -> None:
+    """Mark pipeline as configuration completed to remove from draft status."""
+    try:
+        corehub.fetch_core_hub(
+            f"/pipelines/{new_pipeline_id}",
+            method="PUT",
+            token=state.token,
+            body={"configurationCompleted": True, "name": new_pipeline_name},
+        )
+        logger.info("Marked pipeline %s (%s) as configuration completed", new_pipeline_name, new_pipeline_id)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("Failed to mark pipeline %s as configuration completed: %s", new_pipeline_id, exc)
+
+
+def _create_imported_entities(job: _ArchiveImport, name: str, yaml_path: Path, new_pipeline_id: Any, new_pipeline_name: Any) -> None:
+    """Recreate the entities (and UDFs) of one imported pipeline from its YAML."""
+    # Determine schemas and optional type hints from YAML
+    schema_pairs = extract_all_schemas_from_yaml(str(yaml_path))
+    if not schema_pairs:
+        job.errors.append(f"{name}: no schemas found in YAML; skipping entity creation")
+        return
+
+    src_type_hint, tgt_type_hint = extract_schema_types_from_yaml(str(yaml_path))
+    prefs = state.preferences()
+    entities = _PipelineEntities(
+        name=name,
+        yaml_path=yaml_path,
+        pipeline_id=new_pipeline_id,
+        pipeline_name=new_pipeline_name,
+        source_type=src_type_hint or "SQL",
+        target_type=tgt_type_hint or "SQL",
+        enable_scheduling=prefs["enableScheduling"],
+        create_tables=prefs["createTables"],
+    )
+
+    overall_success = True
+    for src_schema, tgt_schema in schema_pairs:
+        if not _create_schema_pair_entities(job, entities, src_schema, tgt_schema):
+            overall_success = False
+
+    if not overall_success:
+        logger.warning(
+            "Import-all: entity creation had errors for pipeline %s (%s) from %s",
+            new_pipeline_name,
+            new_pipeline_id,
+            name,
+        )
+    else:
+        _mark_configuration_completed(new_pipeline_id, new_pipeline_name)
+
+
+def _import_archive_pipeline(job: _ArchiveImport, name: str, stem_no_ext: str, yaml_text: str) -> None:
+    """Recreate one pipeline of a backup ZIP: pipeline, agents, certificates, entities and UDFs."""
+    # Resolve original pipeline identity.
+    old_pipeline_id, embedded_name = _resolve_pipeline_identity(yaml_text, stem_no_ext)
+
+    meta = job.meta_by_old_id.get(str(old_pipeline_id)) if old_pipeline_id is not None else None
+    base_name = meta.get("pipelineName") if isinstance(meta, dict) else None
+    base_name = base_name or embedded_name or _default_pipeline_name(old_pipeline_id)
+
+    agents_for_pipeline = _agents_for_pipeline(job, name, meta)
+    if agents_for_pipeline is None:
+        return
+
+    # Create pipeline + bind agents
+    try:
+        cfg = {"pipelineName": base_name, "agents": agents_for_pipeline}
+        result = corehub.import_pipeline_config_only(
+            token=state.token,
+            base_url=state.base_url,
+            use_ssl=state.use_ssl,
+            skip_verify=state.skip_verify,
+            config=cfg,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Failed to import config for %s", name)
+        job.errors.append(f"{name}: failed to create pipeline and bind agents: {exc}")
+        return
+
+    new_pipeline_id = result.get("pipelineId")
+    new_pipeline_name = result.get("pipelineName")
+    job.created_pipelines.append(result)
+
+    # Upload certificates for agents if specified
+    _upload_pipeline_certificates(job, name, agents_for_pipeline, new_pipeline_id)
+
+    yaml_path = _materialize_import_yaml(job, name, yaml_text)
+    if yaml_path is None:
+        return
+
+    _create_imported_entities(job, name, yaml_path, new_pipeline_id, new_pipeline_name)
+
+
+def _import_archive_pipelines(job: _ArchiveImport) -> None:
+    """Second pass: process each per-pipeline YAML and recreate pipeline + entities."""
+    with zipfile.ZipFile(io.BytesIO(job.contents)) as zf:
+        for name in zf.namelist():
+            stem_no_ext = _pipeline_yaml_stem(name)
+            if stem_no_ext is None:
+                continue
+
+            try:
+                yaml_text = zf.read(name).decode("utf-8")
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.exception("Failed to read YAML %s from archive", name)
+                job.errors.append(f"{name}: failed to read from archive: {exc}")
+                continue
+
+            _import_archive_pipeline(job, name, stem_no_ext, yaml_text)
+
+
+def _import_summary(created_pipelines: list[dict], errors: list[str]) -> str:
+    """Human-friendly summary message of an Export All import."""
+    if created_pipelines:
+        summary_parts = [
+            f"{p.get('pipelineName') or '(unnamed)'} ({p.get('pipelineId') or '?'})"
+            for p in created_pipelines
+        ]
+        summary = "; ".join(summary_parts)
+        base_msg = f"Imported {len(created_pipelines)} pipeline(s): {summary}."
+    else:
+        base_msg = "No pipelines were imported from the archive."
+
+    if errors:
+        error_msg = " Some items encountered errors: " + "; ".join(errors)
+        base_msg += error_msg
+    return base_msg
+
+
+def _import_archive(contents: bytes) -> ApiMessage:
+    """Recreate the pipelines, agents, entities, UDFs and global configs of an Export All ZIP."""
+    udf_root = _extract_import_udf_sources(contents)
+
+    # First pass: find and parse agents-config.yaml for shared agents + metadata
+    agents_text = _read_agents_config_text(contents, "import-all")
+    agents_config, agents_list = _parse_agents_config(agents_text, "import-all")
+
+    # Build lookup for original pipeline metadata, if present
+    job = _ArchiveImport(
+        contents=contents,
+        agents_list=agents_list,
+        meta_by_old_id=_pipeline_meta_by_old_id(agents_config),
+        udf_root=udf_root,
+    )
+
+    _restore_archive_globals(contents, job.errors)
+
+    try:
+        _import_archive_pipelines(job)
+    except HTTPException:
+        raise
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Unexpected error during import-all processing")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    errors = job.errors
+    return ApiMessage(message=_import_summary(job.created_pipelines, errors), logs=errors if errors else None)
+
+
+async def import_all(
+    file: UploadFile = File(...)
+) -> ApiMessage:
+    """Validate a full backup ZIP (pipelines + agents-config).
+
+    The ZIP is expected to come from the Export All feature and contain
+    at least an agents-config.yaml file. Agents are provisioned via CoreHub API.
+    """
+
+    _require_session()
+
+    contents = await _read_nonempty_upload(file)
+
+    prune_workspace_sessions()
+    return _import_archive(contents)
+
+
+def _check_agent_definitions(agents_list: list, logs: list[str], errors: list[str]) -> None:
+    """Validate agent definitions in agents-config.yaml."""
+    for cfg in agents_list:
+        if not isinstance(cfg, dict):
+            continue
+        a_type = cfg.get("agentType")
+        a_tag = cfg.get("agentTag")
+        if not a_type or not a_tag:
+            errors.append("One agent definition is missing agentType/agentTag.")
+            continue
+        logs.append(f"Agent definition found: {a_type}/{a_tag}")
+
+
+def _existing_pipeline_names(errors: list[str]) -> set[str]:
+    """Names of the pipelines of the Core Hub, to estimate the names an import would create."""
+    existing_names: set[str] = set()
+    try:
+        existing = corehub.fetch_core_hub("/pipelines", token=state.token)
+        if isinstance(existing, list):
+            for item in existing:
+                name = item.get("name") if isinstance(item, dict) else None
+                if isinstance(name, str) and name:
+                    existing_names.add(name)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Failed to fetch existing pipelines during validate-all")
+        errors.append(f"Failed to fetch existing pipelines: {exc}")
+    return existing_names
+
+
+def _materialize_validation_yaml(name: str, yaml_text: str, errors: list[str]) -> Optional[Path]:
+    """Write a pipeline YAML under the validate workspace; None (and an error) when it fails."""
+    try:
+        temp_dir = get_workspace_root() / "validate"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        return _write_session_file(temp_dir, YAML_SUFFIX, yaml_text.encode("utf-8"))
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Failed to materialize YAML %s to disk during validate-all", name)
+        errors.append(f"{name}: failed to materialize YAML to disk: {exc}")
+        return None
+
+
+def _unique_pipeline_name(base_name: str, reserved_names: set[str]) -> str:
+    """base_name, or its first '(restored N)' variant that is not taken yet."""
+    if base_name not in reserved_names:
+        return base_name
+    idx = 1
+    while True:
+        suffix = " (restored)" if idx == 1 else f" (restored {idx})"
+        candidate = f"{base_name}{suffix}"
+        if candidate not in reserved_names:
+            return candidate
+        idx += 1
+
+
+def _validate_pipeline_yaml(
+    name: str, stem_no_ext: str, yaml_text: str, yaml_path: Path, reserved_names: set[str], logs: list[str], errors: list[str]
+) -> None:
+    """Report the pipeline one backup YAML would create and the schema pairs it defines."""
+    # Estimate the pipeline name that would be used on import.
+    old_pipeline_id, embedded_name = _resolve_pipeline_identity(yaml_text, stem_no_ext)
+
+    base_name = embedded_name or _default_pipeline_name(old_pipeline_id)
+    pipeline_name = _unique_pipeline_name(base_name, reserved_names)
+    reserved_names.add(pipeline_name)
+
+    logs.append(
+        f"{name}: would create pipeline '{pipeline_name}'"
+        + (f" from original ID {old_pipeline_id}" if old_pipeline_id else "")
+    )
+
+    schema_pairs = extract_all_schemas_from_yaml(str(yaml_path))
+    if not schema_pairs:
+        errors.append(f"{name}: no schemas found in YAML; entities cannot be recreated.")
+    else:
+        logs.append(
+            f"{name}: discovered {len(schema_pairs)} schema pair(s): "
+            + ", ".join(f"{s}->{t}" for s, t in schema_pairs)
+        )
+
+
+def _validate_archive_pipelines(contents: bytes, reserved_names: set[str], logs: list[str], errors: list[str]) -> None:
+    """Validate each per-pipeline YAML can be parsed and has schemas."""
+    with zipfile.ZipFile(io.BytesIO(contents)) as zf:
+        for name in zf.namelist():
+            stem_no_ext = _pipeline_yaml_stem(name)
+            if stem_no_ext is None:
+                continue
+
+            logs.append(f"Validating pipeline definition: {name}")
+
+            try:
+                yaml_text = zf.read(name).decode("utf-8")
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.exception("Failed to read YAML %s from archive during validate-all", name)
+                errors.append(f"{name}: failed to read from archive: {exc}")
+                continue
+
+            yaml_path = _materialize_validation_yaml(name, yaml_text, errors)
+            if yaml_path is None:
+                continue
+
+            _validate_pipeline_yaml(name, stem_no_ext, yaml_text, yaml_path, reserved_names, logs, errors)
+
+
+def _validate_archive(contents: bytes) -> ApiMessage:
+    """Dry-run the import of an Export All ZIP and report what it would do."""
+    logs: list[str] = []
+    errors: list[str] = []
+
+    # Locate and parse agents-config.yaml
+    agents_text = _read_agents_config_text(contents, "validate-all", logs)
+    _, agents_list = _parse_agents_config(agents_text, "validate-all")
+
+    logs.append(f"agents-config.yaml defines {len(agents_list)} agent configuration(s).")
+
+    _check_agent_definitions(agents_list, logs, errors)
+
+    # Fetch existing pipelines to estimate final pipeline names that would be created
+    reserved_names = _existing_pipeline_names(errors)
+
+    try:
+        _validate_archive_pipelines(contents, reserved_names, logs, errors)
+    except HTTPException:
+        raise
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Unexpected error during validate-all processing")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    success = not errors
+    if success:
+        logs.insert(0, "Validation OK: archive is structurally consistent and ready to import.")
+    else:
+        logs.insert(0, "Validation failed: one or more problems were detected.")
+        logs.append("Errors:")
+        logs.extend(f"- {e}" for e in errors)
+
+    return ApiMessage(success=success, message="\n".join(logs))
+
+
+async def validate_all(
+    file: UploadFile = File(...)
+) -> ApiMessage:
+    """Dry-run validation for an Export All ZIP archive.
+
+    This endpoint parses the archive, checks that agents-config.yaml is
+    present and well formed, verifies that no masked passwords are
+    present, and ensures that each per-pipeline YAML can be read and has
+    at least one schema pair defined. It does **not** create pipelines,
+    bind agents or create entities.
+    """
+
+    _require_session()
+
+    contents = await _read_nonempty_upload(file)
+    return _validate_archive(contents)
+
+
+async def import_full_backup(
+    file: UploadFile = File(...),
+    ai_settings_passphrase: Optional[str] = Form(None),
+) -> ApiMessage:
+    """Restore a complete CoreHub backup (pipelines + global configs + schedules).
+
+    Accepts the ZIP produced by /api/export/full-backup and restores each
+    domain independently: global configs, SMTP, webhooks, thresholds,
+    schedules, and pipelines (agents + entities + UDFs).
+    """
+
+    _require_session()
+
+    contents = await _read_nonempty_upload(file)
+
+    try:
+        results = corehub.import_full_corehub_backup(
+            token=state.token,
+            base_url=state.base_url,
+            use_ssl=state.use_ssl,
+            skip_verify=state.skip_verify,
+            zip_bytes=contents,
+            chronos_token=state.chronos_token,
+            ai_settings_passphrase=ai_settings_passphrase,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Failed to import full CoreHub backup")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return ApiMessage(message="Full backup restore completed. " + _summarize_restore(results))
+
+
+def _parse_uploaded_yaml(contents: bytes) -> Any:
+    """Parse an uploaded YAML backup; 400 when it is not valid YAML."""
+    try:
+        return yaml.safe_load(contents.decode("utf-8"))
+    except yaml.YAMLError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid YAML: {exc}") from exc
+
+
+async def import_users(file: UploadFile = File(...)) -> ApiMessage:
+    """Restore user management configuration from a YAML backup."""
+    _require_session()
+
+    contents = await _read_nonempty_upload(file)
+    users_data = _parse_uploaded_yaml(contents)
+
+    try:
+        result = corehub.import_users(
+            token=state.token,
+            base_url=state.base_url,
+            use_ssl=state.use_ssl,
+            skip_verify=state.skip_verify,
+            users_data=users_data,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Failed to import users")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    status = result.get("status", "unknown")
+    return ApiMessage(message=f"Users import {status}")
+
+
+async def import_oidc(file: UploadFile = File(...)) -> ApiMessage:
+    """Restore OIDC configuration from a YAML backup."""
+    _require_session()
+
+    contents = await _read_nonempty_upload(file)
+    oidc_data = _parse_uploaded_yaml(contents)
+
+    try:
+        result = corehub.import_oidc_config(
+            token=state.token,
+            base_url=state.base_url,
+            use_ssl=state.use_ssl,
+            skip_verify=state.skip_verify,
+            oidc_data=oidc_data,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Failed to import OIDC config")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    summary_parts: list[str] = []
+    for key, res in result.items():
+        status = res.get("status", "unknown")
+        summary_parts.append(f"{key}: {status}")
+    return ApiMessage(message="OIDC import completed. " + "; ".join(summary_parts))
+
+
+def _register_import_routes(app: FastAPI) -> None:
+    """The Export All import and validation routes and the backup restore routes."""
+    app.add_api_route("/api/import/all", import_all, methods=["POST"], responses=_ARCHIVE_IMPORT_RESPONSES)
+    app.add_api_route("/api/import/validate-all", validate_all, methods=["POST"], responses=_ARCHIVE_IMPORT_RESPONSES)
+    app.add_api_route("/api/import/full-backup", import_full_backup, methods=["POST"], responses=_FILE_IMPORT_RESPONSES)
+    app.add_api_route("/api/import/users", import_users, methods=["POST"], responses=_FILE_IMPORT_RESPONSES)
+    app.add_api_route("/api/import/oidc", import_oidc, methods=["POST"], responses=_FILE_IMPORT_RESPONSES)
+
+
 def create_app() -> FastAPI:
     _ensure_static_assets()
     asset_rewrites = _fingerprint_static_assets()
@@ -1519,893 +2576,7 @@ def create_app() -> FastAPI:
 
     _register_pipeline_routes(app)
 
-    @app.post("/api/import/all", response_model=ApiMessage)
-    async def import_all(
-        file: UploadFile = File(...)
-    ) -> ApiMessage:
-        """Validate a full backup ZIP (pipelines + agents-config).
-
-        The ZIP is expected to come from the Export All feature and contain
-        at least an agents-config.yaml file. Agents are provisioned via CoreHub API.
-        """
-
-        if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
-
-        contents = await file.read()
-        if not contents:
-            raise HTTPException(status_code=400, detail=UPLOADED_FILE_EMPTY)
-
-        # Extract UDF source files (if present) into an app-owned session
-        # directory so they can be compiled automatically during import. Both
-        # Export All and single-pipeline Full backup ZIPs place UDFs under
-        # folders named 'udf-<agentId>' (optionally nested under pipeline_<id>/
-        # for single pipeline backups).
-        prune_workspace_sessions()
-        udf_root: Optional[Path] = None
-        try:
-            udf_root = new_session_dir("import")
-
-            with zipfile.ZipFile(io.BytesIO(contents)) as zf_udf:
-                for member in zf_udf.namelist():
-                    lower = member.lower()
-                    # Skip macOS resource-fork entries
-                    if member.startswith("__MACOSX/") or member.rsplit("/", 1)[-1].startswith("._"):
-                        continue
-                    # Only consider files under udf-* folders
-                    if "udf-" not in member and not member.lstrip("/").startswith("udf-"):
-                        continue
-                    # Only extract recognized UDF source extensions
-                    if not (
-                        lower.endswith(".java")
-                        or lower.endswith(".kt")
-                        or lower.endswith(".js")
-                        or lower.endswith(".py")
-                        or lower.endswith(".rb")
-                    ):
-                        continue
-
-                    dest_path = udf_root / member
-                    dest_path.parent.mkdir(parents=True, exist_ok=True)
-                    with zf_udf.open(member) as src, open(dest_path, "wb") as dst:
-                        shutil.copyfileobj(src, dst)
-
-            # Point the UDF helper module to this directory so it can resolve
-            # files via UDF_NAME + extension lookups.
-            create_user_defined_functions.UDF_PATH = str(udf_root)
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.exception(
-                "Failed to extract UDF source files from backup; UDF compilation will be skipped: %s",
-                exc,
-            )
-            # Still set UDF_PATH to the (possibly empty) directory so that
-            # create_all_entities.main doesn't fall back to the YAML temp dir
-            # (where UDF files are never present) and produce confusing errors.
-            if udf_root is not None and udf_root.is_dir():
-                create_user_defined_functions.UDF_PATH = str(udf_root)
-
-        # First pass: find and parse agents-config.yaml for shared agents + metadata
-        try:
-            with zipfile.ZipFile(io.BytesIO(contents)) as zf:
-                agents_name = None
-                for name in zf.namelist():
-                    lower = name.lower()
-                    if lower.endswith("agents-config.yaml") or lower.endswith("agents-config.yml"):
-                        agents_name = name
-                        break
-
-                if not agents_name:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Archive does not contain agents-config.yaml",
-                    )
-
-                agents_text = zf.read(agents_name).decode("utf-8")
-        except HTTPException:
-            raise
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.exception("Failed to process uploaded ZIP during import-all")
-            raise HTTPException(status_code=400, detail=f"Invalid ZIP archive: {exc}") from exc
-
-        try:
-            agents_config = yaml.safe_load(agents_text)
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.exception("Failed to parse agents-config.yaml during import-all")
-            raise HTTPException(status_code=400, detail=f"Failed to parse agents-config.yaml: {exc}") from exc
-
-        if _has_masked_password(agents_config):
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "Config contains masked passwords (*******). "
-                    "Please replace them with real passwords before importing."
-                ),
-            )
-
-        agents_list = agents_config.get("agents")
-        if not isinstance(agents_list, list) or not agents_list:
-            raise HTTPException(status_code=400, detail="agents-config.yaml does not contain a non-empty 'agents' list")
-
-        errors: list[str] = []
-
-        # Build lookup for original pipeline metadata, if present
-        pipelines_meta = agents_config.get("pipelines") or []
-        meta_by_old_id = {}
-        if isinstance(pipelines_meta, list):
-            for item in pipelines_meta:
-                if not isinstance(item, dict):
-                    continue
-                old_id = item.get("pipelineId")
-                if old_id is not None:
-                    meta_by_old_id[str(old_id)] = item
-
-        created_pipelines: list[dict] = []
-
-        # Restore global notification settings (SMTP) if present in the backup.
-        # Prefer a dedicated global-config.yaml file; otherwise fall back to a
-        # globalNotifications key embedded in any per-pipeline YAML.
-        try:
-            notification_cfg = None
-            with zipfile.ZipFile(io.BytesIO(contents)) as zf_gc:
-                for name in zf_gc.namelist():
-                    if name.startswith("__MACOSX/") or name.rsplit("/", 1)[-1].startswith("._"):
-                        continue
-                    stem = name.rsplit("/", 1)[-1].rsplit(".", 1)[0]
-                    if stem == "global-config":
-                        try:
-                            parsed = yaml.safe_load(zf_gc.read(name).decode("utf-8"))
-                            if isinstance(parsed, dict):
-                                notification_cfg = parsed
-                                break
-                        except Exception as exc:  # pylint: disable=broad-except
-                            logger.warning(IMPORT_ALL_PARSE_FAILED, name, exc)
-
-                # Fallback: scan per-pipeline YAMLs for an embedded globalNotifications key
-                if notification_cfg is None:
-                    for name in zf_gc.namelist():
-                        lower = name.lower()
-                        if not lower.endswith((".yaml", ".yml")):
-                            continue
-                        if "agents-config" in lower:
-                            continue
-                        if name.startswith("__MACOSX/") or name.rsplit("/", 1)[-1].startswith("._"):
-                            continue
-                        try:
-                            parsed = yaml.safe_load(zf_gc.read(name).decode("utf-8"))
-                        except Exception:  # pylint: disable=broad-except
-                            continue
-                        if isinstance(parsed, dict) and isinstance(parsed.get("globalNotifications"), dict):
-                            notification_cfg = {"globalNotifications": parsed["globalNotifications"]}
-                            break
-
-            if notification_cfg:
-                result = corehub.import_global_notifications(
-                    token=state.token,
-                    base_url=state.base_url,
-                    use_ssl=state.use_ssl,
-                    skip_verify=state.skip_verify,
-                    notification_cfg=notification_cfg,
-                )
-                if result.get("status") == "restored":
-                    logger.info("Restored global notification settings during import-all")
-                elif result.get("status") == "failed":
-                    errors.append(f"global notifications: {result.get('error')}")
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.warning("Failed to restore global notifications during import-all: %s", exc)
-
-        # Restore users config (full CoreHub backup) if present.
-        try:
-            users_cfg = None
-            with zipfile.ZipFile(io.BytesIO(contents)) as zf_users:
-                for name in zf_users.namelist():
-                    if name.rsplit("/", 1)[-1].rsplit(".", 1)[0] == "users":
-                        try:
-                            users_cfg = yaml.safe_load(zf_users.read(name).decode("utf-8"))
-                            break
-                        except Exception as exc:  # pylint: disable=broad-except
-                            logger.warning(IMPORT_ALL_PARSE_FAILED, name, exc)
-            if users_cfg:
-                result = corehub.import_users(
-                    token=state.token,
-                    base_url=state.base_url,
-                    use_ssl=state.use_ssl,
-                    skip_verify=state.skip_verify,
-                    users_data=users_cfg,
-                )
-                if result.get("status") == "restored":
-                    logger.info("Restored users config during import-all")
-                elif result.get("status") == "failed":
-                    errors.append(f"users: {result.get('error')}")
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.warning("Failed to restore users during import-all: %s", exc)
-
-        # Restore OIDC config (full CoreHub backup) if present.
-        try:
-            oidc_cfg = None
-            with zipfile.ZipFile(io.BytesIO(contents)) as zf_oidc:
-                for name in zf_oidc.namelist():
-                    if name.rsplit("/", 1)[-1].rsplit(".", 1)[0] == "oidc":
-                        try:
-                            oidc_cfg = yaml.safe_load(zf_oidc.read(name).decode("utf-8"))
-                            break
-                        except Exception as exc:  # pylint: disable=broad-except
-                            logger.warning(IMPORT_ALL_PARSE_FAILED, name, exc)
-            if oidc_cfg:
-                result = corehub.import_oidc_config(
-                    token=state.token,
-                    base_url=state.base_url,
-                    use_ssl=state.use_ssl,
-                    skip_verify=state.skip_verify,
-                    oidc_data=oidc_cfg,
-                )
-                if result.get("status") == "restored":
-                    logger.info("Restored OIDC config during import-all")
-                elif result.get("status") == "failed":
-                    errors.append(f"oidc: {result.get('error')}")
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.warning("Failed to restore OIDC during import-all: %s", exc)
-
-        # Second pass: process each per-pipeline YAML and recreate pipeline + entities
-        try:
-            with zipfile.ZipFile(io.BytesIO(contents)) as zf:
-                for name in zf.namelist():
-                    lower = name.lower()
-                    # Skip macOS resource-fork entries (e.g. __MACOSX/ or ._filename)
-                    if name.startswith("__MACOSX/") or name.rsplit("/", 1)[-1].startswith("._"):
-                        continue
-                    if not (lower.endswith(".yaml") or lower.endswith(".yml")):
-                        continue
-                    if "agents-config" in lower:
-                        continue
-
-                    # Skip global config YAMLs from full CoreHub backup format
-                    # (these are backed up separately and not pipeline configs)
-                    stem = name.rsplit("/", 1)[-1]  # strip any path
-                    stem_no_ext = stem.rsplit(".", 1)[0]
-                    if stem_no_ext in GLOBAL_CONFIG_NAMES:
-                        continue
-
-                    try:
-                        yaml_text = zf.read(name).decode("utf-8")
-                    except Exception as exc:  # pylint: disable=broad-except
-                        logger.exception("Failed to read YAML %s from archive", name)
-                        errors.append(f"{name}: failed to read from archive: {exc}")
-                        continue
-
-                    # Resolve original pipeline identity. Prefer the exportMetadata
-                    # key embedded in the YAML (current exports); fall back to
-                    # parsing the backup filename for legacy backups.
-                    old_pipeline_id, embedded_name = _extract_export_metadata_from_yaml_text(yaml_text)
-                    if not old_pipeline_id:
-                        old_pipeline_id = _extract_pipeline_id_from_backup_stem(stem_no_ext)
-
-                    meta = meta_by_old_id.get(str(old_pipeline_id)) if old_pipeline_id is not None else None
-                    base_name = None
-                    if isinstance(meta, dict):
-                        base_name = meta.get("pipelineName")
-                    if not base_name:
-                        base_name = embedded_name
-                    if not base_name:
-                        base_name = f"Imported pipeline {old_pipeline_id}" if old_pipeline_id else "Imported pipeline"
-
-                    # Select agents for this pipeline: use per-pipeline mapping when present,
-                    # otherwise fall back to the full agents list from agents-config.yaml.
-                    agents_for_pipeline = agents_list
-                    pipeline_agents_meta = meta.get("agents") if isinstance(meta, dict) else None
-                    if isinstance(pipeline_agents_meta, list) and pipeline_agents_meta:
-                        selected: list[dict] = []
-                        for want in pipeline_agents_meta:
-                            if not isinstance(want, dict):
-                                continue
-
-                            a_type = want.get("agentType")
-                            a_tag = want.get("agentTag")
-                            a_id = want.get("agentId") or want.get("id")
-
-                            if not a_type or not a_tag:
-                                errors.append(
-                                    f"{name}: pipeline agents mapping has an entry without agentType/agentTag; skipping that entry."
-                                )
-                                continue
-
-                            def _matches_agent(candidate: dict) -> bool:
-                                if not isinstance(candidate, dict):
-                                    return False
-                                if candidate.get("agentType") != a_type or candidate.get("agentTag") != a_tag:
-                                    return False
-                                if not a_id:
-                                    return True
-                                cand_id = candidate.get("agentId") or candidate.get("id")
-                                return cand_id is not None and str(cand_id) == str(a_id)
-
-                            # Prefer matching by agentId when present to avoid merging distinct
-                            # agents that share the same tag/type. Fall back to tag/type only
-                            # for backwards compatibility with older exports.
-                            match = next((a for a in agents_list if _matches_agent(a)), None)
-                            if not match and a_id is not None:
-                                match = next(
-                                    (
-                                        a
-                                        for a in agents_list
-                                        if isinstance(a, dict)
-                                        and a.get("agentType") == a_type
-                                        and a.get("agentTag") == a_tag
-                                    ),
-                                    None,
-                                )
-
-                            if not match:
-                                errors.append(
-                                    f"{name}: agents-config.yaml declares agentType={a_type!r}, agentTag={a_tag!r} for this pipeline "
-                                    "but it is not present in the top-level agents list."
-                                )
-                            else:
-                                selected.append(match)
-
-                        if selected:
-                            # Deduplicate in case of repeated mappings
-                            seen_local: set[tuple] = set()
-                            deduped: list[dict] = []
-                            for a in selected:
-                                key = (a.get("agentType"), a.get("agentTag"))
-                                if key in seen_local:
-                                    continue
-                                seen_local.add(key)
-                                deduped.append(a)
-                            agents_for_pipeline = deduped
-                        else:
-                            # If mapping exists but nothing could be resolved, skip this pipeline
-                            errors.append(
-                                f"{name}: no valid agents could be resolved from the per-pipeline agents mapping; skipping this pipeline."
-                            )
-                            continue
-
-                    # Create pipeline + bind agents
-                    try:
-                        cfg = {"pipelineName": base_name, "agents": agents_for_pipeline}
-                        result = corehub.import_pipeline_config_only(
-                            token=state.token,
-                            base_url=state.base_url,
-                            use_ssl=state.use_ssl,
-                            skip_verify=state.skip_verify,
-                            config=cfg,
-                        )
-                    except Exception as exc:  # pylint: disable=broad-except
-                        logger.exception("Failed to import config for %s", name)
-                        errors.append(f"{name}: failed to create pipeline and bind agents: {exc}")
-                        continue
-
-                    new_pipeline_id = result.get("pipelineId")
-                    new_pipeline_name = result.get("pipelineName")
-                    created_pipelines.append(result)
-
-                    # Upload certificates for agents if specified
-                    logger.debug(f"Checking {len(agents_for_pipeline)} agents for certificate uploads")
-                    for agent_cfg in agents_for_pipeline:
-                        cert_path = agent_cfg.get("_certificate_path")
-                        cert_type = agent_cfg.get("_certificate_type")
-                        agent_id = agent_cfg.get("_agent_id")
-                        
-                        if cert_path and cert_type and agent_id:
-                            logger.info(
-                                f"Processing certificate upload for agent {agent_id}: "
-                                f"path={cert_path}, type={cert_type}"
-                            )
-                            try:
-                                # Extract certificate from ZIP
-                                with zipfile.ZipFile(io.BytesIO(contents)) as zf_cert:
-                                    # Try to find the certificate file in the ZIP
-                                    # Support both absolute and relative paths
-                                    cert_filename = cert_path.lstrip("./")
-                                    logger.debug(f"Looking for certificate file: {cert_filename}")
-                                    logger.debug(f"Available files in ZIP: {zf_cert.namelist()}")
-                                    cert_data = None
-                                    # Pipeline folder of the YAML (e.g. pipeline_xxx/certificate.txt), if any
-                                    pipeline_folder = name.split('/')[0] if '/' in name else None
-
-                                    # Try exact match first
-                                    if cert_filename in zf_cert.namelist():
-                                        cert_data = zf_cert.read(cert_filename)
-                                        logger.debug(f"Found certificate via exact match: {cert_filename}")
-                                    else:
-                                        # Try with pipeline folder prefix (e.g., pipeline_xxx/certificate.txt)
-                                        if pipeline_folder:
-                                            prefixed_path = f"{pipeline_folder}/{cert_filename}"
-                                            if prefixed_path in zf_cert.namelist():
-                                                cert_data = zf_cert.read(prefixed_path)
-                                                logger.debug(f"Found certificate with pipeline prefix: {prefixed_path}")
-                                        
-                                        # Try case-insensitive search as fallback
-                                        if cert_data is None:
-                                            for zip_name in zf_cert.namelist():
-                                                # Match by filename only (ignore path)
-                                                if zip_name.lower().endswith(cert_filename.lower()):
-                                                    cert_data = zf_cert.read(zip_name)
-                                                    logger.debug(f"Found certificate via filename match: {zip_name}")
-                                                    break
-                                    
-                                    if cert_data is None:
-                                        error_msg = f"{name}: Certificate file '{cert_path}' not found in ZIP for agent {agent_id}"
-                                        logger.error(error_msg)
-                                        logger.error(f"Searched for: {cert_filename}, {pipeline_folder}/{cert_filename if pipeline_folder else 'N/A'}")
-                                        errors.append(error_msg)
-                                        continue
-                                    if not cert_data:
-                                        error_msg = f"{name}: Certificate file '{cert_path}' in the ZIP is empty; not uploaded for agent {agent_id}"
-                                        logger.error(error_msg)
-                                        errors.append(error_msg)
-                                        continue
-                                    
-                                    # Determine certificate extension
-                                    cert_ext = Path(cert_filename).suffix.lstrip('.').lower() or 'crt'
-                                    logger.debug(
-                                        f"Certificate extracted: {len(cert_data)} bytes, extension: {cert_ext}"
-                                    )
-                                    
-                                    # Upload certificate to CoreHub
-                                    corehub.upload_agent_certificate(
-                                        token=state.token,
-                                        pipeline_id=new_pipeline_id,
-                                        agent_id=agent_id,
-                                        certificate_type=cert_type,
-                                        certificate_data=cert_data,
-                                        certificate_ext=cert_ext,
-                                    )
-                                    logger.info(
-                                        f"Successfully uploaded {cert_type} certificate ({len(cert_data)} bytes) "
-                                        f"for agent {agent_id} in pipeline {new_pipeline_id}"
-                                    )
-                                    
-                                    # Now send credentials AFTER certificate upload
-                                    host_creds = agent_cfg.get("_host_credentials")
-                                    custom_host_creds = agent_cfg.get("_custom_host_credentials")
-                                    if host_creds is not None or custom_host_creds is not None:
-                                        logger.info(
-                                            f"Sending credentials for agent {agent_id} after certificate upload"
-                                        )
-                                        corehub.fetch_core_hub(
-                                            f"/pipelines/{new_pipeline_id}/agents/{agent_id}/config/credentials",
-                                            method="PUT",
-                                            token=state.token,
-                                            body={
-                                                "hostCredentials": host_creds or {},
-                                                "customHostCredentials": custom_host_creds or {},
-                                            },
-                                        )
-                                        logger.info(
-                                            f"Successfully sent credentials for agent {agent_id}"
-                                        )
-                            except Exception as cert_exc:  # pylint: disable=broad-except
-                                logger.exception(
-                                    "Failed to upload certificate for agent %s in pipeline %s",
-                                    agent_id,
-                                    new_pipeline_id,
-                                )
-                                errors.append(
-                                    f"{name}: Failed to upload certificate for agent {agent_id}: {cert_exc}"
-                                )
-
-                    # Write YAML for schema extraction and entity creation into
-                    # the SAME session directory where this import's UDF files
-                    # were extracted (udf_root), so YAML and UDFs share one root
-                    # and UDF lookups resolve without spanning sibling folders.
-                    try:
-                        restore_dir = udf_root if udf_root is not None else new_session_dir("import")
-                        restore_dir.mkdir(parents=True, exist_ok=True)
-                        yaml_path = _write_session_file(restore_dir, ".yaml", yaml_text.encode("utf-8"))
-                    except Exception as exc:  # pylint: disable=broad-except
-                        logger.exception("Failed to materialize YAML %s to disk", name)
-                        errors.append(f"{name}: failed to materialize YAML to disk: {exc}")
-                        continue
-
-                    # Determine schemas and optional type hints from YAML
-                    schema_pairs = extract_all_schemas_from_yaml(str(yaml_path))
-                    if not schema_pairs:
-                        errors.append(f"{name}: no schemas found in YAML; skipping entity creation")
-                        continue
-
-                    src_type_hint, tgt_type_hint = extract_schema_types_from_yaml(str(yaml_path))
-                    source_type = src_type_hint or "SQL"
-                    target_type = tgt_type_hint or "SQL"
-
-                    prefs = state.preferences()
-                    enable_scheduling = prefs["enableScheduling"]
-                    create_tables = prefs["createTables"]
-
-                    overall_success = True
-                    for src_schema, tgt_schema in schema_pairs:
-                        try:
-                            result_run = corehub.run_create_entities(
-                                token=state.token,
-                                base_url=state.base_url,
-                                pipeline_id=new_pipeline_id,
-                                source_schema=src_schema,
-                                target_schema=tgt_schema,
-                                source_type=source_type,
-                                target_type=target_type,
-                                yaml_file=str(yaml_path),
-                                skip_errors=True,
-                                chunk_size=50,
-                                enable_scheduling=enable_scheduling,
-                                create_tables=create_tables,
-                                use_ssl=state.use_ssl,
-                                skip_verify=state.skip_verify,
-                                log_callback=None,
-                                chronos_token=state.chronos_token,
-                            )
-                            if not result_run.get("success"):
-                                overall_success = False
-                                if result_run.get("error"):
-                                    errors.append(
-                                        f"{name}: entity creation error for {src_schema}->{tgt_schema}: {result_run['error']}"
-                                    )
-
-                            # After entities are created for this schema pair, automatically
-                            # compile and register any UDFs referenced in the YAML using the
-                            # exported source files from the backup.
-                            if udf_root is not None:
-                                try:
-                                    create_user_defined_functions.main(
-                                        new_pipeline_id,
-                                        src_schema,
-                                        tgt_schema,
-                                        source_type,
-                                        target_type,
-                                        str(yaml_path),
-                                        state.token,
-                                        True,  # skip_errors
-                                        50,  # chunk_size
-                                    )
-                                except Exception as exc_udf:  # pylint: disable=broad-except
-                                    overall_success = False
-                                    logger.exception(
-                                        "Failed to process UDFs for pipeline %s (%s) schema %s->%s from %s",
-                                        new_pipeline_name,
-                                        new_pipeline_id,
-                                        src_schema,
-                                        tgt_schema,
-                                        name,
-                                    )
-                                    errors.append(
-                                        f"{name}: UDF compilation error for {src_schema}->{tgt_schema}: {exc_udf}"
-                                    )
-                        except Exception as exc:  # pylint: disable=broad-except
-                            overall_success = False
-                            logger.exception(
-                                "Failed to create entities for pipeline %s (%s) from %s", new_pipeline_name, new_pipeline_id, name
-                            )
-                            errors.append(
-                                f"{name}: exception during entity creation for {src_schema}->{tgt_schema}: {exc}"
-                            )
-
-                    if not overall_success:
-                        logger.warning(
-                            "Import-all: entity creation had errors for pipeline %s (%s) from %s",
-                            new_pipeline_name,
-                            new_pipeline_id,
-                            name,
-                        )
-                    else:
-                        # Mark pipeline as configuration completed to remove from draft status
-                        try:
-                            corehub.fetch_core_hub(
-                                f"/pipelines/{new_pipeline_id}",
-                                method="PUT",
-                                token=state.token,
-                                body={"configurationCompleted": True, "name": new_pipeline_name},
-                            )
-                            logger.info("Marked pipeline %s (%s) as configuration completed", new_pipeline_name, new_pipeline_id)
-                        except Exception as exc:  # pylint: disable=broad-except
-                            logger.warning("Failed to mark pipeline %s as configuration completed: %s", new_pipeline_id, exc)
-        except HTTPException:
-            raise
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.exception("Unexpected error during import-all processing")
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-        # Build a human-friendly summary message
-        if created_pipelines:
-            summary_parts = [
-                f"{p.get('pipelineName') or '(unnamed)'} ({p.get('pipelineId') or '?'})"
-                for p in created_pipelines
-            ]
-            summary = "; ".join(summary_parts)
-            base_msg = f"Imported {len(created_pipelines)} pipeline(s): {summary}."
-        else:
-            base_msg = "No pipelines were imported from the archive."
-
-        if errors:
-            error_msg = " Some items encountered errors: " + "; ".join(errors)
-            base_msg += error_msg
-
-        return ApiMessage(message=base_msg, logs=errors if errors else None)
-
-    @app.post("/api/import/validate-all", response_model=ApiMessage)
-    async def validate_all(
-        file: UploadFile = File(...)
-    ) -> ApiMessage:
-        """Dry-run validation for an Export All ZIP archive.
-
-        This endpoint parses the archive, checks that agents-config.yaml is
-        present and well formed, verifies that no masked passwords are
-        present, and ensures that each per-pipeline YAML can be read and has
-        at least one schema pair defined. It does **not** create pipelines,
-        bind agents or create entities.
-        """
-
-        if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
-
-        contents = await file.read()
-        if not contents:
-            raise HTTPException(status_code=400, detail=UPLOADED_FILE_EMPTY)
-
-        logs: list[str] = []
-        errors: list[str] = []
-
-        # Locate and parse agents-config.yaml
-        try:
-            with zipfile.ZipFile(io.BytesIO(contents)) as zf:
-                names = zf.namelist()
-                logs.append(f"Archive contains {len(names)} entries.")
-
-                agents_name = None
-                for name in names:
-                    lower = name.lower()
-                    if lower.endswith("agents-config.yaml") or lower.endswith("agents-config.yml"):
-                        agents_name = name
-                        break
-
-                if not agents_name:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Archive does not contain agents-config.yaml",
-                    )
-
-                logs.append(f"Found agents config: {agents_name}")
-                agents_text = zf.read(agents_name).decode("utf-8")
-        except HTTPException:
-            raise
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.exception("Failed to process uploaded ZIP during validate-all")
-            raise HTTPException(status_code=400, detail=f"Invalid ZIP archive: {exc}") from exc
-
-        try:
-            agents_config = yaml.safe_load(agents_text)
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.exception("Failed to parse agents-config.yaml during validate-all")
-            raise HTTPException(status_code=400, detail=f"Failed to parse agents-config.yaml: {exc}") from exc
-
-        if _has_masked_password(agents_config):
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "Config contains masked passwords (*******). "
-                    "Please replace them with real passwords before importing."
-                ),
-            )
-
-        agents_list = agents_config.get("agents")
-        if not isinstance(agents_list, list) or not agents_list:
-            raise HTTPException(status_code=400, detail="agents-config.yaml does not contain a non-empty 'agents' list")
-
-        logs.append(f"agents-config.yaml defines {len(agents_list)} agent configuration(s).")
-
-        # Validate agent definitions in agents-config.yaml
-        for cfg in agents_list:
-            if not isinstance(cfg, dict):
-                continue
-            a_type = cfg.get("agentType")
-            a_tag = cfg.get("agentTag")
-            if not a_type or not a_tag:
-                errors.append("One agent definition is missing agentType/agentTag.")
-                continue
-            logs.append(f"Agent definition found: {a_type}/{a_tag}")
-
-        # Fetch existing pipelines to estimate final pipeline names that would be created
-        existing_names: set[str] = set()
-        try:
-            existing = corehub.fetch_core_hub("/pipelines", token=state.token)
-            if isinstance(existing, list):
-                for item in existing:
-                    if isinstance(item, dict):
-                        name = item.get("name")
-                        if isinstance(name, str) and name:
-                            existing_names.add(name)
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.exception("Failed to fetch existing pipelines during validate-all")
-            errors.append(f"Failed to fetch existing pipelines: {exc}")
-
-        reserved_names = set(existing_names)
-
-        # Validate each per-pipeline YAML can be parsed and has schemas
-        try:
-            with zipfile.ZipFile(io.BytesIO(contents)) as zf:
-                for name in zf.namelist():
-                    lower = name.lower()
-                    # Skip macOS resource-fork entries (e.g. __MACOSX/ or ._filename)
-                    if name.startswith("__MACOSX/") or name.rsplit("/", 1)[-1].startswith("._"):
-                        continue
-                    if not (lower.endswith(".yaml") or lower.endswith(".yml")):
-                        continue
-                    if "agents-config" in lower:
-                        continue
-
-                    # Skip global config YAMLs (backed up separately, not pipeline configs)
-                    stem = name.rsplit("/", 1)[-1]
-                    if stem.rsplit(".", 1)[0] in GLOBAL_CONFIG_NAMES:
-                        continue
-
-                    logs.append(f"Validating pipeline definition: {name}")
-
-                    try:
-                        yaml_text = zf.read(name).decode("utf-8")
-                    except Exception as exc:  # pylint: disable=broad-except
-                        logger.exception("Failed to read YAML %s from archive during validate-all", name)
-                        errors.append(f"{name}: failed to read from archive: {exc}")
-                        continue
-
-                    try:
-                        temp_dir = get_workspace_root() / "validate"
-                        temp_dir.mkdir(parents=True, exist_ok=True)
-                        with tempfile.NamedTemporaryFile(delete=False, suffix=".yaml", dir=temp_dir) as tmp:
-                            tmp.write(yaml_text.encode("utf-8"))
-                            yaml_path = Path(tmp.name)
-                    except Exception as exc:  # pylint: disable=broad-except
-                        logger.exception("Failed to materialize YAML %s to disk during validate-all", name)
-                        errors.append(f"{name}: failed to materialize YAML to disk: {exc}")
-                        continue
-
-                    # Estimate the pipeline name that would be used on import.
-                    # Prefer the exportMetadata embedded in the YAML; fall back
-                    # to parsing the backup filename for legacy backups.
-                    stem = name.rsplit("/", 1)[-1]
-                    stem_no_ext = stem.rsplit(".", 1)[0]
-                    old_pipeline_id, embedded_name = _extract_export_metadata_from_yaml_text(yaml_text)
-                    if not old_pipeline_id:
-                        old_pipeline_id = _extract_pipeline_id_from_backup_stem(stem_no_ext)
-
-                    base_name = embedded_name
-                    if not base_name:
-                        base_name = f"Imported pipeline {old_pipeline_id}" if old_pipeline_id else "Imported pipeline"
-                    pipeline_name = base_name
-                    if pipeline_name in reserved_names:
-                        idx = 1
-                        while True:
-                            suffix = " (restored)" if idx == 1 else f" (restored {idx})"
-                            candidate = f"{base_name}{suffix}"
-                            if candidate not in reserved_names:
-                                pipeline_name = candidate
-                                break
-                            idx += 1
-                    reserved_names.add(pipeline_name)
-
-                    logs.append(
-                        f"{name}: would create pipeline '{pipeline_name}'"
-                        + (f" from original ID {old_pipeline_id}" if old_pipeline_id else "")
-                    )
-
-                    schema_pairs = extract_all_schemas_from_yaml(str(yaml_path))
-                    if not schema_pairs:
-                        errors.append(f"{name}: no schemas found in YAML; entities cannot be recreated.")
-                    else:
-                        logs.append(
-                            f"{name}: discovered {len(schema_pairs)} schema pair(s): "
-                            + ", ".join(f"{s}->{t}" for s, t in schema_pairs)
-                        )
-        except HTTPException:
-            raise
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.exception("Unexpected error during validate-all processing")
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-        success = not errors
-        if success:
-            logs.insert(0, "Validation OK: archive is structurally consistent and ready to import.")
-        else:
-            logs.insert(0, "Validation failed: one or more problems were detected.")
-            logs.append("Errors:")
-            logs.extend(f"- {e}" for e in errors)
-
-        return ApiMessage(success=success, message="\n".join(logs))
-
-    @app.post("/api/import/full-backup", responses=_FILE_IMPORT_RESPONSES)
-    async def import_full_backup(
-        file: UploadFile = File(...),
-        ai_settings_passphrase: Optional[str] = Form(None),
-    ) -> ApiMessage:
-        """Restore a complete CoreHub backup (pipelines + global configs + schedules).
-
-        Accepts the ZIP produced by /api/export/full-backup and restores each
-        domain independently: global configs, SMTP, webhooks, thresholds,
-        schedules, and pipelines (agents + entities + UDFs).
-        """
-
-        if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
-
-        contents = await file.read()
-        if not contents:
-            raise HTTPException(status_code=400, detail=UPLOADED_FILE_EMPTY)
-
-        try:
-            results = corehub.import_full_corehub_backup(
-                token=state.token,
-                base_url=state.base_url,
-                use_ssl=state.use_ssl,
-                skip_verify=state.skip_verify,
-                zip_bytes=contents,
-                chronos_token=state.chronos_token,
-                ai_settings_passphrase=ai_settings_passphrase,
-            )
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.exception("Failed to import full CoreHub backup")
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-        return ApiMessage(message="Full backup restore completed. " + _summarize_restore(results))
-
-    @app.post("/api/import/users", responses=_FILE_IMPORT_RESPONSES)
-    async def import_users(file: UploadFile = File(...)) -> ApiMessage:
-        """Restore user management configuration from a YAML backup."""
-        if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
-
-        contents = await file.read()
-        if not contents:
-            raise HTTPException(status_code=400, detail=UPLOADED_FILE_EMPTY)
-
-        try:
-            users_data = yaml.safe_load(contents.decode("utf-8"))
-        except yaml.YAMLError as exc:
-            raise HTTPException(status_code=400, detail=f"Invalid YAML: {exc}") from exc
-
-        try:
-            result = corehub.import_users(
-                token=state.token,
-                base_url=state.base_url,
-                use_ssl=state.use_ssl,
-                skip_verify=state.skip_verify,
-                users_data=users_data,
-            )
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.exception("Failed to import users")
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-        status = result.get("status", "unknown")
-        return ApiMessage(message=f"Users import {status}")
-
-    @app.post("/api/import/oidc", responses=_FILE_IMPORT_RESPONSES)
-    async def import_oidc(file: UploadFile = File(...)) -> ApiMessage:
-        """Restore OIDC configuration from a YAML backup."""
-        if not state.token or not state.base_url:
-            raise HTTPException(status_code=401, detail="Authentication required")
-
-        contents = await file.read()
-        if not contents:
-            raise HTTPException(status_code=400, detail=UPLOADED_FILE_EMPTY)
-
-        try:
-            oidc_data = yaml.safe_load(contents.decode("utf-8"))
-        except yaml.YAMLError as exc:
-            raise HTTPException(status_code=400, detail=f"Invalid YAML: {exc}") from exc
-
-        try:
-            result = corehub.import_oidc_config(
-                token=state.token,
-                base_url=state.base_url,
-                use_ssl=state.use_ssl,
-                skip_verify=state.skip_verify,
-                oidc_data=oidc_data,
-            )
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.exception("Failed to import OIDC config")
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-        summary_parts: list[str] = []
-        for key, res in result.items():
-            status = res.get("status", "unknown")
-            summary_parts.append(f"{key}: {status}")
-        return ApiMessage(message="OIDC import completed. " + "; ".join(summary_parts))
+    _register_import_routes(app)
 
     @app.get("/api/export/all-pipelines")
     async def export_all_pipelines(include_secrets: bool = False):
