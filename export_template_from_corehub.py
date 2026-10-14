@@ -1240,6 +1240,9 @@ def build_yaml_structure(
     return root
 
 
+_HEADER_RULE = "# ---------------------------------------------------------------"
+
+
 def build_export_header(
     token: str,
     pipeline_id: str,
@@ -1285,15 +1288,15 @@ def build_export_header(
     exported_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     lines = [
-        "# ---------------------------------------------------------------",
+        _HEADER_RULE,
         "# Gluesync Automator - Pipeline Configuration Export",
-        "# ---------------------------------------------------------------",
+        _HEADER_RULE,
         f"# CoreHub URL     : {corehub_url}",
         f"# CoreHub version : {corehub_version}",
         f"# Pipeline ID     : {pipeline_id}",
         f"# Pipeline name   : {pipeline_name}",
         f"# Exported at     : {exported_at} (UTC)",
-        "# ---------------------------------------------------------------",
+        _HEADER_RULE,
         "",
     ]
     return "\n".join(lines)
