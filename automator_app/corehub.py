@@ -3116,6 +3116,26 @@ def import_oidc_config(
     return results
 
 
+def _read_backup_yaml(extract_dir: Path, filename: str) -> Any:
+    """Load ``filename`` from an extracted backup, or None when the backup has no such file."""
+    path = extract_dir / filename
+    if not path.exists():
+        return None
+    with open(path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+def _pipelines_zip_status(extract_dir: Path) -> Dict[str, Any]:
+    """Report the pipelines.zip of an extracted backup; app.py imports it via the import-all flow."""
+    pipelines_zip_path = extract_dir / "pipelines.zip"
+    if not pipelines_zip_path.exists():
+        return {"status": "skipped", "reason": "pipelines.zip not found"}
+    with open(pipelines_zip_path, "rb") as f:
+        pipelines_zip = f.read()
+    # The caller (app.py) handles pipeline import via the existing import_all flow
+    return {"status": "pending", "zip_size": len(pipelines_zip)}
+
+
 def import_full_corehub_backup(
     *,
     token: str,
@@ -3146,92 +3166,38 @@ def import_full_corehub_backup(
         with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
             zf.extractall(str(extract_dir))
 
-        def _read_yaml(filename: str) -> Any:
-            path = extract_dir / filename
-            if not path.exists():
-                return None
-            with open(path, "r", encoding="utf-8") as f:
-                return yaml.safe_load(f)
-
-        # Restore global configs
-        global_configs = _read_yaml(_GLOBAL_CONFIGS_BACKUP_FILE)
-        if global_configs is not None:
-            results["global_configs"] = import_global_configs(
-                token=token, base_url=base_url, use_ssl=use_ssl, skip_verify=skip_verify,
-                configs=global_configs,
-            )
-        else:
-            results["global_configs"] = {"status": "skipped", "reason": "global-configs.yaml not found"}
-
-        # Restore SMTP
-        smtp = _read_yaml(_SMTP_BACKUP_FILE)
-        if smtp is not None:
-            results["smtp"] = import_smtp_settings(
-                token=token, base_url=base_url, use_ssl=use_ssl, skip_verify=skip_verify,
-                smtp_data=smtp,
-            )
-        else:
-            results["smtp"] = {"status": "skipped", "reason": "smtp.yaml not found"}
-
-        # Restore webhooks
-        webhooks = _read_yaml(_WEBHOOKS_BACKUP_FILE)
-        if webhooks is not None:
-            results["webhooks"] = import_webhooks_config(
-                token=token, base_url=base_url, use_ssl=use_ssl, skip_verify=skip_verify,
-                webhooks_data=webhooks,
-            )
-        else:
-            results["webhooks"] = {"status": "skipped", "reason": "webhooks.yaml not found"}
-
-        # Restore thresholds
-        thresholds = _read_yaml(_THRESHOLDS_BACKUP_FILE)
-        if thresholds is not None:
-            results["thresholds"] = import_thresholds(
-                token=token, base_url=base_url, use_ssl=use_ssl, skip_verify=skip_verify,
-                thresholds_data=thresholds,
-            )
-        else:
-            results["thresholds"] = {"status": "skipped", "reason": "thresholds.yaml not found"}
-
-        # Restore schedules
-        schedules = _read_yaml(_SCHEDULES_BACKUP_FILE)
-        if schedules is not None:
-            results["schedules"] = import_schedules(
-                token=token, base_url=base_url, use_ssl=use_ssl, skip_verify=skip_verify,
-                schedules_data=schedules, chronos_token=chronos_token,
-            )
-        else:
-            results["schedules"] = {"status": "skipped", "reason": "schedules.yaml not found"}
-
-        # Restore users
-        users = _read_yaml(_USERS_BACKUP_FILE)
-        if users is not None:
-            results["users"] = import_users(
-                token=token, base_url=base_url, use_ssl=use_ssl, skip_verify=skip_verify,
-                users_data=users,
-            )
-        else:
-            results["users"] = {"status": "skipped", "reason": "users.yaml not found"}
-
-        # Restore OIDC
-        oidc = _read_yaml(_OIDC_BACKUP_FILE)
-        if oidc is not None:
-            results["oidc"] = import_oidc_config(
-                token=token, base_url=base_url, use_ssl=use_ssl, skip_verify=skip_verify,
-                oidc_data=oidc,
-            )
-        else:
-            results["oidc"] = {"status": "skipped", "reason": "oidc.yaml not found"}
+        connection = {
+            "token": token,
+            "base_url": base_url,
+            "use_ssl": use_ssl,
+            "skip_verify": skip_verify,
+        }
+        # (result key, backup file, restore function), restored in this order.
+        sections = (
+            ("global_configs", _GLOBAL_CONFIGS_BACKUP_FILE,
+             lambda data: import_global_configs(**connection, configs=data)),
+            ("smtp", _SMTP_BACKUP_FILE,
+             lambda data: import_smtp_settings(**connection, smtp_data=data)),
+            ("webhooks", _WEBHOOKS_BACKUP_FILE,
+             lambda data: import_webhooks_config(**connection, webhooks_data=data)),
+            ("thresholds", _THRESHOLDS_BACKUP_FILE,
+             lambda data: import_thresholds(**connection, thresholds_data=data)),
+            ("schedules", _SCHEDULES_BACKUP_FILE,
+             lambda data: import_schedules(**connection, schedules_data=data, chronos_token=chronos_token)),
+            ("users", _USERS_BACKUP_FILE,
+             lambda data: import_users(**connection, users_data=data)),
+            ("oidc", _OIDC_BACKUP_FILE,
+             lambda data: import_oidc_config(**connection, oidc_data=data)),
+        )
+        for key, filename, restore in sections:
+            data = _read_backup_yaml(extract_dir, filename)
+            if data is not None:
+                results[key] = restore(data)
+            else:
+                results[key] = {"status": "skipped", "reason": f"{filename} not found"}
 
         # Restore pipelines (reuse existing import-all logic)
-        pipelines_zip_path = extract_dir / "pipelines.zip"
-        if pipelines_zip_path.exists():
-            with open(pipelines_zip_path, "rb") as f:
-                pipelines_zip = f.read()
-            # The caller (app.py) handles pipeline import via the existing import_all flow
-            results["pipelines"] = {"status": "pending", "zip_size": len(pipelines_zip)}
-        else:
-            results["pipelines"] = {"status": "skipped", "reason": "pipelines.zip not found"}
+        results["pipelines"] = _pipelines_zip_status(extract_dir)
 
         results["ai_settings"] = _restore_ai_settings_file(extract_dir, token, ai_settings_passphrase)
 
