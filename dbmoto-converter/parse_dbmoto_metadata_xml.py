@@ -287,6 +287,486 @@ def sanitize_xml_file(xml_path: str) -> None:
             # Best-effort: if we cannot write back, we leave the original file
             pass
 
+
+# Placeholder used to protect escaped semicolons (backslash + ";") while splitting
+# DBMMReplStatuses property strings on ";".
+_ESCAPED_SEMICOLON_PLACEHOLDER = "\x00ESC_SEMI\x00"
+
+
+def _element_name(elem):
+    """Return the first non-empty name among the <n>, <Name> and <name> tags."""
+    name = None
+    for name_tag in ["n", "Name", "name"]:
+        name = elem.findtext(name_tag)
+        if name:
+            break
+    return name
+
+
+def _int_or_zero(value):
+    """Convert value to int, returning 0 when it is missing or not numeric."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _split_escaped_properties(props_text):
+    """Split a property string on ";", keeping escaped semicolons protected."""
+    return props_text.replace("\\;", _ESCAPED_SEMICOLON_PLACEHOLDER).split(';')
+
+
+def _extract_groups_and_chains(root):
+    """Extract DBMMGroups entries, split into regular groups and chains."""
+    groups = {}
+    chains = {}
+    for group_elem in root.findall("./tables/DBMMGroups"):
+        group_id = group_elem.findtext("GroupID")
+        group_name = group_elem.findtext("Name")
+        group_type = group_elem.findtext("Type")
+
+        if not (group_id and group_name):
+            continue
+        if group_type == "0":  # Regular group
+            groups[group_id] = {
+                "name": group_name,
+                "type": "group",
+                "description": group_elem.findtext("Description") or ""
+            }
+            print(f"  Found group: {group_name} (ID: {group_id})")
+        elif group_type == "1":  # Chain
+            chains[group_id] = {
+                "name": group_name,
+                "type": "chain",
+                "description": group_elem.findtext("Description") or ""
+            }
+            print(f"  Found chain: {group_name} (ID: {group_id})")
+    return groups, chains
+
+
+def _parse_replication_properties(props_text):
+    """Parse a replication Properties string into a dictionary."""
+    properties = {}
+    for prop in props_text.split(';'):
+        if '=' in prop:
+            key, value = prop.split('=', 1)
+            properties[key] = value
+    return properties
+
+
+def _extract_replications(root, chains):
+    """Extract replications to track group/chain memberships."""
+    replications = {}
+    for repl_elem in root.findall("./tables/DBMMReplications"):
+        repl_id = repl_elem.findtext("ReplicationID")
+        group_id = repl_elem.findtext("GroupID")
+        name = repl_elem.findtext("Name")
+        repl_status = repl_elem.findtext("ReplStatus")
+        properties = _parse_replication_properties(repl_elem.findtext("Properties", ""))
+
+        if repl_id and group_id and name:
+            replications[repl_id] = {
+                "name": name,
+                "group_id": group_id,
+                "repl_status": repl_status,
+                "src_table_id": repl_elem.findtext("SrcTableID"),
+                "trg_table_id": repl_elem.findtext("TrgTableID"),
+                "group_priority": int(properties.get('GroupPriority', '0')) if group_id in chains else 0
+            }
+    return replications
+
+
+def _find_refresh_filter(props_text):
+    """Return the unescaped RefreshFilter value of a status Properties string, or None."""
+    for prop in _split_escaped_properties(props_text):
+        if '=' not in prop:
+            continue
+        key, value = prop.split('=', 1)
+        if key.strip() == "RefreshFilter" and value.strip():
+            # Restore escaped semicolons, then unescape XML entities and backslash escapes
+            filt = value.strip().replace(_ESCAPED_SEMICOLON_PLACEHOLDER, ";")
+            filt = html.unescape(filt)
+            filt = filt.replace("\\=", "=")
+            filt = filt.replace("\\\\", "\\")
+            return filt
+    return None
+
+
+def _extract_refresh_filters(root):
+    """Extract replication refresh filters (whereClause) from DBMMReplStatuses."""
+    refresh_filters = {}
+    for status_elem in root.findall("./tables/DBMMReplStatuses"):
+        repl_id = status_elem.findtext("ReplicationID")
+        filt = _find_refresh_filter(status_elem.findtext("Properties", ""))
+        if filt is not None:
+            refresh_filters[repl_id] = filt
+            print(f"  Found refresh filter for replication {repl_id}: {refresh_filters[repl_id]}")
+    return refresh_filters
+
+
+def _connection_from_element(conn_elem, conn_id):
+    """Build the connection dictionary for a DBMMConnections element."""
+    conn_name = _element_name(conn_elem) or f"Connection_{conn_id}"
+
+    # Check if this is a source or target connection
+    is_source = conn_elem.findtext("IsSource", "N").upper() == "Y"
+    connect_params = parse_connect_params(conn_elem.findtext("ConnectParams", ""))
+    db_version = connect_params.get("dbversion") or ""
+    data_source_name = connect_params.get("datasourcename") or ""
+    connection_type = connect_params.get("connectiontype") or ""
+    database_type = data_source_name or connection_type or conn_elem.findtext("Type") or ""
+
+    return {
+        "id": conn_id,
+        "name": conn_name,
+        "is_source": is_source,
+        "schemas": {},
+        "db_version": db_version,
+        "data_source_name": data_source_name,
+        "connection_type": connection_type,
+        "database_type": database_type,
+        "connect_params": connect_params,
+    }
+
+
+def _record_connection_details(conn):
+    """Add a connection to the conversion statistics and log it."""
+    role_label = "SOURCE" if conn["is_source"] else "TARGET"
+    conversion_stats['connections_details'].append({
+        "id": conn["id"],
+        "name": conn["name"],
+        "role": role_label,
+        "database_type": conn["database_type"],
+        "db_version": conn["db_version"],
+        "data_source_name": conn["data_source_name"],
+        "connection_type": conn["connection_type"],
+    })
+
+    type_label = conn["database_type"] or "Unknown database"
+    version_label = conn["db_version"] or "unknown version"
+    print(f"  Found {role_label} connection: {conn['name']} (ID: {conn['id']}) -> {type_label} ({version_label})")
+
+
+def _extract_connections(root):
+    """Extract database connections and identify source vs target ones."""
+    connections = {}
+    source_connections = set()
+    target_connections = set()
+
+    for conn_elem in root.findall("./tables/DBMMConnections"):
+        conn_id = conn_elem.findtext("ConnectionID")
+        if not conn_id:
+            continue
+        conn = _connection_from_element(conn_elem, conn_id)
+        connections[conn_id] = conn
+        _record_connection_details(conn)
+
+        if conn["is_source"]:
+            source_connections.add(conn_id)
+        else:
+            target_connections.add(conn_id)
+    return connections, source_connections, target_connections
+
+
+def _extract_catalogs(root):
+    """Extract catalogs (database names) from DBMMCatalogs."""
+    catalogs = {}
+    for catalog_elem in root.findall("./tables/DBMMCatalogs"):
+        catalog_id = catalog_elem.findtext("CatalogID")
+        catalog_name = catalog_elem.findtext("Name") or catalog_elem.findtext("n") or catalog_elem.findtext("name")
+        if catalog_id and catalog_name:
+            catalogs[catalog_id] = catalog_name
+            print(f"  Found catalog: {catalog_name} (ID: {catalog_id})")
+    return catalogs
+
+
+def _extract_schemas(root, connections, catalogs):
+    """Extract schemas and link them to their connections."""
+    schemas = {}
+    for schema_elem in root.findall("./tables/DBMMSchemas"):
+        schema_id = schema_elem.findtext("SchemaID")
+        conn_id = schema_elem.findtext("ConnectionID")
+        catalog_id = schema_elem.findtext("CatalogID")
+        schema_name = _element_name(schema_elem) or f"Schema_{schema_id}"
+
+        # Resolve catalog (database) name if available
+        catalog_name = catalogs.get(catalog_id) if catalog_id else None
+
+        if schema_id and conn_id in connections:
+            schema = {
+                "id": schema_id,
+                "name": schema_name,
+                "connection_id": conn_id,
+                "catalog_name": catalog_name,
+                "tables": {}
+            }
+            schemas[schema_id] = schema
+            # Link schema to connection
+            connections[conn_id]["schemas"][schema_id] = schema
+            db_label = f" (database: {catalog_name})" if catalog_name else ""
+            print(f"  Found schema: {schema_name} (ID: {schema_id}){db_label}")
+    return schemas
+
+
+def _extract_tables(root, schemas):
+    """Extract tables and link them to their schemas; return (tables, linked_count)."""
+    tables = {}
+    table_count = 0
+    for table_elem in root.findall("./tables/DBMMTables"):
+        table_id = table_elem.findtext("TableID")
+        schema_id = table_elem.findtext("SchemaID")
+        table_name = _element_name(table_elem) or f"Table_{table_id}"
+
+        if not table_id:
+            continue
+        table = {
+            "id": table_id,
+            "name": table_name,
+            "schema_id": schema_id,
+            "fields": []
+        }
+        tables[table_id] = table
+
+        # Link table to schema if possible
+        if schema_id and schema_id in schemas:
+            schemas[schema_id]["tables"][table_id] = table
+            table_count += 1
+    return tables, table_count
+
+
+def _field_data_from_element(field_elem, field_name):
+    """Build the field dictionary (name, type, sizes, nullability) of a DBMMFields element."""
+    field_type_raw = field_elem.findtext("Type")
+    field_type = field_type_raw.strip() if field_type_raw else "VARCHAR"
+    field_type = TYPE_ALIASES.get(field_type.upper(), field_type)
+    allow_null = (field_elem.findtext("AllowNull", "Y").strip().upper() == "Y")
+    return {
+        "name": field_name,
+        "type": field_type,
+        "data_length": _int_or_zero(field_elem.findtext("Size") or "0"),
+        "numeric_precision": _int_or_zero(field_elem.findtext("Precision") or "0"),
+        "numeric_scale": _int_or_zero(field_elem.findtext("Scale") or "0"),
+        "allow_null": allow_null
+    }
+
+
+def _register_primary_key(table, table_id, field_name, primary_key_pos):
+    """Record a primary key column from PrimaryKeyPos.
+
+    Returns (primary_keys_added, non_primary_keys_skipped).
+    """
+    if primary_key_pos is None:
+        return 0, 0
+    try:
+        pk_pos_int = int(primary_key_pos)
+    except ValueError:
+        # Handle non-numeric PrimaryKeyPos values
+        print(f"    Warning: Invalid PrimaryKeyPos value '{primary_key_pos}' for field {field_name} in table {table['name']} (Table ID: {table_id})")
+        return 0, 0
+    if pk_pos_int >= 1:
+        # This is a primary key (position >= 1) - handles clustered indexes with multiple PK columns
+        table["primary_keys"].append(field_name)
+        print(f"    Found primary key: {field_name} in table {table['name']} (Table ID: {table_id}) - PrimaryKeyPos={primary_key_pos}")
+        return 1, 0
+    if pk_pos_int == 0:
+        # This is not a primary key (position 0) - log and skip
+        print(f"    Skipping non-primary key: {field_name} in table {table['name']} (Table ID: {table_id}) - PrimaryKeyPos=0")
+        return 0, 1
+    return 0, 0
+
+
+def _extract_fields(root, tables):
+    """Attach fields and primary keys to their tables; return (field_count, primary_key_count)."""
+    field_count = 0
+    primary_key_count = 0
+    skipped_composite_keys = 0
+
+    for field_elem in root.findall("./tables/DBMMFields"):
+        table_id = field_elem.findtext("TableID")
+        field_name = _element_name(field_elem) or f"Field_{field_elem.findtext('FieldID')}"
+
+        # Add the field to its table
+        if table_id in tables:
+            table = tables[table_id]
+            table.setdefault("fields", [])
+            table.setdefault("primary_keys", [])
+            table["fields"].append(_field_data_from_element(field_elem, field_name))
+
+            # Handle primary key information
+            added, skipped = _register_primary_key(
+                table, table_id, field_name, field_elem.findtext("PrimaryKeyPos")
+            )
+            primary_key_count += added
+            skipped_composite_keys += skipped
+
+        field_count += 1
+
+    print(f"Found {field_count} fields linked to tables")
+    print(f"Found {primary_key_count} primary keys (PrimaryKeyPos>=1)")
+    print(f"Skipped {skipped_composite_keys} non-primary key fields (PrimaryKeyPos=0)")
+    return field_count, primary_key_count
+
+
+def _summarize_tables(tables):
+    """Print the tables with/without fields summary; return (with_fields, with_primary_keys)."""
+    tables_with_fields = sum(1 for t in tables.values() if t["fields"])
+    tables_with_primary_keys = sum(1 for t in tables.values() if t.get("primary_keys"))
+    print(f"Tables with fields: {tables_with_fields}")
+    print(f"Tables without fields: {len(tables) - tables_with_fields}")
+    print(f"Tables with primary keys: {tables_with_primary_keys}")
+    return tables_with_fields, tables_with_primary_keys
+
+
+def _journal_checkpoint_from_status(status_elem):
+    """Build the journal checkpoint of a DBMMReplStatuses element, or None if incomplete."""
+    props_text = status_elem.findtext("Properties", "")
+    transaction_id = status_elem.findtext("TransactionID")
+    transaction_ts = status_elem.findtext("TransactionTS")
+
+    # Parse properties using the same escaped-semicolon-safe approach
+    properties = {}
+    for prop in _split_escaped_properties(props_text):
+        if '=' in prop:
+            key, value = prop.split('=', 1)
+            properties[key.strip()] = value.strip().replace(_ESCAPED_SEMICOLON_PLACEHOLDER, ";")
+
+    # Check for required journal properties
+    receiver_name = properties.get("ReceiverName")
+    receiver_library = properties.get("ReceiverLibrary")
+    journal_name = properties.get("JournalName")
+    journal_library = properties.get("JournalLibrary")
+
+    if not all([receiver_name, receiver_library, journal_name, journal_library]):
+        return None
+
+    # Format sequence number with leading zeros (20 digits)
+    sequence_number = str(transaction_id).zfill(20) if transaction_id else "0".zfill(20)
+
+    return {
+        "journalLibrary": journal_library,
+        "journalName": journal_name,
+        "receiverLibrary": receiver_library,
+        "receiverName": receiver_name,
+        "sequenceNumber": sequence_number,
+        "timestamp": int(transaction_ts) if transaction_ts else 0
+    }
+
+
+def _store_journal_checkpoint(journal_checkpoints, checkpoint_data):
+    """Store a checkpoint per journalLibrary per journal, keeping the oldest (smallest) timestamp."""
+    journal_library = checkpoint_data["journalLibrary"]
+    journal_name = checkpoint_data["journalName"]
+    if journal_library not in journal_checkpoints:
+        journal_checkpoints[journal_library] = {}
+
+    existing = journal_checkpoints[journal_library].get(journal_name)
+    if existing is None or checkpoint_data["timestamp"] < existing["timestamp"]:
+        journal_checkpoints[journal_library][journal_name] = checkpoint_data
+        print(f"  Found journal checkpoint for journalLibrary '{journal_library}', journal '{journal_name}': seq={checkpoint_data['sequenceNumber']}, ts={checkpoint_data['timestamp']}")
+    else:
+        print(f"  Skipped newer checkpoint for journalLibrary '{journal_library}', journal '{journal_name}' (ts={checkpoint_data['timestamp']} >= existing ts={existing['timestamp']})")
+
+
+def _extract_journal_checkpoints(root):
+    """Extract journal checkpoints from DBMMReplStatuses (AS400 journal metadata)."""
+    journal_checkpoints = {}
+    for status_elem in root.findall("./tables/DBMMReplStatuses"):
+        checkpoint_data = _journal_checkpoint_from_status(status_elem)
+        if checkpoint_data is not None:
+            _store_journal_checkpoint(journal_checkpoints, checkpoint_data)
+    return journal_checkpoints
+
+
+def _find_table_schema(connections, table_id, is_source):
+    """Return (schema_name, connection_name) holding table_id among source or target connections."""
+    for conn in connections.values():
+        if conn['is_source'] != is_source:
+            continue
+        for schema in conn["schemas"].values():
+            if table_id in schema["tables"]:
+                return schema["name"], conn["name"]
+    return None, None
+
+
+def _build_source_to_target_schemas(replications, connections):
+    """Build the source-to-target schema mapping from the replications."""
+    source_to_target_schemas = {}
+
+    for repl in replications.values():
+        src_table_id = repl['src_table_id']
+        trg_table_id = repl['trg_table_id']
+        if not (src_table_id and trg_table_id):
+            continue
+
+        src_schema_name, src_conn_name = _find_table_schema(connections, src_table_id, True)
+        trg_schema_name, trg_conn_name = _find_table_schema(connections, trg_table_id, False)
+
+        # Map source schema to target schema
+        if not (src_schema_name and trg_schema_name):
+            continue
+        if src_schema_name not in source_to_target_schemas:
+            source_to_target_schemas[src_schema_name] = trg_schema_name
+            print(f"  Mapped source schema '{src_schema_name}' ({src_conn_name}) -> target schema '{trg_schema_name}' ({trg_conn_name})")
+        elif source_to_target_schemas[src_schema_name] != trg_schema_name:
+            # Multiple target schemas for same source - log warning but keep first mapping
+            print(f"  Warning: Source schema '{src_schema_name}' maps to multiple targets: '{source_to_target_schemas[src_schema_name]}' and '{trg_schema_name}'")
+    return source_to_target_schemas
+
+
+def _extract_field_mappings(root):
+    """Extract forward field mappings and [!RecordID] expressions from DBMMFieldMappings.
+
+    Returns (field_mappings, record_id_mappings) where field_mappings is
+    {replication_id: {src_field_id: {target_field_id, src_expression, type}}} and
+    record_id_mappings is {replication_id: {target_field_id: src_expression}}.
+    """
+    field_mappings = {}
+    record_id_mappings = {}
+
+    for mapping_elem in root.findall("./tables/DBMMFieldMappings"):
+        repl_id = mapping_elem.findtext("ReplicationID")
+        src_field_id = mapping_elem.findtext("SrcFieldID")
+        trg_field_id = mapping_elem.findtext("TrgFieldID")
+        src_expression = mapping_elem.findtext("SrcExpression")
+        is_forth = mapping_elem.findtext("IsForth", "Y").upper() == "Y"
+
+        if not (repl_id and is_forth):  # Only process forward mappings
+            continue
+        repl_mappings = field_mappings.setdefault(repl_id, {})
+
+        if src_field_id:
+            # Direct field-to-field mapping
+            repl_mappings[src_field_id] = {
+                "target_field_id": trg_field_id,
+                "src_expression": src_expression,
+                "type": "direct"
+            }
+        elif src_expression and trg_field_id:
+            # Expression-based mapping - store with None src_field_id
+            repl_mappings[f"expr_{trg_field_id}"] = {
+                "target_field_id": trg_field_id,
+                "src_expression": src_expression,
+                "type": "expression"
+            }
+            # Check for [!RecordID] expression
+            if "[!RecordID]" in src_expression:
+                record_id_mappings.setdefault(repl_id, {})[trg_field_id] = src_expression
+                print(f"    Found [!RecordID] mapping: replication {repl_id}, target field {trg_field_id}")
+    return field_mappings, record_id_mappings
+
+
+def _build_field_id_lookup(root):
+    """Build the {(table_id, field_id): field_name} lookup used to resolve target field names."""
+    field_id_to_name = {}
+    for field_elem in root.findall("./tables/DBMMFields"):
+        field_id = field_elem.findtext("FieldID")
+        table_id = field_elem.findtext("TableID")
+        field_name = _element_name(field_elem)
+        if field_id and table_id and field_name:
+            field_id_to_name[(table_id, field_id)] = field_name
+    return field_id_to_name
+
+
 def parse_xml():
     xml_path = os.environ.get('XML_PATH') or args.xml_path
     if not xml_path:
@@ -307,469 +787,56 @@ def parse_xml():
     
     # First, extract groups information
     print("Extracting groups and chains...")
-    groups = {}
-    chains = {}
-    
-    for group_elem in root.findall("./tables/DBMMGroups"):
-        group_id = group_elem.findtext("GroupID")
-        group_name = group_elem.findtext("Name")
-        group_type = group_elem.findtext("Type")
-        
-        if group_id and group_name:
-            if group_type == "0":  # Regular group
-                groups[group_id] = {
-                    "name": group_name,
-                    "type": "group",
-                    "description": group_elem.findtext("Description") or ""
-                }
-                print(f"  Found group: {group_name} (ID: {group_id})")
-            elif group_type == "1":  # Chain
-                chains[group_id] = {
-                    "name": group_name,
-                    "type": "chain",
-                    "description": group_elem.findtext("Description") or ""
-                }
-                print(f"  Found chain: {group_name} (ID: {group_id})")
+    groups, chains = _extract_groups_and_chains(root)
     
     # Extract replications to track group/chain memberships
-    replications = {}
-    for repl_elem in root.findall("./tables/DBMMReplications"):
-        repl_id = repl_elem.findtext("ReplicationID")
-        group_id = repl_elem.findtext("GroupID")
-        name = repl_elem.findtext("Name")
-        repl_status = repl_elem.findtext("ReplStatus")
-        properties = {}
-        
-        # Parse properties string into a dictionary
-        props_text = repl_elem.findtext("Properties", "")
-        for prop in props_text.split(';'):
-            if '=' in prop:
-                key, value = prop.split('=', 1)
-                properties[key] = value
-        
-        if repl_id and group_id and name:
-            replications[repl_id] = {
-                "name": name,
-                "group_id": group_id,
-                "repl_status": repl_status,
-                "src_table_id": repl_elem.findtext("SrcTableID"),
-                "trg_table_id": repl_elem.findtext("TrgTableID"),
-                "group_priority": int(properties.get('GroupPriority', '0')) if group_id in chains else 0
-            }
+    replications = _extract_replications(root, chains)
     
     # Extract replication statuses for refresh filters (whereClause)
-    refresh_filters = {}
-    for status_elem in root.findall("./tables/DBMMReplStatuses"):
-        repl_id = status_elem.findtext("ReplicationID")
-        props_text = status_elem.findtext("Properties", "")
-        # Respect \; (escaped semicolons) when splitting by semicolons
-        _placeholder = "\x00ESC_SEMI\x00"
-        safe_props = props_text.replace("\\;", _placeholder)
-        for prop in safe_props.split(';'):
-            if '=' in prop:
-                key, value = prop.split('=', 1)
-                if key.strip() == "RefreshFilter" and value.strip():
-                    # Restore escaped semicolons, then unescape XML entities and backslash escapes
-                    filt = value.strip().replace(_placeholder, ";")
-                    filt = html.unescape(filt)
-                    filt = filt.replace("\\=", "=")
-                    filt = filt.replace("\\\\", "\\")
-                    refresh_filters[repl_id] = filt
-                    print(f"  Found refresh filter for replication {repl_id}: {refresh_filters[repl_id]}")
-                    break
+    refresh_filters = _extract_refresh_filters(root)
     
     # Extract database connections and identify source vs target
     print("Extracting connections...")
-    connections = {}
-    source_connections = set()
-    target_connections = set()
-    
-    for conn_elem in root.findall("./tables/DBMMConnections"):
-        conn_id = conn_elem.findtext("ConnectionID")
-        
-        # Try to get connection name from several possible tags
-        conn_name = None
-        for name_tag in ["n", "Name", "name"]:
-            conn_name = conn_elem.findtext(name_tag)
-            if conn_name:
-                break
-        
-        # If no name found, use a default name with the ID
-        if not conn_name:
-            conn_name = f"Connection_{conn_id}"
-        
-        # Check if this is a source or target connection
-        is_source = conn_elem.findtext("IsSource", "N").upper() == "Y"
-        connect_params_raw = conn_elem.findtext("ConnectParams", "")
-        connect_params = parse_connect_params(connect_params_raw)
-        db_version = connect_params.get("dbversion") or ""
-        data_source_name = connect_params.get("datasourcename") or ""
-        connection_type = connect_params.get("connectiontype") or ""
-        database_type = data_source_name or connection_type or conn_elem.findtext("Type") or ""
-        
-        if conn_id:
-            connections[conn_id] = {
-                "id": conn_id,
-                "name": conn_name,
-                "is_source": is_source,
-                "schemas": {},
-                "db_version": db_version,
-                "data_source_name": data_source_name,
-                "connection_type": connection_type,
-                "database_type": database_type,
-                "connect_params": connect_params,
-            }
-            
-            conversion_stats['connections_details'].append({
-                "id": conn_id,
-                "name": conn_name,
-                "role": "SOURCE" if is_source else "TARGET",
-                "database_type": database_type,
-                "db_version": db_version,
-                "data_source_name": data_source_name,
-                "connection_type": connection_type,
-            })
-            
-            role_label = "SOURCE" if is_source else "TARGET"
-            type_label = database_type or "Unknown database"
-            version_label = db_version or "unknown version"
-            print(f"  Found {role_label} connection: {conn_name} (ID: {conn_id}) -> {type_label} ({version_label})")
-            
-            if is_source:
-                source_connections.add(conn_id)
-            else:
-                target_connections.add(conn_id)
-    
+    connections, source_connections, target_connections = _extract_connections(root)
     print(f"Found {len(connections)} database connections ({len(source_connections)} source, {len(target_connections)} target)")
     
     # Extract catalogs (database names) from DBMMCatalogs
-    catalogs = {}
-    for catalog_elem in root.findall("./tables/DBMMCatalogs"):
-        catalog_id = catalog_elem.findtext("CatalogID")
-        catalog_name = catalog_elem.findtext("Name") or catalog_elem.findtext("n") or catalog_elem.findtext("name")
-        if catalog_id and catalog_name:
-            catalogs[catalog_id] = catalog_name
-            print(f"  Found catalog: {catalog_name} (ID: {catalog_id})")
+    catalogs = _extract_catalogs(root)
 
     # Extract schemas
     print("Extracting schemas...")
-    schemas = {}
-    for schema_elem in root.findall("./tables/DBMMSchemas"):
-        schema_id = schema_elem.findtext("SchemaID")
-        conn_id = schema_elem.findtext("ConnectionID")
-        catalog_id = schema_elem.findtext("CatalogID")
-        
-        # Try to get schema name from several possible tags
-        schema_name = None
-        for name_tag in ["n", "Name", "name"]:
-            schema_name = schema_elem.findtext(name_tag)
-            if schema_name:
-                break
-        
-        # If no name found, use a default name with the ID
-        if not schema_name:
-            schema_name = f"Schema_{schema_id}"
-
-        # Resolve catalog (database) name if available
-        catalog_name = catalogs.get(catalog_id) if catalog_id else None
-        
-        if schema_id and conn_id in connections:
-            schema = {
-                "id": schema_id,
-                "name": schema_name,
-                "connection_id": conn_id,
-                "catalog_name": catalog_name,
-                "tables": {}
-            }
-            schemas[schema_id] = schema
-            # Link schema to connection
-            connections[conn_id]["schemas"][schema_id] = schema
-            db_label = f" (database: {catalog_name})" if catalog_name else ""
-            print(f"  Found schema: {schema_name} (ID: {schema_id}){db_label}")
-    
+    schemas = _extract_schemas(root, connections, catalogs)
     print(f"Found {len(schemas)} schemas linked to connections")
     
     # Extract tables
     print("Extracting tables...")
-    tables = {}
-    table_count = 0
-    for table_elem in root.findall("./tables/DBMMTables"):
-        table_id = table_elem.findtext("TableID")
-        schema_id = table_elem.findtext("SchemaID")
-        
-        # Try to get table name from several possible tags
-        table_name = None
-        for name_tag in ["n", "Name", "name"]:
-            table_name = table_elem.findtext(name_tag)
-            if table_name:
-                break
-        
-        # If no name found, use a default name with the ID
-        if not table_name:
-            table_name = f"Table_{table_id}"
-        
-        if table_id:
-            table = {
-                "id": table_id,
-                "name": table_name,
-                "schema_id": schema_id,
-                "fields": []
-            }
-            tables[table_id] = table
-            
-            # Link table to schema if possible
-            if schema_id and schema_id in schemas:
-                schemas[schema_id]["tables"][table_id] = table
-                table_count += 1
-    
+    tables, table_count = _extract_tables(root, schemas)
     print(f"Found {table_count} tables linked to schemas (out of {len(tables)} total tables)")
     
     # Extract fields and primary keys
     print("Extracting fields and primary keys...")
-    field_count = 0
-    primary_key_count = 0
-    skipped_composite_keys = 0
-    
-    for field_elem in root.findall("./tables/DBMMFields"):
-        field_id = field_elem.findtext("FieldID")
-        table_id = field_elem.findtext("TableID")
-        
-        # Try to get field name from several possible tags
-        field_name = None
-        for name_tag in ["n", "Name", "name"]:
-            field_name = field_elem.findtext(name_tag)
-            if field_name:
-                break
-        
-        # If no name found, use a default name with the ID
-        if not field_name:
-            field_id = field_elem.findtext("FieldID")
-            field_name = f"Field_{field_id}"
-        
-        # Extract type information
-        field_type_raw = field_elem.findtext("Type")
-        field_type = field_type_raw.strip() if field_type_raw else "VARCHAR"
-        field_type = TYPE_ALIASES.get(field_type.upper(), field_type)
-        field_size = field_elem.findtext("Size") or "0"
-        field_precision = field_elem.findtext("Precision") or "0"
-        field_scale = field_elem.findtext("Scale") or "0"
-        allow_null = (field_elem.findtext("AllowNull", "Y").strip().upper() == "Y")
-        
-        # Extract primary key position
-        primary_key_pos = field_elem.findtext("PrimaryKeyPos")
-        
-        # Add the field to its table
-        if table_id in tables:
-            if "fields" not in tables[table_id]:
-                tables[table_id]["fields"] = []
-            if "primary_keys" not in tables[table_id]:
-                tables[table_id]["primary_keys"] = []
-            
-            try:
-                data_length = int(field_size)
-            except (TypeError, ValueError):
-                data_length = 0
-
-            try:
-                numeric_precision = int(field_precision)
-            except (TypeError, ValueError):
-                numeric_precision = 0
-
-            try:
-                numeric_scale = int(field_scale)
-            except (TypeError, ValueError):
-                numeric_scale = 0
-
-            field_data = {
-                "name": field_name,
-                "type": field_type,
-                "data_length": data_length,
-                "numeric_precision": numeric_precision,
-                "numeric_scale": numeric_scale,
-                "allow_null": allow_null
-            }
-            tables[table_id]["fields"].append(field_data)
-            
-            # Handle primary key information
-            if primary_key_pos is not None:
-                try:
-                    pk_pos_int = int(primary_key_pos)
-                    if pk_pos_int >= 1:
-                        # This is a primary key (position >= 1) - handles clustered indexes with multiple PK columns
-                        tables[table_id]["primary_keys"].append(field_name)
-                        primary_key_count += 1
-                        print(f"    Found primary key: {field_name} in table {tables[table_id]['name']} (Table ID: {table_id}) - PrimaryKeyPos={primary_key_pos}")
-                    elif pk_pos_int == 0:
-                        # This is not a primary key (position 0) - log and skip
-                        skipped_composite_keys += 1
-                        print(f"    Skipping non-primary key: {field_name} in table {tables[table_id]['name']} (Table ID: {table_id}) - PrimaryKeyPos=0")
-                except ValueError:
-                    # Handle non-numeric PrimaryKeyPos values
-                    print(f"    Warning: Invalid PrimaryKeyPos value '{primary_key_pos}' for field {field_name} in table {tables[table_id]['name']} (Table ID: {table_id})")
-        
-        field_count += 1
-    
-    print(f"Found {field_count} fields linked to tables")
-    print(f"Found {primary_key_count} primary keys (PrimaryKeyPos>=1)")
-    print(f"Skipped {skipped_composite_keys} non-primary key fields (PrimaryKeyPos=0)")
+    field_count, primary_key_count = _extract_fields(root, tables)
     
     # Print summary of tables with/without fields
-    tables_with_fields = sum(1 for t in tables.values() if t["fields"])
-    tables_with_primary_keys = sum(1 for t in tables.values() if t.get("primary_keys"))
-    print(f"Tables with fields: {tables_with_fields}")
-    print(f"Tables without fields: {len(tables) - tables_with_fields}")
-    print(f"Tables with primary keys: {tables_with_primary_keys}")
+    tables_with_fields, tables_with_primary_keys = _summarize_tables(tables)
 
     # Extract journal checkpoints from DBMMReplStatuses (AS400 journal metadata)
-    journal_checkpoints = {}
-    for status_elem in root.findall("./tables/DBMMReplStatuses"):
-        repl_id = status_elem.findtext("ReplicationID")
-        props_text = status_elem.findtext("Properties", "")
-        transaction_id = status_elem.findtext("TransactionID")
-        transaction_ts = status_elem.findtext("TransactionTS")
-
-        # Parse properties using the same escaped-semicolon-safe approach
-        properties = {}
-        _placeholder = "\x00ESC_SEMI\x00"
-        safe_props = props_text.replace("\\;", _placeholder)
-        for prop in safe_props.split(';'):
-            if '=' in prop:
-                key, value = prop.split('=', 1)
-                properties[key.strip()] = value.strip().replace(_placeholder, ";")
-
-        # Check for required journal properties
-        receiver_name = properties.get("ReceiverName")
-        receiver_library = properties.get("ReceiverLibrary")
-        journal_name = properties.get("JournalName")
-        journal_library = properties.get("JournalLibrary")
-
-        if not all([receiver_name, receiver_library, journal_name, journal_library]):
-            continue
-
-        # Format sequence number with leading zeros (20 digits)
-        sequence_number = str(transaction_id).zfill(20) if transaction_id else "0".zfill(20)
-
-        checkpoint_data = {
-            "journalLibrary": journal_library,
-            "journalName": journal_name,
-            "receiverLibrary": receiver_library,
-            "receiverName": receiver_name,
-            "sequenceNumber": sequence_number,
-            "timestamp": int(transaction_ts) if transaction_ts else 0
-        }
-
-        # Store per journalLibrary per journal, keeping the oldest (smallest) timestamp
-        if journal_library not in journal_checkpoints:
-            journal_checkpoints[journal_library] = {}
-
-        existing = journal_checkpoints[journal_library].get(journal_name)
-        if existing is None or checkpoint_data["timestamp"] < existing["timestamp"]:
-            journal_checkpoints[journal_library][journal_name] = checkpoint_data
-            print(f"  Found journal checkpoint for journalLibrary '{journal_library}', journal '{journal_name}': seq={sequence_number}, ts={checkpoint_data['timestamp']}")
-        else:
-            print(f"  Skipped newer checkpoint for journalLibrary '{journal_library}', journal '{journal_name}' (ts={checkpoint_data['timestamp']} >= existing ts={existing['timestamp']})")
+    journal_checkpoints = _extract_journal_checkpoints(root)
 
     # Build source-to-target schema mapping from replications
     print("\nBuilding source-to-target schema mappings...")
-    source_to_target_schemas = {}
-    
-    for repl_id, repl in replications.items():
-        src_table_id = repl['src_table_id']
-        trg_table_id = repl['trg_table_id']
-        
-        if src_table_id and trg_table_id:
-            # Find source table's schema
-            src_schema_name = None
-            src_conn_name = None
-            for conn_id, conn in connections.items():
-                if conn['is_source']:  # Only look in source connections
-                    for schema_id, schema in conn["schemas"].items():
-                        if src_table_id in schema["tables"]:
-                            src_schema_name = schema["name"]
-                            src_conn_name = conn["name"]
-                            break
-                    if src_schema_name:
-                        break
-            
-            # Find target table's schema
-            trg_schema_name = None
-            trg_conn_name = None
-            for conn_id, conn in connections.items():
-                if not conn['is_source']:  # Only look in target connections
-                    for schema_id, schema in conn["schemas"].items():
-                        if trg_table_id in schema["tables"]:
-                            trg_schema_name = schema["name"]
-                            trg_conn_name = conn["name"]
-                            break
-                    if trg_schema_name:
-                        break
-            
-            # Map source schema to target schema
-            if src_schema_name and trg_schema_name:
-                if src_schema_name not in source_to_target_schemas:
-                    source_to_target_schemas[src_schema_name] = trg_schema_name
-                    print(f"  Mapped source schema '{src_schema_name}' ({src_conn_name}) -> target schema '{trg_schema_name}' ({trg_conn_name})")
-                elif source_to_target_schemas[src_schema_name] != trg_schema_name:
-                    # Multiple target schemas for same source - log warning but keep first mapping
-                    print(f"  Warning: Source schema '{src_schema_name}' maps to multiple targets: '{source_to_target_schemas[src_schema_name]}' and '{trg_schema_name}'")
-    
+    source_to_target_schemas = _build_source_to_target_schemas(replications, connections)
     print(f"Found {len(source_to_target_schemas)} unique source-to-target schema mappings")
     
     # Extract field mappings from DBMMFieldMappings
     print("\nExtracting field mappings...")
-    field_mappings = {}  # Structure: {replication_id: {src_field_id: {target_field_id, target_expression, src_expression}}}
-    record_id_mappings = {}  # Structure: {replication_id: {target_field_id: src_expression}} for [!RecordID] expressions
-    
-    for mapping_elem in root.findall("./tables/DBMMFieldMappings"):
-        mapping_id = mapping_elem.findtext("FieldMappingID")
-        repl_id = mapping_elem.findtext("ReplicationID")
-        src_field_id = mapping_elem.findtext("SrcFieldID")
-        trg_field_id = mapping_elem.findtext("TrgFieldID")
-        src_expression = mapping_elem.findtext("SrcExpression")
-        is_forth = mapping_elem.findtext("IsForth", "Y").upper() == "Y"
-        
-        if repl_id and is_forth:  # Only process forward mappings
-            if repl_id not in field_mappings:
-                field_mappings[repl_id] = {}
-            
-            if src_field_id:
-                # Direct field-to-field mapping
-                field_mappings[repl_id][src_field_id] = {
-                    "target_field_id": trg_field_id,
-                    "src_expression": src_expression,
-                    "type": "direct"
-                }
-            elif src_expression:
-                # Expression-based mapping - store with None src_field_id
-                if trg_field_id:
-                    field_mappings[repl_id][f"expr_{trg_field_id}"] = {
-                        "target_field_id": trg_field_id,
-                        "src_expression": src_expression,
-                        "type": "expression"
-                    }
-                    # Check for [!RecordID] expression
-                    if "[!RecordID]" in src_expression:
-                        if repl_id not in record_id_mappings:
-                            record_id_mappings[repl_id] = {}
-                        record_id_mappings[repl_id][trg_field_id] = src_expression
-                        print(f"    Found [!RecordID] mapping: replication {repl_id}, target field {trg_field_id}")
-    
+    field_mappings, record_id_mappings = _extract_field_mappings(root)
     total_mappings = sum(len(m) for m in field_mappings.values())
     print(f"Found {total_mappings} field mappings across {len(field_mappings)} replications")
     
     # Build field ID to name lookup for resolving target field names
     print("\nBuilding field ID to name lookup...")
-    field_id_to_name = {}
-    for field_elem in root.findall("./tables/DBMMFields"):
-        field_id = field_elem.findtext("FieldID")
-        table_id = field_elem.findtext("TableID")
-        field_name = None
-        for name_tag in ["n", "Name", "name"]:
-            field_name = field_elem.findtext(name_tag)
-            if field_name:
-                break
-        if field_id and table_id and field_name:
-            field_id_to_name[(table_id, field_id)] = field_name
+    field_id_to_name = _build_field_id_lookup(root)
     print(f"Built lookup with {len(field_id_to_name)} field ID entries")
     
     # Print summary of groups and chains
