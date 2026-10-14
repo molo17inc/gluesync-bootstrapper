@@ -323,6 +323,9 @@ automator_build_windows:
   rules:
     - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
       when: always
+    # signing test tags: build + sign only, nothing is published (automator_publish matches release tags only)
+    - if: $CI_COMMIT_TAG =~ /^automator-sign-rc-\d+$/
+      when: always
     - when: never
   variables:
     PIP_DISABLE_PIP_VERSION_CHECK: "1"
@@ -349,6 +352,7 @@ automator_build_windows:
     - |
       $python = Join-Path $env:CI_PROJECT_DIR 'python\python.exe'
       $version = $env:CI_COMMIT_TAG -replace '^automator-', ''
+      if ($env:CI_COMMIT_TAG -match '^automator-sign-rc-(\d+)$') { $version = "0.0.0-sign-rc.$($Matches[1])" }
       Write-Host "Building Gluesync Automator version $version for Windows"
       $versionFile = Join-Path $env:CI_PROJECT_DIR 'automator_app\VERSION'
       $utf8 = New-Object System.Text.UTF8Encoding $false
@@ -366,6 +370,81 @@ automator_build_windows:
     paths:
       - .automator-build/dist/gluesync-automator-windows.exe
     expire_in: 2 weeks
+
+automator_sign_windows:
+  # Code signing (MOLO17 SRL, DigiCert KeyLocker): same protected runner and environment as the platform installer.
+  # The runner only takes protected refs; every tag in this project is protected.
+  stage: build
+  tags:
+    - hq-windows-sign
+  environment:
+    name: signing
+    action: prepare
+  needs:
+    - job: automator_build_windows
+      artifacts: true
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
+      when: always
+    - if: $CI_COMMIT_TAG =~ /^automator-sign-rc-\d+$/
+      when: always
+    - when: never
+  script:
+    - powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\sign-automator-windows.ps1
+  artifacts:
+    when: always
+    name: "gluesync-automator-windows-signed-${CI_COMMIT_TAG}"
+    paths:
+      - .automator-build/dist/gluesync-automator-windows.exe
+      - .automator-build/dist/automator-signatures.json
+    expire_in: 2 weeks
+
+automator_smoke_signed_windows:
+  # Runs the signed exe that automator_publish uploads: it must start and serve the UI (signing must not break the
+  # PyInstaller one-file archive). Same check as automator_smoke_windows, against the frozen app.
+  stage: build
+  tags:
+    - hq-windows-shell-2022
+  needs:
+    - job: automator_sign_windows
+      artifacts: true
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
+      when: always
+    - if: $CI_COMMIT_TAG =~ /^automator-sign-rc-\d+$/
+      when: always
+    - when: never
+  script:
+    - |
+      $ErrorActionPreference = 'Stop'
+      $exe = Join-Path $env:CI_PROJECT_DIR '.automator-build\dist\gluesync-automator-windows.exe'
+      $sig = Get-AuthenticodeSignature -LiteralPath $exe
+      Write-Host "Signature: $($sig.Status) $($sig.SignerCertificate.Subject)"
+      if ($sig.Status -ne 'Valid') { throw "Signed Automator exe does not verify on this runner: $($sig.Status)" }
+      $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+      $listener.Start(); $port = $listener.LocalEndpoint.Port; $listener.Stop()
+      $logFile = Join-Path $env:CI_PROJECT_DIR 'automator-signed-smoke.log'
+      $errorLogFile = Join-Path $env:CI_PROJECT_DIR 'automator-signed-smoke.err.log'
+      $process = Start-Process -FilePath $exe -ArgumentList @('--host', '127.0.0.1', '--port', "$port", '--no-open-browser') -RedirectStandardOutput $logFile -RedirectStandardError $errorLogFile -PassThru
+      try {
+        $deadline = (Get-Date).AddSeconds(180); $ok = $false
+        while ((Get-Date) -lt $deadline -and -not $process.HasExited) {
+          try { $r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 "http://127.0.0.1:$port/api/healthz"; if ($r.StatusCode -eq 200 -and ($r.Content | ConvertFrom-Json).status -eq 'ok') { $ok = $true; break } } catch { }
+          Start-Sleep -Seconds 2
+        }
+        if (-not $ok) {
+          Write-Host "=== STDOUT ==="; Get-Content $logFile -EA SilentlyContinue
+          Write-Host "=== STDERR ==="; Get-Content $errorLogFile -EA SilentlyContinue
+          throw "Signed Automator exe did not answer /api/healthz (exited: $($process.HasExited))"
+        }
+        $root = Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 "http://127.0.0.1:$port/"
+        if ($root.StatusCode -ne 200 -or $root.Headers['Content-Type'] -notlike 'text/html*') { throw "UI root returned $($root.StatusCode) $($root.Headers['Content-Type'])" }
+        Write-Host "Signed Automator exe smoke test passed (healthz ok, UI served on port $port)"
+      }
+      finally {
+        if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
+        Get-Process -Name 'gluesync-automator-windows' -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
+      }
 
 # automator_build_macos:
 #   stage: build
@@ -399,8 +478,10 @@ automator_publish:
   needs:
     - job: automator_build
       artifacts: true
-    - job: automator_build_windows
+    - job: automator_sign_windows
       artifacts: true
+    - job: automator_smoke_signed_windows
+      artifacts: false
     - job: automator_build_macos # Uncomment when macOS CI is enabled
       artifacts: true
       optional: true # Make it optional since macOS build might be disabled
@@ -409,7 +490,7 @@ automator_publish:
       when: always
     - when: never
   before_script:
-    - apk add --no-cache aws-cli bash
+    - apk add --no-cache aws-cli bash python3
     - |
       if [ "${DUAL_WRITE_SG:-0}" = "1" ]; then
         apk add --no-cache lftp
@@ -440,6 +521,11 @@ automator_publish:
       FTP_ROOT="/molo17.com/public_html/gs-content/gluesync-automator"
 
       cd .automator-build/dist
+      # Code signing: publish only the exe automator_sign_windows verified (automator-signatures.json, Valid, no problems)
+      SIG_SHA=$(python3 -c "import json,sys; r=json.load(open('automator-signatures.json',encoding='utf-8-sig'))[0]; sys.exit('Automator exe not validly signed: '+str(r['status'])+' '+'; '.join(r['problems'])) if r['status']!='Valid' or r['problems'] else print(r['sha256'])")
+      EXE_SHA=$(sha256sum gluesync-automator-windows.exe | cut -d' ' -f1)
+      if [ "$SIG_SHA" != "$EXE_SHA" ]; then echo "gluesync-automator-windows.exe is not the file automator_sign_windows verified: refusing to publish"; exit 1; fi
+      echo "Automator exe signature verified (sha256 $EXE_SHA)"
       echo "Publishing Automator to ${S3_URI}/ (region ${REGION})"
 
       aws s3 cp gluesync-automator-windows.exe \
