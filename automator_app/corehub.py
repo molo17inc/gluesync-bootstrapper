@@ -1411,6 +1411,65 @@ def export_pipeline_entities_package(
     return zip_buffer.read(), "application/zip", filename
 
 
+def _enrich_null_column_types(
+    schemas: Dict[str, Any],
+    entities: Any,
+    token: str,
+    pipeline_id: str,
+) -> None:
+    """Fill null column types of ``schemas`` from live CoreHub discovery; failures are only logged."""
+    try:
+        enriched = enrich_null_column_types_from_discovery(
+            schemas, entities, token, pipeline_id
+        )
+        if enriched:
+            logger.info(
+                "export_pipeline_yaml: enriched null column types for %d table(s) "
+                "via live CoreHub discovery for pipeline %s",
+                enriched,
+                pipeline_id,
+            )
+    except Exception as enrich_exc:  # pylint: disable=broad-except
+        logger.warning(
+            "export_pipeline_yaml: column-type enrichment failed for pipeline %s: %s",
+            pipeline_id,
+            enrich_exc,
+        )
+
+
+def _add_global_notifications(
+    yaml_data: Dict[str, Any],
+    *,
+    token: str,
+    base_url: str,
+    pipeline_id: str,
+    use_ssl: Optional[bool],
+    skip_verify: Optional[bool],
+    include_secrets: bool,
+) -> None:
+    """Embed the global notification settings (SMTP) into ``yaml_data``; failures are only logged."""
+    try:
+        notification_cfg = fetch_global_notification_config(
+            token=token,
+            base_url=base_url,
+            use_ssl=use_ssl,
+            skip_verify=skip_verify,
+            include_secrets=include_secrets,
+        )
+        if notification_cfg and yaml_data:
+            yaml_data["globalNotifications"] = notification_cfg
+            logger.info(
+                "Added global notification config to YAML export for pipeline %s",
+                pipeline_id,
+            )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning(
+            "Failed to add global notification config to YAML export for pipeline %s: %s",
+            pipeline_id,
+            exc,
+        )
+
+
 def export_pipeline_yaml(
     *,
     token: str,
@@ -1483,23 +1542,7 @@ def export_pipeline_yaml(
     # DataTypeInterface was not registered for serialisation and therefore
     # stored as null in SQLite.  We call live discovery for each affected
     # table so the exported YAML always carries real type information.
-    try:
-        enriched = enrich_null_column_types_from_discovery(
-            schemas, entities, token, pipeline_id
-        )
-        if enriched:
-            logger.info(
-                "export_pipeline_yaml: enriched null column types for %d table(s) "
-                "via live CoreHub discovery for pipeline %s",
-                enriched,
-                pipeline_id,
-            )
-    except Exception as _enrich_exc:  # pylint: disable=broad-except
-        logger.warning(
-            "export_pipeline_yaml: column-type enrichment failed for pipeline %s: %s",
-            pipeline_id,
-            _enrich_exc,
-        )
+    _enrich_null_column_types(schemas, entities, token, pipeline_id)
 
     # Clean up internal metadata before export
     for schema_cfg in schemas.values():
@@ -1530,26 +1573,15 @@ def export_pipeline_yaml(
     # Skipped when the caller writes global config to a separate file
     # (e.g. inside a ZIP backup) to avoid duplication.
     if include_global_config:
-        try:
-            notification_cfg = fetch_global_notification_config(
-                token=token,
-                base_url=base_url,
-                use_ssl=use_ssl,
-                skip_verify=skip_verify,
-                include_secrets=include_secrets,
-            )
-            if notification_cfg and yaml_data:
-                yaml_data["globalNotifications"] = notification_cfg
-                logger.info(
-                    "Added global notification config to YAML export for pipeline %s",
-                    pipeline_id,
-                )
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.warning(
-                "Failed to add global notification config to YAML export for pipeline %s: %s",
-                pipeline_id,
-                exc,
-            )
+        _add_global_notifications(
+            yaml_data,
+            token=token,
+            base_url=base_url,
+            pipeline_id=pipeline_id,
+            use_ssl=use_ssl,
+            skip_verify=skip_verify,
+            include_secrets=include_secrets,
+        )
 
     buffer = io.StringIO()
     yaml.safe_dump(
