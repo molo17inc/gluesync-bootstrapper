@@ -38,7 +38,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 import mcp.types as types
 from mcp.server import Server
@@ -878,6 +878,380 @@ async def list_tools() -> List[types.Tool]:
 
 # ── TOOL IMPLEMENTATIONS ────────────────────────────────────────────────────
 
+ToolHandler = Callable[[Dict[str, Any], str], List[types.TextContent]]
+
+_PID = "pipeline_id"
+_AID = "agent_id"
+
+
+def _raw_text(raw: Any) -> List[types.TextContent]:
+    """Return a raw (Prometheus) text payload as is, anything else as JSON."""
+    return _text(raw if isinstance(raw, str) else _fmt(raw))
+
+
+def _path_tool(
+    path_template: str, *arg_names: str, method: str = "GET", raw: bool = False
+) -> ToolHandler:
+    """Build a handler that calls ``path_template`` filled with the named arguments.
+
+    The arguments are read in the given order, so a missing one raises the same
+    ``KeyError`` as reading them one by one. With ``raw`` a text response is
+    returned as is instead of being JSON-formatted.
+    """
+    def handler(arguments: Dict[str, Any], token: str) -> List[types.TextContent]:
+        values = [arguments[arg_name] for arg_name in arg_names]
+        result = _call(path_template.format(*values), token, method=method)
+        if raw:
+            return _raw_text(result)
+        return _text(_fmt(result))
+    return handler
+
+
+def _entity_ids_query(arguments: Dict[str, Any]) -> str:
+    """Return the ``&entitiesId=...`` query suffix for the optional ``entity_ids``."""
+    eids: List[str] = arguments.get("entity_ids") or []
+    if eids:
+        return "&" + "&".join(f"entitiesId={e}" for e in eids)
+    return ""
+
+
+def _sync_command(
+    arguments: Dict[str, Any], token: str, command: str, default_snapshot: bool
+) -> List[types.TextContent]:
+    pid = arguments["pipeline_id"]
+    entity_qs = _entity_ids_query(arguments)
+    snapshot = "true" if arguments.get("with_snapshot", default_snapshot) else "false"
+    write_method = arguments.get("snapshot_write_method", "UPSERT")
+    qs = f"?withSnapshot={snapshot}&snapshotWriteMethod={write_method}" + entity_qs
+    return _text(_fmt(_call(f"/pipelines/{pid}/commands/sync/{command}{qs}", token, method="POST")))
+
+
+# ── Pipelines ──────────────────────────────────────────────────────────────
+
+def _tool_get_pipeline_status(arguments: Dict[str, Any], token: str) -> List[types.TextContent]:
+    pid = arguments["pipeline_id"]
+    status_resp = _call(f"/pipelines/{pid}/entities-status", token)
+    statuses = status_resp if isinstance(status_resp, list) else []
+
+    summary: Dict[str, Any] = {
+        "pipeline_id": pid,
+        "total_entities": len(statuses),
+        "by_status": {},
+    }
+    for st in statuses:
+        if st.get("errorState"):
+            status = "error"
+        elif st.get("isSyncActive") or st.get("isMigrationActive"):
+            status = "active"
+        else:
+            status = "hold"
+        summary["by_status"].setdefault(status, []).append(
+            st.get("entityId", "?")
+        )
+    return _text(_fmt(summary))
+
+
+# ── Agents ─────────────────────────────────────────────────────────────────
+
+def _tool_discover_schemas(arguments: Dict[str, Any], token: str) -> List[types.TextContent]:
+    pid = arguments["pipeline_id"]
+    aid = arguments["agent_id"]
+    limit = arguments.get("limit", 200)
+    offset = arguments.get("offset", 0)
+    return _text(_fmt(_call(
+        f"/pipelines/{pid}/agents/{aid}/discovery/schemas?limit={limit}&offset={offset}",
+        token,
+    )))
+
+
+def _tool_discover_tables(arguments: Dict[str, Any], token: str) -> List[types.TextContent]:
+    pid = arguments["pipeline_id"]
+    aid = arguments["agent_id"]
+    schema = arguments["schema_name"]
+    limit = arguments.get("limit", 500)
+    offset = arguments.get("offset", 0)
+    result = _call(
+        f"/pipelines/{pid}/agents/{aid}/discovery/tables"
+        f"?tableschema={schema}&limit={limit}&offset={offset}",
+        token,
+    )
+    return _text(_fmt(result))
+
+
+def _tool_discover_columns(arguments: Dict[str, Any], token: str) -> List[types.TextContent]:
+    pid = arguments["pipeline_id"]
+    aid = arguments["agent_id"]
+    schema = arguments["schema_name"]
+    table = arguments["table_name"]
+    from commons import get_table_columns
+    return _text(_fmt(get_table_columns(token, pid, aid, schema, table)))
+
+
+def _tool_assign_agent(arguments: Dict[str, Any], token: str) -> List[types.TextContent]:
+    pid = arguments["pipeline_id"]
+    aid = arguments["agent_id"]
+    agent_type = arguments["agent_type"].upper()
+    return _text(_fmt(_call(
+        f"/pipelines/{pid}/agents/{aid}?agentType={agent_type}",
+        token,
+        method="PUT",
+    )))
+
+
+# ── Entities ───────────────────────────────────────────────────────────────
+
+def _tool_upsert_entities(arguments: Dict[str, Any], token: str) -> List[types.TextContent]:
+    pid = arguments["pipeline_id"]
+    entities = arguments["entities"]
+    return _text(_fmt(_call(
+        f"/pipelines/{pid}/config/entities",
+        token,
+        method="PUT",
+        body={"entities": entities},
+    )))
+
+
+def _tool_delete_entities(arguments: Dict[str, Any], token: str) -> List[types.TextContent]:
+    pid = arguments["pipeline_id"]
+    eids = arguments["entity_ids"]
+    return _text(_fmt(_call(
+        f"/pipelines/{pid}/config/entities",
+        token,
+        method="DELETE",
+        body={"entitiesId": eids},
+    )))
+
+
+# ── Sync commands ──────────────────────────────────────────────────────────
+
+def _tool_start_sync(arguments: Dict[str, Any], token: str) -> List[types.TextContent]:
+    return _sync_command(arguments, token, "start", default_snapshot=False)
+
+
+def _tool_stop_sync(arguments: Dict[str, Any], token: str) -> List[types.TextContent]:
+    pid = arguments["pipeline_id"]
+    eids = arguments.get("entity_ids") or []
+    qs = "?" + "&".join(f"entitiesId={e}" for e in eids) if eids else ""
+    return _text(_fmt(_call(f"/pipelines/{pid}/commands/sync/stop{qs}", token, method="POST")))
+
+
+def _tool_redo_sync(arguments: Dict[str, Any], token: str) -> List[types.TextContent]:
+    return _sync_command(arguments, token, "redo", default_snapshot=True)
+
+
+def _tool_one_time_snapshot(arguments: Dict[str, Any], token: str) -> List[types.TextContent]:
+    pid = arguments["pipeline_id"]
+    entity_qs = _entity_ids_query(arguments)
+    write_method = arguments.get("snapshot_write_method", "UPSERT")
+    qs = f"?snapshotWriteMethod={write_method}" + entity_qs
+    return _text(_fmt(_call(
+        f"/pipelines/{pid}/commands/sync/one-time-snapshot{qs}", token, method="POST"
+    )))
+
+
+def _tool_start_group_sync(arguments: Dict[str, Any], token: str) -> List[types.TextContent]:
+    pid = arguments["pipeline_id"]
+    gid = arguments["group_id"]
+    snapshot = "true" if arguments.get("with_snapshot") else "false"
+    return _text(_fmt(_call(
+        f"/pipelines/{pid}/commands/sync/start-group?groupId={gid}&withSnapshot={snapshot}",
+        token,
+        method="POST",
+    )))
+
+
+# ── Notifications ──────────────────────────────────────────────────────────
+
+# Optional notification filters, in query-string order: (argument, query parameter).
+_NOTIFICATION_FILTERS_BEFORE_LEVEL = (
+    ("text_to_search", "textToSearch"),
+    ("pipeline_id", "pipelineId"),
+    ("agent_id", "agentId"),
+    ("entity_id", "entityId"),
+    ("group_id", "groupId"),
+)
+_NOTIFICATION_FILTERS_AFTER_LEVEL = (
+    ("from_date", "fromDate"),
+    ("to_date", "toDate"),
+)
+
+
+def _append_filters(parts: List[str], arguments: Dict[str, Any], filters: Sequence[Any]) -> None:
+    for arg_name, param in filters:
+        if arguments.get(arg_name):
+            parts.append(f"{param}={arguments[arg_name]}")
+
+
+def _tool_get_notifications(arguments: Dict[str, Any], token: str) -> List[types.TextContent]:
+    limit = arguments.get("limit", 50)
+    offset = arguments.get("offset", 0)
+    parts = [f"limit={limit}", f"offset={offset}"]
+    _append_filters(parts, arguments, _NOTIFICATION_FILTERS_BEFORE_LEVEL)
+    for lv in (arguments.get("level") or []):
+        parts.append(f"level={lv}")
+    _append_filters(parts, arguments, _NOTIFICATION_FILTERS_AFTER_LEVEL)
+    return _text(_fmt(_call(f"/notifications?{'&'.join(parts)}", token)))
+
+
+def _tool_mark_notifications_read(arguments: Dict[str, Any], token: str) -> List[types.TextContent]:
+    nids = arguments.get("notification_ids") or []
+    if len(nids) == 1:
+        # Single notification → POST /notifications/{id}/read
+        return _text(_fmt(_call(
+            f"/notifications/{nids[0]}/read", token, method="POST"
+        )))
+    if nids:
+        # Multiple → POST /notifications/read with ids in body
+        return _text(_fmt(_call(
+            "/notifications/read",
+            token,
+            method="POST",
+            body={"notificationsId": nids},
+        )))
+    # All → POST /notifications/read with empty body
+    return _text(_fmt(_call("/notifications/read", token, method="POST")))
+
+
+# ── Mapping functions (UDF) ────────────────────────────────────────────────
+
+def _collect_udf_entries(
+    udf_entries: List[Any], entity_name: str, udfs: Dict[str, Dict[str, Any]]
+) -> None:
+    for u in udf_entries:
+        if isinstance(u, dict) and u.get("name"):
+            entry = udfs.setdefault(
+                str(u["name"]),
+                {"name": u["name"], "type": u.get("type"), "usedByEntities": []},
+            )
+            if entity_name not in entry["usedByEntities"]:
+                entry["usedByEntities"].append(entity_name)
+
+
+def _scan_custom_props(obj: Any, entity_name: str, udfs: Dict[str, Dict[str, Any]]) -> None:
+    if isinstance(obj, dict):
+        udf_entries = obj.get("udf")
+        if isinstance(udf_entries, list):
+            _collect_udf_entries(udf_entries, entity_name, udfs)
+        for v in obj.values():
+            _scan_custom_props(v, entity_name, udfs)
+    elif isinstance(obj, list):
+        for v in obj:
+            _scan_custom_props(v, entity_name, udfs)
+
+
+def _entity_items(entities_resp: Any) -> Any:
+    """Return the entity list of a ``/entities`` response (a list or ``{"entities": [...]}``)."""
+    if isinstance(entities_resp, list):
+        return entities_resp
+    if isinstance(entities_resp, dict):
+        return entities_resp.get("entities", [])
+    return []
+
+
+def _tool_list_mapping_functions(arguments: Dict[str, Any], token: str) -> List[types.TextContent]:
+    pid = arguments["pipeline_id"]
+    entities_resp = _call(f"/pipelines/{pid}/entities", token)
+    udfs: Dict[str, Dict[str, Any]] = {}
+    for item in _entity_items(entities_resp):
+        ent = item.get("entity", item) if isinstance(item, dict) else item
+        if isinstance(ent, dict):
+            ent_name = str(ent.get("entityName") or ent.get("id") or "unknown")
+            _scan_custom_props(ent, ent_name, udfs)
+    return _text(_fmt(list(udfs.values())))
+
+
+# ── Export ─────────────────────────────────────────────────────────────────
+
+def _tool_export_pipeline_yaml(arguments: Dict[str, Any], token: str) -> List[types.TextContent]:
+    pid = arguments["pipeline_id"]
+    base_url = arguments["base_url"]
+    from automator_app.corehub import (
+        configure_core_hub,
+        export_pipeline_yaml as _export,
+    )
+    configure_core_hub(base_url)
+    yaml_text = _export(
+        token=token,
+        base_url=base_url,
+        pipeline_id=pid,
+        use_ssl=None,
+        skip_verify=None,
+    )
+    return _text(yaml_text)
+
+
+# Tool name -> handler(arguments, token).
+_TOOL_HANDLERS: Dict[str, ToolHandler] = {
+    # Pipelines
+    "list_pipelines": _path_tool("/pipelines"),
+    "get_pipeline": _path_tool("/pipelines/{}", _PID),
+    "get_pipeline_status": _tool_get_pipeline_status,
+    "get_pipeline_snapshot_status": _path_tool("/pipelines/{}/snapshot-status", _PID),
+    "delete_pipeline": _path_tool("/pipelines/{}", _PID, method="DELETE"),
+    "reset_pipeline_checkpoint": _path_tool("/pipelines/{}/checkpoint", _PID, method="PATCH"),
+    "get_pipeline_entities_status": _path_tool("/pipelines/{}/entities-status", _PID),
+    # Agents
+    "list_pipeline_agents": _path_tool("/pipelines/{}/agents", _PID),
+    "get_agent": _path_tool("/pipelines/{}/agents/{}", _PID, _AID),
+    "get_agent_raw": _path_tool("/pipelines/{}/agents/{}?includeSecrets=true", _PID, _AID),
+    "get_agent_node_info": _path_tool("/pipelines/{}/agents/{}/discovery/node-info", _PID, _AID),
+    "discover_schemas": _tool_discover_schemas,
+    "discover_tables": _tool_discover_tables,
+    "discover_columns": _tool_discover_columns,
+    "assign_agent": _tool_assign_agent,
+    "unassign_agent": _path_tool("/pipelines/{}/agents/{}", _PID, _AID, method="DELETE"),
+    # Entities
+    "get_pipeline_entities": _path_tool("/pipelines/{}/entities", _PID),
+    "get_entity": _path_tool("/pipelines/{}/entities/{}", _PID, "entity_id"),
+    "upsert_entities": _tool_upsert_entities,
+    "delete_entities": _tool_delete_entities,
+    # Sync commands
+    "start_sync": _tool_start_sync,
+    "stop_sync": _tool_stop_sync,
+    "redo_sync": _tool_redo_sync,
+    "one_time_snapshot": _tool_one_time_snapshot,
+    "start_group_sync": _tool_start_group_sync,
+    "stop_group_sync": _path_tool(
+        "/pipelines/{}/commands/sync/stop-group?groupId={}", _PID, "group_id", method="POST"
+    ),
+    # Maintenance
+    "enter_maintenance_mode": _path_tool("/pipelines/{}/commands/maintenance/enter", _PID, method="POST"),
+    "exit_maintenance_mode": _path_tool("/pipelines/{}/commands/maintenance/exit", _PID, method="POST"),
+    # Groups
+    "list_groups": _path_tool("/pipelines/{}/config/groups", _PID),
+    # Global config
+    "get_global_config": _path_tool("/global-config"),
+    "get_global_config_keys": _path_tool("/global-config/keys"),
+    "get_release_channel": _path_tool("/global-config/release-channel"),
+    "set_log_level": _path_tool("/global-config/logging/level/{}", "level", method="PUT"),
+    # Notifications
+    "get_notifications": _tool_get_notifications,
+    "get_notification": _path_tool("/notifications/{}", "notification_id"),
+    "get_notification_count": _path_tool("/notifications/count"),
+    "mark_notifications_read": _tool_mark_notifications_read,
+    # Mapping functions (UDF)
+    "list_mapping_functions": _tool_list_mapping_functions,
+    "get_mapping_function_code": _path_tool(
+        "/pipelines/{}/config/entities/mapping-functions/{}", _PID, "udf_name"
+    ),
+    # Metrics (JSON)
+    "get_pipeline_metrics": _path_tool("/metrics/{}", _PID),
+    "get_agent_metrics": _path_tool("/metrics/{}/agents/{}", _PID, _AID),
+    "get_entity_metrics": _path_tool("/metrics/{}/entities/{}", _PID, "entity_id"),
+    "get_global_metrics": _path_tool("/metrics"),
+    # Metrics (Prometheus / OpenMetrics text). The base /metrics endpoint returns
+    # Prometheus text when basicMetricsRoute is mounted (via prometheusMetricsRoutes).
+    "get_prometheus_metrics": _path_tool("/metrics", raw=True),
+    "get_agent_prometheus_metrics": _path_tool("/metrics/{}/agents/{}", _PID, _AID, raw=True),
+    # Export
+    "export_pipeline_yaml": _tool_export_pipeline_yaml,
+    # License
+    "get_license_info": _path_tool("/global-config/license"),
+    # Version
+    "get_corehub_version": _path_tool("/version"),
+}
+
+
 @server.call_tool()
 async def call_tool(name: str, arguments: Dict[str, Any]) -> Sequence[types.TextContent]:
     try:
@@ -886,391 +1260,10 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> Sequence[types.Text
         return _text(f"ERROR: {exc}")
 
     try:
-        # ── Pipelines ──────────────────────────────────────────────────────
-        if name == "list_pipelines":
-            return _text(_fmt(_call("/pipelines", token)))
-
-        elif name == "get_pipeline":
-            pid = arguments["pipeline_id"]
-            return _text(_fmt(_call(f"/pipelines/{pid}", token)))
-
-        elif name == "get_pipeline_status":
-            pid = arguments["pipeline_id"]
-            status_resp = _call(f"/pipelines/{pid}/entities-status", token)
-            statuses = status_resp if isinstance(status_resp, list) else []
-
-            summary: Dict[str, Any] = {
-                "pipeline_id": pid,
-                "total_entities": len(statuses),
-                "by_status": {},
-            }
-            for st in statuses:
-                if st.get("errorState"):
-                    status = "error"
-                elif st.get("isSyncActive") or st.get("isMigrationActive"):
-                    status = "active"
-                else:
-                    status = "hold"
-                summary["by_status"].setdefault(status, []).append(
-                    st.get("entityId", "?")
-                )
-            return _text(_fmt(summary))
-
-        elif name == "get_pipeline_snapshot_status":
-            pid = arguments["pipeline_id"]
-            return _text(_fmt(_call(f"/pipelines/{pid}/snapshot-status", token)))
-
-        elif name == "delete_pipeline":
-            pid = arguments["pipeline_id"]
-            return _text(_fmt(_call(f"/pipelines/{pid}", token, method="DELETE")))
-
-        elif name == "reset_pipeline_checkpoint":
-            pid = arguments["pipeline_id"]
-            return _text(_fmt(_call(f"/pipelines/{pid}/checkpoint", token, method="PATCH")))
-
-        elif name == "get_pipeline_entities_status":
-            pid = arguments["pipeline_id"]
-            return _text(_fmt(_call(f"/pipelines/{pid}/entities-status", token)))
-
-        # ── Agents ─────────────────────────────────────────────────────────
-        elif name == "list_pipeline_agents":
-            pid = arguments["pipeline_id"]
-            return _text(_fmt(_call(f"/pipelines/{pid}/agents", token)))
-
-        elif name == "get_agent":
-            pid = arguments["pipeline_id"]
-            aid = arguments["agent_id"]
-            return _text(_fmt(_call(f"/pipelines/{pid}/agents/{aid}", token)))
-
-        elif name == "get_agent_raw":
-            pid = arguments["pipeline_id"]
-            aid = arguments["agent_id"]
-            return _text(_fmt(_call(f"/pipelines/{pid}/agents/{aid}?includeSecrets=true", token)))
-
-        elif name == "get_agent_node_info":
-            pid = arguments["pipeline_id"]
-            aid = arguments["agent_id"]
-            return _text(_fmt(_call(f"/pipelines/{pid}/agents/{aid}/discovery/node-info", token)))
-
-        elif name == "discover_schemas":
-            pid = arguments["pipeline_id"]
-            aid = arguments["agent_id"]
-            limit = arguments.get("limit", 200)
-            offset = arguments.get("offset", 0)
-            return _text(_fmt(_call(
-                f"/pipelines/{pid}/agents/{aid}/discovery/schemas?limit={limit}&offset={offset}",
-                token,
-            )))
-
-        elif name == "discover_tables":
-            pid = arguments["pipeline_id"]
-            aid = arguments["agent_id"]
-            schema = arguments["schema_name"]
-            limit = arguments.get("limit", 500)
-            offset = arguments.get("offset", 0)
-            result = _call(
-                f"/pipelines/{pid}/agents/{aid}/discovery/tables"
-                f"?tableschema={schema}&limit={limit}&offset={offset}",
-                token,
-            )
-            return _text(_fmt(result))
-
-        elif name == "discover_columns":
-            pid = arguments["pipeline_id"]
-            aid = arguments["agent_id"]
-            schema = arguments["schema_name"]
-            table = arguments["table_name"]
-            from commons import get_table_columns
-            return _text(_fmt(get_table_columns(token, pid, aid, schema, table)))
-
-        elif name == "assign_agent":
-            pid = arguments["pipeline_id"]
-            aid = arguments["agent_id"]
-            agent_type = arguments["agent_type"].upper()
-            return _text(_fmt(_call(
-                f"/pipelines/{pid}/agents/{aid}?agentType={agent_type}",
-                token,
-                method="PUT",
-            )))
-
-        elif name == "unassign_agent":
-            pid = arguments["pipeline_id"]
-            aid = arguments["agent_id"]
-            return _text(_fmt(_call(
-                f"/pipelines/{pid}/agents/{aid}",
-                token,
-                method="DELETE",
-            )))
-
-        # ── Entities ───────────────────────────────────────────────────────
-        elif name == "get_pipeline_entities":
-            pid = arguments["pipeline_id"]
-            return _text(_fmt(_call(f"/pipelines/{pid}/entities", token)))
-
-        elif name == "get_entity":
-            pid = arguments["pipeline_id"]
-            eid = arguments["entity_id"]
-            return _text(_fmt(_call(f"/pipelines/{pid}/entities/{eid}", token)))
-
-        elif name == "upsert_entities":
-            pid = arguments["pipeline_id"]
-            entities = arguments["entities"]
-            return _text(_fmt(_call(
-                f"/pipelines/{pid}/config/entities",
-                token,
-                method="PUT",
-                body={"entities": entities},
-            )))
-
-        elif name == "delete_entities":
-            pid = arguments["pipeline_id"]
-            eids = arguments["entity_ids"]
-            return _text(_fmt(_call(
-                f"/pipelines/{pid}/config/entities",
-                token,
-                method="DELETE",
-                body={"entitiesId": eids},
-            )))
-
-        # ── Sync commands ──────────────────────────────────────────────────
-        elif name == "start_sync":
-            pid = arguments["pipeline_id"]
-            eids: List[str] = arguments.get("entity_ids") or []
-            snapshot = "true" if arguments.get("with_snapshot") else "false"
-            write_method = arguments.get("snapshot_write_method", "UPSERT")
-            qs = f"?withSnapshot={snapshot}&snapshotWriteMethod={write_method}"
-            if eids:
-                qs += "&" + "&".join(f"entitiesId={e}" for e in eids)
-            return _text(_fmt(_call(f"/pipelines/{pid}/commands/sync/start{qs}", token, method="POST")))
-
-        elif name == "stop_sync":
-            pid = arguments["pipeline_id"]
-            eids = arguments.get("entity_ids") or []
-            qs = "?" + "&".join(f"entitiesId={e}" for e in eids) if eids else ""
-            return _text(_fmt(_call(f"/pipelines/{pid}/commands/sync/stop{qs}", token, method="POST")))
-
-        elif name == "redo_sync":
-            pid = arguments["pipeline_id"]
-            eids = arguments.get("entity_ids") or []
-            snapshot = "true" if arguments.get("with_snapshot", True) else "false"
-            write_method = arguments.get("snapshot_write_method", "UPSERT")
-            qs = f"?withSnapshot={snapshot}&snapshotWriteMethod={write_method}"
-            if eids:
-                qs += "&" + "&".join(f"entitiesId={e}" for e in eids)
-            return _text(_fmt(_call(f"/pipelines/{pid}/commands/sync/redo{qs}", token, method="POST")))
-
-        elif name == "one_time_snapshot":
-            pid = arguments["pipeline_id"]
-            eids = arguments.get("entity_ids") or []
-            write_method = arguments.get("snapshot_write_method", "UPSERT")
-            qs = f"?snapshotWriteMethod={write_method}"
-            if eids:
-                qs += "&" + "&".join(f"entitiesId={e}" for e in eids)
-            return _text(_fmt(_call(
-                f"/pipelines/{pid}/commands/sync/one-time-snapshot{qs}", token, method="POST"
-            )))
-
-        elif name == "start_group_sync":
-            pid = arguments["pipeline_id"]
-            gid = arguments["group_id"]
-            snapshot = "true" if arguments.get("with_snapshot") else "false"
-            return _text(_fmt(_call(
-                f"/pipelines/{pid}/commands/sync/start-group?groupId={gid}&withSnapshot={snapshot}",
-                token,
-                method="POST",
-            )))
-
-        elif name == "stop_group_sync":
-            pid = arguments["pipeline_id"]
-            gid = arguments["group_id"]
-            return _text(_fmt(_call(
-                f"/pipelines/{pid}/commands/sync/stop-group?groupId={gid}",
-                token,
-                method="POST",
-            )))
-
-        # ── Maintenance ────────────────────────────────────────────────────
-        elif name == "enter_maintenance_mode":
-            pid = arguments["pipeline_id"]
-            return _text(_fmt(_call(
-                f"/pipelines/{pid}/commands/maintenance/enter", token, method="POST"
-            )))
-
-        elif name == "exit_maintenance_mode":
-            pid = arguments["pipeline_id"]
-            return _text(_fmt(_call(
-                f"/pipelines/{pid}/commands/maintenance/exit", token, method="POST"
-            )))
-
-        # ── Groups ─────────────────────────────────────────────────────────
-        elif name == "list_groups":
-            pid = arguments["pipeline_id"]
-            return _text(_fmt(_call(f"/pipelines/{pid}/config/groups", token)))
-
-        # ── Global config ──────────────────────────────────────────────────
-        elif name == "get_global_config":
-            return _text(_fmt(_call("/global-config", token)))
-
-        elif name == "get_global_config_keys":
-            return _text(_fmt(_call("/global-config/keys", token)))
-
-        elif name == "get_release_channel":
-            return _text(_fmt(_call("/global-config/release-channel", token)))
-
-        elif name == "set_log_level":
-            level = arguments["level"]
-            return _text(_fmt(_call(
-                f"/global-config/logging/level/{level}", token, method="PUT"
-            )))
-
-        # ── Notifications ──────────────────────────────────────────────────
-        elif name == "get_notifications":
-            limit = arguments.get("limit", 50)
-            offset = arguments.get("offset", 0)
-            parts = [f"limit={limit}", f"offset={offset}"]
-            if arguments.get("text_to_search"):
-                parts.append(f"textToSearch={arguments['text_to_search']}")
-            if arguments.get("pipeline_id"):
-                parts.append(f"pipelineId={arguments['pipeline_id']}")
-            if arguments.get("agent_id"):
-                parts.append(f"agentId={arguments['agent_id']}")
-            if arguments.get("entity_id"):
-                parts.append(f"entityId={arguments['entity_id']}")
-            if arguments.get("group_id"):
-                parts.append(f"groupId={arguments['group_id']}")
-            for lv in (arguments.get("level") or []):
-                parts.append(f"level={lv}")
-            if arguments.get("from_date"):
-                parts.append(f"fromDate={arguments['from_date']}")
-            if arguments.get("to_date"):
-                parts.append(f"toDate={arguments['to_date']}")
-            return _text(_fmt(_call(f"/notifications?{'&'.join(parts)}", token)))
-
-        elif name == "get_notification":
-            nid = arguments["notification_id"]
-            return _text(_fmt(_call(f"/notifications/{nid}", token)))
-
-        elif name == "get_notification_count":
-            return _text(_fmt(_call("/notifications/count", token)))
-
-        elif name == "mark_notifications_read":
-            nids = arguments.get("notification_ids") or []
-            if len(nids) == 1:
-                # Single notification → POST /notifications/{id}/read
-                return _text(_fmt(_call(
-                    f"/notifications/{nids[0]}/read", token, method="POST"
-                )))
-            elif nids:
-                # Multiple → POST /notifications/read with ids in body
-                return _text(_fmt(_call(
-                    "/notifications/read",
-                    token,
-                    method="POST",
-                    body={"notificationsId": nids},
-                )))
-            else:
-                # All → POST /notifications/read with empty body
-                return _text(_fmt(_call("/notifications/read", token, method="POST")))
-
-        # ── Mapping functions (UDF) ────────────────────────────────────────
-        elif name == "list_mapping_functions":
-            pid = arguments["pipeline_id"]
-            entities_resp = _call(f"/pipelines/{pid}/entities", token)
-            udfs: Dict[str, Dict[str, Any]] = {}
-
-            def _scan_custom_props(obj: Any, entity_name: str) -> None:
-                if isinstance(obj, dict):
-                    udf_entries = obj.get("udf")
-                    if isinstance(udf_entries, list):
-                        for u in udf_entries:
-                            if isinstance(u, dict) and u.get("name"):
-                                entry = udfs.setdefault(
-                                    str(u["name"]),
-                                    {"name": u["name"], "type": u.get("type"), "usedByEntities": []},
-                                )
-                                if entity_name not in entry["usedByEntities"]:
-                                    entry["usedByEntities"].append(entity_name)
-                    for v in obj.values():
-                        _scan_custom_props(v, entity_name)
-                elif isinstance(obj, list):
-                    for v in obj:
-                        _scan_custom_props(v, entity_name)
-
-            items = entities_resp if isinstance(entities_resp, list) else entities_resp.get("entities", []) if isinstance(entities_resp, dict) else []
-            for item in items:
-                ent = item.get("entity", item) if isinstance(item, dict) else item
-                if isinstance(ent, dict):
-                    ent_name = str(ent.get("entityName") or ent.get("id") or "unknown")
-                    _scan_custom_props(ent, ent_name)
-            return _text(_fmt(list(udfs.values())))
-
-        elif name == "get_mapping_function_code":
-            pid = arguments["pipeline_id"]
-            udf_name = arguments["udf_name"]
-            return _text(_fmt(_call(
-                f"/pipelines/{pid}/config/entities/mapping-functions/{udf_name}",
-                token,
-            )))
-
-        # ── Metrics (JSON) ───────────────────────────────────────────────
-        elif name == "get_pipeline_metrics":
-            pid = arguments["pipeline_id"]
-            return _text(_fmt(_call(f"/metrics/{pid}", token)))
-
-        elif name == "get_agent_metrics":
-            pid = arguments["pipeline_id"]
-            aid = arguments["agent_id"]
-            return _text(_fmt(_call(f"/metrics/{pid}/agents/{aid}", token)))
-
-        elif name == "get_entity_metrics":
-            pid = arguments["pipeline_id"]
-            eid = arguments["entity_id"]
-            return _text(_fmt(_call(f"/metrics/{pid}/entities/{eid}", token)))
-
-        elif name == "get_global_metrics":
-            return _text(_fmt(_call("/metrics", token)))
-
-        # ── Metrics (Prometheus / OpenMetrics text) ────────────────────────
-        elif name == "get_prometheus_metrics":
-            # The base /metrics endpoint returns Prometheus text when
-            # basicMetricsRoute is mounted (via prometheusMetricsRoutes).
-            raw = _call("/metrics", token)
-            return _text(raw if isinstance(raw, str) else _fmt(raw))
-
-        elif name == "get_agent_prometheus_metrics":
-            pid = arguments["pipeline_id"]
-            aid = arguments["agent_id"]
-            raw = _call(f"/metrics/{pid}/agents/{aid}", token)
-            return _text(raw if isinstance(raw, str) else _fmt(raw))
-
-        # ── Export ─────────────────────────────────────────────────────────
-        elif name == "export_pipeline_yaml":
-            pid = arguments["pipeline_id"]
-            base_url = arguments["base_url"]
-            from automator_app.corehub import (
-                configure_core_hub,
-                export_pipeline_yaml as _export,
-            )
-            configure_core_hub(base_url)
-            yaml_text = _export(
-                token=token,
-                base_url=base_url,
-                pipeline_id=pid,
-                use_ssl=None,
-                skip_verify=None,
-            )
-            return _text(yaml_text)
-
-        # ── License ────────────────────────────────────────────────────
-        elif name == "get_license_info":
-            return _text(_fmt(_call("/global-config/license", token)))
-
-        # ── Version ────────────────────────────────────────────────────────
-        elif name == "get_corehub_version":
-            return _text(_fmt(_call("/version", token)))
-
-        else:
+        handler = _TOOL_HANDLERS.get(name)
+        if handler is None:
             return _text(f"ERROR: Unknown tool '{name}'")
+        return handler(arguments, token)
 
     except Exception as exc:  # pylint: disable=broad-except
         logger.exception("MCP tool '%s' raised an error: %s", name, exc)
