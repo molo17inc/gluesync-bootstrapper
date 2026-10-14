@@ -60,6 +60,10 @@ logger = logging.getLogger(__name__)
 
 LOGIN_REQUIRED = "Log in to a Core Hub first"
 ZIP_MEDIA_TYPE = mimetypes.types_map[".zip"]
+APPLICATION_ZIP = "application/zip"
+UPLOADED_FILE_EMPTY = "Uploaded file is empty"
+IMPORT_ALL_PARSE_FAILED = "Failed to parse %s during import-all: %s"
+CLAUDE_DESKTOP_CONFIG = "claude_desktop_config.json"
 
 CHANGELOG_API_BASE_URL = "https://api.backoffice.molo17.com"
 
@@ -725,7 +729,7 @@ def create_app() -> FastAPI:
 
         contents = await file.read()
         if not contents:
-            raise HTTPException(status_code=400, detail="Uploaded file is empty")
+            raise HTTPException(status_code=400, detail=UPLOADED_FILE_EMPTY)
 
         if file.filename.lower().endswith('.zip'):
             # Extract YAML and UDF source files from the ZIP into a single
@@ -1154,7 +1158,7 @@ def create_app() -> FastAPI:
         filename = f"backup_{safe_name}_{pipeline_id}_{timestamp}.zip"
         return StreamingResponse(
             io.BytesIO(zip_data),
-            media_type="application/zip",
+            media_type=APPLICATION_ZIP,
             headers={
                 "Content-Disposition": f'attachment; filename="{filename}"',
             },
@@ -1324,7 +1328,7 @@ def create_app() -> FastAPI:
 
         contents = await file.read()
         if not contents:
-            raise HTTPException(status_code=400, detail="Uploaded file is empty")
+            raise HTTPException(status_code=400, detail=UPLOADED_FILE_EMPTY)
 
         # Extract UDF source files (if present) into an app-owned session
         # directory so they can be compiled automatically during import. Both
@@ -1448,7 +1452,7 @@ def create_app() -> FastAPI:
                                 notification_cfg = parsed
                                 break
                         except Exception as exc:  # pylint: disable=broad-except
-                            logger.warning("Failed to parse %s during import-all: %s", name, exc)
+                            logger.warning(IMPORT_ALL_PARSE_FAILED, name, exc)
 
                 # Fallback: scan per-pipeline YAMLs for an embedded globalNotifications key
                 if notification_cfg is None:
@@ -1493,7 +1497,7 @@ def create_app() -> FastAPI:
                             users_cfg = yaml.safe_load(zf_users.read(name).decode("utf-8"))
                             break
                         except Exception as exc:  # pylint: disable=broad-except
-                            logger.warning("Failed to parse %s during import-all: %s", name, exc)
+                            logger.warning(IMPORT_ALL_PARSE_FAILED, name, exc)
             if users_cfg:
                 result = corehub.import_users(
                     token=state.token,
@@ -1519,7 +1523,7 @@ def create_app() -> FastAPI:
                             oidc_cfg = yaml.safe_load(zf_oidc.read(name).decode("utf-8"))
                             break
                         except Exception as exc:  # pylint: disable=broad-except
-                            logger.warning("Failed to parse %s during import-all: %s", name, exc)
+                            logger.warning(IMPORT_ALL_PARSE_FAILED, name, exc)
             if oidc_cfg:
                 result = corehub.import_oidc_config(
                     token=state.token,
@@ -1930,7 +1934,7 @@ def create_app() -> FastAPI:
 
         contents = await file.read()
         if not contents:
-            raise HTTPException(status_code=400, detail="Uploaded file is empty")
+            raise HTTPException(status_code=400, detail=UPLOADED_FILE_EMPTY)
 
         logs: list[str] = []
         errors: list[str] = []
@@ -2118,7 +2122,7 @@ def create_app() -> FastAPI:
 
         contents = await file.read()
         if not contents:
-            raise HTTPException(status_code=400, detail="Uploaded file is empty")
+            raise HTTPException(status_code=400, detail=UPLOADED_FILE_EMPTY)
 
         try:
             results = corehub.import_full_corehub_backup(
@@ -2144,7 +2148,7 @@ def create_app() -> FastAPI:
 
         contents = await file.read()
         if not contents:
-            raise HTTPException(status_code=400, detail="Uploaded file is empty")
+            raise HTTPException(status_code=400, detail=UPLOADED_FILE_EMPTY)
 
         try:
             users_data = yaml.safe_load(contents.decode("utf-8"))
@@ -2174,7 +2178,7 @@ def create_app() -> FastAPI:
 
         contents = await file.read()
         if not contents:
-            raise HTTPException(status_code=400, detail="Uploaded file is empty")
+            raise HTTPException(status_code=400, detail=UPLOADED_FILE_EMPTY)
 
         try:
             oidc_data = yaml.safe_load(contents.decode("utf-8"))
@@ -2221,7 +2225,7 @@ def create_app() -> FastAPI:
         filename = f"pipeline_backups_{timestamp}.zip"
         return StreamingResponse(
             io.BytesIO(zip_data),
-            media_type="application/zip",
+            media_type=APPLICATION_ZIP,
             headers={
                 "Content-Disposition": f'attachment; filename="{filename}"',
             },
@@ -2384,7 +2388,7 @@ def create_app() -> FastAPI:
         filename = f"corehub_full_backup_{timestamp}.zip"
         return StreamingResponse(
             io.BytesIO(zip_data),
-            media_type="application/zip",
+            media_type=APPLICATION_ZIP,
             headers={
                 "Content-Disposition": f'attachment; filename="{filename}"',
             },
@@ -2579,11 +2583,11 @@ def create_app() -> FastAPI:
         """Return per-client MCP config file paths for the current OS."""
         home = Path.home()
         if sys.platform == "darwin":
-            claude = home / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
+            claude = home / "Library" / "Application Support" / "Claude" / CLAUDE_DESKTOP_CONFIG
         elif sys.platform == "win32":
-            claude = Path(os.environ.get("APPDATA", home / "AppData" / "Roaming")) / "Claude" / "claude_desktop_config.json"
+            claude = Path(os.environ.get("APPDATA", home / "AppData" / "Roaming")) / "Claude" / CLAUDE_DESKTOP_CONFIG
         else:
-            claude = home / ".config" / "Claude" / "claude_desktop_config.json"
+            claude = home / ".config" / "Claude" / CLAUDE_DESKTOP_CONFIG
         return {
             "claude": claude,
             "windsurf": home / ".codeium" / "windsurf" / "mcp_config.json",
