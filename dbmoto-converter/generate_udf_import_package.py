@@ -89,31 +89,40 @@ class BinOp(ExprNode):
         return f"({self.left!r} {self.op} {self.right!r})"
 
 
-_TOKEN_RE = re.compile(
-    r"""
-    \s*(
-        \[[^\]]+\]            |   # field reference [NAME]
-        "[^"]*"               |   # string literal
-        [A-Za-z_][A-Za-z0-9_]* |  # identifier
-        \d+(?:\.\d+)?         |   # number
-        [(),/*+\-.]               # punctuation / operators
-    )
-    """,
-    re.VERBOSE,
+# Identifiers are ASCII-only: re.ASCII keeps \w equal to [A-Za-z0-9_].
+_IDENTIFIER_RE = re.compile(r"[A-Za-z_]\w*", re.ASCII)
+_NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
+
+# Token patterns, tried in order at the current position (the first one that
+# matches wins). Whitespace between tokens is skipped by tokenize().
+_TOKEN_PATTERNS = (
+    re.compile(r"\[[^\]]+\]"),    # field reference [NAME]
+    re.compile(r'"[^"]*"'),       # string literal
+    _IDENTIFIER_RE,               # identifier
+    _NUMBER_RE,                   # number
+    re.compile(r"[(),/*+\-.]"),   # punctuation / operators
 )
+
+
+def _match_token(expression: str, pos: int) -> Optional[re.Match]:
+    for pattern in _TOKEN_PATTERNS:
+        match = pattern.match(expression, pos)
+        if match:
+            return match
+    return None
 
 
 def tokenize(expression: str) -> List[str]:
     tokens = []
     pos = 0
     while pos < len(expression):
-        match = _TOKEN_RE.match(expression, pos)
+        match = _match_token(expression, pos)
         if not match:
             if expression[pos].isspace():
                 pos += 1
                 continue
             raise ValueError(f"Unexpected character {expression[pos]!r} in expression: {expression}")
-        tokens.append(match.group(1))
+        tokens.append(match.group(0))
         pos = match.end()
     return tokens
 
@@ -151,7 +160,7 @@ class ExpressionParser:
         while self.peek() == ".":
             self.next()
             method = self.next()
-            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", method):
+            if not _IDENTIFIER_RE.fullmatch(method):
                 raise ValueError(f"Expected method name after '.', got {method!r}")
             if self.next() != "(":
                 raise ValueError(f"Expected '(' after method name {method!r}")
@@ -182,10 +191,10 @@ class ExpressionParser:
         if token.startswith('"'):
             self.next()
             return StrLit(token[1:-1])
-        if re.fullmatch(r"\d+(?:\.\d+)?", token):
+        if _NUMBER_RE.fullmatch(token):
             self.next()
             return NumLit(token)
-        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", token):
+        if _IDENTIFIER_RE.fullmatch(token):
             name = self.next()
             if self.peek() == "(":
                 self.next()
@@ -855,7 +864,7 @@ import java.time.LocalDateTime;
 
 def _sanitize_identifier(value: str) -> str:
     """Turn an arbitrary name into a valid Java identifier fragment."""
-    cleaned = re.sub(r"[^A-Za-z0-9_]", "_", value).strip("_")
+    cleaned = re.sub(r"\W", "_", value, flags=re.ASCII).strip("_")
     if cleaned and cleaned[0].isdigit():
         cleaned = f"_{cleaned}"
     return cleaned or "X"
