@@ -24,9 +24,17 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import parse_dbmoto_metadata_xml as parser
+
+
+def _use_xml(test_case, xml_path):
+    """Point parser.args.xml_path at xml_path for the duration of the test."""
+    patcher = mock.patch.object(parser.args, "xml_path", xml_path)
+    patcher.start()
+    test_case.addCleanup(patcher.stop)
 
 
 class TestJournalCheckpointExtraction(unittest.TestCase):
@@ -152,7 +160,7 @@ class TestJournalCheckpointExtraction(unittest.TestCase):
             f.write('  </tables>\n')
             f.write('</metadata>\n')
 
-        parser.args.xml_path = xml_no_journal
+        _use_xml(self, xml_no_journal)
         result = parser.parse_xml()
         journal_checkpoints = result[-2]
 
@@ -228,7 +236,7 @@ class TestJournalCheckpointExtraction(unittest.TestCase):
             f.write('  </tables>\n')
             f.write('</metadata>\n')
 
-        parser.args.xml_path = xml_short
+        _use_xml(self, xml_short)
         result = parser.parse_xml()
         journal_checkpoints = result[-2]
 
@@ -272,7 +280,7 @@ class TestJournalCheckpointExtraction(unittest.TestCase):
             f.write('  </tables>\n')
             f.write('</metadata>\n')
 
-        parser.args.xml_path = xml_no_fields
+        _use_xml(self, xml_no_fields)
         result = parser.parse_xml()
 
         parser.export_as_yaml(
@@ -283,7 +291,7 @@ class TestJournalCheckpointExtraction(unittest.TestCase):
         )
 
         cp_path = os.path.join(self.temp_dir, 'LIB1', 'JRN001.cp')
-        self.assertTrue(os.path.exists(cp_path), f"Checkpoint file should be written even without fields")
+        self.assertTrue(os.path.exists(cp_path), "Checkpoint file should be written even without fields")
 
         with open(cp_path, 'r') as fh:
             content = json.load(fh)
@@ -452,7 +460,7 @@ class TestJournalCheckpointGoldenSelection(unittest.TestCase):
             f.write('  </tables>\n')
             f.write('</metadata>\n')
 
-        parser.args.xml_path = xml_two_journals
+        _use_xml(self, xml_two_journals)
         result = parser.parse_xml()
         journal_checkpoints = result[-2]
 

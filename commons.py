@@ -124,32 +124,118 @@ def get_oracle_agent_tags() -> set[str]:
     return oracle_tags
 
 
-def fetch_core_hub(path, method='GET', token=None, body=None, params=None, headers=None, expected_error_statuses=None):
-    # Log request details
+def _log_request_mapping(title, mapping):
+    logger.debug(title)
+    for k, v in mapping.items():
+        logger.debug(f"  {k}: {v}")
+
+
+def _log_request_body(body):
+    logger.debug("\nRequest Body:")
+    try:
+        if isinstance(body, (bytes, bytearray)):
+            logger.debug(f"<binary payload: {len(body)} bytes>")
+        else:
+            logger.debug(json.dumps(body, indent=2) if isinstance(body, (dict, list)) else str(body))
+    except Exception as e:
+        logger.debug(f"<Unable to serialize request body: {e}>")
+
+
+def _log_core_hub_request(method, path, body, params, headers):
+    """Log the details of a CoreHub request before it is sent."""
     logger.debug(f"\n{'=' * 80}")
     logger.debug(f"[API REQUEST] {method.upper()} {path}")
 
     if params:
-        logger.debug("\nQuery Parameters:")
-        for k, v in params.items():
-            logger.debug(f"  {k}: {v}")
+        _log_request_mapping("\nQuery Parameters:", params)
 
     if headers:
-        logger.debug("\nCustom Headers:")
-        for k, v in headers.items():
-            logger.debug(f"  {k}: {v}")
+        _log_request_mapping("\nCustom Headers:", headers)
 
     if body is not None:
-        logger.debug("\nRequest Body:")
-        try:
-            if isinstance(body, (bytes, bytearray)):
-                logger.debug(f"<binary payload: {len(body)} bytes>")
-            else:
-                logger.debug(json.dumps(body, indent=2) if isinstance(body, (dict, list)) else str(body))
-        except Exception as e:
-            logger.debug(f"<Unable to serialize request body: {e}>")
+        _log_request_body(body)
 
     logger.debug("-" * 40)
+
+
+def _log_core_hub_response(method, path, response, duration):
+    """Log a CoreHub response (full JSON when possible, long strings trimmed)."""
+    logger.debug(f"Request completed in {duration:.3f}s")
+    logger.debug(f"[RESPONSE] {method.upper()} {path}")
+
+    try:
+        if isinstance(response, (dict, list)):
+            response_text = json.dumps(response, indent=2, ensure_ascii=False)
+        else:
+            response_text = str(response)
+    except Exception as exc:  # pragma: no cover - defensive
+        response_text = f"<unable to serialize response: {exc}>"
+
+    max_preview_chars = 10000
+    if len(response_text) > max_preview_chars:
+        logger.debug(
+            "Response (trimmed to %d of %d chars): %s…",
+            max_preview_chars,
+            len(response_text),
+            response_text[:max_preview_chars],
+        )
+    else:
+        logger.debug("Response: %s", response_text)
+
+    logger.debug("=" * 80 + "\n")
+
+
+def _has_error_response(error):
+    return hasattr(error, 'response') and error.response is not None
+
+
+def _log_error_response(is_expected, text):
+    if is_expected:
+        logger.info(f"Response: {text}")
+    else:
+        logger.error(f"Error response: {text}")
+
+
+def _read_error_payload(error, is_expected):
+    """Log and return the body of a failed CoreHub response (JSON when possible)."""
+    if not _has_error_response(error):
+        return None
+    try:
+        error_payload = error.response.json()
+        _log_error_response(is_expected, json.dumps(error_payload, indent=2))
+    except Exception:
+        error_payload = error.response.text
+        _log_error_response(is_expected, error_payload)
+    return error_payload
+
+
+def _describe_core_hub_failure(error, method, path, expected_error_statuses):
+    """Log a failed CoreHub request and return the message of the error to raise."""
+    # Check if this is an expected error status (e.g. 404 during table existence checks)
+    is_expected = False
+    if expected_error_statuses and _has_error_response(error):
+        is_expected = error.response.status_code in expected_error_statuses
+
+    if is_expected:
+        logger.info(f"API request returned expected status: {str(error)}")
+    else:
+        logger.error(f"API request failed: {str(error)}")
+
+    error_payload = _read_error_payload(error, is_expected)
+    logger.debug("=" * 80 + "\n")
+
+    message = f"CoreHub request {method.upper()} {path} failed: {error}"
+    if error_payload:
+        if isinstance(error_payload, (dict, list)):
+            message += f" | Response: {json.dumps(error_payload, ensure_ascii=False)}"
+        else:
+            message += f" | Response: {error_payload}"
+    return message
+
+
+def fetch_core_hub(path, method='GET', token=None, body=None, params=None, headers=None, expected_error_statuses=None):
+    # Log request details
+    _log_core_hub_request(method, path, body, params, headers)
 
     try:
         # Make the request
@@ -157,67 +243,12 @@ def fetch_core_hub(path, method='GET', token=None, body=None, params=None, heade
         response = core_hub_client.request(path, method, token, body, params, headers=headers, expected_error_statuses=expected_error_statuses)
         duration = time.time() - start_time
 
-        # Log response (dump full JSON when possible, otherwise capture long strings)
-        logger.debug(f"Request completed in {duration:.3f}s")
-        logger.debug(f"[RESPONSE] {method.upper()} {path}")
-
-        try:
-            if isinstance(response, (dict, list)):
-                response_text = json.dumps(response, indent=2, ensure_ascii=False)
-            else:
-                response_text = str(response)
-        except Exception as exc:  # pragma: no cover - defensive
-            response_text = f"<unable to serialize response: {exc}>"
-
-        max_preview_chars = 10000
-        if len(response_text) > max_preview_chars:
-            logger.debug(
-                "Response (trimmed to %d of %d chars): %s…",
-                max_preview_chars,
-                len(response_text),
-                response_text[:max_preview_chars],
-            )
-        else:
-            logger.debug("Response: %s", response_text)
-
-        logger.debug("=" * 80 + "\n")
+        _log_core_hub_response(method, path, response, duration)
 
         return response
 
     except Exception as e:
-        # Check if this is an expected error status (e.g. 404 during table existence checks)
-        is_expected = False
-        if expected_error_statuses and hasattr(e, 'response') and e.response is not None:
-            is_expected = e.response.status_code in expected_error_statuses
-
-        if is_expected:
-            logger.info(f"API request returned expected status: {str(e)}")
-        else:
-            logger.error(f"API request failed: {str(e)}")
-
-        error_payload = None
-        if hasattr(e, 'response') and e.response is not None:
-            try:
-                error_payload = e.response.json()
-                if is_expected:
-                    logger.info(f"Response: {json.dumps(error_payload, indent=2)}")
-                else:
-                    logger.error(f"Error response: {json.dumps(error_payload, indent=2)}")
-            except Exception:
-                error_payload = e.response.text
-                if is_expected:
-                    logger.info(f"Response: {error_payload}")
-                else:
-                    logger.error(f"Error response: {error_payload}")
-        logger.debug("=" * 80 + "\n")
-
-        message = f"CoreHub request {method.upper()} {path} failed: {e}"
-        if error_payload:
-            if isinstance(error_payload, (dict, list)):
-                message += f" | Response: {json.dumps(error_payload, ensure_ascii=False)}"
-            else:
-                message += f" | Response: {error_payload}"
-
+        message = _describe_core_hub_failure(e, method, path, expected_error_statuses)
         raise RuntimeError(message) from e
 
 
@@ -590,8 +621,63 @@ def extract_target_column_types(discovered_target_columns):
     return result
 
 
+def _find_source_matrix_item(source_matrix, source_type):
+    """Return the source matrix entry that supports ``source_type`` (or None)."""
+    return next(
+        (
+            item for item in source_matrix
+            if source_type in item.get('supportedTypes', [])
+            or item.get('gluesyncDataType') == source_type
+        ),
+        None
+    )
+
+
+def _target_string_default_type(target_matrix, source_type):
+    """Return the target's STRING defaultType, or ``source_type`` when there is none."""
+    target_item_fallback = next(
+        (item for item in target_matrix if item.get('gluesyncDataType') == 'STRING'),
+        None
+    )
+    if target_item_fallback:
+        return target_item_fallback.get('defaultType', source_type)
+    return source_type
+
+
+def _first_compatible_default_type(category, members, source_gluesync_type, target_types_by_gsd):
+    """Return the defaultType of the first other member of a compatibility group the target implements."""
+    for candidate_gsd in members:
+        if candidate_gsd == source_gluesync_type:
+            continue
+        candidate_item = target_types_by_gsd.get(candidate_gsd)
+        if candidate_item and candidate_item.get('defaultType'):
+            logger.debug(
+                f"map_data_type: no exact target mapping for "
+                f"gluesyncDataType '{source_gluesync_type}'; using "
+                f"compatibility group '{category}' member "
+                f"'{candidate_gsd}' -> '{candidate_item['defaultType']}'"
+            )
+            return candidate_item['defaultType']
+    return None
+
+
+def _compatibility_group_default_type(source_gluesync_type, target_node_info, target_matrix):
+    """Look up the target's compatibility group of ``source_gluesync_type`` (or None)."""
+    compatibility_matrix = target_node_info.get('dataTypeCompatibilityMatrix', {}) or {}
+    target_types_by_gsd = {
+        item.get('gluesyncDataType'): item
+        for item in target_matrix
+        if item.get('gluesyncDataType')
+    }
+    for category, members in compatibility_matrix.items():
+        if not isinstance(members, list) or source_gluesync_type not in members:
+            continue
+        # Only the first category containing the source type is considered.
+        return _first_compatible_default_type(category, members, source_gluesync_type, target_types_by_gsd)
+    return None
+
+
 def map_data_type(source_type, source_node_info, target_node_info,
-                  source_agent_tag=None, target_agent_tag=None,
                   target_table_column_types=None):
     """Map a source native type to the corresponding target native type.
 
@@ -624,27 +710,14 @@ def map_data_type(source_type, source_node_info, target_node_info,
         return source_type
 
     # Step 2: Resolve source -> gluesyncDataType
-    source_item = next(
-        (
-            item for item in source_matrix
-            if source_type in item.get('supportedTypes', [])
-            or item.get('gluesyncDataType') == source_type
-        ),
-        None
-    )
+    source_item = _find_source_matrix_item(source_matrix, source_type)
 
     if not source_item:
         logger.warning(
             f"map_data_type: no source mapping for '{source_type}'. "
             f"Falling back to target's STRING defaultType."
         )
-        target_item_fallback = next(
-            (item for item in target_matrix if item.get('gluesyncDataType') == 'STRING'),
-            None
-        )
-        if target_item_fallback:
-            return target_item_fallback.get('defaultType', source_type)
-        return source_type
+        return _target_string_default_type(target_matrix, source_type)
 
     source_gluesync_type = source_item.get('gluesyncDataType')
 
@@ -671,28 +744,9 @@ def map_data_type(source_type, source_node_info, target_node_info,
     # gluesyncDataType in that category that the target matrix implements.
     # This covers cases like source=double precision (DOUBLE) -> target Vertica
     # which exposes only FLOAT under the NUMBER group.
-    compatibility_matrix = target_node_info.get('dataTypeCompatibilityMatrix', {}) or {}
-    target_types_by_gsd = {
-        item.get('gluesyncDataType'): item
-        for item in target_matrix
-        if item.get('gluesyncDataType')
-    }
-    for category, members in compatibility_matrix.items():
-        if not isinstance(members, list) or source_gluesync_type not in members:
-            continue
-        for candidate_gsd in members:
-            if candidate_gsd == source_gluesync_type:
-                continue
-            candidate_item = target_types_by_gsd.get(candidate_gsd)
-            if candidate_item and candidate_item.get('defaultType'):
-                logger.debug(
-                    f"map_data_type: no exact target mapping for "
-                    f"gluesyncDataType '{source_gluesync_type}'; using "
-                    f"compatibility group '{category}' member "
-                    f"'{candidate_gsd}' -> '{candidate_item['defaultType']}'"
-                )
-                return candidate_item['defaultType']
-        break
+    compatible_type = _compatibility_group_default_type(source_gluesync_type, target_node_info, target_matrix)
+    if compatible_type is not None:
+        return compatible_type
 
     logger.warning(
         f"map_data_type: no target mapping for gluesyncDataType '{source_gluesync_type}'. "
@@ -941,6 +995,103 @@ def extract_schema_types_from_yaml(yaml_file_path):
         logger.error(f"Exception details: {traceback.format_exc()}")
         return None, None
 
+# Optional column metadata copied into a filter clause column when discovery reports it.
+_FILTER_COLUMN_OPTIONAL_FIELDS = [
+    'charMaxLength', 'charOctetLength', 'charSet', 'collation',
+    'numPrec', 'numPrecRadix', 'numScale', 'datetimePrec',
+    'udtCategory', 'udtName',
+]
+
+
+def _find_discovered_column(columns_info, column_name):
+    """Return the discovered column named ``column_name`` (or None)."""
+    if columns_info and 'columns' in columns_info:
+        for col in columns_info['columns']:
+            if col.get('name') == column_name:
+                return col
+    return None
+
+
+def _build_filter_column(column_name, matched_column, fallback_type, table_id,
+                         source_node_info, target_node_info):
+    """Build the column object of a filter clause (full Column model when discovered)."""
+    if matched_column is None:
+        print(f"Warning: Column '{column_name}' not found in table columns, using minimal fallback")
+        filter_column = {
+            "id": 1,
+            "name": column_name,
+            "dataType": fallback_type
+        }
+        if table_id is not None:
+            filter_column["tableId"] = int(table_id)
+        return filter_column
+
+    # Map the source native dataType to the target native type when node info is available
+    source_data_type = matched_column.get('dataType', fallback_type)
+    if source_node_info and target_node_info:
+        mapped_data_type = map_data_type(source_data_type, source_node_info, target_node_info)
+    else:
+        mapped_data_type = source_data_type
+
+    # Full column object mirroring the entity's column payload (2.2.6.0 Column model)
+    filter_column = {
+        "id": matched_column.get('id'),
+        "name": column_name,
+        "position": matched_column.get('position', 0),
+        "dataType": mapped_data_type,
+        "isPK": matched_column.get('isPK', False),
+        "isIdentity": matched_column.get('isIdentity', False),
+        "isNullable": matched_column.get('isNullable', False),
+    }
+    if table_id is not None:
+        filter_column["tableId"] = int(table_id)
+    # Copy optional metadata fields when present
+    for field in _FILTER_COLUMN_OPTIONAL_FIELDS:
+        if field in matched_column and matched_column[field] is not None:
+            filter_column[field] = matched_column[field]
+    return filter_column
+
+
+def _build_filter_clause(clause, columns_info, table_id, source_node_info, target_node_info):
+    """Convert one YAML filter clause; return None when the clause must be skipped."""
+    # Skip invalid clauses
+    if 'column' not in clause or 'operation' not in clause:
+        print(f"Warning: Skipping invalid filter clause: {clause}")
+        return None
+
+    column_name = clause['column']
+    operation_type = clause['operation']
+
+    # Find the matching column from discovery
+    matched_column = _find_discovered_column(columns_info, column_name)
+    fallback_type = clause.get('type', 'string')
+    filter_column = _build_filter_column(column_name, matched_column, fallback_type, table_id,
+                                         source_node_info, target_node_info)
+
+    filter_clause = {
+        "column": filter_column,
+        "operation": {
+            "type": operation_type
+        }
+    }
+
+    # Handle value based on operation type
+    if operation_type not in ['IsNull', 'IsNotNull']:
+        if 'value' not in clause:
+            print(f"Warning: Missing value for operation {operation_type} on column {column_name}")
+            return None
+
+        # Convert all values to strings
+        if isinstance(clause['value'], (list, tuple)):
+            # Handle arrays (for IN operations)
+            filter_clause["operation"]["filterValue"] = [str(v) for v in clause['value']]
+        else:
+            # Handle single values
+            filter_clause["operation"]["filterValue"] = str(clause['value'])
+
+    return filter_clause
+
+
 def process_filter_clauses(filter_config, columns_info, table_id=None,
                            source_node_info=None, target_node_info=None):
     """
@@ -961,80 +1112,10 @@ def process_filter_clauses(filter_config, columns_info, table_id=None,
 
     processed_clauses = []
     for clause in filter_config['clauses']:
-        # Skip invalid clauses
-        if 'column' not in clause or 'operation' not in clause:
-            print(f"Warning: Skipping invalid filter clause: {clause}")
+        filter_clause = _build_filter_clause(clause, columns_info, table_id,
+                                             source_node_info, target_node_info)
+        if filter_clause is None:
             continue
-
-        column_name = clause['column']
-        operation_type = clause['operation']
-
-        # Find the matching column from discovery
-        matched_column = None
-        if columns_info and 'columns' in columns_info:
-            for col in columns_info['columns']:
-                if col.get('name') == column_name:
-                    matched_column = col
-                    break
-
-        fallback_type = clause.get('type', 'string')
-
-        if matched_column is None:
-            print(f"Warning: Column '{column_name}' not found in table columns, using minimal fallback")
-            filter_column = {
-                "id": 1,
-                "name": column_name,
-                "dataType": fallback_type
-            }
-            if table_id is not None:
-                filter_column["tableId"] = int(table_id)
-        else:
-            # Map the source native dataType to the target native type when node info is available
-            source_data_type = matched_column.get('dataType', fallback_type)
-            if source_node_info and target_node_info:
-                mapped_data_type = map_data_type(source_data_type, source_node_info, target_node_info)
-            else:
-                mapped_data_type = source_data_type
-
-            # Full column object mirroring the entity's column payload (2.2.6.0 Column model)
-            filter_column = {
-                "id": matched_column.get('id'),
-                "name": column_name,
-                "position": matched_column.get('position', 0),
-                "dataType": mapped_data_type,
-                "isPK": matched_column.get('isPK', False),
-                "isIdentity": matched_column.get('isIdentity', False),
-                "isNullable": matched_column.get('isNullable', False),
-            }
-            if table_id is not None:
-                filter_column["tableId"] = int(table_id)
-            # Copy optional metadata fields when present
-            for field in ['charMaxLength', 'charOctetLength', 'charSet', 'collation',
-                          'numPrec', 'numPrecRadix', 'numScale', 'datetimePrec',
-                          'udtCategory', 'udtName']:
-                if field in matched_column and matched_column[field] is not None:
-                    filter_column[field] = matched_column[field]
-
-        filter_clause = {
-            "column": filter_column,
-            "operation": {
-                "type": operation_type
-            }
-        }
-
-        # Handle value based on operation type
-        if operation_type not in ['IsNull', 'IsNotNull']:
-            if 'value' not in clause:
-                print(f"Warning: Missing value for operation {operation_type} on column {column_name}")
-                continue
-
-            # Convert all values to strings
-            if isinstance(clause['value'], (list, tuple)):
-                # Handle arrays (for IN operations)
-                filter_clause["operation"]["filterValue"] = [str(v) for v in clause['value']]
-            else:
-                # Handle single values
-                filter_clause["operation"]["filterValue"] = str(clause['value'])
 
         print(f"Generated filter clause: {json.dumps(filter_clause, indent=2)}")
         processed_clauses.append(filter_clause)

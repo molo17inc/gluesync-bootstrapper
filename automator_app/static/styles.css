@@ -583,11 +583,6 @@ select:focus {
   accent-color: #fff;
 }
 
-.hint-text {
-  font-size: 0.8rem;
-  color: var(--muted);
-}
-
 .checkbox input {
   width: 18px;
   height: 18px;

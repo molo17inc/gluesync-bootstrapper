@@ -3,6 +3,8 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from unittest import mock
+
 import yaml
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -232,16 +234,24 @@ class TestCatalogFilename(unittest.TestCase):
         with open(self.xml_path, 'w', encoding='utf-8') as fh:
             fh.write(xml)
 
+        self._patch_parser_args(
+            xml_path=self.xml_path,
+            output_dir=self.output_dir,
+            template=self.template_path,
+            include_targets=True,
+            force_schemas=None,
+        )
+
     def tearDown(self):
         self.temp_dir.cleanup()
 
-    def test_multiple_dbo_schemas_produce_distinct_files(self):
-        parser.args.xml_path = self.xml_path
-        parser.args.output_dir = self.output_dir
-        parser.args.template = self.template_path
-        parser.args.include_targets = True
-        parser.args.force_schemas = None
+    def _patch_parser_args(self, **values):
+        """Override parser.args attributes for the duration of the test."""
+        patcher = mock.patch.multiple(parser.args, **values)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
+    def test_multiple_dbo_schemas_produce_distinct_files(self):
         connections, groups, chains, replications, source_to_target_schemas, \
             field_mappings, field_id_to_name, record_id_mappings, \
             journal_checkpoints, refresh_filters = parser.parse_xml()
@@ -301,15 +311,7 @@ class TestCatalogFilename(unittest.TestCase):
         self.assertNotIn('TABLE_GOAL', test_tables)
 
     def test_catalog_name_stored_on_schema(self):
-        parser.args.xml_path = self.xml_path
-        parser.args.output_dir = self.output_dir
-        parser.args.template = self.template_path
-        parser.args.include_targets = True
-        parser.args.force_schemas = None
-
-        connections, groups, chains, replications, source_to_target_schemas, \
-            field_mappings, field_id_to_name, record_id_mappings, \
-            journal_checkpoints, refresh_filters = parser.parse_xml()
+        connections = parser.parse_xml()[0]
 
         # Verify catalog_name is resolved on each source schema
         source_conn = connections['40']
@@ -321,7 +323,7 @@ class TestCatalogFilename(unittest.TestCase):
 
         # Target schema has no catalog (CatalogID=0)
         target_conn = connections['37']
-        target_schema = list(target_conn['schemas'].values())[0]
+        target_schema = next(iter(target_conn['schemas'].values()))
         self.assertIsNone(target_schema['catalog_name'])
 
 

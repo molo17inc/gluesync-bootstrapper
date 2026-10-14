@@ -219,7 +219,7 @@ class TestMultiTargetReplication(unittest.TestCase):
         )
 
     def test_generates_two_yaml_files_for_two_targets(self):
-        exported = self._run_export()
+        self._run_export()
 
         # With include_targets=True, target connections also export their own YAMLs,
         # so total count is 4. We verify the 2 source-connection YAMLs that carry

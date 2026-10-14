@@ -20,6 +20,7 @@
 
 import os
 import json
+from dataclasses import dataclass
 import urllib.parse
 
 import requests
@@ -197,47 +198,224 @@ def create_target_table(pipeline_id: str, create_table_request: CreateTableReque
         logger.info(f"generate create table statement: {error_msg}")
         raise
 
-def create_tables(token, pipeline_id, source_schema, target_schema, tables, source_agent_id, target_agent_id,
-                  source_type, target_type, yaml_config, skip_errors=True,
-                  source_agent_tag=None, target_agent_tag=None):
-    # First, collect all unique group names from the YAML configuration
+def _add_custom_group_names(group_names: set, custom_tables) -> None:
+    """Add the (non-default) groups the custom tables of a schema belong to."""
+    for _, table_data in custom_tables.items():
+        if 'groupId' in table_data and table_data['groupId'] != '_default':
+            group_names.add(table_data['groupId'])
+
+
+def _collect_group_names(yaml_config) -> set:
+    """Collect all unique group names from the YAML configuration."""
     group_names = set()
-    if yaml_config:
-        schemas_dict = yaml_config.get('schemas', {})
-        if not schemas_dict:
-            schemas_dict = {k: v for k, v in yaml_config.items() if isinstance(v, dict)}
-
-        for schema_name, schema_config in schemas_dict.items():
-            if 'tables' in schema_config and 'custom' in schema_config['tables']:
-                for table_key, table_data in schema_config['tables']['custom'].items():
-                    if 'groupId' in table_data and table_data['groupId'] != '_default':
-                        group_names.add(table_data['groupId'])
-
-    # Create groups before creating entities
-    groupId_map = {}
-    for group_name in group_names:
-        groupId = create_group(token, pipeline_id, group_name)
-        if groupId != '_default':
-            groupId_map[group_name] = groupId
-            logger.info(f"Created/retrieved group '{group_name}' with ID: {groupId}")
-
-    """Create entities for the pipeline."""
     if not yaml_config:
-        yaml_config = {}
+        return group_names
+    schemas_dict = yaml_config.get('schemas', {})
+    if not schemas_dict:
+        schemas_dict = {k: v for k, v in yaml_config.items() if isinstance(v, dict)}
 
-    entities = []
+    for _, schema_config in schemas_dict.items():
+        if 'tables' in schema_config and 'custom' in schema_config['tables']:
+            _add_custom_group_names(group_names, schema_config['tables']['custom'])
+    return group_names
 
-    # Get node info for data type mapping
-    source_node_info = get_node_info(token, pipeline_id, source_agent_id)
-    target_node_info = get_node_info(token, pipeline_id, target_agent_id)
 
-    logger.info("Source Node Info:")
-    logger.info(json.dumps(source_node_info, indent=2))
-    logger.info("Target Node Info:")
-    logger.info(json.dumps(target_node_info, indent=2))
+def _create_groups(token, pipeline_id, group_names) -> None:
+    """Create groups before creating entities."""
+    for group_name in group_names:
+        group_id = create_group(token, pipeline_id, group_name)
+        if group_id != '_default':
+            logger.info(f"Created/retrieved group '{group_name}' with ID: {group_id}")
 
-    logger.info(f"Full YAML config: {json.dumps(yaml_config, indent=2)}")
 
+@dataclass
+class _TableCreationContext:
+    """What the creation of every table of one source schema shares."""
+
+    token: str
+    pipeline_id: str
+    source_schema: str
+    source_agent_id: str
+    yaml_target_schema: str
+    whitelist: list
+    blacklist: list
+    custom_tables: dict
+    global_source_custom_properties: dict
+    global_target_custom_properties: dict
+    source_node_info: dict
+    target_node_info: dict
+
+
+def _table_name_of(table):
+    """Name of a table of the source agent (a plain name, or an object with a name)."""
+    if isinstance(table, str):
+        return table
+    return table.get("name")
+
+
+def _is_skipped_table(table_name: str, blacklist, whitelist) -> bool:
+    """Whether a table is a system table, blacklisted or missing from the whitelist."""
+    return bool(table_name.startswith("sys") or
+                (blacklist and table_name in blacklist) or
+                (whitelist and table_name not in whitelist))
+
+
+def _discovered_pk_keys(columns) -> list:
+    """The primary keys the source agent discovered, as key definitions."""
+    return [
+        {
+            "name": col["name"],
+            "alias": col["name"],
+            "type": col.get("dataType")
+        } for col in columns["columns"] if col.get("isPK")
+    ]
+
+
+def _parse_key_def(key_def):
+    """``(name, alias, type)`` of a YAML key: a plain name, or a dict with a name and an optional alias."""
+    if not isinstance(key_def, dict):
+        # Simple string format - use the string as both name and alias
+        return key_def, key_def, None
+    # Handle the case where the key is specified as a dict with 'name' and optional 'alias'
+    key_name = next(iter(key_def)) if not key_def.get('name') else key_def['name']
+    key_config = key_def.get(key_name, {}) if isinstance(key_def.get(key_name), dict) else {}
+
+    # Get the key name (either from the dict key or from the 'name' field)
+    key_name = key_name or key_config.get('name')
+    # Get the alias (defaults to the key name if not specified)
+    key_alias = key_config.get('name', key_name)
+
+    # Get the key type from the config or find it in the columns
+    key_type = key_config.get('dataType')
+    return key_name, key_alias, key_type
+
+
+def _custom_keys(table_name: str, key_defs, columns) -> list:
+    """The keys the YAML declares for a table, typed from the source columns when not specified."""
+    keys = []
+    for key_def in key_defs:
+        # Handle both string (key name) and dict (key with name/alias) formats
+        key_name, key_alias, key_type = _parse_key_def(key_def)
+
+        # Try to find the key in the columns to get its type if not specified
+        key_column = next((col for col in columns["columns"] if col["name"] == key_name), None)
+
+        if key_column:
+            keys.append({
+                "name": key_name,
+                "alias": key_alias,
+                "type": key_type or key_column.get("dataType")
+            })
+        else:
+            logger.info(
+                f"Warning: Key {key_name} not found in columns for table {table_name}. Adding with unknown type.")
+            keys.append({
+                "name": key_name,
+                "alias": key_alias,
+                "type": key_type or "unknown"
+            })
+    return keys
+
+
+def _yaml_fallback_keys(table_name: str, custom_config: dict, columns) -> list:
+    """Source has no discovered PKs — fall back to YAML keys (or documentKey.keys)."""
+    keys = []
+    yaml_fallback_keys = custom_config.get('keys') or []
+    if not yaml_fallback_keys and 'documentKey' in custom_config:
+        yaml_fallback_keys = custom_config['documentKey'].get('keys', [])
+
+    if yaml_fallback_keys:
+        logger.info(f"Source table {table_name} has no PKs — using YAML-defined keys as fallback: {yaml_fallback_keys}")
+        for key_name in yaml_fallback_keys:
+            key_column = next((col for col in columns["columns"] if col["name"].lower() == key_name.lower()), None)
+            if key_column:
+                keys.append({
+                    "name": key_column["name"],
+                    "alias": key_column["name"],
+                    "type": key_column.get("dataType")
+                })
+            else:
+                logger.warning(f"Fallback key '{key_name}' not found in columns for table '{table_name}'")
+    return keys
+
+
+def _table_keys(table_name: str, custom_config: dict, columns) -> list:
+    """The keys of a table: the YAML ones when declared, else the discovered primary keys (else the YAML fallback)."""
+    if custom_config and 'keys' in custom_config and custom_config['keys'] is not None:
+        keys = _custom_keys(table_name, custom_config['keys'], columns)
+        logger.info(f"Using custom keys for {table_name}: {keys}")
+        return keys
+
+    keys = _discovered_pk_keys(columns)
+    logger.info(f"Using primary keys for {table_name}: {keys}")
+    if not keys and custom_config:
+        keys = _yaml_fallback_keys(table_name, custom_config, columns)
+    return keys
+
+
+def _log_table_settings(ctx: _TableCreationContext, table_name: str, custom_config: dict, columns) -> None:
+    """Log the custom properties, target name, filters and document key a table is configured with."""
+    # Get table-specific custom properties and merge with global properties
+    table_custom_properties = custom_config.get('customProperties', {})
+    source_custom_properties = {**ctx.global_source_custom_properties, **table_custom_properties.get('source', {})}
+    target_custom_properties = {**ctx.global_target_custom_properties, **table_custom_properties.get('target', {})}
+
+    logger.info(f"Source custom properties for {table_name}: {source_custom_properties}")
+    logger.info(f"Target custom properties for {table_name}: {target_custom_properties}")
+
+    # Get custom target table name if specified
+    target_table_name = custom_config.get('name', table_name)
+    logger.info(f"Using target table name: {target_table_name} for source table: {table_name}")
+
+    # Get and process filter configuration
+    filter_config = custom_config.get('filter')
+    processed_filters = process_filter_clauses(filter_config, columns) if filter_config else None
+    logger.info(f"Processed filters for {table_name}: {processed_filters}")
+
+    # Get document key configuration if it exists
+    if custom_config and 'documentKey' in custom_config:
+        doc_key_config = custom_config['documentKey']
+        document_key = {
+            "prefix": doc_key_config.get('prefix', ''),
+            "suffix": doc_key_config.get('suffix', ''),
+            "separator": doc_key_config.get('separator', '-'),
+            "keys": doc_key_config.get('keys', [])
+        }
+        logger.info(f"Document key configuration for {table_name}: {document_key}")
+
+
+def _create_table(ctx: _TableCreationContext, table_name: str) -> None:
+    """Create the target table of one source table, as the YAML configures it."""
+    columns = get_table_columns(ctx.token, ctx.pipeline_id, ctx.source_agent_id, ctx.source_schema, table_name)
+
+    custom_config = ctx.custom_tables.get(table_name, {})
+    if custom_config is None:
+        custom_config = {}
+        logger.info(
+            f"Warning: Custom config for table {table_name} is present but empty in YAML. Converting to empty dict.")
+    logger.info(f"Custom config for {table_name}: {custom_config}")
+
+    _log_table_settings(ctx, table_name, custom_config, columns)
+    target_table_name = custom_config.get('name', table_name)
+
+    # Process keys and other configurations as before...
+    keys = _table_keys(table_name, custom_config, columns)
+    if not keys:
+        logger.info(f"Warning: No keys specified for {table_name}. Table will have no keys.")
+
+    # Only send source-discovered keys to the create-table statement.
+    # YAML-defined keys are honoured for entity creation (create_all_entities.py)
+    # but must not be sent to generate_create_table_statement when the source
+    # agent has not discovered any primary keys.
+    source_discovered_keys = _discovered_pk_keys(columns)
+
+    # check if the table exists on the target
+    handle_table_creation(ctx.pipeline_id, target_table_name, ctx.yaml_target_schema, source_discovered_keys, ctx.token,
+                          columns, custom_config, ctx.source_node_info, ctx.target_node_info)
+
+
+def _schema_tables_context(yaml_config: dict, source_schema: str, target_schema: str) -> dict:
+    """The table settings of ``source_schema`` in the YAML configuration (target schema, lists, custom tables)."""
     schemas_root = yaml_config.get('schemas', yaml_config)
     schema_config = schemas_root.get(source_schema, {})
     logger.info(f"Schema config for {source_schema}: {json.dumps(schema_config, indent=2)}")
@@ -263,383 +441,345 @@ def create_tables(token, pipeline_id, source_schema, target_schema, tables, sour
     logger.info(f"Custom tables: {custom_tables}")
     logger.info(f"Global source custom properties: {global_source_custom_properties}")
     logger.info(f"Global target custom properties: {global_target_custom_properties}")
+    return {
+        "yaml_target_schema": yaml_target_schema,
+        "whitelist": whitelist,
+        "blacklist": blacklist,
+        "custom_tables": custom_tables,
+        "global_source_custom_properties": global_source_custom_properties,
+        "global_target_custom_properties": global_target_custom_properties,
+    }
+
+
+def create_tables(token, pipeline_id, source_schema, target_schema, tables, source_agent_id, target_agent_id,
+                  yaml_config):
+    """Create the target tables of the source tables of a schema, as the YAML configuration describes them."""
+    # First, collect all unique group names from the YAML configuration
+    group_names = _collect_group_names(yaml_config)
+
+    # Create groups before creating entities
+    _create_groups(token, pipeline_id, group_names)
+
+    if not yaml_config:
+        yaml_config = {}
+
+    # Get node info for data type mapping
+    source_node_info = get_node_info(token, pipeline_id, source_agent_id)
+    target_node_info = get_node_info(token, pipeline_id, target_agent_id)
+
+    logger.info("Source Node Info:")
+    logger.info(json.dumps(source_node_info, indent=2))
+    logger.info("Target Node Info:")
+    logger.info(json.dumps(target_node_info, indent=2))
+
+    logger.info(f"Full YAML config: {json.dumps(yaml_config, indent=2)}")
+
+    ctx = _TableCreationContext(
+        token=token,
+        pipeline_id=pipeline_id,
+        source_schema=source_schema,
+        source_agent_id=source_agent_id,
+        source_node_info=source_node_info,
+        target_node_info=target_node_info,
+        **_schema_tables_context(yaml_config, source_schema, target_schema),
+    )
 
     for table in tables:
-        if isinstance(table, str):
-            table_name = table
-        else:
-            table_name = table.get("name")
+        table_name = _table_name_of(table)
 
         if not table_name:
-            logger.info(f"Warning: Table without name encountered. Skipping.")
+            logger.info("Warning: Table without name encountered. Skipping.")
             continue
 
-        if (table_name.startswith("sys") or
-                (blacklist and table_name in blacklist) or
-                (whitelist and table_name not in whitelist)):
+        if _is_skipped_table(table_name, ctx.blacklist, ctx.whitelist):
             logger.info(f"Skipping table: {table_name}")
             continue
 
-        columns = get_table_columns(token, pipeline_id, source_agent_id, source_schema, table_name)
+        _create_table(ctx, table_name)
 
-        custom_config = custom_tables.get(table_name, {})
-        if custom_config is None:
-            custom_config = {}
+
+def _to_int(value, default=0):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _to_bool(value, default=True):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y"}
+    if value is None:
+        return default
+    return bool(value)
+
+
+_LENGTH_TYPES = frozenset({
+    'varchar2',
+    'varchar',
+    'char',
+    'nchar',
+    'nvarchar2',
+    'raw',
+    'binary',
+    'varbinary',
+})
+
+
+def _normalize_data_length(col_type: str, data_length: int) -> int:
+    base_type = str(col_type or '').split('(')[0].strip().lower()
+    length_value = _to_int(data_length, 0)
+    if base_type in _LENGTH_TYPES:
+        return length_value if length_value > 0 else 1024
+    return length_value
+
+
+class _KeyLookup:
+    """The key names of a table (and their alias), matched as given or case-insensitively."""
+
+    def __init__(self, keys):
+        # Build key lookup from keys parameter (for backward compatibility)
+        # and from column isPrimaryKey property (preferred for Gluesync 2.2.6.0+)
+        self.key_names = set()
+        for key in (keys or []):
+            if isinstance(key, dict):
+                if key.get("name"):
+                    self.key_names.add(key["name"])
+                if key.get("alias"):
+                    self.key_names.add(key["alias"])
+            else:
+                self.key_names.add(key)
+        self.key_names_lower = {
+            key_name.lower() for key_name in self.key_names if isinstance(key_name, str)
+        }
+
+    def is_primary_key(self, column_name) -> bool:
+        # Keys-based check for backward compatibility
+        if column_name in self.key_names:
+            return True
+        return isinstance(column_name, str) and column_name.lower() in self.key_names_lower
+
+
+def _target_only_column_spec(target_col):
+    """``(name, type, dataLength, numPrec, numScale, isNullable)`` of a targetOnlyColumns entry."""
+    # Support both string format and object format
+    if isinstance(target_col, str):
+        # Simple string format: just the column name, with the default type, length, precision, scale and nullable
+        return target_col, 'varchar', 1024, 0, 0, False
+    # Object format with user-defined properties
+    return (
+        target_col.get('name'),
+        target_col.get('dataType') or target_col.get('type') or 'varchar',  # null-safe: treat explicit null as missing
+        target_col.get('dataLength', 1024),  # Default data length
+        target_col.get('numPrec', 0),  # Default numeric precision
+        target_col.get('numScale', 0),  # Default numeric scale
+        target_col.get('isNullable', False),  # Default nullable
+    )
+
+
+def _target_only_column_dtos(target_only_columns, key_lookup: _KeyLookup, source_node_info, target_node_info) -> list:
+    """The target columns of a targetOnlyColumns definition."""
+    column_dtos = []
+    for idx, target_col in enumerate(target_only_columns, 1):
+        col_name, col_type, col_data_length, col_numeric_precision, col_numeric_scale, col_is_nullable = \
+            _target_only_column_spec(target_col)
+
+        # Map the column type to target node type
+        mapped_type = map_data_type(
+            col_type,
+            source_node_info,
+            target_node_info,
+        )
+        col_data_length = _normalize_data_length(mapped_type, col_data_length)
+
+        column_dtos.append(Column(
+            name=col_name,
+            dataType=format_column_type(mapped_type, col_data_length, col_numeric_precision, col_numeric_scale),
+            id=idx,  # Use sequential IDs for target-only columns
+            tableId=0,
+            position=idx,
+            isPK=key_lookup.is_primary_key(col_name),
+            isNullable=col_is_nullable,
+            charMaxLength=col_data_length,
+            numPrec=col_numeric_precision,
+            numScale=col_numeric_scale
+        ))
+    return column_dtos
+
+
+def _split_column_entries(column_entries):
+    """``(metadata columns, source→target mappings)`` of the YAML column entries (null entries are dropped)."""
+    metadata_columns = []
+    simple_mappings = []
+    for entry in column_entries:
+        if isinstance(entry, dict) and 'name' in entry:
+            metadata_columns.append(entry)
+        elif entry is not None:
+            simple_mappings.append(entry)
+    return metadata_columns, simple_mappings
+
+
+def _metadata_column_dto(idx: int, col_meta: dict, key_lookup: _KeyLookup, source_node_info,
+                         target_node_info) -> Column:
+    """The target column of a YAML column metadata entry."""
+    col_name = col_meta.get('name')
+
+    # Use `or` rather than .get(key, default) so that an explicit
+    # null value (type: null in YAML) is treated the same as a
+    # missing key and falls through to the 'varchar' fallback.
+    col_type = col_meta.get('dataType') or col_meta.get('type') or 'varchar'
+    col_data_length = _to_int(col_meta.get('dataLength', col_meta.get('data_length')))
+    col_numeric_precision = _to_int(col_meta.get('numericPrecision', col_meta.get('numeric_precision')))
+    col_numeric_scale = _to_int(col_meta.get('numericScale', col_meta.get('numeric_scale')))
+    col_is_nullable = _to_bool(col_meta.get('isNullable', col_meta.get('is_nullable')))
+
+    # Use separate id and ordinalPosition from YAML metadata
+    column_id = _to_int(col_meta.get('id'), idx)
+    ordinal_position = _to_int(col_meta.get('ordinalPosition'), idx)
+
+    # User-declared targetDataType wins over both `type` and the
+    # automatic source->target mapping. When set, use it verbatim
+    # and skip map_data_type entirely so it lands in the CREATE TABLE
+    # statement exactly as declared (e.g. TIMESTAMP, DATE, DATETIME).
+    _override = col_meta.get('targetDataType')
+    if _override:
+        mapped_type = _override
+    else:
+        # Map source type to target type (e.g. CHARACTER -> varchar)
+        mapped_type = map_data_type(
+            col_type,
+            source_node_info,
+            target_node_info,
+        )
+    col_data_length = _normalize_data_length(mapped_type, col_data_length)
+    resolved_target_type = mapped_type
+
+    # YAML-defined keys are the bootstrapper source of truth for
+    # target table creation.  When source metadata says a column is
+    # not a PK (for example CUSTOMERS_NO_PKEY in demo-kits), still
+    # mark it as PK if the table-list-template declares it in keys.
+    col_is_pk = key_lookup.is_primary_key(col_name) or bool(col_meta.get('isPK', col_meta.get('is_primary_key')))
+    return Column(
+        name=col_name,
+        dataType=format_column_type(resolved_target_type, col_data_length, col_numeric_precision, col_numeric_scale),
+        id=column_id,
+        tableId=0,
+
+        position=ordinal_position,
+        isPK=col_is_pk,
+        isNullable=col_is_nullable,
+        charMaxLength=col_data_length,
+        numPrec=col_numeric_precision,
+        numScale=col_numeric_scale
+    )
+
+
+def _metadata_column_dtos(metadata_columns, target_table_name: str, key_lookup: _KeyLookup, source_node_info,
+                          target_node_info) -> list:
+    """The target columns of the YAML column metadata entries."""
+    logger.info(f"Using YAML column metadata for table {target_table_name}")
+    column_dtos = []
+    for idx, col_meta in enumerate(metadata_columns, 1):
+        if not col_meta.get('name'):
             logger.info(
-                f"Warning: Custom config for table {table_name} is present but empty in YAML. Converting to empty dict.")
-        logger.info(f"Custom config for {table_name}: {custom_config}")
+                f"Warning: Column metadata entry missing 'name' for table {target_table_name}. Skipping entry: {col_meta}")
+            continue
+        column_dtos.append(_metadata_column_dto(
+            idx, col_meta, key_lookup, source_node_info, target_node_info
+        ))
+    return column_dtos
 
-        # Get table-specific custom properties and merge with global properties
-        table_custom_properties = custom_config.get('customProperties', {})
-        source_custom_properties = {**global_source_custom_properties, **table_custom_properties.get('source', {})}
-        target_custom_properties = {**global_target_custom_properties, **table_custom_properties.get('target', {})}
 
-        logger.info(f"Source custom properties for {table_name}: {source_custom_properties}")
-        logger.info(f"Target custom properties for {table_name}: {target_custom_properties}")
+def _source_column_dtos(columns, key_lookup: _KeyLookup, source_node_info, target_node_info) -> list:
+    """When no metadata is provided, fall back to source column properties directly."""
+    column_dtos = []
+    for col in columns["columns"]:
+        # Map source type to target type (e.g. CHARACTER -> varchar)
+        mapped_type = map_data_type(
+            col.get("dataType"),
+            source_node_info,
+            target_node_info,
+        )
+        col_data_length = _normalize_data_length(mapped_type, col.get("charMaxLength", 0))
+        # YAML-defined keys override source metadata so templates can
+        # create target PKs for source tables that do not expose one.
+        col_is_pk = key_lookup.is_primary_key(col["name"]) or bool(col.get("isPK"))
+        column_dtos.append(Column(
+            name=col["name"],
+            dataType=format_column_type(mapped_type, col_data_length,
+                                   col.get("numPrec", 0), col.get("numScale", 0)),
+            id=col.get("position", col.get("id", 1)),
+            tableId=0,
+            position=col.get("position", col.get("id", 1)),
+            isPK=col_is_pk,
+            isNullable=col.get("isNullable", False),
+            charMaxLength=col_data_length,
+            numPrec=col.get("numPrec", 0),
+            numScale=col.get("numScale", 0)
+        ))
+    return column_dtos
 
-        # Get custom target table name if specified
-        target_table_name = custom_config.get('name', table_name)
-        logger.info(f"Using target table name: {target_table_name} for source table: {table_name}")
 
-        # Get and process filter configuration
-        filter_config = custom_config.get('filter')
-        processed_filters = process_filter_clauses(filter_config, columns) if filter_config else None
-        logger.info(f"Processed filters for {table_name}: {processed_filters}")
+def _mapped_column_dtos(column_entries, target_table_name: str, columns, key_lookup: _KeyLookup, source_node_info,
+                        target_node_info) -> Optional[list]:
+    """The target columns from the YAML column metadata, else from the source columns.
 
-        # Get document key configuration if it exists
-        document_key = None
-        if custom_config and 'documentKey' in custom_config:
-            doc_key_config = custom_config['documentKey']
-            document_key = {
-                "prefix": doc_key_config.get('prefix', ''),
-                "suffix": doc_key_config.get('suffix', ''),
-                "separator": doc_key_config.get('separator', '-'),
-                "keys": doc_key_config.get('keys', [])
-            }
-            logger.info(f"Document key configuration for {table_name}: {document_key}")
+    ``None`` when the YAML columns are source→target mappings, which cannot describe a table to create.
+    """
+    metadata_columns, simple_mappings = _split_column_entries(column_entries)
 
-        # Process keys and other configurations as before...
-        if custom_config and 'keys' in custom_config and custom_config['keys'] is not None:
-            keys = []
-            for key_def in custom_config['keys']:
-                # Handle both string (key name) and dict (key with name/alias) formats
-                if isinstance(key_def, dict):
-                    # Handle the case where the key is specified as a dict with 'name' and optional 'alias'
-                    key_name = next(iter(key_def)) if not key_def.get('name') else key_def['name']
-                    key_config = key_def.get(key_name, {}) if isinstance(key_def.get(key_name), dict) else {}
+    if simple_mappings:
+        logger.info(
+            f"Skipping table creation for {target_table_name}: column mappings use source→target format, which is not supported for CREATE_TABLE_IF_NOT_EXISTS.")
+        return None
 
-                    # Get the key name (either from the dict key or from the 'name' field)
-                    key_name = key_name or key_config.get('name')
-                    # Get the alias (defaults to the key name if not specified)
-                    key_alias = key_config.get('name', key_name)
+    column_dtos = []
+    if metadata_columns:
+        column_dtos = _metadata_column_dtos(metadata_columns, target_table_name, key_lookup, source_node_info,
+                                            target_node_info)
 
-                    # Get the key type from the config or find it in the columns
-                    key_type = key_config.get('dataType')
-                else:
-                    # Simple string format - use the string as both name and alias
-                    key_name = key_def
-                    key_alias = key_def
-                    key_type = None
-
-                # Try to find the key in the columns to get its type if not specified
-                key_column = next((col for col in columns["columns"] if col["name"] == key_name), None)
-
-                if key_column:
-                    keys.append({
-                        "name": key_name,
-                        "alias": key_alias,
-                        "type": key_type or key_column.get("dataType")
-                    })
-                else:
-                    logger.info(
-                        f"Warning: Key {key_name} not found in columns for table {table_name}. Adding with unknown type.")
-                    keys.append({
-                        "name": key_name,
-                        "alias": key_alias,
-                        "type": key_type or "unknown"
-                    })
-            logger.info(f"Using custom keys for {table_name}: {keys}")
-        else:
-            keys = [
-                {
-                    "name": col["name"],
-                    "alias": col["name"],
-                    "type": col.get("dataType")
-                } for col in columns["columns"] if col.get("isPK")
-            ]
-            logger.info(f"Using primary keys for {table_name}: {keys}")
-
-            if not keys and custom_config:
-                # Source has no discovered PKs — fall back to YAML keys (or documentKey.keys)
-                yaml_fallback_keys = custom_config.get('keys') or []
-                if not yaml_fallback_keys and 'documentKey' in custom_config:
-                    yaml_fallback_keys = custom_config['documentKey'].get('keys', [])
-
-                if yaml_fallback_keys:
-                    logger.info(f"Source table {table_name} has no PKs — using YAML-defined keys as fallback: {yaml_fallback_keys}")
-                    for key_name in yaml_fallback_keys:
-                        key_column = next((col for col in columns["columns"] if col["name"].lower() == key_name.lower()), None)
-                        if key_column:
-                            keys.append({
-                                "name": key_column["name"],
-                                "alias": key_column["name"],
-                                "type": key_column.get("dataType")
-                            })
-                        else:
-                            logger.warning(f"Fallback key '{key_name}' not found in columns for table '{table_name}'")
-
-        if not keys:
-            logger.info(f"Warning: No keys specified for {table_name}. Table will have no keys.")
-
-        # Only send source-discovered keys to the create-table statement.
-        # YAML-defined keys are honoured for entity creation (create_all_entities.py)
-        # but must not be sent to generate_create_table_statement when the source
-        # agent has not discovered any primary keys.
-        source_discovered_keys = [
-            {
-                "name": col["name"],
-                "alias": col["name"],
-                "type": col.get("dataType")
-            } for col in columns["columns"] if col.get("isPK")
-        ]
-
-        # check if the table exists on the target
-        handle_table_creation(pipeline_id, target_table_name, yaml_target_schema, source_discovered_keys, token, columns, custom_config,
-                              source_node_info, target_node_info,
-                              source_agent_tag=source_agent_tag, target_agent_tag=target_agent_tag)
+    if not column_dtos:
+        column_dtos = _source_column_dtos(columns, key_lookup, source_node_info, target_node_info)
+    return column_dtos
 
 
 def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_schema: str, keys: list, token: str,
-                          columns: list, custom_config, source_node_info, target_node_info,
-                          source_agent_tag=None, target_agent_tag=None):
+                          columns: list, custom_config, source_node_info, target_node_info):
     custom_config = custom_config or {}
 
-    if not table_exists(pipeline_id=pipeline_id, schema_name=yaml_target_schema, table_name=target_table_name,
-                        token=token):
-        if CREATE_TABLE_IF_NOT_EXISTS:
-            logger.info(f"table: {target_table_name} does not exists, creating it")
-            # Create ColumnDto objects
-            column_dtos = []
-            column_entries = custom_config.get('columns') or []
-            target_only_columns = custom_config.get('targetOnlyColumns', [])
-
-            # Build key lookup from keys parameter (for backward compatibility)
-            # and from column isPrimaryKey property (preferred for Gluesync 2.2.6.0+)
-            key_names = set()
-            key_names_lower = set()
-            for key in (keys or []):
-                if isinstance(key, dict):
-                    if key.get("name"):
-                        key_names.add(key["name"])
-                    if key.get("alias"):
-                        key_names.add(key["alias"])
-                else:
-                    key_names.add(key)
-            key_names_lower = {
-                key_name.lower() for key_name in key_names if isinstance(key_name, str)
-            }
-
-            def _is_primary_key(column_name: str, col_is_primary_key: bool = None) -> bool:
-                # Prefer isPrimaryKey from column if available (Gluesync 2.2.6.0+)
-                if col_is_primary_key is not None:
-                    return col_is_primary_key
-                # Fall back to keys-based check for backward compatibility
-                if column_name in key_names:
-                    return True
-                return isinstance(column_name, str) and column_name.lower() in key_names_lower
-
-            def _to_int(value, default=0):
-                try:
-                    return int(value)
-                except (TypeError, ValueError):
-                    return default
-
-            def _to_bool(value, default=True):
-                if isinstance(value, bool):
-                    return value
-                if isinstance(value, str):
-                    return value.strip().lower() in {"1", "true", "yes", "y"}
-                if value is None:
-                    return default
-                return bool(value)
-
-            def _normalize_data_length(col_type: str, data_length: int) -> int:
-                base_type = str(col_type or '').split('(')[0].strip().lower()
-                length_value = _to_int(data_length, 0)
-                length_types = {
-                    'varchar2',
-                    'varchar',
-                    'char',
-                    'nchar',
-                    'nvarchar2',
-                    'raw',
-                    'binary',
-                    'varbinary',
-                }
-                if base_type in length_types:
-                    return length_value if length_value > 0 else 1024
-                return length_value
-
-            # Check if targetOnlyColumns are defined - if so, use them instead of source columns
-            if target_only_columns:
-                logger.info(f"Using targetOnlyColumns definition for table {target_table_name}")
-                for idx, target_col in enumerate(target_only_columns, 1):
-                    # Support both string format and object format
-                    if isinstance(target_col, str):
-                        # Simple string format: just the column name
-                        col_name = target_col
-                        col_type = 'varchar'  # Default type
-                        col_data_length = 1024  # Default data length
-                        col_numeric_precision = 0  # Default numeric precision
-                        col_numeric_scale = 0  # Default numeric scale
-                        col_is_nullable = False  # Default nullable
-                    else:
-                        # Object format with user-defined properties
-                        col_name = target_col.get('name')
-                        col_type = target_col.get('dataType') or target_col.get('type') or 'varchar'  # null-safe: treat explicit null as missing
-                        col_data_length = target_col.get('dataLength', 1024)  # Default data length
-                        col_numeric_precision = target_col.get('numPrec', 0)  # Default numeric precision
-                        col_numeric_scale = target_col.get('numScale', 0)  # Default numeric scale
-                        col_is_nullable = target_col.get('isNullable', False)  # Default nullable
-                    
-                    # Map the column type to target node type
-                    mapped_type = map_data_type(
-                        col_type,
-                        source_node_info,
-                        target_node_info,
-                        source_agent_tag=source_agent_tag,
-                        target_agent_tag=target_agent_tag,
-                    )
-                    col_data_length = _normalize_data_length(mapped_type, col_data_length)
-                    
-                    column_dtos.append(Column(
-                        name=col_name,
-                        dataType=format_column_type(mapped_type, col_data_length, col_numeric_precision, col_numeric_scale),
-                        id=idx,  # Use sequential IDs for target-only columns
-                        tableId=0,
-                        position=idx,
-                        isPK=_is_primary_key(col_name),
-                        isNullable=col_is_nullable,
-                        charMaxLength=col_data_length,
-                        numPrec=col_numeric_precision,
-                        numScale=col_numeric_scale
-                    ))
-            else:
-                metadata_columns = []
-                simple_mappings = []
-                for entry in column_entries:
-                    if isinstance(entry, dict) and 'name' in entry:
-                        metadata_columns.append(entry)
-                    elif entry is None:
-                        continue
-                    else:
-                        simple_mappings.append(entry)
-
-                if simple_mappings:
-                    logger.info(
-                        f"Skipping table creation for {target_table_name}: column mappings use source→target format, which is not supported for CREATE_TABLE_IF_NOT_EXISTS.")
-                    return
-
-                if metadata_columns:
-                    logger.info(f"Using YAML column metadata for table {target_table_name}")
-                    for idx, col_meta in enumerate(metadata_columns, 1):
-                        col_name = col_meta.get('name')
-                        if not col_name:
-                            logger.info(
-                                f"Warning: Column metadata entry missing 'name' for table {target_table_name}. Skipping entry: {col_meta}")
-                            continue
-
-                        # Use `or` rather than .get(key, default) so that an explicit
-                        # null value (type: null in YAML) is treated the same as a
-                        # missing key and falls through to the 'varchar' fallback.
-                        col_type = col_meta.get('dataType') or col_meta.get('type') or 'varchar'
-                        col_data_length = _to_int(col_meta.get('dataLength', col_meta.get('data_length')))
-                        col_numeric_precision = _to_int(col_meta.get('numericPrecision', col_meta.get('numeric_precision')))
-                        col_numeric_scale = _to_int(col_meta.get('numericScale', col_meta.get('numeric_scale')))
-                        col_is_nullable = _to_bool(col_meta.get('isNullable', col_meta.get('is_nullable')))
-                        
-                        # Use separate id and ordinalPosition from YAML metadata
-                        column_id = _to_int(col_meta.get('id'), idx)
-                        ordinal_position = _to_int(col_meta.get('ordinalPosition'), idx)
-
-                        # User-declared targetDataType wins over both `type` and the
-                        # automatic source->target mapping. When set, use it verbatim
-                        # and skip map_data_type entirely so it lands in the CREATE TABLE
-                        # statement exactly as declared (e.g. TIMESTAMP, DATE, DATETIME).
-                        _override = col_meta.get('targetDataType')
-                        if _override:
-                            mapped_type = _override
-                        else:
-                            # Map source type to target type (e.g. CHARACTER -> varchar)
-                            mapped_type = map_data_type(
-                                col_type,
-                                source_node_info,
-                                target_node_info,
-                                source_agent_tag=source_agent_tag,
-                                target_agent_tag=target_agent_tag,
-                            )
-                        col_data_length = _normalize_data_length(mapped_type, col_data_length)
-                        resolved_target_type = mapped_type
-
-                        # YAML-defined keys are the bootstrapper source of truth for
-                        # target table creation.  When source metadata says a column is
-                        # not a PK (for example CUSTOMERS_NO_PKEY in demo-kits), still
-                        # mark it as PK if the table-list-template declares it in keys.
-                        col_is_pk = _is_primary_key(col_name) or bool(col_meta.get('isPK', col_meta.get('is_primary_key')))
-                        column_dtos.append(Column(
-                            name=col_name,
-                            dataType=format_column_type(resolved_target_type, col_data_length, col_numeric_precision, col_numeric_scale),
-                            id=column_id,
-                            tableId=0,
-                            
-                            position=ordinal_position,
-                            isPK=col_is_pk,
-                            isNullable=col_is_nullable,
-                            charMaxLength=col_data_length,
-                            numPrec=col_numeric_precision,
-                            numScale=col_numeric_scale
-                        ))
-
-                if not column_dtos:
-                    # When no metadata is provided, fall back to source column properties directly
-                    for col in columns["columns"]:
-                        # Map source type to target type (e.g. CHARACTER -> varchar)
-                        mapped_type = map_data_type(
-                            col.get("dataType"),
-                            source_node_info,
-                            target_node_info,
-                            source_agent_tag=source_agent_tag,
-                            target_agent_tag=target_agent_tag,
-                        )
-                        col_data_length = _normalize_data_length(mapped_type, col.get("charMaxLength", 0))
-                        # YAML-defined keys override source metadata so templates can
-                        # create target PKs for source tables that do not expose one.
-                        col_is_pk = _is_primary_key(col["name"]) or bool(col.get("isPK"))
-                        column_dtos.append(Column(
-                            name=col["name"],
-                            dataType=format_column_type(mapped_type, col_data_length,
-                                                   col.get("numPrec", 0), col.get("numScale", 0)),
-                            id=col.get("position", col.get("id", 1)),
-                            tableId=0,
-                            position=col.get("position", col.get("id", 1)),
-                            isPK=col_is_pk,
-                            isNullable=col.get("isNullable", False),
-                            charMaxLength=col_data_length,
-                            numPrec=col.get("numPrec", 0),
-                            numScale=col.get("numScale", 0)
-                        ))
-            
-            table_data = GenerateCreateTargetTableStatementRequest(columns=column_dtos)
-            statement = generate_create_table_statement(pipeline_id=pipeline_id, schema_name=yaml_target_schema,
-                                                        table_name=target_table_name, token=token,
-                                                        table_data=table_data)
-            logger.info(f"create table statement: {statement}")
-            create_target_table(pipeline_id=pipeline_id, create_table_request=CreateTableRequest(statement=statement),
-                                token=token)
-        else:
-            logger.info(f"table: {target_table_name} does not exists, skipping creation as CREATE_TABLE_IF_NOT_EXISTS is false")
-    else:
+    if table_exists(pipeline_id=pipeline_id, schema_name=yaml_target_schema, table_name=target_table_name,
+                    token=token):
         logger.info(f"table: {target_table_name} already exists")
+        return
+    if not CREATE_TABLE_IF_NOT_EXISTS:
+        logger.info(f"table: {target_table_name} does not exists, skipping creation as CREATE_TABLE_IF_NOT_EXISTS is false")
+        return
+
+    logger.info(f"table: {target_table_name} does not exists, creating it")
+    # Create ColumnDto objects
+    column_entries = custom_config.get('columns') or []
+    target_only_columns = custom_config.get('targetOnlyColumns', [])
+
+    key_lookup = _KeyLookup(keys)
+
+    # Check if targetOnlyColumns are defined - if so, use them instead of source columns
+    if target_only_columns:
+        logger.info(f"Using targetOnlyColumns definition for table {target_table_name}")
+        column_dtos = _target_only_column_dtos(target_only_columns, key_lookup, source_node_info, target_node_info)
+    else:
+        column_dtos = _mapped_column_dtos(column_entries, target_table_name, columns, key_lookup, source_node_info,
+                                          target_node_info)
+        if column_dtos is None:
+            return
+
+    table_data = GenerateCreateTargetTableStatementRequest(columns=column_dtos)
+    statement = generate_create_table_statement(pipeline_id=pipeline_id, schema_name=yaml_target_schema,
+                                                table_name=target_table_name, token=token,
+                                                table_data=table_data)
+    logger.info(f"create table statement: {statement}")
+    create_target_table(pipeline_id=pipeline_id, create_table_request=CreateTableRequest(statement=statement),
+                        token=token)
 
 
 def main(pipeline_id, source_schema, target_schema, source_type, target_type, yaml_file, token, skip_errors=True):
@@ -688,9 +828,7 @@ def main(pipeline_id, source_schema, target_schema, source_type, target_type, ya
         create_tables(
             token, pipeline_id, source_schema, target_schema,
             tables, source_agent['agentId'], target_agent['agentId'],
-            source_type, target_type, yaml_config, skip_errors,
-            source_agent_tag=source_agent.get('agentTag'),
-            target_agent_tag=target_agent.get('agentTag')
+            yaml_config
         )
 
     except Exception as e:

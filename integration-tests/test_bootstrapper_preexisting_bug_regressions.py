@@ -142,11 +142,10 @@ class TargetKeysWithoutColumnMappingsTests(unittest.TestCase):
         columns_def = [dict(col, alias=col["name"]) for col in self.SOURCE_COLUMNS]
         with mock.patch.object(create_all_entities, "get_table_columns", return_value=target_discovery), \
                 mock.patch.object(create_all_entities, "map_data_type", side_effect=lambda t, *a, **k: t):
-            return create_all_entities._assemble_target_side(
-                "token", "pipeline", TARGET_AGENT, "tgt", "CUSTOMERS", "CUSTOMERS",
-                {"columns": self.SOURCE_COLUMNS}, columns_def, {"keys": keys}, False, False, {}, False,
-                500, 600, {}, node_info(), node_info(), None, None, True,
-            )
+            ctx = create_all_entities._PipelineContext("token", "pipeline", TARGET_AGENT, "tgt", node_info(), node_info())
+            pair = create_all_entities._TablePair("CUSTOMERS", "CUSTOMERS", {"columns": self.SOURCE_COLUMNS},
+                                                  {"keys": keys}, 500, 600)
+            return create_all_entities._assemble_target_side(ctx, pair, columns_def, False, {}, {})
 
     def test_every_key_is_resolved(self):
         _, target_keys = self._assemble(["ID", "name"])

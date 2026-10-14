@@ -177,7 +177,7 @@ class RunCreateEntitiesForTablesTests(unittest.TestCase):
 
         self.assertTrue(result["success"])
         # create_tables should be overridden to False because target is NoSQL
-        self.assertEqual(captured_create_entities[0].get("yaml_config"), None)
+        self.assertIsNone(captured_create_entities[0].get("yaml_config"))
 
 
 class ListPipelinesTests(unittest.TestCase):

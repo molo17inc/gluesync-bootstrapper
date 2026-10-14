@@ -23,6 +23,8 @@ import sys
 import os
 import tempfile
 import shutil
+from unittest import mock
+
 import yaml
 
 # Add parent directory to path to import parse_dbmoto_metadata_xml
@@ -52,17 +54,25 @@ class TestRRNExtraction(unittest.TestCase):
         if os.path.exists(self.temp_output_dir):
             shutil.rmtree(self.temp_output_dir)
 
+    def _patch_parser_args(self, **values):
+        """Override parser.args attributes for the duration of the test."""
+        patcher = mock.patch.multiple(parser.args, **values)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_rrn_extraction_from_rrn_test_no_schema(self):
         """Test that RRN extraction works with RRN-test-no-schema.xml."""
         # Run the parser
-        parser.args.xml_path = self.test_xml
-        parser.args.output_dir = self.temp_output_dir
-        parser.args.template = os.path.join(
-            os.path.dirname(os.path.dirname(__file__)),
-            'table-list-template-basic.yaml'
+        self._patch_parser_args(
+            xml_path=self.test_xml,
+            output_dir=self.temp_output_dir,
+            template=os.path.join(
+                os.path.dirname(os.path.dirname(__file__)),
+                'table-list-template-basic.yaml'
+            ),
+            include_targets=True,
+            force_schemas=None,
         )
-        parser.args.include_targets = True
-        parser.args.force_schemas = None
         
         # Parse and export
         connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name, record_id_mappings, journal_checkpoints, refresh_filters = parser.parse_xml()
@@ -116,10 +126,9 @@ class TestRRNExtraction(unittest.TestCase):
 
     def test_rrn_mapping_detected_in_parse_xml(self):
         """Test that parse_xml correctly detects [!RecordID] mappings."""
-        parser.args.xml_path = self.test_xml
-        parser.args.output_dir = self.temp_output_dir
-        
-        connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name, record_id_mappings, _journal_checkpoints, _refresh_filters = parser.parse_xml()
+        self._patch_parser_args(xml_path=self.test_xml, output_dir=self.temp_output_dir)
+
+        record_id_mappings = parser.parse_xml()[7]
         
         # Verify RecordID mapping was detected
         self.assertIsNotNone(record_id_mappings)
@@ -134,14 +143,16 @@ class TestRRNExtraction(unittest.TestCase):
             self.skipTest("rrtest.xml not found in test data directory")
         
         # Run the parser
-        parser.args.xml_path = rrtest_xml
-        parser.args.output_dir = self.temp_output_dir
-        parser.args.template = os.path.join(
-            os.path.dirname(os.path.dirname(__file__)),
-            'table-list-template-basic.yaml'
+        self._patch_parser_args(
+            xml_path=rrtest_xml,
+            output_dir=self.temp_output_dir,
+            template=os.path.join(
+                os.path.dirname(os.path.dirname(__file__)),
+                'table-list-template-basic.yaml'
+            ),
+            include_targets=True,
+            force_schemas=None,
         )
-        parser.args.include_targets = True
-        parser.args.force_schemas = None
         
         # Parse and export
         connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name, record_id_mappings, journal_checkpoints, refresh_filters = parser.parse_xml()

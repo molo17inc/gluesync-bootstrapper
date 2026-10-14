@@ -127,6 +127,34 @@ def expressions_by_target_column_id(
     return by_id
 
 
+def _index_mappings_by_target_name(
+    column_mappings: List[MutableMapping[str, Any]],
+    target_name_key: str,
+) -> Dict[str, MutableMapping[str, Any]]:
+    """Index the exported column mappings by their target name (lower-cased)."""
+    name_to_mapping: Dict[str, MutableMapping[str, Any]] = {}
+    for mapping in column_mappings:
+        tname = mapping.get(target_name_key) or mapping.get("name")
+        if not tname:
+            continue
+        name_to_mapping[str(tname).lower()] = mapping
+    return name_to_mapping
+
+
+def _target_only_mapping_entry(tname: Any, expr: Dict[str, Any], tcol: Mapping[str, Any]) -> Dict[str, Any]:
+    """Build the mapping of a target-only / technical column not present in source→target mappings."""
+    entry: Dict[str, Any] = {
+        "target": tname,
+        "expression": expr,
+    }
+    dtype = tcol.get("dataType")
+    if dtype is None:
+        dtype = tcol.get("type")
+    if dtype is not None:
+        entry["type"] = dtype
+    return entry
+
+
 def apply_field_functions_to_column_mappings(
     column_mappings: List[MutableMapping[str, Any]],
     target_columns: Sequence[Mapping[str, Any]],
@@ -148,14 +176,7 @@ def apply_field_functions_to_column_mappings(
     if not expr_by_col_id:
         return column_mappings
 
-    # name(lower) → column id for columns already present in mappings
-    mapped_target_ids = set()
-    name_to_mapping: Dict[str, MutableMapping[str, Any]] = {}
-    for mapping in column_mappings:
-        tname = mapping.get(target_name_key) or mapping.get("name")
-        if not tname:
-            continue
-        name_to_mapping[str(tname).lower()] = mapping
+    name_to_mapping = _index_mappings_by_target_name(column_mappings, target_name_key)
 
     for col_id, expr in expr_by_col_id.items():
         tcol = target_by_id.get(col_id)
@@ -165,24 +186,26 @@ def apply_field_functions_to_column_mappings(
         existing = name_to_mapping.get(str(tname).lower())
         if existing is not None:
             existing["expression"] = expr
-            mapped_target_ids.add(col_id)
             continue
 
         # Target-only / technical column not present in source→target mappings.
-        entry: Dict[str, Any] = {
-            "target": tname,
-            "expression": expr,
-        }
-        dtype = tcol.get("dataType") if tcol else None
-        if dtype is None and tcol is not None:
-            dtype = tcol.get("type")
-        if dtype is not None:
-            entry["type"] = dtype
+        entry = _target_only_mapping_entry(tname, expr, tcol)
         column_mappings.append(entry)
-        mapped_target_ids.add(col_id)
         name_to_mapping[str(tname).lower()] = entry
 
     return column_mappings
+
+
+def _yaml_entry_target_name(entry: Dict[str, Any]) -> Any:
+    """Target column name a YAML column entry carries an expression for (None when it cannot carry one)."""
+    if "target" in entry and entry.get("target") is not None:
+        return entry.get("target")
+    if "source" in entry:
+        return entry.get("target") or entry.get("source")
+    if "name" in entry:
+        return entry.get("name")
+    # Legacy {SRC: "TGT"} cannot carry expression alongside the mapping key.
+    return None
 
 
 def iter_yaml_column_expressions(
@@ -199,17 +222,7 @@ def iter_yaml_column_expressions(
         if not expr:
             continue
 
-        target_name = None
-        if "target" in entry and entry.get("target") is not None:
-            target_name = entry.get("target")
-        elif "source" in entry:
-            target_name = entry.get("target") or entry.get("source")
-        elif "name" in entry:
-            target_name = entry.get("name")
-        else:
-            # Legacy {SRC: "TGT"} cannot carry expression alongside the mapping key.
-            continue
-
+        target_name = _yaml_entry_target_name(entry)
         if target_name is None or target_name == "":
             continue
         yield str(target_name), expr
@@ -222,6 +235,34 @@ def produced_target_names(yaml_columns: Optional[Sequence[Any]]) -> List[str]:
         for target_name, expr in iter_yaml_column_expressions(yaml_columns)
         if expr.get("type") in PRODUCING_EXPRESSION_TYPES
     ]
+
+
+def _refuse_values_on_fed_targets(
+    yaml_columns: Optional[Sequence[Any]],
+    fed_target_names: Iterable[str],
+    label: str,
+) -> None:
+    """Raise ``EntityMappingError`` when a fixed/technical value or scalar function sits on a fed target column."""
+    fed = {str(name).lower() for name in fed_target_names}
+    for target_name, expr in iter_yaml_column_expressions(yaml_columns):
+        if expr.get("type") in REFUSED_ON_FED_TARGET_TYPES and target_name.lower() in fed:
+            raise EntityMappingError(
+                f"Table {label}: the {expr.get('type')} field function on target column {target_name} gives it a "
+                f"value of its own while a source column feeds it, which a Gluesync 2.3 CoreHub refuses (P16): "
+                f"remove the source from that row, so that no source column feeds the column (null:1)"
+            )
+
+
+def _index_target_columns_by_name(target_columns: Sequence[Mapping[str, Any]]) -> Dict[str, Mapping[str, Any]]:
+    """Index target columns by name (or alias), lower-cased."""
+    by_name: Dict[str, Mapping[str, Any]] = {}
+    for col in target_columns or []:
+        if not isinstance(col, dict):
+            continue
+        name = col.get("name") or col.get("alias")
+        if name:
+            by_name[str(name).lower()] = col
+    return by_name
 
 
 def build_field_functions_for_entity_type(
@@ -244,22 +285,9 @@ def build_field_functions_for_entity_type(
     if table_or_object_id is None:
         return []
     if fed_target_names is not None:
-        fed = {str(name).lower() for name in fed_target_names}
-        for target_name, expr in iter_yaml_column_expressions(yaml_columns):
-            if expr.get("type") in REFUSED_ON_FED_TARGET_TYPES and target_name.lower() in fed:
-                raise EntityMappingError(
-                    f"Table {label}: the {expr.get('type')} field function on target column {target_name} gives it a "
-                    f"value of its own while a source column feeds it, which a Gluesync 2.3 CoreHub refuses (P16): "
-                    f"remove the source from that row, so that no source column feeds the column (null:1)"
-                )
+        _refuse_values_on_fed_targets(yaml_columns, fed_target_names, label)
 
-    by_name: Dict[str, Mapping[str, Any]] = {}
-    for col in target_columns or []:
-        if not isinstance(col, dict):
-            continue
-        name = col.get("name") or col.get("alias")
-        if name:
-            by_name[str(name).lower()] = col
+    by_name = _index_target_columns_by_name(target_columns)
 
     field_functions: List[Dict[str, Any]] = []
     seen_column_ids = set()

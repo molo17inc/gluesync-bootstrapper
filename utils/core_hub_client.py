@@ -29,6 +29,27 @@ logger = logging.getLogger(__name__)
 # Disable insecure request warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+def _log_request_error(e, expected_error_statuses):
+    """Log a failed CoreHub request at the level its status calls for.
+
+    Expected statuses (e.g. 404 during table existence checks) are logged as
+    info, 401 Unauthorized as a warning (it is expected during initial
+    authentication attempts), anything else as an error.
+    """
+    response = e.response if hasattr(e, 'response') else None
+    has_response = response is not None
+    if expected_error_statuses and has_response and response.status_code in expected_error_statuses:
+        log = logger.info
+        log(f"CoreHub API request returned expected status: {str(e)}")
+    else:
+        log = logger.warning if has_response and response.status_code == 401 else logger.error
+        log(f"CoreHub API request failed: {str(e)}")
+    # Include response details if available
+    if has_response:
+        log(f"Status code: {response.status_code}")
+        log(f"Response: {response.text}")
+
+
 class CoreHubClient:
     """Client for handling CoreHub API requests."""
 
@@ -77,6 +98,28 @@ class CoreHubClient:
 
     def request(self, path, method='GET', token=None, body=None, params=None, headers=None, expected_error_statuses=None):
         url = f"{self.base_url}{path}"
+        headers = self._prepare_headers(token, headers)
+
+        # Use configured SSL verification setting
+        verify = self.verify_ssl if self.use_ssl else False
+
+        try:
+            response = self._send(method, url, headers, body, verify, params)
+
+            # Force raise for status
+            response.raise_for_status()
+
+            # Parse JSON response or return text if not JSON
+            try:
+                return response.json()
+            except ValueError:
+                return response.text
+        except requests.exceptions.RequestException as e:
+            _log_request_error(e, expected_error_statuses)
+            raise
+
+    def _prepare_headers(self, token, headers):
+        """Return a copy of ``headers`` with the auth and encoding headers set."""
         headers = headers.copy() if headers else {}
 
         if token:
@@ -93,72 +136,30 @@ class CoreHubClient:
         # send malformed/double Content-Encoding headers
         if 'Accept-Encoding' not in headers:
             headers['Accept-Encoding'] = 'identity'
+        return headers
 
-        # Use configured SSL verification setting
-        verify = self.verify_ssl if self.use_ssl else False
+    def _send(self, method, url, headers, body, verify, params):
+        """Send the request with the session method matching ``method``."""
+        if method.upper() == 'GET':
+            return self.session.get(url, headers=headers, verify=verify, params=params)
+        if method.upper() in ('POST', 'PUT'):
+            return self._send_with_body(method.upper(), url, headers, body, verify, params)
+        if method.upper() == 'DELETE':
+            return self.session.delete(url, headers=headers, verify=verify, params=params)
+        raise ValueError(f"Unsupported HTTP method: {method}")
 
-        try:
-            if method.upper() == 'GET':
-                response = self.session.get(url, headers=headers, verify=verify, params=params)
-            elif method.upper() == 'POST':
-                if isinstance(body, (bytes, bytearray)):
-                    # For binary data, don't set Content-Type - send raw bytes
-                    response = self.session.post(url, headers=headers, data=body, verify=verify, params=params)
-                else:
-                    # For JSON data, set Content-Type if not already set
-                    if 'Content-Type' not in headers:
-                        headers['Content-Type'] = 'application/json'
-                    response = self.session.post(url, headers=headers, json=body, verify=verify, params=params)
-            elif method.upper() == 'PUT':
-                if isinstance(body, (bytes, bytearray)):
-                    # For binary data, don't set Content-Type - send raw bytes
-                    logger.debug(f"Sending binary PUT: {len(body)} bytes, headers: {headers}")
-                    response = self.session.put(url, headers=headers, data=body, verify=verify, params=params)
-                    logger.debug(f"Binary PUT response status: {response.status_code}")
-                else:
-                    # For JSON data, set Content-Type if not already set
-                    if 'Content-Type' not in headers:
-                        headers['Content-Type'] = 'application/json'
-                    response = self.session.put(url, headers=headers, json=body, verify=verify, params=params)
-            elif method.upper() == 'DELETE':
-                response = self.session.delete(url, headers=headers, verify=verify, params=params)
-            else:
-                raise ValueError(f"Unsupported HTTP method: {method}")
-
-            # Force raise for status
-            response.raise_for_status()
-
-            # Parse JSON response or return text if not JSON
-            try:
-                return response.json()
-            except ValueError:
-                return response.text
-        except requests.exceptions.RequestException as e:
-            # Check if this is an expected error status (e.g. 404 during table existence checks)
-            is_expected = False
-            if expected_error_statuses and hasattr(e, 'response') and e.response is not None:
-                is_expected = e.response.status_code in expected_error_statuses
-
-            # Check if this is a 401 Unauthorized error - these are expected during
-            # initial authentication attempts and should be warnings, not errors
-            is_401 = False
-            if hasattr(e, 'response') and e.response is not None:
-                is_401 = e.response.status_code == 401
-
-            if is_expected:
-                logger.info(f"CoreHub API request returned expected status: {str(e)}")
-                if hasattr(e, 'response') and e.response is not None:
-                    logger.info(f"Status code: {e.response.status_code}")
-                    logger.info(f"Response: {e.response.text}")
-            elif is_401:
-                logger.warning(f"CoreHub API request failed: {str(e)}")
-                if hasattr(e, 'response') and e.response is not None:
-                    logger.warning(f"Status code: {e.response.status_code}")
-                    logger.warning(f"Response: {e.response.text}")
-            else:
-                logger.error(f"CoreHub API request failed: {str(e)}")
-                # Include response details if available
-                if hasattr(e, 'response') and e.response is not None:
-                    logger.error(f"Status code: {e.response.status_code}")
-                    logger.error(f"Response: {e.response.text}")
-            raise
+    def _send_with_body(self, verb, url, headers, body, verify, params):
+        """Send a POST or PUT: raw bytes as they are, anything else as JSON."""
+        send = self.session.post if verb == 'POST' else self.session.put
+        if isinstance(body, (bytes, bytearray)):
+            # For binary data, don't set Content-Type - send raw bytes
+            if verb == 'PUT':
+                logger.debug(f"Sending binary PUT: {len(body)} bytes, headers: {headers}")
+            response = send(url, headers=headers, data=body, verify=verify, params=params)
+            if verb == 'PUT':
+                logger.debug(f"Binary PUT response status: {response.status_code}")
+            return response
+        # For JSON data, set Content-Type if not already set
+        if 'Content-Type' not in headers:
+            headers['Content-Type'] = 'application/json'
+        return send(url, headers=headers, json=body, verify=verify, params=params)

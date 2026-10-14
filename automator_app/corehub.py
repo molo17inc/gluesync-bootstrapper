@@ -30,9 +30,10 @@ import shutil
 import zipfile
 import tempfile
 from contextlib import redirect_stdout
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urljoin
 
 import requests
@@ -69,6 +70,28 @@ import time
 import yaml
 
 logger = logging.getLogger(__name__)
+
+# CoreHub REST paths used more than once.
+_SMTP_CONFIG_PATH = "/global-config/smtp"
+_USERS_PATH = "/users"
+
+# Placeholder written instead of a secret when secrets are not exported.
+_MASKED_SECRET = "*******"
+
+_UDF_ENTITIES_FETCH_FAILED_LOG = "Failed to fetch entities for UDF export in pipeline %s: %s"
+
+# Files of the full CoreHub backup ZIP, one per configuration domain.
+_GLOBAL_CONFIGS_BACKUP_FILE = "global-configs.yaml"
+_SMTP_BACKUP_FILE = "smtp.yaml"
+_WEBHOOKS_BACKUP_FILE = "webhooks.yaml"
+_THRESHOLDS_BACKUP_FILE = "thresholds.yaml"
+_SCHEDULES_BACKUP_FILE = "schedules.yaml"
+_USERS_BACKUP_FILE = "users.yaml"
+_OIDC_BACKUP_FILE = "oidc.yaml"
+
+# Reasons reported when a restore skips a configuration section.
+_REASON_NOT_PRESENT_IN_BACKUP = "not present in backup"
+_REASON_EXPORTED_WITH_ERROR = "exported with error"
 
 
 class DuplicateCancelledError(RuntimeError):
@@ -266,6 +289,66 @@ def authenticate(
     return token
 
 
+class _CallbackLogHandler(logging.Handler):
+    """Logging handler that forwards every non-empty log message to a callback."""
+
+    def __init__(self, callback: Callable[[str], None], level: int = logging.NOTSET) -> None:
+        super().__init__(level=level)
+        self._callback = callback
+
+    def emit(self, record: logging.LogRecord) -> None:  # type: ignore[override]
+        message = record.getMessage()
+        if message:
+            self._callback(message)
+
+
+def _is_nosql_target(target_type: Optional[str]) -> bool:
+    """True when the inferred target type is a non-RDBMS (NoSQL) one."""
+    return bool(target_type) and target_type.upper() == "NOSQL"
+
+
+def _apply_create_tables_setting(create_tables: bool) -> None:
+    """Set the CREATE_TABLE_IF_NOT_EXISTS flag and env variable read by create_all_entities."""
+    set_create_table_if_not_exists(create_tables)
+    os.environ['CREATE_TABLE_IF_NOT_EXISTS'] = 'true' if create_tables else 'false'
+
+
+def _restore_create_tables_setting(prev_env_value: Optional[str], prev_flag_value: bool) -> None:
+    """Put back the CREATE_TABLE_IF_NOT_EXISTS env variable and flag saved before a run."""
+    if prev_env_value is not None:
+        os.environ['CREATE_TABLE_IF_NOT_EXISTS'] = prev_env_value
+    else:
+        os.environ.pop('CREATE_TABLE_IF_NOT_EXISTS', None)
+    set_create_table_if_not_exists(prev_flag_value)
+
+
+def _replay_logs(log_callback: Optional[Callable[[str], None]], logs: list) -> None:
+    """Send each captured stdout line to ``log_callback``, when there is one."""
+    if log_callback is not None:
+        for line in logs:
+            log_callback(line)
+
+
+def _create_entities_outcome(result_payload: Dict[str, Any], logs: list) -> Dict[str, Any]:
+    """Build the response of run_create_entities from the create_all_entities result."""
+    success = bool(result_payload.get("success", True))
+    errors = result_payload.get("errors") or []
+    if errors:
+        success = False
+    payload: Dict[str, Any] = {
+        "success": success,
+        "logs": logs,
+        "result": result_payload,
+    }
+    if not success:
+        summary_error = result_payload.get("error")
+        if not summary_error and errors:
+            summary_error = "; ".join(errors)
+        if summary_error:
+            payload["error"] = summary_error
+    return payload
+
+
 def run_create_entities(
     *,
     token: str,
@@ -302,33 +385,24 @@ def run_create_entities(
         use_ssl=use_ssl,
         skip_verify=skip_verify,
     )
-    if inferred_target_type and inferred_target_type.upper() == "NOSQL":
+    if _is_nosql_target(inferred_target_type):
         logger.info(
             "Pipeline %s has a non-RDBMS target (%s) - disabling table creation",
             pipeline_id,
             inferred_target_type,
         )
         create_tables = False
-    if inferred_source_type:
-        source_type = inferred_source_type
-    if inferred_target_type:
-        target_type = inferred_target_type
+    source_type = inferred_source_type or source_type
+    target_type = inferred_target_type or target_type
 
     prev_env_create_tables = os.environ.get('CREATE_TABLE_IF_NOT_EXISTS')
     prev_flag_create_tables = CREATE_TABLE_IF_NOT_EXISTS
-    set_create_table_if_not_exists(create_tables)
-    os.environ['CREATE_TABLE_IF_NOT_EXISTS'] = 'true' if create_tables else 'false'
+    _apply_create_tables_setting(create_tables)
 
     handler = None
     root_logger = logging.getLogger()
     if log_callback is not None:
-        class CallbackHandler(logging.Handler):
-            def emit(self, record: logging.LogRecord) -> None:  # type: ignore[override]
-                message = record.getMessage()
-                if message:
-                    log_callback(message)
-
-        handler = CallbackHandler(level=logging.INFO)
+        handler = _CallbackLogHandler(log_callback, level=logging.INFO)
         root_logger.addHandler(handler)
 
     buffer = io.StringIO()
@@ -359,34 +433,12 @@ def run_create_entities(
     finally:
         if handler:
             root_logger.removeHandler(handler)
-        if prev_env_create_tables is not None:
-            os.environ['CREATE_TABLE_IF_NOT_EXISTS'] = prev_env_create_tables
-        else:
-            os.environ.pop('CREATE_TABLE_IF_NOT_EXISTS', None)
-        set_create_table_if_not_exists(prev_flag_create_tables)
+        _restore_create_tables_setting(prev_env_create_tables, prev_flag_create_tables)
 
     logs = buffer.getvalue().splitlines()
-    if log_callback is not None:
-        for line in logs:
-            log_callback(line)
+    _replay_logs(log_callback, logs)
 
-    result_payload = result_payload or {}
-    success = bool(result_payload.get("success", True))
-    errors = result_payload.get("errors") or []
-    if errors:
-        success = False
-    payload: Dict[str, Any] = {
-        "success": success,
-        "logs": logs,
-        "result": result_payload,
-    }
-    if not success:
-        summary_error = result_payload.get("error")
-        if not summary_error and errors:
-            summary_error = "; ".join(errors)
-        if summary_error:
-            payload["error"] = summary_error
-    return payload
+    return _create_entities_outcome(result_payload or {}, logs)
 
 
 def run_create_entities_for_tables(
@@ -1042,7 +1094,7 @@ def fetch_global_notification_config(
     params = {"include_secrets": "true"} if include_secrets else None
 
     try:
-        smtp = fetch_core_hub("/global-config/smtp", token=token, params=params)
+        smtp = fetch_core_hub(_SMTP_CONFIG_PATH, token=token, params=params)
     except Exception as exc:  # pylint: disable=broad-except
         logger.warning("Failed to fetch global SMTP config: %s", exc)
         return None
@@ -1052,7 +1104,7 @@ def fetch_global_notification_config(
 
     cfg = dict(smtp)
     if not include_secrets and "password" in cfg and cfg["password"]:
-        cfg["password"] = "*******"
+        cfg["password"] = _MASKED_SECRET
     return cfg
 
 
@@ -1092,6 +1144,46 @@ def _mapping_function_extension(mf_type: Optional[Any]) -> str:
     return ext
 
 
+def _target_agent_entity(entity: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Return the first agentEntity of ``entity`` whose entityType is Target, if any."""
+    for ae in entity.get("agentEntities", []) or []:
+        et = ae.get("entityType") or {}
+        if et.get("type") == "Target":
+            return ae
+    return None
+
+
+def _referenced_udfs(target_et: Dict[str, Any]) -> List[Tuple[Any, Any]]:
+    """``(name, type)`` of the UDFs a Target entityType refers to, in declaration order.
+
+    ``mappingFunctionInfo`` wins when present; otherwise the legacy ``udf`` array is used.
+    Entries without a name are ignored.
+    """
+    mf_info = target_et.get("mappingFunctionInfo")
+    if isinstance(mf_info, dict):
+        udf_name = mf_info.get("name")
+        return [(udf_name, mf_info.get("type"))] if udf_name else []
+
+    udf_cfg = target_et.get("udf") or []
+    if not isinstance(udf_cfg, list):
+        return []
+    return [
+        (udf.get("name"), udf.get("type"))
+        for udf in udf_cfg
+        if isinstance(udf, dict) and udf.get("name")
+    ]
+
+
+def _udf_export_entry(target_ae: Dict[str, Any], udf_name: Any, udf_type: Any) -> Dict[str, Any]:
+    """Describe one UDF to export: its name, type and the agentId of its Target agent."""
+    raw_agent_id = target_ae.get("agentId") or target_ae.get("id")
+    return {
+        "name": str(udf_name),
+        "type": udf_type,
+        "agentId": str(raw_agent_id) if raw_agent_id is not None else None,
+    }
+
+
 def discover_udfs_from_entities(
     entities: Any,
 ) -> Dict[str, Dict[str, Any]]:
@@ -1109,48 +1201,15 @@ def discover_udfs_from_entities(
         if not isinstance(ent, dict):
             continue
 
-        target_ae: Optional[Dict[str, Any]] = None
-        for ae in ent.get("agentEntities", []) or []:
-            et = ae.get("entityType") or {}
-            if et.get("type") == "Target":
-                target_ae = ae
-                break
+        target_ae = _target_agent_entity(ent)
         if not target_ae:
             continue
 
         target_et = target_ae.get("entityType") or {}
-
-        mf_info = target_et.get("mappingFunctionInfo")
-        if isinstance(mf_info, dict):
-            udf_name = mf_info.get("name")
-            if udf_name:
-                key = str(udf_name)
-                if key not in udfs_to_export:
-                    raw_agent_id = target_ae.get("agentId") or target_ae.get("id")
-                    udfs_to_export[key] = {
-                        "name": str(udf_name),
-                        "type": mf_info.get("type"),
-                        "agentId": str(raw_agent_id) if raw_agent_id is not None else None,
-                    }
-            continue
-
-        udf_cfg = target_et.get("udf") or []
-        if isinstance(udf_cfg, list):
-            for udf in udf_cfg:
-                if not isinstance(udf, dict):
-                    continue
-                udf_name = udf.get("name")
-                if not udf_name:
-                    continue
-                key = str(udf_name)
-                if key in udfs_to_export:
-                    continue
-                raw_agent_id = target_ae.get("agentId") or target_ae.get("id")
-                udfs_to_export[key] = {
-                    "name": str(udf_name),
-                    "type": udf.get("type"),
-                    "agentId": str(raw_agent_id) if raw_agent_id is not None else None,
-                }
+        for udf_name, udf_type in _referenced_udfs(target_et):
+            key = str(udf_name)
+            if key not in udfs_to_export:
+                udfs_to_export[key] = _udf_export_entry(target_ae, udf_name, udf_type)
 
     return udfs_to_export
 
@@ -1302,7 +1361,7 @@ def export_pipeline_entities_package(
         entities = fetch_pipeline_entities(token, pipeline_id)
     except Exception as exc:  # pylint: disable=broad-except
         logger.exception(
-            "Failed to fetch entities for UDF export in pipeline %s: %s",
+            _UDF_ENTITIES_FETCH_FAILED_LOG,
             pipeline_id,
             exc,
         )
@@ -1351,6 +1410,65 @@ def export_pipeline_entities_package(
         len(udfs_to_export),
     )
     return zip_buffer.read(), "application/zip", filename
+
+
+def _enrich_null_column_types(
+    schemas: Dict[str, Any],
+    entities: Any,
+    token: str,
+    pipeline_id: str,
+) -> None:
+    """Fill null column types of ``schemas`` from live CoreHub discovery; failures are only logged."""
+    try:
+        enriched = enrich_null_column_types_from_discovery(
+            schemas, entities, token, pipeline_id
+        )
+        if enriched:
+            logger.info(
+                "export_pipeline_yaml: enriched null column types for %d table(s) "
+                "via live CoreHub discovery for pipeline %s",
+                enriched,
+                pipeline_id,
+            )
+    except Exception as enrich_exc:  # pylint: disable=broad-except
+        logger.warning(
+            "export_pipeline_yaml: column-type enrichment failed for pipeline %s: %s",
+            pipeline_id,
+            enrich_exc,
+        )
+
+
+def _add_global_notifications(
+    yaml_data: Dict[str, Any],
+    *,
+    token: str,
+    base_url: str,
+    pipeline_id: str,
+    use_ssl: Optional[bool],
+    skip_verify: Optional[bool],
+    include_secrets: bool,
+) -> None:
+    """Embed the global notification settings (SMTP) into ``yaml_data``; failures are only logged."""
+    try:
+        notification_cfg = fetch_global_notification_config(
+            token=token,
+            base_url=base_url,
+            use_ssl=use_ssl,
+            skip_verify=skip_verify,
+            include_secrets=include_secrets,
+        )
+        if notification_cfg and yaml_data:
+            yaml_data["globalNotifications"] = notification_cfg
+            logger.info(
+                "Added global notification config to YAML export for pipeline %s",
+                pipeline_id,
+            )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning(
+            "Failed to add global notification config to YAML export for pipeline %s: %s",
+            pipeline_id,
+            exc,
+        )
 
 
 def export_pipeline_yaml(
@@ -1425,23 +1543,7 @@ def export_pipeline_yaml(
     # DataTypeInterface was not registered for serialisation and therefore
     # stored as null in SQLite.  We call live discovery for each affected
     # table so the exported YAML always carries real type information.
-    try:
-        enriched = enrich_null_column_types_from_discovery(
-            schemas, entities, token, pipeline_id
-        )
-        if enriched:
-            logger.info(
-                "export_pipeline_yaml: enriched null column types for %d table(s) "
-                "via live CoreHub discovery for pipeline %s",
-                enriched,
-                pipeline_id,
-            )
-    except Exception as _enrich_exc:  # pylint: disable=broad-except
-        logger.warning(
-            "export_pipeline_yaml: column-type enrichment failed for pipeline %s: %s",
-            pipeline_id,
-            _enrich_exc,
-        )
+    _enrich_null_column_types(schemas, entities, token, pipeline_id)
 
     # Clean up internal metadata before export
     for schema_cfg in schemas.values():
@@ -1472,26 +1574,15 @@ def export_pipeline_yaml(
     # Skipped when the caller writes global config to a separate file
     # (e.g. inside a ZIP backup) to avoid duplication.
     if include_global_config:
-        try:
-            notification_cfg = fetch_global_notification_config(
-                token=token,
-                base_url=base_url,
-                use_ssl=use_ssl,
-                skip_verify=skip_verify,
-                include_secrets=include_secrets,
-            )
-            if notification_cfg and yaml_data:
-                yaml_data["globalNotifications"] = notification_cfg
-                logger.info(
-                    "Added global notification config to YAML export for pipeline %s",
-                    pipeline_id,
-                )
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.warning(
-                "Failed to add global notification config to YAML export for pipeline %s: %s",
-                pipeline_id,
-                exc,
-            )
+        _add_global_notifications(
+            yaml_data,
+            token=token,
+            base_url=base_url,
+            pipeline_id=pipeline_id,
+            use_ssl=use_ssl,
+            skip_verify=skip_verify,
+            include_secrets=include_secrets,
+        )
 
     buffer = io.StringIO()
     yaml.safe_dump(
@@ -1506,24 +1597,198 @@ def export_pipeline_yaml(
     return header + buffer.getvalue()
 
 
-def export_pipeline_full_backup(
-    *,
-    token: str,
-    base_url: str,
-    pipeline_id: str,
-    use_ssl: Optional[bool],
-    skip_verify: Optional[bool],
-    include_secrets: bool = False,
-    chronos_token: Optional[str] = None,
-) -> bytes:
-    """Export a full backup (YAML + agents-config + UDFs) for a single pipeline."""
+@dataclass
+class _PipelinesBackup:
+    """Settings of a pipelines backup ZIP and the agent configurations gathered while writing it."""
 
-    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+    token: str
+    base_url: str
+    use_ssl: Optional[bool]
+    skip_verify: Optional[bool]
+    include_secrets: bool
+    chronos_token: Optional[str]
+    skip_schedules: bool = False
+    agents: List[Dict[str, Any]] = field(default_factory=list)
+    seen_agents: set = field(default_factory=set)
+    pipelines_meta: List[Dict[str, Any]] = field(default_factory=list)
 
+
+def _backup_pipeline_meta(backup: _PipelinesBackup, pipeline_id: str, pipeline_name: str) -> Dict[str, Any]:
+    """Register a pipeline in the backup and return its metadata (agents are referenced from it later)."""
+    pipeline_meta: Dict[str, Any] = {
+        "pipelineId": pipeline_id,
+        "pipelineName": pipeline_name,
+    }
+    backup.pipelines_meta.append(pipeline_meta)
+    return pipeline_meta
+
+
+def _backup_yaml_filename(pipeline_name: str, pipeline_id: str) -> str:
+    """``backup_<name>_<pipelineId>_<timestamp>.yaml``, the name of a pipeline YAML inside a backup ZIP."""
+    safe_name = "".join(c for c in pipeline_name if c.isalnum() or c in (" ", "-", "_")).rstrip()
+    if not safe_name:
+        safe_name = pipeline_id
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"backup_{safe_name}_{pipeline_id}_{timestamp}.yaml"
+
+
+def _fetch_udf_entities(token: str, pipeline_id: str) -> Any:
+    """Entities of a pipeline, used to discover its mapping functions; empty when CoreHub fails."""
+    try:
+        return fetch_pipeline_entities(token, pipeline_id)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception(_UDF_ENTITIES_FETCH_FAILED_LOG, pipeline_id, exc)
+        return []
+
+
+def _backup_agent_identity(agent: Any) -> Optional[Tuple[Any, Any, Any, Any]]:
+    """``(agentType, agentTag, hostCredentials, agentId)`` of an agent worth backing up, else None."""
+    if not isinstance(agent, dict):
+        return None
+    agent_type = agent.get("agentType")
+    agent_tag = agent.get("agentTag")
+    host_credentials = agent.get("hostCredentials") or {}
+    raw_agent_id = agent.get("agentId") or agent.get("id")
+    if not agent_type or not agent_tag or not host_credentials:
+        return None
+    return agent_type, agent_tag, host_credentials, raw_agent_id
+
+
+def _backup_agent_key(agent_type: Any, agent_tag: Any, host_credentials: Any, raw_agent_id: Any) -> tuple:
+    """Deduplication key of an agent: its agentId when available, otherwise type, tag and connection details.
+
+    Both kinds of key have the same length; the first item keeps them apart, so an agentId key only ever
+    equals the key of the same agentId.
+    """
+    if raw_agent_id is not None:
+        return ("id", str(raw_agent_id), "", "", "", "")
+    return (
+        "props",
+        str(agent_type),
+        str(agent_tag),
+        str(host_credentials.get("connectionName")),
+        str(host_credentials.get("host")),
+        str(host_credentials.get("port")),
+    )
+
+
+def _backup_agent_entry(agent: Dict[str, Any], identity: Tuple[Any, Any, Any, Any], include_secrets: bool) -> Dict[str, Any]:
+    """agents-config.yaml entry of an agent; its password is masked unless ``include_secrets``."""
+    agent_type, agent_tag, host_credentials, raw_agent_id = identity
+    export_host_credentials = dict(host_credentials)
+    if not include_secrets and "password" in export_host_credentials and export_host_credentials["password"]:
+        export_host_credentials["password"] = _MASKED_SECRET
+
+    agent_payload: Dict[str, Any] = {
+        "agentType": agent_type,
+        "agentTag": agent_tag,
+        "hostCredentials": export_host_credentials,
+        # Keep the same naming as config.json/example-config.json
+        "customHostCredentials": agent.get("customHostCredentials") or {},
+        "specificConfiguration": agent.get("specificConfiguration") or {},
+    }
+    if raw_agent_id is not None:
+        agent_payload["agentId"] = str(raw_agent_id)
+    return agent_payload
+
+
+def _collect_backup_agents(backup: _PipelinesBackup, pipeline_agents: List[Any]) -> List[Dict[str, Any]]:
+    """Add the agents of one pipeline to the backup (once each) and return the pipeline's references to them."""
+    pipeline_agent_refs: List[Dict[str, Any]] = []
+    for agent in pipeline_agents:
+        identity = _backup_agent_identity(agent)
+        if identity is None:
+            continue
+        agent_type, agent_tag, _, raw_agent_id = identity
+
+        ref: Dict[str, Any] = {
+            "agentType": agent_type,
+            "agentTag": agent_tag,
+        }
+        if raw_agent_id is not None:
+            ref["agentId"] = str(raw_agent_id)
+        pipeline_agent_refs.append(ref)
+
+        key = _backup_agent_key(*identity)
+        if key in backup.seen_agents:
+            continue
+        backup.seen_agents.add(key)
+        backup.agents.append(_backup_agent_entry(agent, identity, backup.include_secrets))
+    return pipeline_agent_refs
+
+
+def _add_backup_pipeline_agents(backup: _PipelinesBackup, pipeline_id: str, pipeline_meta: Dict[str, Any]) -> None:
+    """Collect the agents of a pipeline into the backup and reference them from the pipeline metadata."""
+    try:
+        pipeline_agents = get_pipeline_agents(backup.token, pipeline_id)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Failed to fetch agents for pipeline %s: %s", pipeline_id, exc)
+        pipeline_agents = []
+
+    if isinstance(pipeline_agents, list):
+        pipeline_agent_refs = _collect_backup_agents(backup, pipeline_agents)
+        if pipeline_agent_refs:
+            pipeline_meta["agents"] = pipeline_agent_refs
+
+
+def _annotate_masked_passwords(yaml_text: str) -> str:
+    """Append a comment to every masked password line so the obfuscation is clear to readers."""
+    yaml_text_lines = []
+    for line in yaml_text.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith("password:") and _MASKED_SECRET in stripped:
+            # Preserve indentation when appending the comment
+            line = f"{line}  # original password omitted"
+        yaml_text_lines.append(line)
+    return "\n".join(yaml_text_lines) + "\n"
+
+
+def _write_backup_agents_config(zip_file: zipfile.ZipFile, backup: _PipelinesBackup, root_prefix: str = "") -> None:
+    """Write the collected agents and the pipelines referencing them to agents-config.yaml, if any agent was found."""
+    if not backup.agents:
+        return
+    agents_payload: Dict[str, Any] = {"agents": backup.agents}
+    if backup.pipelines_meta:
+        agents_payload["pipelines"] = backup.pipelines_meta
+
+    buffer = io.StringIO()
+    yaml.safe_dump(
+        agents_payload,
+        buffer,
+        sort_keys=False,
+        allow_unicode=True,
+    )
+    zip_file.writestr(f"{root_prefix}agents-config.yaml", _annotate_masked_passwords(buffer.getvalue()))
+
+
+def _write_backup_global_notifications(zip_file: zipfile.ZipFile, backup: _PipelinesBackup, root_prefix: str = "") -> bool:
+    """Write the global notification settings (SMTP) to global-config.yaml; False when CoreHub has none."""
+    notification_cfg = fetch_global_notification_config(
+        token=backup.token,
+        base_url=backup.base_url,
+        use_ssl=backup.use_ssl,
+        skip_verify=backup.skip_verify,
+        include_secrets=backup.include_secrets,
+    )
+    if not notification_cfg:
+        return False
+    buffer = io.StringIO()
+    yaml.safe_dump(
+        {"globalNotifications": notification_cfg},
+        buffer,
+        sort_keys=False,
+        allow_unicode=True,
+    )
+    zip_file.writestr(f"{root_prefix}global-config.yaml", buffer.getvalue())
+    return True
+
+
+def _full_backup_pipeline_name(token: str, pipeline_id: str) -> str:
+    """Name of the pipeline to back up; raise PipelineInMaintenanceError when it is in maintenance mode."""
     pipeline_name = pipeline_id
     try:
         response = fetch_core_hub(f"/pipelines/{pipeline_id}", token=token)
-    except Exception as exc:  # pylint: disable=broad-except
+    except Exception:  # pylint: disable=broad-except
         logger.exception("Failed to fetch pipeline %s metadata", pipeline_id)
         raise
     if isinstance(response, dict):
@@ -1546,20 +1811,38 @@ def export_pipeline_full_backup(
                 "maintenance mode and cannot be backed up. Exit maintenance "
                 "mode on CoreHub and try again."
             )
+    return pipeline_name
+
+
+def export_pipeline_full_backup(
+    *,
+    token: str,
+    base_url: str,
+    pipeline_id: str,
+    use_ssl: Optional[bool],
+    skip_verify: Optional[bool],
+    include_secrets: bool = False,
+    chronos_token: Optional[str] = None,
+) -> bytes:
+    """Export a full backup (YAML + agents-config + UDFs) for a single pipeline."""
+
+    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+
+    pipeline_name = _full_backup_pipeline_name(token, pipeline_id)
+    backup = _PipelinesBackup(
+        token=token,
+        base_url=base_url,
+        use_ssl=use_ssl,
+        skip_verify=skip_verify,
+        include_secrets=include_secrets,
+        chronos_token=chronos_token,
+    )
 
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-        all_agents: list[dict] = []
-        seen_agents: set[tuple] = set()
-        pipelines_meta: list[dict] = []
         # Top-level folder for this pipeline inside the ZIP
         root_prefix = f"pipeline_{pipeline_id}/"
-
-        pipeline_meta: Dict[str, Any] = {
-            "pipelineId": pipeline_id,
-            "pipelineName": pipeline_name,
-        }
-        pipelines_meta.append(pipeline_meta)
+        pipeline_meta = _backup_pipeline_meta(backup, pipeline_id, pipeline_name)
 
         # Export pipeline YAML configuration. Global config is written to a
         # separate global-config.yaml below, so don't embed it here.
@@ -1573,129 +1856,18 @@ def export_pipeline_full_backup(
             include_global_config=False,
             chronos_token=chronos_token,
         )
-
-        safe_name = "".join(c for c in pipeline_name if c.isalnum() or c in (" ", "-", "_")).rstrip()
-        if not safe_name:
-            safe_name = pipeline_id
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{root_prefix}backup_{safe_name}_{pipeline_id}_{timestamp}.yaml"
-        zip_file.writestr(filename, yaml_content)
+        zip_file.writestr(f"{root_prefix}{_backup_yaml_filename(pipeline_name, pipeline_id)}", yaml_content)
         logger.info("Exported pipeline %s (%s) YAML", pipeline_name, pipeline_id)
 
         # Discover mapping functions (UDFs) referenced by this pipeline
-        try:
-            entities = fetch_pipeline_entities(token, pipeline_id)
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.exception("Failed to fetch entities for UDF export in pipeline %s: %s", pipeline_id, exc)
-            entities = []
-        udfs_to_export = discover_udfs_from_entities(entities)
+        udfs_to_export = discover_udfs_from_entities(_fetch_udf_entities(token, pipeline_id))
 
-        # Collect agents for this pipeline
-        try:
-            pipeline_agents = get_pipeline_agents(token, pipeline_id)
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.exception("Failed to fetch agents for pipeline %s: %s", pipeline_id, exc)
-            pipeline_agents = []
-
-        if isinstance(pipeline_agents, list):
-            pipeline_agent_refs: list[dict] = []
-            for agent in pipeline_agents:
-                if not isinstance(agent, dict):
-                    continue
-
-                agent_type = agent.get("agentType")
-                agent_tag = agent.get("agentTag")
-                host_credentials = agent.get("hostCredentials") or {}
-                raw_agent_id = agent.get("agentId") or agent.get("id")
-
-                if not agent_type or not agent_tag or not host_credentials:
-                    continue
-
-                ref: Dict[str, Any] = {
-                    "agentType": agent_type,
-                    "agentTag": agent_tag,
-                }
-                if raw_agent_id is not None:
-                    ref["agentId"] = str(raw_agent_id)
-                pipeline_agent_refs.append(ref)
-
-                if raw_agent_id is not None:
-                    key = ("id", str(raw_agent_id))
-                else:
-                    key = (
-                        "props",
-                        str(agent_type),
-                        str(agent_tag),
-                        str(host_credentials.get("connectionName")),
-                        str(host_credentials.get("host")),
-                        str(host_credentials.get("port")),
-                    )
-                if key in seen_agents:
-                    continue
-                seen_agents.add(key)
-
-                export_host_credentials = dict(host_credentials)
-                if not include_secrets and "password" in export_host_credentials and export_host_credentials["password"]:
-                    export_host_credentials["password"] = "*******"
-
-                agent_payload: Dict[str, Any] = {
-                    "agentType": agent_type,
-                    "agentTag": agent_tag,
-                    "hostCredentials": export_host_credentials,
-                    "customHostCredentials": agent.get("customHostCredentials") or {},
-                    "specificConfiguration": agent.get("specificConfiguration") or {},
-                }
-                if raw_agent_id is not None:
-                    agent_payload["agentId"] = str(raw_agent_id)
-                all_agents.append(agent_payload)
-
-            if pipeline_agent_refs:
-                pipeline_meta["agents"] = pipeline_agent_refs
-
-        if all_agents:
-            agents_payload: Dict[str, Any] = {"agents": all_agents}
-            if pipelines_meta:
-                agents_payload["pipelines"] = pipelines_meta
-
-            buffer = io.StringIO()
-            yaml.safe_dump(
-                agents_payload,
-                buffer,
-                sort_keys=False,
-                allow_unicode=True,
-            )
-
-            yaml_text_lines = []
-            for line in buffer.getvalue().splitlines():
-                stripped = line.lstrip()
-                if stripped.startswith("password:") and "*******" in stripped:
-                    line = f"{line}  # original password omitted"
-                yaml_text_lines.append(line)
-
-            yaml_text = "\n".join(yaml_text_lines) + "\n"
-            zip_file.writestr(f"{root_prefix}agents-config.yaml", yaml_text)
+        _add_backup_pipeline_agents(backup, pipeline_id, pipeline_meta)
+        _write_backup_agents_config(zip_file, backup, root_prefix)
 
         # Export global notification settings (SMTP)
         try:
-            notification_cfg = fetch_global_notification_config(
-                token=token,
-                base_url=base_url,
-                use_ssl=use_ssl,
-                skip_verify=skip_verify,
-                include_secrets=include_secrets,
-            )
-            if notification_cfg:
-                buffer = io.StringIO()
-                yaml.safe_dump(
-                    {"globalNotifications": notification_cfg},
-                    buffer,
-                    sort_keys=False,
-                    allow_unicode=True,
-                )
-                zip_file.writestr(
-                    f"{root_prefix}global-config.yaml",
-                    buffer.getvalue(),
-                )
+            if _write_backup_global_notifications(zip_file, backup, root_prefix):
                 logger.info(
                     "Exported global notification config for pipeline %s",
                     pipeline_id,
@@ -1718,6 +1890,98 @@ def export_pipeline_full_backup(
 
     zip_buffer.seek(0)
     return zip_buffer.read()
+
+
+def _export_pipeline_into_backup(
+    zip_file: zipfile.ZipFile,
+    backup: _PipelinesBackup,
+    pipeline_id: str,
+    pipeline_name: str,
+    udfs_to_export: Dict[Tuple[str, str], Dict[str, Any]],
+) -> None:
+    """Add one pipeline to an all-pipelines backup: its YAML, its mapping functions and its agents."""
+    pipeline_meta = _backup_pipeline_meta(backup, pipeline_id, pipeline_name)
+
+    try:
+        # Export individual pipeline
+        yaml_content = export_pipeline_yaml(
+            token=backup.token,
+            base_url=backup.base_url,
+            pipeline_id=pipeline_id,
+            use_ssl=backup.use_ssl,
+            skip_verify=backup.skip_verify,
+            skip_schedules=backup.skip_schedules,
+            include_secrets=backup.include_secrets,
+            include_global_config=False,
+            chronos_token=backup.chronos_token,
+        )
+        zip_file.writestr(_backup_yaml_filename(pipeline_name, pipeline_id), yaml_content)
+        logger.info("Exported pipeline %s (%s)", pipeline_name, pipeline_id)
+
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Failed to export pipeline %s: %s", pipeline_id, exc)
+        # Continue with other pipelines
+
+    # Discover mapping functions (UDFs) referenced by this pipeline so we can
+    # export their source code once per (pipeline, udfName) pair.
+    entities = _fetch_udf_entities(backup.token, pipeline_id)
+    for udf_name, meta in discover_udfs_from_entities(entities).items():
+        udfs_to_export.setdefault((pipeline_id, udf_name), meta)
+
+    _add_backup_pipeline_agents(backup, pipeline_id, pipeline_meta)
+
+
+def _write_all_pipelines_udf_sources(
+    zip_file: zipfile.ZipFile,
+    token: str,
+    udfs_to_export: Dict[Tuple[str, str], Dict[str, Any]],
+) -> None:
+    """Write the source of every discovered mapping function under ``udf-<agentId>/`` in the ZIP."""
+    for (pipeline_id, udf_name), meta in udfs_to_export.items():
+        for udf_filename, code in _udf_source_files(
+            token=token,
+            pipeline_id=pipeline_id,
+            udfs_to_export={udf_name: meta},
+        ):
+            # Store source code as UTF-8 text inside the ZIP
+            zip_file.writestr(udf_filename, code.encode("utf-8"))
+
+
+def _write_skipped_maintenance_note(
+    zip_file: zipfile.ZipFile,
+    skipped_maintenance: List[str],
+    exported_count: int,
+) -> None:
+    """Log how the backup went and list in the ZIP the pipelines skipped because of maintenance mode."""
+    if not skipped_maintenance:
+        logger.info(
+            "Backup completed: %d pipeline(s) exported, none in maintenance mode.",
+            exported_count,
+        )
+        return
+
+    # Leave a clear, human-readable trace of any pipeline that was excluded
+    # from the backup because it was in maintenance mode. This makes the
+    # skip visible to operators who inspect the backup archive without
+    # having to dig through server logs.
+    skipped_lines = [
+        "# The following pipelines were in maintenance mode at backup "
+        "# time and have been excluded from this archive.",
+        "# Exit maintenance mode on CoreHub and run the backup again to "
+        "# include them.",
+        "",
+    ]
+    skipped_lines.extend(f"- {name}" for name in skipped_maintenance)
+    zip_file.writestr(
+        "skipped-maintenance-pipelines.txt",
+        ("\n".join(skipped_lines) + "\n").encode("utf-8"),
+    )
+    logger.warning(
+        "Backup completed but %d pipeline(s) were skipped because they "
+        "are in maintenance mode: %s",
+        len(skipped_maintenance),
+        ", ".join(skipped_maintenance),
+    )
 
 
 def export_all_pipelines_yaml(
@@ -1748,20 +2012,26 @@ def export_all_pipelines_yaml(
         skip_verify=skip_verify,
     )
 
+    # Accumulate agent configurations across pipelines
+    backup = _PipelinesBackup(
+        token=token,
+        base_url=base_url,
+        use_ssl=use_ssl,
+        skip_verify=skip_verify,
+        include_secrets=include_secrets,
+        chronos_token=chronos_token,
+        skip_schedules=skip_schedules,
+    )
+
     # Create ZIP file in memory
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-        # Accumulate agent configurations across pipelines
-        all_agents: list[dict] = []
-        seen_agents: set[tuple] = set()
-        pipelines_meta: list[dict] = []
+        # Mapping functions (UDFs) referenced by entities, exported once per
+        # (pipeline, udfName) pair.
+        # Key: (pipeline_id, udf_name) -> {"name": str, "type": Optional[Any], "agentId": Optional[str]}
+        udfs_to_export: Dict[Tuple[str, str], Dict[str, Any]] = {}
 
-        # Track mapping functions (UDFs) referenced by entities so we can export
-        # their source code once per (pipeline, udfName) pair.
-        # Key: (pipeline_id, udf_name) -> {"name": str, "type": Optional[Any]}
-        udfs_to_export: Dict[tuple[str, str], Dict[str, Any]] = {}
-
-        skipped_maintenance: list[str] = []
+        skipped_maintenance: List[str] = []
 
         for pipeline in pipelines:
             pipeline_id = pipeline['id']
@@ -1783,213 +2053,15 @@ def export_all_pipelines_yaml(
                 )
                 continue
 
-            pipeline_meta: Dict[str, Any] = {
-                "pipelineId": pipeline_id,
-                "pipelineName": pipeline_name,
-            }
-            pipelines_meta.append(pipeline_meta)
-
-            try:
-                # Export individual pipeline
-                yaml_content = export_pipeline_yaml(
-                    token=token,
-                    base_url=base_url,
-                    pipeline_id=pipeline_id,
-                    use_ssl=use_ssl,
-                    skip_verify=skip_verify,
-                    skip_schedules=skip_schedules,
-                    include_secrets=include_secrets,
-                    include_global_config=False,
-                    chronos_token=chronos_token,
-                )
-
-                # Create filename with pipeline name if available
-                safe_name = "".join(c for c in pipeline_name if c.isalnum() or c in (' ', '-', '_')).rstrip()
-                if not safe_name:
-                    safe_name = pipeline_id
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = f"backup_{safe_name}_{pipeline_id}_{timestamp}.yaml"
-
-                # Add to ZIP
-                zip_file.writestr(filename, yaml_content)
-                logger.info("Exported pipeline %s (%s)", pipeline_name, pipeline_id)
-
-            except Exception as exc:  # pylint: disable=broad-except
-                logger.exception("Failed to export pipeline %s: %s", pipeline_id, exc)
-                # Continue with other pipelines
-
-            # Discover mapping functions (UDFs) referenced by this pipeline so we
-            # can export their source code as part of the full backup.
-            try:
-                entities = fetch_pipeline_entities(token, pipeline_id)
-            except Exception as exc:  # pylint: disable=broad-except
-                logger.exception("Failed to fetch entities for UDF export in pipeline %s: %s", pipeline_id, exc)
-                entities = []
-
-            if isinstance(entities, list):
-                for ent in entities:
-                    if not isinstance(ent, dict):
-                        continue
-
-                    # Find the target agent entity for this logical entity
-                    target_ae: Optional[Dict[str, Any]] = None
-                    for ae in ent.get("agentEntities", []) or []:
-                        et = ae.get("entityType") or {}
-                        if et.get("type") == "Target":
-                            target_ae = ae
-                            break
-                    if not target_ae:
-                        continue
-
-                    target_et = target_ae.get("entityType") or {}
-
-                    # Preferred: single mappingFunctionInfo entry
-                    mf_info = target_et.get("mappingFunctionInfo")
-                    if isinstance(mf_info, dict):
-                        udf_name = mf_info.get("name")
-                        if udf_name:
-                            key = (pipeline_id, str(udf_name))
-                            if key not in udfs_to_export:
-                                raw_agent_id = target_ae.get("agentId") or target_ae.get("id")
-                                udfs_to_export[key] = {
-                                    "name": str(udf_name),
-                                    "type": mf_info.get("type"),
-                                    "agentId": str(raw_agent_id) if raw_agent_id is not None else None,
-                                }
-                        continue
-
-                    # Backwards-compat: array-style "udf" configuration on entityType
-                    udf_cfg = target_et.get("udf") or []
-                    if isinstance(udf_cfg, list):
-                        for udf in udf_cfg:
-                            if not isinstance(udf, dict):
-                                continue
-                            udf_name = udf.get("name")
-                            if not udf_name:
-                                continue
-                            key = (pipeline_id, str(udf_name))
-                            if key in udfs_to_export:
-                                continue
-                            raw_agent_id = target_ae.get("agentId") or target_ae.get("id")
-                            udfs_to_export[key] = {
-                                "name": str(udf_name),
-                                "type": udf.get("type"),
-                                "agentId": str(raw_agent_id) if raw_agent_id is not None else None,
-                            }
-
-            # Try to collect agents for this pipeline
-            try:
-                pipeline_agents = get_pipeline_agents(token, pipeline_id)
-            except Exception as exc:  # pylint: disable=broad-except
-                logger.exception("Failed to fetch agents for pipeline %s: %s", pipeline_id, exc)
-                pipeline_agents = []
-
-            if isinstance(pipeline_agents, list):
-                # Per-pipeline agent references (by type/tag)
-                pipeline_agent_refs: list[dict] = []
-                for agent in pipeline_agents:
-                    if not isinstance(agent, dict):
-                        continue
-
-                    agent_type = agent.get("agentType")
-                    agent_tag = agent.get("agentTag")
-                    host_credentials = agent.get("hostCredentials") or {}
-                    raw_agent_id = agent.get("agentId") or agent.get("id")
-
-                    if not agent_type or not agent_tag or not host_credentials:
-                        continue
-
-                    # Add lightweight reference for this pipeline
-                    ref: Dict[str, Any] = {
-                        "agentType": agent_type,
-                        "agentTag": agent_tag,
-                    }
-                    if raw_agent_id is not None:
-                        ref["agentId"] = str(raw_agent_id)
-                    pipeline_agent_refs.append(ref)
-
-                    # Deduplicate primarily by agentId when available, otherwise by
-                    # a composite key of type, tag and basic connection details
-                    if raw_agent_id is not None:
-                        key = ("id", str(raw_agent_id))
-                    else:
-                        key = (
-                            "props",
-                            str(agent_type),
-                            str(agent_tag),
-                            str(host_credentials.get("connectionName")),
-                            str(host_credentials.get("host")),
-                            str(host_credentials.get("port")),
-                        )
-                    if key in seen_agents:
-                        continue
-                    seen_agents.add(key)
-
-                    # Mask secrets when exporting, unless include_secrets is True
-                    masked_host_credentials = dict(host_credentials)
-                    if not include_secrets and "password" in masked_host_credentials and masked_host_credentials["password"]:
-                        masked_host_credentials["password"] = "*******"
-
-                    agent_payload: Dict[str, Any] = {
-                        "agentType": agent_type,
-                        "agentTag": agent_tag,
-                        "hostCredentials": masked_host_credentials,
-                        # Keep the same naming as config.json/example-config.json
-                        "customHostCredentials": agent.get("customHostCredentials") or {},
-                        "specificConfiguration": agent.get("specificConfiguration") or {},
-                    }
-                    if raw_agent_id is not None:
-                        agent_payload["agentId"] = str(raw_agent_id)
-                    all_agents.append(agent_payload)
-
-                if pipeline_agent_refs:
-                    pipeline_meta["agents"] = pipeline_agent_refs
+            _export_pipeline_into_backup(zip_file, backup, pipeline_id, pipeline_name, udfs_to_export)
 
         # After processing all pipelines, write a consolidated agents-config.yaml
         # if any agents were found, and export UDF source files when present.
-        if all_agents:
-            agents_payload: Dict[str, Any] = {"agents": all_agents}
-            if pipelines_meta:
-                agents_payload["pipelines"] = pipelines_meta
-
-            buffer = io.StringIO()
-            yaml.safe_dump(
-                agents_payload,
-                buffer,
-                sort_keys=False,
-                allow_unicode=True,
-            )
-
-            # Add inline comments to make password obfuscation clear
-            yaml_text_lines = []
-            for line in buffer.getvalue().splitlines():
-                stripped = line.lstrip()
-                if stripped.startswith("password:") and "*******" in stripped:
-                    # Preserve indentation when appending the comment
-                    line = f"{line}  # original password omitted"
-                yaml_text_lines.append(line)
-
-            yaml_text = "\n".join(yaml_text_lines) + "\n"
-            zip_file.writestr("agents-config.yaml", yaml_text)
+        _write_backup_agents_config(zip_file, backup)
 
         # Export global notification settings (SMTP) once for the whole backup.
         try:
-            notification_cfg = fetch_global_notification_config(
-                token=token,
-                base_url=base_url,
-                use_ssl=use_ssl,
-                skip_verify=skip_verify,
-                include_secrets=include_secrets,
-            )
-            if notification_cfg:
-                buffer = io.StringIO()
-                yaml.safe_dump(
-                    {"globalNotifications": notification_cfg},
-                    buffer,
-                    sort_keys=False,
-                    allow_unicode=True,
-                )
-                zip_file.writestr("global-config.yaml", buffer.getvalue())
+            if _write_backup_global_notifications(zip_file, backup):
                 logger.info("Exported global notification config to all-pipelines backup")
         except Exception as exc:  # pylint: disable=broad-except
             logger.warning(
@@ -1997,96 +2069,8 @@ def export_all_pipelines_yaml(
                 exc,
             )
 
-        # Export mapping function (UDF) source files, if any were discovered.
-        for (pipeline_id, udf_name), meta in udfs_to_export.items():
-            try:
-                response = fetch_core_hub(
-                    f"/pipelines/{pipeline_id}/config/entities/mapping-functions/{udf_name}",
-                    token=token,
-                )
-            except Exception as exc:  # pylint: disable=broad-except
-                logger.exception("Failed to fetch mapping function %s for pipeline %s: %s", udf_name, pipeline_id, exc)
-                continue
-
-            if not isinstance(response, dict):
-                logger.warning(
-                    "Unexpected response while fetching mapping function %s for pipeline %s: %r",
-                    udf_name,
-                    pipeline_id,
-                    response,
-                )
-                continue
-
-            code = response.get("code")
-            mf_type = response.get("type") or meta.get("type")
-            if not isinstance(code, str) or not code:
-                logger.warning("Mapping function %s for pipeline %s has no code to export", udf_name, pipeline_id)
-                continue
-
-            # Determine file extension based on mapping function type.
-            # Mapping aligned with MappingFunctionsType in CoreHub:
-            # - Java      -> .java
-            # - Kotlin    -> .kt
-            # - Python    -> .js
-            # - Javascript-> .py
-            # - Ruby      -> .rb
-            ext = ".java"
-            if isinstance(mf_type, str):
-                t = mf_type.lower()
-                if t == "java":
-                    ext = ".java"
-                elif t == "kotlin":
-                    ext = ".kt"
-                elif t == "python":
-                    ext = ".js"
-                elif t == "javascript":
-                    ext = ".py"
-                elif t == "ruby":
-                    ext = ".rb"
-
-            safe_udf_name = "".join(c for c in str(udf_name) if c.isalnum() or c in ("_", "-")) or "udf"
-            # Place each UDF under a folder named 'udf-<agentId>', with the file
-            # named as the UDF name plus extension so it can be reused with the
-            # UDF_PATH-based lookup used by create_user_defined_functions.
-            agent_id = meta.get("agentId")
-            if agent_id is not None:
-                safe_agent_id = "".join(c for c in str(agent_id) if c.isalnum() or c in ("_", "-")) or "unknown"
-                folder = f"udf-{safe_agent_id}"
-            else:
-                folder = "udf-unknown"
-            udf_filename = f"{folder}/{safe_udf_name}{ext}"
-
-            # Store source code as UTF-8 text inside the ZIP
-            zip_file.writestr(udf_filename, code.encode("utf-8"))
-
-        # Leave a clear, human-readable trace of any pipeline that was excluded
-        # from the backup because it was in maintenance mode. This makes the
-        # skip visible to operators who inspect the backup archive without
-        # having to dig through server logs.
-        if skipped_maintenance:
-            skipped_lines = [
-                "# The following pipelines were in maintenance mode at backup "
-                "# time and have been excluded from this archive.",
-                "# Exit maintenance mode on CoreHub and run the backup again to "
-                "# include them.",
-                "",
-            ]
-            skipped_lines.extend(f"- {name}" for name in skipped_maintenance)
-            zip_file.writestr(
-                "skipped-maintenance-pipelines.txt",
-                ("\n".join(skipped_lines) + "\n").encode("utf-8"),
-            )
-            logger.warning(
-                "Backup completed but %d pipeline(s) were skipped because they "
-                "are in maintenance mode: %s",
-                len(skipped_maintenance),
-                ", ".join(skipped_maintenance),
-            )
-        else:
-            logger.info(
-                "Backup completed: %d pipeline(s) exported, none in maintenance mode.",
-                len(pipelines_meta),
-            )
+        _write_all_pipelines_udf_sources(zip_file, token, udfs_to_export)
+        _write_skipped_maintenance_note(zip_file, skipped_maintenance, len(backup.pipelines_meta))
 
     zip_buffer.seek(0)
     return zip_buffer.read()
@@ -2138,7 +2122,7 @@ def export_smtp_settings(
     configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
 
     try:
-        response = fetch_core_hub("/global-config/smtp", token=token, params={"include_secrets": "true"})
+        response = fetch_core_hub(_SMTP_CONFIG_PATH, token=token, params={"include_secrets": "true"})
         if isinstance(response, dict):
             return {"smtp": response}
         return {"smtp": {"value": response}}
@@ -2211,6 +2195,20 @@ def export_thresholds(
     return configs
 
 
+def _normalize_paginated_response(response: Any) -> Any:
+    """Normalize a Chronos response for the backup.
+
+    A paginated ``{"items": [...], "total": N}`` becomes the plain list of items, any other
+    dict or a list is kept as is, and a scalar is wrapped as ``{"value": ...}``.
+    """
+    if isinstance(response, dict):
+        items = response.get("items")
+        return items if isinstance(items, list) else response
+    if isinstance(response, list):
+        return response
+    return {"value": response}
+
+
 def export_schedules(
     *,
     token: str,
@@ -2225,34 +2223,14 @@ def export_schedules(
     configs: Dict[str, Any] = {}
     try:
         jobs_response = fetch_core_hub("/chronos/api/jobs", token=chronos_token or token)
-        # Normalize paginated responses {"items": [...], "total": N} to a plain list
-        if isinstance(jobs_response, dict):
-            items = jobs_response.get("items")
-            if isinstance(items, list):
-                configs["jobs"] = items
-            else:
-                configs["jobs"] = jobs_response
-        elif isinstance(jobs_response, list):
-            configs["jobs"] = jobs_response
-        else:
-            configs["jobs"] = {"value": jobs_response}
+        configs["jobs"] = _normalize_paginated_response(jobs_response)
     except Exception as exc:  # pylint: disable=broad-except
         logger.warning("Failed to fetch scheduler jobs: %s", exc)
         configs["jobs"] = {"error": str(exc)}
 
     try:
         settings_response = fetch_core_hub("/chronos/api/settings", token=chronos_token or token)
-        # Normalize paginated settings responses too
-        if isinstance(settings_response, dict):
-            items = settings_response.get("items")
-            if isinstance(items, list):
-                configs["settings"] = items
-            else:
-                configs["settings"] = settings_response
-        elif isinstance(settings_response, list):
-            configs["settings"] = settings_response
-        else:
-            configs["settings"] = {"value": settings_response}
+        configs["settings"] = _normalize_paginated_response(settings_response)
     except Exception as exc:  # pylint: disable=broad-except
         logger.warning("Failed to fetch scheduler settings: %s", exc)
         configs["settings"] = {"error": str(exc)}
@@ -2271,7 +2249,7 @@ def export_users(
     configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
 
     try:
-        response = fetch_core_hub("/users", token=token, params={"include_secrets": "true"})
+        response = fetch_core_hub(_USERS_PATH, token=token, params={"include_secrets": "true"})
         if isinstance(response, dict):
             return {"users": response}
         if isinstance(response, list):
@@ -2356,40 +2334,40 @@ def export_full_corehub_backup(
             global_configs = export_global_configs(
                 token=token, base_url=base_url, use_ssl=use_ssl, skip_verify=skip_verify
             )
-            zip_file.writestr("global-configs.yaml", _dump_to_yaml(global_configs).encode("utf-8"))
+            zip_file.writestr(_GLOBAL_CONFIGS_BACKUP_FILE, _dump_to_yaml(global_configs).encode("utf-8"))
         except Exception as exc:  # pylint: disable=broad-except
             logger.warning("Failed to export global configs: %s", exc)
-            zip_file.writestr("global-configs.yaml", _dump_to_yaml({"error": str(exc)}).encode("utf-8"))
+            zip_file.writestr(_GLOBAL_CONFIGS_BACKUP_FILE, _dump_to_yaml({"error": str(exc)}).encode("utf-8"))
 
         # SMTP settings
         try:
             smtp = export_smtp_settings(
                 token=token, base_url=base_url, use_ssl=use_ssl, skip_verify=skip_verify
             )
-            zip_file.writestr("smtp.yaml", _dump_to_yaml(smtp).encode("utf-8"))
+            zip_file.writestr(_SMTP_BACKUP_FILE, _dump_to_yaml(smtp).encode("utf-8"))
         except Exception as exc:  # pylint: disable=broad-except
             logger.warning("Failed to export SMTP settings: %s", exc)
-            zip_file.writestr("smtp.yaml", _dump_to_yaml({"error": str(exc)}).encode("utf-8"))
+            zip_file.writestr(_SMTP_BACKUP_FILE, _dump_to_yaml({"error": str(exc)}).encode("utf-8"))
 
         # Webhooks config
         try:
             webhooks = export_webhooks_config(
                 token=token, base_url=base_url, use_ssl=use_ssl, skip_verify=skip_verify
             )
-            zip_file.writestr("webhooks.yaml", _dump_to_yaml(webhooks).encode("utf-8"))
+            zip_file.writestr(_WEBHOOKS_BACKUP_FILE, _dump_to_yaml(webhooks).encode("utf-8"))
         except Exception as exc:  # pylint: disable=broad-except
             logger.warning("Failed to export webhooks config: %s", exc)
-            zip_file.writestr("webhooks.yaml", _dump_to_yaml({"error": str(exc)}).encode("utf-8"))
+            zip_file.writestr(_WEBHOOKS_BACKUP_FILE, _dump_to_yaml({"error": str(exc)}).encode("utf-8"))
 
         # Thresholds config
         try:
             thresholds = export_thresholds(
                 token=token, base_url=base_url, use_ssl=use_ssl, skip_verify=skip_verify
             )
-            zip_file.writestr("thresholds.yaml", _dump_to_yaml(thresholds).encode("utf-8"))
+            zip_file.writestr(_THRESHOLDS_BACKUP_FILE, _dump_to_yaml(thresholds).encode("utf-8"))
         except Exception as exc:  # pylint: disable=broad-except
             logger.warning("Failed to export thresholds: %s", exc)
-            zip_file.writestr("thresholds.yaml", _dump_to_yaml({"error": str(exc)}).encode("utf-8"))
+            zip_file.writestr(_THRESHOLDS_BACKUP_FILE, _dump_to_yaml({"error": str(exc)}).encode("utf-8"))
 
         # Schedules config
         try:
@@ -2397,10 +2375,10 @@ def export_full_corehub_backup(
                 token=token, base_url=base_url, use_ssl=use_ssl, skip_verify=skip_verify,
                 chronos_token=chronos_token,
             )
-            zip_file.writestr("schedules.yaml", _dump_to_yaml(schedules).encode("utf-8"))
+            zip_file.writestr(_SCHEDULES_BACKUP_FILE, _dump_to_yaml(schedules).encode("utf-8"))
         except Exception as exc:  # pylint: disable=broad-except
             logger.warning("Failed to export schedules: %s", exc)
-            zip_file.writestr("schedules.yaml", _dump_to_yaml({"error": str(exc)}).encode("utf-8"))
+            zip_file.writestr(_SCHEDULES_BACKUP_FILE, _dump_to_yaml({"error": str(exc)}).encode("utf-8"))
 
         # Users config
         try:
@@ -2416,22 +2394,22 @@ def export_full_corehub_backup(
                 "#   - ALL affected users MUST reset their password via the CoreHub UI.\n"
             )
             zip_file.writestr(
-                "users.yaml",
+                _USERS_BACKUP_FILE,
                 (users_comment + _dump_to_yaml(users)).encode("utf-8"),
             )
         except Exception as exc:  # pylint: disable=broad-except
             logger.warning("Failed to export users: %s", exc)
-            zip_file.writestr("users.yaml", _dump_to_yaml({"error": str(exc)}).encode("utf-8"))
+            zip_file.writestr(_USERS_BACKUP_FILE, _dump_to_yaml({"error": str(exc)}).encode("utf-8"))
 
         # OIDC config
         try:
             oidc = export_oidc_config(
                 token=token, base_url=base_url, use_ssl=use_ssl, skip_verify=skip_verify
             )
-            zip_file.writestr("oidc.yaml", _dump_to_yaml(oidc).encode("utf-8"))
+            zip_file.writestr(_OIDC_BACKUP_FILE, _dump_to_yaml(oidc).encode("utf-8"))
         except Exception as exc:  # pylint: disable=broad-except
             logger.warning("Failed to export OIDC config: %s", exc)
-            zip_file.writestr("oidc.yaml", _dump_to_yaml({"error": str(exc)}).encode("utf-8"))
+            zip_file.writestr(_OIDC_BACKUP_FILE, _dump_to_yaml({"error": str(exc)}).encode("utf-8"))
 
         # AI settings: one bundle from Core Hub. An older Core Hub has none to back up.
         _write_ai_settings(
@@ -2548,10 +2526,10 @@ def import_global_configs(
     for key, path in endpoints.items():
         data = configs.get(key)
         if data is None:
-            results[key] = {"status": "skipped", "reason": "not present in backup"}
+            results[key] = {"status": "skipped", "reason": _REASON_NOT_PRESENT_IN_BACKUP}
             continue
         if isinstance(data, dict) and "error" in data:
-            results[key] = {"status": "skipped", "reason": "exported with error"}
+            results[key] = {"status": "skipped", "reason": _REASON_EXPORTED_WITH_ERROR}
             continue
 
         payload = _unwrap_value_if_needed(data)
@@ -2578,13 +2556,13 @@ def import_smtp_settings(
 
     smtp = smtp_data.get("smtp")
     if smtp is None:
-        return {"status": "skipped", "reason": "not present in backup"}
+        return {"status": "skipped", "reason": _REASON_NOT_PRESENT_IN_BACKUP}
     if isinstance(smtp, dict) and "error" in smtp:
-        return {"status": "skipped", "reason": "exported with error"}
+        return {"status": "skipped", "reason": _REASON_EXPORTED_WITH_ERROR}
 
     payload = _unwrap_value_if_needed(smtp)
     try:
-        fetch_core_hub("/global-config/smtp", method="PUT", token=token, body=payload)
+        fetch_core_hub(_SMTP_CONFIG_PATH, method="PUT", token=token, body=payload)
         return {"status": "restored"}
     except Exception as exc:  # pylint: disable=broad-except
         logger.warning("Failed to restore SMTP settings: %s", exc)
@@ -2617,11 +2595,11 @@ def import_global_notifications(
 
     payload = dict(payload)
     pwd = payload.get("password")
-    if pwd in ("*******", "<hidden>", None, ""):
+    if pwd in (_MASKED_SECRET, "<hidden>", None, ""):
         payload.pop("password", None)
 
     try:
-        fetch_core_hub("/global-config/smtp", method="PUT", token=token, body=payload)
+        fetch_core_hub(_SMTP_CONFIG_PATH, method="PUT", token=token, body=payload)
         return {"status": "restored"}
     except Exception as exc:  # pylint: disable=broad-except
         logger.warning("Failed to restore global notification settings: %s", exc)
@@ -2651,10 +2629,10 @@ def import_webhooks_config(
     for key, path in endpoints.items():
         data = webhooks_data.get(key)
         if data is None:
-            results[key] = {"status": "skipped", "reason": "not present in backup"}
+            results[key] = {"status": "skipped", "reason": _REASON_NOT_PRESENT_IN_BACKUP}
             continue
         if isinstance(data, dict) and "error" in data:
-            results[key] = {"status": "skipped", "reason": "exported with error"}
+            results[key] = {"status": "skipped", "reason": _REASON_EXPORTED_WITH_ERROR}
             continue
 
         payload = _unwrap_value_if_needed(data)
@@ -2689,10 +2667,10 @@ def import_thresholds(
     for key, path in endpoints.items():
         data = thresholds_data.get(key)
         if data is None:
-            results[key] = {"status": "skipped", "reason": "not present in backup"}
+            results[key] = {"status": "skipped", "reason": _REASON_NOT_PRESENT_IN_BACKUP}
             continue
         if isinstance(data, dict) and "error" in data:
-            results[key] = {"status": "skipped", "reason": "exported with error"}
+            results[key] = {"status": "skipped", "reason": _REASON_EXPORTED_WITH_ERROR}
             continue
 
         payload = _unwrap_value_if_needed(data)
@@ -2704,6 +2682,35 @@ def import_thresholds(
             results[key] = {"status": "failed", "error": str(exc)}
 
     return results
+
+
+def _restore_scheduler_settings(settings: Any, token: str) -> Dict[str, Any]:
+    """PUT the backed-up Chronos settings, unless they are missing or were exported with an error."""
+    if settings is None or (isinstance(settings, dict) and "error" in settings):
+        return {"status": "skipped"}
+    payload = _unwrap_value_if_needed(settings)
+    try:
+        fetch_core_hub("/chronos/api/settings", method="PUT", token=token, body=payload)
+        return {"status": "restored"}
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("Failed to restore scheduler settings: %s", exc)
+        return {"status": "failed", "error": str(exc)}
+
+
+def _restore_scheduler_jobs(jobs: List[Any], token: str) -> Dict[str, Any]:
+    """POST every backed-up Chronos job and count how many were restored or failed."""
+    restored = 0
+    failed = 0
+    for job in jobs:
+        if not isinstance(job, dict):
+            continue
+        try:
+            fetch_core_hub("/chronos/api/jobs", method="POST", token=token, body=job)
+            restored += 1
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("Failed to restore scheduler job %s: %s", job.get("id", "?"), exc)
+            failed += 1
+    return {"status": "restored", "restored": restored, "failed": failed}
 
 
 def import_schedules(
@@ -2721,69 +2728,27 @@ def import_schedules(
     results: Dict[str, Any] = {}
 
     # Restore settings first
-    settings = schedules_data.get("settings")
-    if settings is not None and not (isinstance(settings, dict) and "error" in settings):
-        payload = _unwrap_value_if_needed(settings)
-        try:
-            fetch_core_hub("/chronos/api/settings", method="PUT", token=chronos_token or token, body=payload)
-            results["settings"] = {"status": "restored"}
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.warning("Failed to restore scheduler settings: %s", exc)
-            results["settings"] = {"status": "failed", "error": str(exc)}
-    else:
-        results["settings"] = {"status": "skipped"}
+    results["settings"] = _restore_scheduler_settings(schedules_data.get("settings"), chronos_token or token)
 
     # Restore jobs
     jobs = schedules_data.get("jobs")
     if isinstance(jobs, list):
-        restored = 0
-        failed = 0
-        for job in jobs:
-            if not isinstance(job, dict):
-                continue
-            try:
-                fetch_core_hub("/chronos/api/jobs", method="POST", token=chronos_token or token, body=job)
-                restored += 1
-            except Exception as exc:  # pylint: disable=broad-except
-                logger.warning("Failed to restore scheduler job %s: %s", job.get("id", "?"), exc)
-                failed += 1
-        results["jobs"] = {"status": "restored", "restored": restored, "failed": failed}
+        results["jobs"] = _restore_scheduler_jobs(jobs, chronos_token or token)
     else:
         results["jobs"] = {"status": "skipped", "reason": "no jobs in backup"}
 
     return results
 
 
-def import_users(
-    *,
-    token: str,
-    base_url: str,
-    use_ssl: Optional[bool],
-    skip_verify: Optional[bool],
-    users_data: Dict[str, Any],
-) -> Dict[str, Any]:
-    """Restore user management configuration from a previously exported dict.
+def _collect_importable_users(raw_users: List[Any]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Split the backed-up users into every non-OIDC user and those that carry a password hash.
 
-    Uses the dedicated POST /users/import endpoint (available in CoreHub 1.4+)
-    which accepts password hashes directly, restoring original passwords.
-    Falls back to per-user PUT/POST when the endpoint is unavailable.
+    Returns ``(all_users, bulk_users)``: the normalized entries of every importable user, and
+    the payload entries of ``POST /users/import`` for the users with a ``passwordHash``.
     """
-    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
-
-    users = users_data.get("users")
-    if users is None:
-        return {"status": "skipped", "reason": "not present in backup"}
-    if isinstance(users, dict) and "error" in users:
-        return {"status": "skipped", "reason": "exported with error"}
-
-    raw = _unwrap_value_if_needed(users)
-    if not isinstance(raw, list):
-        return {"status": "skipped", "reason": "invalid users format"}
-
-    # Collect all non-OIDC users from the backup.
-    all_users: list[dict] = []
-    bulk_users: list[dict] = []
-    for user in raw:
+    all_users: List[Dict[str, Any]] = []
+    bulk_users: List[Dict[str, Any]] = []
+    for user in raw_users:
         if not isinstance(user, dict):
             continue
         if user.get("isOidcUser"):
@@ -2812,121 +2777,200 @@ def import_users(
                 "surname": entry["surname"],
                 "email": entry["email"],
             })
+    return all_users, bulk_users
+
+
+def _bulk_import_users(token: str, bulk_users: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Restore users with their password hashes through ``POST /users/import`` (CoreHub 1.4+).
+
+    Returns the import result, or None when the endpoint is unavailable or did not
+    answer with the list of imported users, so the caller falls back to per-user restore.
+    """
+    try:
+        response = fetch_core_hub(
+            "/users/import",
+            method="POST",
+            token=token,
+            body={"users": bulk_users},
+            expected_error_statuses={404},
+        )
+        if isinstance(response, list):
+            return {
+                "status": "restored",
+                "count": len(response),
+                "note": "passwords restored from backup hashes",
+            }
+    except Exception as exc:  # pylint: disable=broad-except
+        err_str = str(exc)
+        if "404" in err_str or "Not Found" in err_str:
+            logger.info("POST /users/import not available (CoreHub < 1.4); falling back to per-user restore")
+        else:
+            logger.warning("POST /users/import failed: %s; falling back", exc)
+    return None
+
+
+def _fetch_existing_users(token: str) -> List[Any]:
+    """The users currently defined on CoreHub, or an empty list when they cannot be fetched."""
+    try:
+        existing_resp = fetch_core_hub(_USERS_PATH, token=token)
+        if isinstance(existing_resp, list):
+            return existing_resp
+        if isinstance(existing_resp, dict):
+            return existing_resp.get("users") or []
+        return []
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("Failed to fetch existing users during import: %s", exc)
+        return []
+
+
+def _existing_users_by_username(token: str) -> Dict[str, dict]:
+    """The users currently defined on CoreHub, keyed by username."""
+    return {
+        str(u.get("username")): u
+        for u in _fetch_existing_users(token)
+        if isinstance(u, dict) and u.get("username")
+    }
+
+
+def _restore_users_one_by_one(
+    token: str,
+    all_users: List[Dict[str, Any]],
+    existing_by_username: Dict[str, dict],
+) -> Tuple[int, int, List[str]]:
+    """Update the users that already exist and create the others, one request per user.
+
+    Users without a username are ignored. Returns ``(created, updated, errors)``.
+    """
+    counts = {"created": 0, "updated": 0}
+    errors: List[str] = []
+    for user in all_users:
+        if not user["username"]:
+            continue
+        outcome, error = _restore_one_user(token, user, existing_by_username)
+        if error is None:
+            counts[outcome] += 1
+        else:
+            errors.append(error)
+    return counts["created"], counts["updated"], errors
+
+
+def _restore_one_user(
+    token: str,
+    user: Dict[str, Any],
+    existing_by_username: Dict[str, dict],
+) -> Tuple[str, Optional[str]]:
+    """Update ``user`` when it already exists on CoreHub, create it otherwise.
+
+    Returns ``("updated" | "created", error)``, where error is None on success.
+    """
+    username = user["username"]
+    if username in existing_by_username:
+        existing_id = existing_by_username[username].get("id")
+        return "updated", _update_existing_user(token, existing_id, user)
+    return "created", _create_user_with_temp_password(token, user)
+
+
+def _update_existing_user(token: str, existing_id: Any, user: Dict[str, Any]) -> Optional[str]:
+    """Update the profile of an existing CoreHub user; returns an error description on failure."""
+    username = user["username"]
+    try:
+        fetch_core_hub(
+            f"{_USERS_PATH}/{existing_id}",
+            method="PUT",
+            token=token,
+            body={
+                "role": user["role"],
+                "name": user["name"],
+                "surname": user["surname"],
+                "email": user["email"],
+            },
+        )
+        return None
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("Failed to update user %s: %s", username, exc)
+        return f"update {username}: {exc}"
+
+
+def _create_user_with_temp_password(token: str, user: Dict[str, Any]) -> Optional[str]:
+    """Create a user with a random temporary password; returns an error description on failure."""
+    import secrets
+    import string
+    username = user["username"]
+    temp_password = "".join(
+        secrets.choice(string.ascii_letters + string.digits) for _ in range(16)
+    )
+    try:
+        fetch_core_hub(
+            _USERS_PATH,
+            method="POST",
+            token=token,
+            body={
+                "username": username,
+                "password": temp_password,
+                "role": user["role"],
+                "name": user["name"],
+                "surname": user["surname"],
+                "email": user["email"],
+            },
+        )
+        return None
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("Failed to create user %s: %s", username, exc)
+        return f"create {username}: {exc}"
+
+
+def import_users(
+    *,
+    token: str,
+    base_url: str,
+    use_ssl: Optional[bool],
+    skip_verify: Optional[bool],
+    users_data: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Restore user management configuration from a previously exported dict.
+
+    Uses the dedicated POST /users/import endpoint (available in CoreHub 1.4+)
+    which accepts password hashes directly, restoring original passwords.
+    Falls back to per-user PUT/POST when the endpoint is unavailable.
+    """
+    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+
+    users = users_data.get("users")
+    if users is None:
+        return {"status": "skipped", "reason": _REASON_NOT_PRESENT_IN_BACKUP}
+    if isinstance(users, dict) and "error" in users:
+        return {"status": "skipped", "reason": _REASON_EXPORTED_WITH_ERROR}
+
+    raw = _unwrap_value_if_needed(users)
+    if not isinstance(raw, list):
+        return {"status": "skipped", "reason": "invalid users format"}
+
+    # Collect all non-OIDC users from the backup.
+    all_users, bulk_users = _collect_importable_users(raw)
 
     if not all_users:
         return {"status": "skipped", "reason": "no importable users"}
 
     # Try the new bulk import endpoint first (only for users with passwordHash).
-    bulk_succeeded = False
     if bulk_users:
-        try:
-            response = fetch_core_hub(
-                "/users/import",
-                method="POST",
-                token=token,
-                body={"users": bulk_users},
-                expected_error_statuses={404},
-            )
-            if isinstance(response, list):
-                return {
-                    "status": "restored",
-                    "count": len(response),
-                    "note": "passwords restored from backup hashes",
-                }
-        except Exception as exc:  # pylint: disable=broad-except
-            err_str = str(exc)
-            if "404" in err_str or "Not Found" in err_str:
-                logger.info("POST /users/import not available (CoreHub < 1.4); falling back to per-user restore")
-            else:
-                logger.warning("POST /users/import failed: %s; falling back", exc)
+        bulk_result = _bulk_import_users(token, bulk_users)
+        if bulk_result is not None:
+            return bulk_result
 
     # Fallback: per-user PUT/POST when the import endpoint is unavailable
     # or when some users lack a passwordHash.
-    try:
-        existing_resp = fetch_core_hub("/users", token=token)
-        if isinstance(existing_resp, list):
-            existing_users = existing_resp
-        elif isinstance(existing_resp, dict):
-            existing_users = existing_resp.get("users") or []
-        else:
-            existing_users = []
-    except Exception as exc:  # pylint: disable=broad-except
-        logger.warning("Failed to fetch existing users during import: %s", exc)
-        existing_users = []
+    created, updated, errors = _restore_users_one_by_one(token, all_users, _existing_users_by_username(token))
 
-    existing_by_username: Dict[str, dict] = {
-        str(u.get("username")): u
-        for u in existing_users
-        if isinstance(u, dict) and u.get("username")
-    }
-
-    created = updated = skipped = 0
-    errors: list[str] = []
-
-    for user in all_users:
-        username = user["username"]
-        if not username:
-            continue
-
-        if username in existing_by_username:
-            existing_id = existing_by_username[username].get("id")
-            try:
-                fetch_core_hub(
-                    f"/users/{existing_id}",
-                    method="PUT",
-                    token=token,
-                    body={
-                        "role": user["role"],
-                        "name": user["name"],
-                        "surname": user["surname"],
-                        "email": user["email"],
-                    },
-                )
-                updated += 1
-            except Exception as exc:  # pylint: disable=broad-except
-                logger.warning("Failed to update user %s: %s", username, exc)
-                errors.append(f"update {username}: {exc}")
-        else:
-            import secrets
-            import string
-            temp_password = "".join(
-                secrets.choice(string.ascii_letters + string.digits) for _ in range(16)
-            )
-            try:
-                fetch_core_hub(
-                    "/users",
-                    method="POST",
-                    token=token,
-                    body={
-                        "username": username,
-                        "password": temp_password,
-                        "role": user["role"],
-                        "name": user["name"],
-                        "surname": user["surname"],
-                        "email": user["email"],
-                    },
-                )
-                created += 1
-            except Exception as exc:  # pylint: disable=broad-except
-                logger.warning("Failed to create user %s: %s", username, exc)
-                errors.append(f"create {username}: {exc}")
-
-    if errors:
-        return {
-            "status": "restored",
-            "created": created,
-            "updated": updated,
-            "skipped": skipped,
-            "errors": errors,
-            "note": "passwords NOT restored; users must reset passwords via CoreHub UI",
-        }
-    return {
+    result: Dict[str, Any] = {
         "status": "restored",
         "created": created,
         "updated": updated,
-        "skipped": skipped,
-        "note": "passwords NOT restored; users must reset passwords via CoreHub UI",
+        "skipped": 0,
     }
+    if errors:
+        result["errors"] = errors
+    result["note"] = "passwords NOT restored; users must reset passwords via CoreHub UI"
+    return result
 
 
 def import_oidc_config(
@@ -2949,10 +2993,10 @@ def import_oidc_config(
     for key, path in endpoints.items():
         data = oidc_data.get(key)
         if data is None:
-            results[key] = {"status": "skipped", "reason": "not present in backup"}
+            results[key] = {"status": "skipped", "reason": _REASON_NOT_PRESENT_IN_BACKUP}
             continue
         if isinstance(data, dict) and "error" in data:
-            results[key] = {"status": "skipped", "reason": "exported with error"}
+            results[key] = {"status": "skipped", "reason": _REASON_EXPORTED_WITH_ERROR}
             continue
 
         payload = _unwrap_value_if_needed(data)
@@ -2964,6 +3008,26 @@ def import_oidc_config(
             results[key] = {"status": "failed", "error": str(exc)}
 
     return results
+
+
+def _read_backup_yaml(extract_dir: Path, filename: str) -> Any:
+    """Load ``filename`` from an extracted backup, or None when the backup has no such file."""
+    path = extract_dir / filename
+    if not path.exists():
+        return None
+    with open(path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+def _pipelines_zip_status(extract_dir: Path) -> Dict[str, Any]:
+    """Report the pipelines.zip of an extracted backup; app.py imports it via the import-all flow."""
+    pipelines_zip_path = extract_dir / "pipelines.zip"
+    if not pipelines_zip_path.exists():
+        return {"status": "skipped", "reason": "pipelines.zip not found"}
+    with open(pipelines_zip_path, "rb") as f:
+        pipelines_zip = f.read()
+    # The caller (app.py) handles pipeline import via the existing import_all flow
+    return {"status": "pending", "zip_size": len(pipelines_zip)}
 
 
 def import_full_corehub_backup(
@@ -2996,92 +3060,38 @@ def import_full_corehub_backup(
         with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
             zf.extractall(str(extract_dir))
 
-        def _read_yaml(filename: str) -> Any:
-            path = extract_dir / filename
-            if not path.exists():
-                return None
-            with open(path, "r", encoding="utf-8") as f:
-                return yaml.safe_load(f)
-
-        # Restore global configs
-        global_configs = _read_yaml("global-configs.yaml")
-        if global_configs is not None:
-            results["global_configs"] = import_global_configs(
-                token=token, base_url=base_url, use_ssl=use_ssl, skip_verify=skip_verify,
-                configs=global_configs,
-            )
-        else:
-            results["global_configs"] = {"status": "skipped", "reason": "global-configs.yaml not found"}
-
-        # Restore SMTP
-        smtp = _read_yaml("smtp.yaml")
-        if smtp is not None:
-            results["smtp"] = import_smtp_settings(
-                token=token, base_url=base_url, use_ssl=use_ssl, skip_verify=skip_verify,
-                smtp_data=smtp,
-            )
-        else:
-            results["smtp"] = {"status": "skipped", "reason": "smtp.yaml not found"}
-
-        # Restore webhooks
-        webhooks = _read_yaml("webhooks.yaml")
-        if webhooks is not None:
-            results["webhooks"] = import_webhooks_config(
-                token=token, base_url=base_url, use_ssl=use_ssl, skip_verify=skip_verify,
-                webhooks_data=webhooks,
-            )
-        else:
-            results["webhooks"] = {"status": "skipped", "reason": "webhooks.yaml not found"}
-
-        # Restore thresholds
-        thresholds = _read_yaml("thresholds.yaml")
-        if thresholds is not None:
-            results["thresholds"] = import_thresholds(
-                token=token, base_url=base_url, use_ssl=use_ssl, skip_verify=skip_verify,
-                thresholds_data=thresholds,
-            )
-        else:
-            results["thresholds"] = {"status": "skipped", "reason": "thresholds.yaml not found"}
-
-        # Restore schedules
-        schedules = _read_yaml("schedules.yaml")
-        if schedules is not None:
-            results["schedules"] = import_schedules(
-                token=token, base_url=base_url, use_ssl=use_ssl, skip_verify=skip_verify,
-                schedules_data=schedules, chronos_token=chronos_token,
-            )
-        else:
-            results["schedules"] = {"status": "skipped", "reason": "schedules.yaml not found"}
-
-        # Restore users
-        users = _read_yaml("users.yaml")
-        if users is not None:
-            results["users"] = import_users(
-                token=token, base_url=base_url, use_ssl=use_ssl, skip_verify=skip_verify,
-                users_data=users,
-            )
-        else:
-            results["users"] = {"status": "skipped", "reason": "users.yaml not found"}
-
-        # Restore OIDC
-        oidc = _read_yaml("oidc.yaml")
-        if oidc is not None:
-            results["oidc"] = import_oidc_config(
-                token=token, base_url=base_url, use_ssl=use_ssl, skip_verify=skip_verify,
-                oidc_data=oidc,
-            )
-        else:
-            results["oidc"] = {"status": "skipped", "reason": "oidc.yaml not found"}
+        connection = {
+            "token": token,
+            "base_url": base_url,
+            "use_ssl": use_ssl,
+            "skip_verify": skip_verify,
+        }
+        # (result key, backup file, restore function), restored in this order.
+        sections = (
+            ("global_configs", _GLOBAL_CONFIGS_BACKUP_FILE,
+             lambda data: import_global_configs(**connection, configs=data)),
+            ("smtp", _SMTP_BACKUP_FILE,
+             lambda data: import_smtp_settings(**connection, smtp_data=data)),
+            ("webhooks", _WEBHOOKS_BACKUP_FILE,
+             lambda data: import_webhooks_config(**connection, webhooks_data=data)),
+            ("thresholds", _THRESHOLDS_BACKUP_FILE,
+             lambda data: import_thresholds(**connection, thresholds_data=data)),
+            ("schedules", _SCHEDULES_BACKUP_FILE,
+             lambda data: import_schedules(**connection, schedules_data=data, chronos_token=chronos_token)),
+            ("users", _USERS_BACKUP_FILE,
+             lambda data: import_users(**connection, users_data=data)),
+            ("oidc", _OIDC_BACKUP_FILE,
+             lambda data: import_oidc_config(**connection, oidc_data=data)),
+        )
+        for key, filename, restore in sections:
+            data = _read_backup_yaml(extract_dir, filename)
+            if data is not None:
+                results[key] = restore(data)
+            else:
+                results[key] = {"status": "skipped", "reason": f"{filename} not found"}
 
         # Restore pipelines (reuse existing import-all logic)
-        pipelines_zip_path = extract_dir / "pipelines.zip"
-        if pipelines_zip_path.exists():
-            with open(pipelines_zip_path, "rb") as f:
-                pipelines_zip = f.read()
-            # The caller (app.py) handles pipeline import via the existing import_all flow
-            results["pipelines"] = {"status": "pending", "zip_size": len(pipelines_zip)}
-        else:
-            results["pipelines"] = {"status": "skipped", "reason": "pipelines.zip not found"}
+        results["pipelines"] = _pipelines_zip_status(extract_dir)
 
         results["ai_settings"] = _restore_ai_settings_file(extract_dir, token, ai_settings_passphrase)
 

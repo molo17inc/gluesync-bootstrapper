@@ -7,7 +7,6 @@ import argparse
 import json
 import sys
 import time
-import urllib.error
 import urllib.request
 from typing import Optional
 
@@ -56,7 +55,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 body = response.read().decode("utf-8")
                 if response.status == 200 and _healthz_body_is_ok(body):
                     break
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        except OSError as exc:  # also covers urllib.error.URLError and TimeoutError
             last_error = exc
             time.sleep(args.interval)
     else:

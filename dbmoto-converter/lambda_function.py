@@ -49,6 +49,7 @@ from datetime import datetime
 from decimal import Decimal
 
 import boto3
+from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from parse_dbmoto_metadata_xml import parse_xml, export_as_yaml, write_conversion_report
@@ -56,6 +57,11 @@ from parse_dbmoto_metadata_xml import parse_xml, export_as_yaml, write_conversio
 
 sqs = boto3.client("sqs")
 dynamodb = boto3.resource("dynamodb")
+
+# S3 client for the downloads bucket, created once per Lambda container.
+# Explicit timeouts equal botocore's defaults (60 s to connect, 60 s to read).
+s3_client_config = Config(connect_timeout=60, read_timeout=60)
+s3 = boto3.client("s3", config=s3_client_config)
 
 
 def _json_default(obj):
@@ -246,7 +252,7 @@ def create_output_zip(output_dir, temp_dir):
 
 
 def _s3_client():
-    return boto3.client("s3")
+    return s3
 
 
 def _s3_bucket_and_key(remote_filename):
@@ -307,7 +313,6 @@ def upload_to_ftp(local_path, remote_filename):
         print(error_msg)
         raise Exception(error_msg)
 
-    ftp_url = None
     if os.environ.get("DUAL_WRITE_SG", "0") == "1":
         try:
             ftp_url = _upload_to_ftp_legacy(local_path, remote_filename)
@@ -316,8 +321,7 @@ def upload_to_ftp(local_path, remote_filename):
             # S3 succeeded; surface FTP failure but do not fail the job
             print(f"WARNING: DUAL_WRITE_SG FTP upload failed: {e}")
 
-    public_url = f"https://molo17.com/{key}"
-    return public_url if ftp_url is None else public_url
+    return f"https://molo17.com/{key}"
 
 
 def download_from_ftp(remote_filename, local_path):
