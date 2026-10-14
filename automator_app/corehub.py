@@ -2790,6 +2790,35 @@ def import_thresholds(
     return results
 
 
+def _restore_scheduler_settings(settings: Any, token: str) -> Dict[str, Any]:
+    """PUT the backed-up Chronos settings, unless they are missing or were exported with an error."""
+    if settings is None or (isinstance(settings, dict) and "error" in settings):
+        return {"status": "skipped"}
+    payload = _unwrap_value_if_needed(settings)
+    try:
+        fetch_core_hub("/chronos/api/settings", method="PUT", token=token, body=payload)
+        return {"status": "restored"}
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("Failed to restore scheduler settings: %s", exc)
+        return {"status": "failed", "error": str(exc)}
+
+
+def _restore_scheduler_jobs(jobs: List[Any], token: str) -> Dict[str, Any]:
+    """POST every backed-up Chronos job and count how many were restored or failed."""
+    restored = 0
+    failed = 0
+    for job in jobs:
+        if not isinstance(job, dict):
+            continue
+        try:
+            fetch_core_hub("/chronos/api/jobs", method="POST", token=token, body=job)
+            restored += 1
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("Failed to restore scheduler job %s: %s", job.get("id", "?"), exc)
+            failed += 1
+    return {"status": "restored", "restored": restored, "failed": failed}
+
+
 def import_schedules(
     *,
     token: str,
@@ -2805,33 +2834,12 @@ def import_schedules(
     results: Dict[str, Any] = {}
 
     # Restore settings first
-    settings = schedules_data.get("settings")
-    if settings is not None and not (isinstance(settings, dict) and "error" in settings):
-        payload = _unwrap_value_if_needed(settings)
-        try:
-            fetch_core_hub("/chronos/api/settings", method="PUT", token=chronos_token or token, body=payload)
-            results["settings"] = {"status": "restored"}
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.warning("Failed to restore scheduler settings: %s", exc)
-            results["settings"] = {"status": "failed", "error": str(exc)}
-    else:
-        results["settings"] = {"status": "skipped"}
+    results["settings"] = _restore_scheduler_settings(schedules_data.get("settings"), chronos_token or token)
 
     # Restore jobs
     jobs = schedules_data.get("jobs")
     if isinstance(jobs, list):
-        restored = 0
-        failed = 0
-        for job in jobs:
-            if not isinstance(job, dict):
-                continue
-            try:
-                fetch_core_hub("/chronos/api/jobs", method="POST", token=chronos_token or token, body=job)
-                restored += 1
-            except Exception as exc:  # pylint: disable=broad-except
-                logger.warning("Failed to restore scheduler job %s: %s", job.get("id", "?"), exc)
-                failed += 1
-        results["jobs"] = {"status": "restored", "restored": restored, "failed": failed}
+        results["jobs"] = _restore_scheduler_jobs(jobs, chronos_token or token)
     else:
         results["jobs"] = {"status": "skipped", "reason": "no jobs in backup"}
 
