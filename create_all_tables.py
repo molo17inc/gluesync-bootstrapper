@@ -452,7 +452,7 @@ def _schema_tables_context(yaml_config: dict, source_schema: str, target_schema:
 
 
 def create_tables(token, pipeline_id, source_schema, target_schema, tables, source_agent_id, target_agent_id,
-                  source_type, target_type, yaml_config, skip_errors=True):
+                  yaml_config):
     """Create the target tables of the source tables of a schema, as the YAML configuration describes them."""
     # First, collect all unique group names from the YAML configuration
     group_names = _collect_group_names(yaml_config)
@@ -828,7 +828,7 @@ def main(pipeline_id, source_schema, target_schema, source_type, target_type, ya
         create_tables(
             token, pipeline_id, source_schema, target_schema,
             tables, source_agent['agentId'], target_agent['agentId'],
-            source_type, target_type, yaml_config, skip_errors
+            yaml_config
         )
 
     except Exception as e:

@@ -231,8 +231,6 @@ class CreateTablesFromDemoKitYamlTests(unittest.TestCase):
                 tables=discovered_tables,
                 source_agent_id="source-agent",
                 target_agent_id="target-agent",
-                source_type="SQL",
-                target_type="SQL",
                 yaml_config=yaml_config,
             )
 
