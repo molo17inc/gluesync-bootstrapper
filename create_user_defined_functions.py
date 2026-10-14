@@ -201,7 +201,7 @@ def find_udf_definition_in_path(udf_name: str, udf_type: UdfFunctionType) -> Pos
     for root in search_roots:
         if not root.is_dir():
             continue
-        found = next((p for p in root.rglob(filename)), None)
+        found = next(iter(root.rglob(filename)), None)
         if found:
             return found
 
