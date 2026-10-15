@@ -2311,6 +2311,7 @@ def export_full_corehub_backup(
     include_secrets: bool = False,
     chronos_token: Optional[str] = None,
     ai_settings_passphrase: Optional[str] = None,
+    ai_settings_current_password: Optional[str] = None,
 ) -> bytes:
     """Export a complete CoreHub backup including pipelines, global configs, SMTP, webhooks, thresholds, and schedules.
 
@@ -2323,7 +2324,8 @@ def export_full_corehub_backup(
       - pipelines/ (individual pipeline YAMLs)
       - agents-config.yaml
       - ai-settings.json (Core Hub 2.3.0.1+; its secrets are included only with
-        include_secrets and an ai_settings_passphrase, sealed with it)
+        include_secrets and an ai_settings_passphrase, sealed with it, and need
+        ai_settings_current_password, the signed-in user's password)
     """
     configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
 
@@ -2417,6 +2419,7 @@ def export_full_corehub_backup(
             token=token,
             include_secrets=include_secrets and bool(ai_settings_passphrase),
             passphrase=ai_settings_passphrase,
+            current_password=ai_settings_current_password,
         )
 
         # Pipelines backup (already a ZIP, extract contents).
@@ -2453,9 +2456,12 @@ def _write_ai_settings(
     token: str,
     include_secrets: bool,
     passphrase: Optional[str],
+    current_password: Optional[str] = None,
 ) -> None:
     try:
-        bundle = ai_settings.export_ai_settings(token, include_secrets=include_secrets, passphrase=passphrase)
+        bundle = ai_settings.export_ai_settings(
+            token, include_secrets=include_secrets, passphrase=passphrase, current_password=current_password
+        )
     except ai_settings.AiSettingsUnsupported as exc:
         logger.info("Skipping AI settings: %s", exc)
         return

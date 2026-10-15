@@ -27,8 +27,9 @@ keys, budgets and every user's conversation retention. Ids and versions are
 kept, so an import into another Core Hub restores them exactly. Secrets travel
 only when asked, sealed with a passphrase of at least 12 characters.
 
-Command line (the passphrase is read from an environment variable, never from
-the command line, where other users of the machine could see it):
+Command line (the passphrase and the password are read from environment
+variables, never from the command line, where other users of the machine could
+see them):
 
     python ai_settings.py export --output ai-settings.json [--include-secrets]
     python ai_settings.py import --input ai-settings.json [--dry-run]
@@ -38,6 +39,12 @@ Connection: CORE_HUB_URL, SSL_ENABLED, SSL_SKIP_VERIFY as for the Bootstrapper;
 the token comes from --token, else AI_SETTINGS_TOKEN, else a login as admin
 with DEFAULT_PASSWORD. The passphrase comes from AI_SETTINGS_PASSPHRASE (or
 the variable --passphrase-env names).
+
+Exporting secrets takes the signed-in user's current password, as Core Hub
+asks it again for that (Gluesync 2.3.0.1): it comes from
+AI_SETTINGS_CURRENT_PASSWORD (or the variable --password-env names), else, when
+this script signs in as admin itself, from DEFAULT_PASSWORD. The token must be
+a sign-in token: Core Hub refuses secrets to a personal API token.
 """
 
 import argparse
@@ -54,6 +61,7 @@ BUNDLE_FORMAT = "gluesync-ai-settings"
 BACKUP_FILENAME = "ai-settings.json"
 MIN_PASSPHRASE_LENGTH = 12
 PASSPHRASE_ENV = "AI_SETTINGS_PASSPHRASE"
+CURRENT_PASSWORD_ENV = "AI_SETTINGS_CURRENT_PASSWORD"
 TOKEN_ENV = "AI_SETTINGS_TOKEN"
 UNSUPPORTED_MESSAGE = (
     "This Core Hub cannot back up AI settings: it needs Gluesync 2.3.0.1 or later"
@@ -105,11 +113,28 @@ def check_passphrase(passphrase: Optional[str]) -> str:
     return passphrase
 
 
-def export_ai_settings(token: str, include_secrets: bool = False, passphrase: Optional[str] = None) -> Dict[str, Any]:
-    """The AI settings bundle of the configured Core Hub."""
+def check_current_password(current_password: Optional[str]) -> str:
+    """Refuse before asking Core Hub, where a missing password still counts as a refused export."""
+    if not current_password:
+        raise ValueError("Exporting secrets needs your current Core Hub password")
+    return current_password
+
+
+def export_ai_settings(
+    token: str,
+    include_secrets: bool = False,
+    passphrase: Optional[str] = None,
+    current_password: Optional[str] = None,
+) -> Dict[str, Any]:
+    """The AI settings bundle of the configured Core Hub.
+
+    With secrets, Core Hub 2.3.0.1 asks the signed-in user's current password again
+    (``currentPassword``) and refuses a personal API token.
+    """
     body: Dict[str, Any] = {"includeSecrets": include_secrets}
     if include_secrets:
         body["passphrase"] = check_passphrase(passphrase)
+        body["currentPassword"] = check_current_password(current_password)
     return _call(EXPORT_PATH, token, body)
 
 
@@ -200,6 +225,10 @@ def _token(explicit: Optional[str]) -> str:
     token = explicit or os.getenv(TOKEN_ENV)
     if token:
         return token
+    return _admin_login()
+
+
+def _admin_login() -> str:
     response = fetch_core_hub(
         "/authentication/login",
         method="POST",
@@ -221,12 +250,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--token", help=f"Core Hub token (default ${TOKEN_ENV}, else admin login)")
     parser.add_argument("--passphrase-env", default=PASSPHRASE_ENV,
                         help=f"Environment variable holding the passphrase (default {PASSPHRASE_ENV})")
+    parser.add_argument("--password-env", default=CURRENT_PASSWORD_ENV,
+                        help="Environment variable holding your current Core Hub password, needed to export "
+                             f"secrets (default {CURRENT_PASSWORD_ENV})")
     commands = parser.add_subparsers(dest="command", required=True)
 
     export_cmd = commands.add_parser("export", help="Write the AI settings bundle to a file")
     export_cmd.add_argument("--output", default=BACKUP_FILENAME)
     export_cmd.add_argument("--include-secrets", action="store_true",
-                            help="Seal provider keys, MCP credentials and API key hashes with the passphrase")
+                            help="Seal provider keys, MCP credentials and API key hashes with the passphrase "
+                                 "(needs your current Core Hub password)")
 
     import_cmd = commands.add_parser("import", help="Restore an AI settings bundle")
     import_cmd.add_argument("--input", default=BACKUP_FILENAME)
@@ -246,7 +279,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 1 if differences else 0
         token = _token(args.token)
         if args.command == "export":
-            bundle = export_ai_settings(token, include_secrets=args.include_secrets, passphrase=passphrase)
+            current_password = os.getenv(args.password_env)
+            if not current_password and not (args.token or os.getenv(TOKEN_ENV)):
+                # This script signed in as admin with DEFAULT_PASSWORD: that is the password Core Hub asks again.
+                current_password = os.getenv("DEFAULT_PASSWORD")
+            bundle = export_ai_settings(token, include_secrets=args.include_secrets, passphrase=passphrase,
+                                        current_password=current_password)
             with open(args.output, "w", encoding="utf-8") as f:
                 json.dump(bundle, f, indent=2, ensure_ascii=False)
             print(f"AI settings written to {args.output} ({'with' if args.include_secrets else 'without'} secrets)")

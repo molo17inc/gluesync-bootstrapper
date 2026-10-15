@@ -34,6 +34,7 @@ from typing import Dict, List, Optional, Tuple, Union, Any
 from utils.log import get_logger, log_success, log_failure
 from utils.chronos_client import ChronosClient
 from utils.core_hub_client import CoreHubClient
+from utils.redact import redact
 
 CORE_HUB_URL = os.getenv('CORE_HUB_URL', 'https://localhost:1717')
 ENABLE_SCHEDULING = os.getenv('ENABLE_SCHEDULING', 'true').lower() == 'true'
@@ -126,7 +127,7 @@ def get_oracle_agent_tags() -> set[str]:
 
 def _log_request_mapping(title, mapping):
     logger.debug(title)
-    for k, v in mapping.items():
+    for k, v in redact(mapping).items():
         logger.debug(f"  {k}: {v}")
 
 
@@ -136,7 +137,8 @@ def _log_request_body(body):
         if isinstance(body, (bytes, bytearray)):
             logger.debug(f"<binary payload: {len(body)} bytes>")
         else:
-            logger.debug(json.dumps(body, indent=2) if isinstance(body, (dict, list)) else str(body))
+            # Passwords, passphrases and tokens never reach the log, which demo kits ship to ELK at DEBUG.
+            logger.debug(json.dumps(redact(body), indent=2) if isinstance(body, (dict, list)) else str(body))
     except Exception as e:
         logger.debug(f"<Unable to serialize request body: {e}>")
 
@@ -165,7 +167,7 @@ def _log_core_hub_response(method, path, response, duration):
 
     try:
         if isinstance(response, (dict, list)):
-            response_text = json.dumps(response, indent=2, ensure_ascii=False)
+            response_text = json.dumps(redact(response), indent=2, ensure_ascii=False)
         else:
             response_text = str(response)
     except Exception as exc:  # pragma: no cover - defensive

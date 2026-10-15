@@ -353,15 +353,18 @@ class ApiMessage(BaseModel):
 
 
 class AiSettingsExportRequest(BaseModel):
-    """The passphrase travels in the body, never in a URL that proxies and logs keep."""
+    """The passphrase and the password travel in the body, never in a URL that proxies and logs keep."""
 
     include_secrets: bool = False
     passphrase: Optional[str] = None
+    # Core Hub 2.3.0.1 asks the signed-in user's current password again to export secrets.
+    current_password: Optional[str] = None
 
 
 class FullBackupRequest(BaseModel):
     include_secrets: bool = False
     ai_settings_passphrase: Optional[str] = None
+    ai_settings_current_password: Optional[str] = None
 
 
 class PipelineInfo(BaseModel):
@@ -649,6 +652,7 @@ def _export_full_backup_with_options(request: FullBackupRequest):
     if request.include_secrets and request.ai_settings_passphrase:
         try:
             ai_settings.check_passphrase(request.ai_settings_passphrase)
+            ai_settings.check_current_password(request.ai_settings_current_password)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -661,6 +665,7 @@ def _export_full_backup_with_options(request: FullBackupRequest):
             include_secrets=request.include_secrets,
             chronos_token=state.chronos_token,
             ai_settings_passphrase=request.ai_settings_passphrase,
+            ai_settings_current_password=request.ai_settings_current_password,
         )
     except Exception as exc:  # pylint: disable=broad-except
         logger.exception("Failed to export full CoreHub backup")
@@ -682,6 +687,7 @@ def _export_ai_settings(request: AiSettingsExportRequest):
             state.token,
             include_secrets=request.include_secrets,
             passphrase=request.passphrase,
+            current_password=request.current_password,
         )
     except ai_settings.AiSettingsUnsupported as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
