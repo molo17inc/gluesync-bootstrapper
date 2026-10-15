@@ -23,6 +23,7 @@ import os
 from urllib.parse import urlparse, urlunparse
 import urllib3
 import logging
+from utils.redact import redact
 
 logger = logging.getLogger(__name__)
 
@@ -154,7 +155,7 @@ class CoreHubClient:
         if isinstance(body, (bytes, bytearray)):
             # For binary data, don't set Content-Type - send raw bytes
             if verb == 'PUT':
-                logger.debug(f"Sending binary PUT: {len(body)} bytes, headers: {headers}")
+                logger.debug(f"Sending binary PUT: {len(body)} bytes, headers: {redact(headers)}")
             response = send(url, headers=headers, data=body, verify=verify, params=params)
             if verb == 'PUT':
                 logger.debug(f"Binary PUT response status: {response.status_code}")

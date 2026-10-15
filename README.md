@@ -743,18 +743,19 @@ The gluesync-demo-kits integration tests run it for every bootstrapper service o
 
 On Gluesync 2.3.0.1 and later, Core Hub exports every AI setting as one bundle: LLM providers, AI Studio agents, model deployments, skill and agent versions, skill attachments, remote MCP servers, Enterprise Brain settings, platform API keys, budgets and each user's conversation retention. Conversations, memories, runs and the Enterprise Brain index are not part of it. Ids and versions are kept, so a restore on another Core Hub keeps every reference between settings.
 
-Secrets (provider API keys, remote MCP credentials, API key hashes) are included only on request, sealed with a passphrase of at least 12 characters; the same passphrase is needed to restore them. Without secrets, the restore lists what is left to redo (a provider key to enter again, an MCP sign-in, an API key to issue again).
+Secrets (provider API keys, remote MCP credentials, API key hashes) are included only on request, sealed with a passphrase of at least 12 characters; the same passphrase is needed to restore them. Core Hub hands them out only to a signed-in user who gives their current password again, and never to a personal API token. Without secrets, the restore lists what is left to redo (a provider key to enter again, an MCP sign-in, an API key to issue again).
 
 ```bash
 export CORE_HUB_URL=https://my-corehub:1717
 export AI_SETTINGS_PASSPHRASE='a long passphrase you keep'
+export AI_SETTINGS_CURRENT_PASSWORD='your Core Hub password'
 python ai_settings.py export --output ai-settings.json --include-secrets
 python ai_settings.py import --input ai-settings.json --dry-run
 python ai_settings.py import --input ai-settings.json
 python ai_settings.py compare before.json after.json
 ```
 
-The passphrase is read from `AI_SETTINGS_PASSPHRASE` (or the variable `--passphrase-env` names), never from the command line. The token comes from `--token`, `AI_SETTINGS_TOKEN`, or a login as `admin` with `DEFAULT_PASSWORD`. In the Automator, the Backup tab exports the AI settings and the Import tab restores them (Check runs a dry run). The full Core Hub backup adds them as `ai-settings.json`.
+The passphrase is read from `AI_SETTINGS_PASSPHRASE` (or the variable `--passphrase-env` names), never from the command line. The token comes from `--token`, `AI_SETTINGS_TOKEN`, or a login as `admin` with `DEFAULT_PASSWORD`; it must be a sign-in token, not a personal API token, to export secrets. Exporting secrets also needs the signed-in user's current password, read from `AI_SETTINGS_CURRENT_PASSWORD` (or the variable `--password-env` names); when the script signs in as `admin` itself, `DEFAULT_PASSWORD` is used. In the Automator, the Backup tab exports the AI settings, asking for your Core Hub password when secrets are included, and the Import tab restores them (Check runs a dry run). The full Core Hub backup adds them as `ai-settings.json`.
 
 ### Transactions Auditing
 

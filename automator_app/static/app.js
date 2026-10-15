@@ -147,11 +147,15 @@ const api = {
     const filename = response.headers.get('Content-Disposition')?.split('filename=')[1]?.replace(/"/g, '') || 'pipeline_backups.zip';
     return { blob, filename };
   },
-  async exportAiSettings(includeSecrets, passphrase) {
+  async exportAiSettings(includeSecrets, passphrase, currentPassword) {
     const response = await fetch('/api/export/ai-settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ include_secrets: includeSecrets, passphrase: includeSecrets ? passphrase : null }),
+      body: JSON.stringify({
+        include_secrets: includeSecrets,
+        passphrase: includeSecrets ? passphrase : null,
+        current_password: includeSecrets ? currentPassword : null,
+      }),
     });
     if (!response.ok) {
       const detail = await response.json().catch(() => ({}));
@@ -2226,6 +2230,9 @@ function initAiSettings() {
   const exportPassphraseLabel = document.getElementById('ai-settings-export-passphrase-label');
   const exportPassphraseHint = document.getElementById('ai-settings-export-passphrase-hint');
   const exportPassphrase = document.getElementById('ai-settings-export-passphrase');
+  const exportPasswordLabel = document.getElementById('ai-settings-export-password-label');
+  const exportPasswordHint = document.getElementById('ai-settings-export-password-hint');
+  const exportPassword = document.getElementById('ai-settings-export-password');
   const exportButton = document.getElementById('ai-settings-export-btn');
   const exportMessage = document.getElementById('ai-settings-export-message');
   const importFile = document.getElementById('ai-settings-import-file');
@@ -2239,6 +2246,10 @@ function initAiSettings() {
     exportPassphraseLabel.hidden = !includeSecrets.checked;
     exportPassphraseHint.hidden = !includeSecrets.checked;
     exportPassphrase.required = includeSecrets.checked;
+    exportPasswordLabel.hidden = !includeSecrets.checked;
+    exportPasswordHint.hidden = !includeSecrets.checked;
+    exportPassword.required = includeSecrets.checked;
+    if (!includeSecrets.checked) exportPassword.value = '';
     if (includeSecrets.checked) exportPassphrase.focus();
   });
 
@@ -2250,10 +2261,15 @@ function initAiSettings() {
       exportPassphrase.focus();
       return;
     }
+    if (withSecrets && !exportPassword.value) {
+      showMessage(exportMessage, 'Enter your Core Hub password: Core Hub asks for it again to export secrets', 'error');
+      exportPassword.focus();
+      return;
+    }
     exportButton.disabled = true;
     showMessage(exportMessage, 'Exporting AI settings…');
     try {
-      const { blob, filename } = await api.exportAiSettings(withSecrets, exportPassphrase.value);
+      const { blob, filename } = await api.exportAiSettings(withSecrets, exportPassphrase.value, exportPassword.value);
       downloadBlob(blob, filename);
       showMessage(exportMessage, `Exported ${filename} ${withSecrets ? 'with sealed secrets' : 'without secrets'}`, 'success');
       logActivity('AI settings', `Exported ${filename}`);
@@ -2261,6 +2277,8 @@ function initAiSettings() {
       showMessage(exportMessage, err.message, 'error');
       logActivity('AI settings', `Export failed: ${err.message}`);
     } finally {
+      // The password is asked again for every export with secrets, never kept in the page.
+      exportPassword.value = '';
       exportButton.disabled = false;
     }
   });

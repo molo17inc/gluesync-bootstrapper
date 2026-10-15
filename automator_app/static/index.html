@@ -307,6 +307,22 @@
                     with this passphrase. Keep it safe: the same passphrase is
                     needed to restore them.</span
                   >
+                  <label id="ai-settings-export-password-label" hidden>
+                    Your Core Hub password
+                    <input
+                      type="password"
+                      id="ai-settings-export-password"
+                      autocomplete="current-password"
+                      aria-describedby="ai-settings-export-password-hint"
+                    />
+                  </label>
+                  <span
+                    class="hint-text"
+                    id="ai-settings-export-password-hint"
+                    hidden
+                    >Core Hub asks for it again before it hands out secrets. It
+                    is sent to Core Hub only and never stored.</span
+                  >
                   <div class="button-group">
                     <button
                       type="submit"

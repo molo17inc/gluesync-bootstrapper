@@ -21,6 +21,7 @@ if str(PROJECT_ROOT) not in sys.path:
 import ai_settings  # noqa: E402
 
 PASSPHRASE = "correct horse battery staple"
+PASSWORD = "the admin password"
 
 
 def _bundle(**overrides):
@@ -58,18 +59,46 @@ class ExportImportTests(unittest.TestCase):
             "/ai-studio/settings/export", method="POST", token="tok", body={"includeSecrets": False}
         )
 
-    def test_export_with_secrets_sends_the_passphrase(self):
+    def test_export_with_secrets_sends_the_passphrase_and_the_current_password(self):
         with mock.patch.object(ai_settings, "fetch_core_hub", return_value=_bundle()) as fetch:
-            ai_settings.export_ai_settings("tok", include_secrets=True, passphrase=PASSPHRASE)
-        self.assertEqual({"includeSecrets": True, "passphrase": PASSPHRASE}, fetch.call_args.kwargs["body"])
+            ai_settings.export_ai_settings("tok", include_secrets=True, passphrase=PASSPHRASE, current_password=PASSWORD)
+        self.assertEqual(
+            {"includeSecrets": True, "passphrase": PASSPHRASE, "currentPassword": PASSWORD},
+            fetch.call_args.kwargs["body"],
+        )
+
+    def test_without_secrets_no_password_is_sent(self):
+        with mock.patch.object(ai_settings, "fetch_core_hub", return_value=_bundle()) as fetch:
+            ai_settings.export_ai_settings("tok", current_password=PASSWORD)
+        self.assertEqual({"includeSecrets": False}, fetch.call_args.kwargs["body"])
 
     def test_a_short_or_missing_passphrase_is_refused_before_calling(self):
         with mock.patch.object(ai_settings, "fetch_core_hub") as fetch:
             with self.assertRaises(ValueError):
-                ai_settings.export_ai_settings("tok", include_secrets=True, passphrase="short")
+                ai_settings.export_ai_settings("tok", include_secrets=True, passphrase="short", current_password=PASSWORD)
             with self.assertRaises(ValueError):
-                ai_settings.export_ai_settings("tok", include_secrets=True)
+                ai_settings.export_ai_settings("tok", include_secrets=True, current_password=PASSWORD)
         fetch.assert_not_called()
+
+    def test_a_missing_password_is_refused_before_calling(self):
+        # Core Hub counts a refused secret export, so a call that cannot succeed is never made.
+        with mock.patch.object(ai_settings, "fetch_core_hub") as fetch:
+            for password in (None, ""):
+                with self.assertRaises(ValueError) as raised:
+                    ai_settings.export_ai_settings("tok", include_secrets=True, passphrase=PASSPHRASE,
+                                                   current_password=password)
+                self.assertIn("password", str(raised.exception))
+        fetch.assert_not_called()
+
+    def test_core_hub_s_reauthentication_refusal_carries_its_message(self):
+        error = _http_error(403, {"message": "Exporting secrets needs your current password: the one given is not correct",
+                                  "code": "AI_SETTINGS_REAUTHENTICATION_REQUIRED"})
+        with mock.patch.object(ai_settings, "fetch_core_hub", side_effect=error):
+            with self.assertRaises(ai_settings.AiSettingsError) as raised:
+                ai_settings.export_ai_settings("tok", include_secrets=True, passphrase=PASSPHRASE,
+                                               current_password="wrong")
+        self.assertEqual("Exporting secrets needs your current password: the one given is not correct",
+                         str(raised.exception))
 
     def test_an_older_core_hub_is_reported_as_unsupported(self):
         for status in (404, 405):
@@ -179,17 +208,41 @@ class CommandLineTests(unittest.TestCase):
             code = ai_settings.main(list(argv))
         return code, out.getvalue(), err.getvalue()
 
-    def test_export_writes_the_bundle_with_the_passphrase_from_the_environment(self):
+    def test_export_writes_the_bundle_with_the_passphrase_and_password_from_the_environment(self):
         output = self.dir / "ai.json"
         with mock.patch.object(ai_settings, "export_ai_settings", return_value=_bundle()) as export:
             code, out, _ = self._run(
                 "--token", "tok", "export", "--output", str(output), "--include-secrets",
-                env={ai_settings.PASSPHRASE_ENV: PASSPHRASE},
+                env={ai_settings.PASSPHRASE_ENV: PASSPHRASE, ai_settings.CURRENT_PASSWORD_ENV: PASSWORD},
             )
         self.assertEqual(0, code)
         self.assertEqual(_bundle(), json.loads(output.read_text()))
-        export.assert_called_once_with("tok", include_secrets=True, passphrase=PASSPHRASE)
+        export.assert_called_once_with("tok", include_secrets=True, passphrase=PASSPHRASE, current_password=PASSWORD)
         self.assertIn("with secrets", out)
+
+    def test_the_password_variable_can_be_renamed(self):
+        with mock.patch.object(ai_settings, "export_ai_settings", return_value=_bundle()) as export:
+            self._run("--token", "tok", "--password-env", "HUB_A_PASSWORD", "export", "--output",
+                      str(self.dir / "x.json"), "--include-secrets",
+                      env={ai_settings.PASSPHRASE_ENV: PASSPHRASE, "HUB_A_PASSWORD": "a-password"})
+        self.assertEqual("a-password", export.call_args.kwargs["current_password"])
+
+    def test_a_given_token_never_borrows_default_password(self):
+        # DEFAULT_PASSWORD is admin's: it is only the right password for the token this script got by logging in.
+        with mock.patch.object(ai_settings, "export_ai_settings", return_value=_bundle()) as export:
+            os.environ.pop(ai_settings.CURRENT_PASSWORD_ENV, None)
+            self._run("--token", "tok", "export", "--output", str(self.dir / "x.json"), "--include-secrets",
+                      env={ai_settings.PASSPHRASE_ENV: PASSPHRASE, "DEFAULT_PASSWORD": "admin"})
+        self.assertIsNone(export.call_args.kwargs["current_password"])
+
+    def test_a_missing_password_exits_two_with_the_reason(self):
+        os.environ.pop(ai_settings.CURRENT_PASSWORD_ENV, None)
+        with mock.patch.object(ai_settings, "fetch_core_hub") as fetch:
+            code, _, err = self._run("--token", "tok", "export", "--output", str(self.dir / "x.json"),
+                                     "--include-secrets", env={ai_settings.PASSPHRASE_ENV: PASSPHRASE})
+        self.assertEqual(2, code)
+        self.assertIn("password", err)
+        fetch.assert_not_called()
 
     def test_import_prints_the_summary(self):
         source = self.dir / "ai.json"
@@ -226,6 +279,16 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(0, code)
         self.assertEqual({"username": "admin", "password": "admin"}, fetch.call_args.kwargs["body"])
         self.assertEqual("fresh", export.call_args.args[0])
+
+    def test_the_admin_login_password_is_the_one_asked_again(self):
+        with mock.patch.dict(os.environ, {"DEFAULT_PASSWORD": "admin", ai_settings.PASSPHRASE_ENV: PASSPHRASE}), \
+                mock.patch.object(ai_settings, "fetch_core_hub", return_value={"apiToken": "fresh"}), \
+                mock.patch.object(ai_settings, "export_ai_settings", return_value=_bundle()) as export:
+            os.environ.pop(ai_settings.TOKEN_ENV, None)
+            os.environ.pop(ai_settings.CURRENT_PASSWORD_ENV, None)
+            code, _, _ = self._run("export", "--output", str(self.dir / "x.json"), "--include-secrets")
+        self.assertEqual(0, code)
+        self.assertEqual("admin", export.call_args.kwargs["current_password"])
 
     def test_a_failed_login_stops_with_a_message(self):
         with mock.patch.object(ai_settings, "fetch_core_hub", return_value={}):
@@ -268,12 +331,13 @@ class FullBackupTests(unittest.TestCase):
 
     def test_the_backup_holds_the_ai_settings_and_seals_secrets_only_with_a_passphrase(self):
         with mock.patch.object(ai_settings, "export_ai_settings", return_value=_bundle()) as export:
-            archive = self._backup(include_secrets=True, ai_settings_passphrase=PASSPHRASE)
+            archive = self._backup(include_secrets=True, ai_settings_passphrase=PASSPHRASE,
+                                   ai_settings_current_password=PASSWORD)
             self._backup(include_secrets=True)
         self.assertEqual(_bundle(), json.loads(archive.read("ai-settings.json")))
         self.assertEqual(
-            [mock.call("tok", include_secrets=True, passphrase=PASSPHRASE),
-             mock.call("tok", include_secrets=False, passphrase=None)],
+            [mock.call("tok", include_secrets=True, passphrase=PASSPHRASE, current_password=PASSWORD),
+             mock.call("tok", include_secrets=False, passphrase=None, current_password=None)],
             export.call_args_list,
         )
 
@@ -344,12 +408,23 @@ class EndpointTests(unittest.TestCase):
     def test_export_downloads_the_bundle(self):
         with mock.patch.object(ai_settings, "export_ai_settings", return_value=_bundle()) as export:
             response = self.client.post(
-                "/api/export/ai-settings", json={"include_secrets": True, "passphrase": PASSPHRASE}
+                "/api/export/ai-settings",
+                json={"include_secrets": True, "passphrase": PASSPHRASE, "current_password": PASSWORD},
             )
         self.assertEqual(200, response.status_code)
         self.assertEqual(_bundle(), response.json())
         self.assertIn("attachment", response.headers["content-disposition"])
-        export.assert_called_once_with("tok", include_secrets=True, passphrase=PASSPHRASE)
+        export.assert_called_once_with("tok", include_secrets=True, passphrase=PASSPHRASE, current_password=PASSWORD)
+
+    def test_a_wrong_or_missing_password_is_a_clear_400(self):
+        refusal = ai_settings.AiSettingsError("Exporting secrets needs your current password: the one given is not correct")
+        with mock.patch.object(ai_settings, "export_ai_settings", side_effect=refusal):
+            response = self.client.post(
+                "/api/export/ai-settings",
+                json={"include_secrets": True, "passphrase": PASSPHRASE, "current_password": "wrong"},
+            )
+        self.assertEqual(400, response.status_code)
+        self.assertIn("current password", response.json()["detail"])
 
     def test_export_errors_map_to_clear_statuses(self):
         cases = [
@@ -392,11 +467,21 @@ class EndpointTests(unittest.TestCase):
     def test_full_backup_by_post_carries_the_ai_passphrase(self):
         with mock.patch.object(self.corehub, "export_full_corehub_backup", return_value=b"PK") as export:
             response = self.client.post(
+                "/api/export/full-backup",
+                json={"include_secrets": True, "ai_settings_passphrase": PASSPHRASE,
+                      "ai_settings_current_password": PASSWORD},
+            )
+            no_password = self.client.post(
                 "/api/export/full-backup", json={"include_secrets": True, "ai_settings_passphrase": PASSPHRASE}
             )
         self.assertEqual(200, response.status_code)
         self.assertEqual(PASSPHRASE, export.call_args.kwargs["ai_settings_passphrase"])
-        short = self.client.post("/api/export/full-backup", json={"include_secrets": True, "ai_settings_passphrase": "x"})
+        self.assertEqual(PASSWORD, export.call_args.kwargs["ai_settings_current_password"])
+        self.assertEqual(400, no_password.status_code)
+        self.assertIn("password", no_password.json()["detail"])
+        self.assertEqual(1, export.call_count, "a backup that cannot get the secrets is refused before it starts")
+        short = self.client.post("/api/export/full-backup", json={"include_secrets": True, "ai_settings_passphrase": "x",
+                                                                  "ai_settings_current_password": PASSWORD})
         self.assertEqual(400, short.status_code)
 
     def test_endpoints_need_a_login(self):
