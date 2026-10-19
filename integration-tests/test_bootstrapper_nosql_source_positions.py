@@ -93,7 +93,8 @@ def restore_all(entity, exported, positions=None, source_tables=None, source_typ
 def restore(entity, exported, **kwargs):
     """Like :func:`restore_all`, for a run that creates one entity (returned)."""
     result, saved = restore_all(entity, exported, **kwargs)
-    assert result["failed"] == 0 and len(saved) == 1, result
+    assert result["failed"] == 0, result
+    assert len(saved) == 1, result
     return saved[0]
 
 
