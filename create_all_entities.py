@@ -1080,16 +1080,23 @@ def _yaml_mapping_row(tb, source_name, target_name):
     source_key, target_key = tb.pair.source_names.key, tb.target_names().key
     wanted_source, wanted_target = source_key(source_name), target_key(target_name)
     for row in tb.pair.custom_config.get('columns') or []:
-        if not isinstance(row, dict) or 'source' not in row:
-            continue
-        sources = row['source'] if isinstance(row['source'], list) else [row['source']]
-        if wanted_source not in {source_key(s) for s in sources}:
-            continue
-        targets = row.get('target')
-        targets = [targets if targets is not None else sources[0]] if not isinstance(targets, list) else targets
-        if wanted_target in {target_key(t) for t in targets}:
+        sides = _mapping_row_sides(row)
+        if sides and wanted_source in {source_key(s) for s in sides[0]} \
+                and wanted_target in {target_key(t) for t in sides[1]}:
             return row
     return {}
+
+
+def _mapping_row_sides(row):
+    """``(sources, targets)`` an exported mapping row names (a row without ``target`` writes its source's name),
+    None for anything else than such a row."""
+    if not isinstance(row, dict) or 'source' not in row:
+        return None
+    sources = row['source'] if isinstance(row['source'], list) else [row['source']]
+    targets = row.get('target')
+    if not isinstance(targets, list):
+        targets = [targets if targets is not None else sources[0]]
+    return sources, targets
 
 
 def _target_position(discovered_target_col, col, yaml_row=None):

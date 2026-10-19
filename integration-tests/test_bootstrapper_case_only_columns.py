@@ -122,7 +122,8 @@ class CaseOnlyColumnsRestoreTests(unittest.TestCase):
     def test_the_export_lists_both_keys_and_both_columns(self):
         table = yaml.safe_load(self.exported)[SCHEMA]["tables"]["custom"][TABLE]
         self.assertEqual(table["keys"], ["ID", "id"])
-        self.assertEqual([(row["source"], row["target"], row["isPK"]) for row in table["columns"]],
+        rows = [(row["source"], row["target"], row["isPK"]) for row in table["columns"]]
+        self.assertEqual(rows,
                          [("FIRST_NAME", "FIRST_NAME", False), ("ID", "ID", True), ("_etag", "_etag", False),
                           ("id", "id", True)])
 
@@ -203,7 +204,8 @@ class CaseOnlyKeysTests(unittest.TestCase):
                 for keys, expected in ((["id"], ["id"]), (["ID"], ["ID"]), (["ID", "id"], ["ID", "id"])):
                     with self.subTest(version=version, chain=chain, keys=keys):
                         restored = self._restore(keys, version, chain)
-                        self.assertEqual([primary_keys(restored, 0), primary_keys(restored, 1)], [expected] * 2)
+                        restored_keys = [primary_keys(restored, 0), primary_keys(restored, 1)]
+                        self.assertEqual(restored_keys, [expected] * 2)
                         self.assertEqual(sorted(names(restored, 0).values()), ["FIRST_NAME", "ID", "_etag", "id"])
                         self.assertEqual(sorted(matrix(restored)),
                                          [("FIRST_NAME", "FIRST_NAME"), ("ID", "ID"), ("_etag", "_etag"),
@@ -213,7 +215,8 @@ class CaseOnlyKeysTests(unittest.TestCase):
         schemas = yaml.safe_load(self.exported)
         del schemas[SCHEMA]["tables"]["custom"][TABLE]["columns"]
         restored = restore(self.original, yaml.safe_dump(schemas, sort_keys=False))
-        self.assertEqual([primary_keys(restored, 0), primary_keys(restored, 1)], [["ID", "id"]] * 2)
+        restored_keys = [primary_keys(restored, 0), primary_keys(restored, 1)]
+        self.assertEqual(restored_keys, [["ID", "id"]] * 2)
         self.assertEqual(summary(restored, 0), summary(self.original, 0))
 
     def test_the_target_holds_only_one_of_the_two_columns_yet(self):
@@ -264,13 +267,16 @@ class NameMatchingTests(unittest.TestCase):
 
     def test_a_name_is_the_column_spelt_so_else_the_only_one_spelt_so_case_aside(self):
         names = entity_mapping.ColumnNames(["ID", "id", "Name", "A", "a", "a "])
-        self.assertEqual([names.resolve(n) for n in ("ID", "id", "iD", "name", "NAME", "x", "a ")],
+        resolved = [names.resolve(n) for n in ("ID", "id", "iD", "name", "NAME", "x", "a ")]
+        self.assertEqual(resolved,
                          ["ID", "id", None, "Name", "Name", None, "a "])
-        self.assertEqual([names.key(n) for n in ("id", "iD", "x", "X")], ["id", "id", "x", "x"])
+        keys = [names.key(n) for n in ("id", "iD", "x", "X")]
+        self.assertEqual(keys, ["id", "id", "x", "x"])
 
     def test_find_by_name_prefers_the_exact_spelling(self):
         columns = [{"name": "ID", "n": 1}, {"name": "id", "n": 2}, {"name": "Name", "n": 3}]
-        self.assertEqual([entity_mapping.find_by_name(columns, n)["n"] for n in ("ID", "id", "NAME")], [1, 2, 3])
+        found = [entity_mapping.find_by_name(columns, n)["n"] for n in ("ID", "id", "NAME")]
+        self.assertEqual(found, [1, 2, 3])
         self.assertIsNone(entity_mapping.find_by_name(columns, "iD"))
         self.assertIsNone(entity_mapping.find_by_name(columns, "other"))
         self.assertEqual(entity_mapping.find_by_name([{"name": "ID"}, {"name": "ID"}], "id"), {"name": "ID"})
@@ -282,21 +288,25 @@ class NameMatchingTests(unittest.TestCase):
     def test_rows_on_columns_that_differ_by_case_are_not_the_same_row(self):
         names = entity_mapping.ColumnNames(["ID", "id"])
         grouped = group_relations(self._relations(("ID", "ID"), ("id", "id")), "T", names, names)
-        self.assertEqual([(r["sources"], r["targets"]) for r in grouped], [(["ID"], ["ID"]), (["id"], ["id"])])
+        pairs = [(r["sources"], r["targets"]) for r in grouped]
+        self.assertEqual(pairs, [(["ID"], ["ID"]), (["id"], ["id"])])
 
     def test_without_the_columns_names_are_compared_case_insensitively_as_before(self):
+        relations = self._relations(("ID", "ID"), ("id", "id"))
         with self.assertRaisesRegex(EntityMappingError, "listed twice"):
-            group_relations(self._relations(("ID", "ID"), ("id", "id")), "T")
+            group_relations(relations, "T")
 
     def test_the_same_row_listed_twice_is_still_refused(self):
         names = entity_mapping.ColumnNames(["ID", "id"])
+        relations = self._relations(("id", "id"), ("id", "id"))
         with self.assertRaisesRegex(EntityMappingError, "listed twice"):
-            group_relations(self._relations(("id", "id"), ("id", "id")), "T", names, names)
+            group_relations(relations, "T", names, names)
 
     def test_a_name_no_column_is_spelt_as_is_the_column_of_that_name(self):
         names = entity_mapping.ColumnNames(["Name"])
+        relations = self._relations(("Name", "Name"), ("name", "name"))
         with self.assertRaisesRegex(EntityMappingError, "listed twice"):
-            group_relations(self._relations(("Name", "Name"), ("name", "name")), "T", names, names)
+            group_relations(relations, "T", names, names)
 
     def test_a_source_repeated_over_rows_is_one_source_only_when_spelt_alike(self):
         rows = [{"sources": [s], "targets": [t]} for s, t in (("ID", "a"), ("id", "b"))]
