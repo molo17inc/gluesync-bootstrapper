@@ -1,0 +1,253 @@
+{
+  "agentEntities": [
+    {
+      "agentEntityId": "260b02c0",
+      "agentId": "ba0c3df9",
+      "columns": [
+        {
+          "dataType": "STRING",
+          "id": -5262660625305103898,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": true,
+          "name": "_id",
+          "position": 0,
+          "tableId": 5400136542618059462
+        },
+        {
+          "dataType": "INT32",
+          "id": -1615676276825804117,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "int32_field",
+          "position": 1,
+          "tableId": 5400136542618059462
+        },
+        {
+          "dataType": "INT64",
+          "id": -978468266217425689,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "int64_field",
+          "position": 2,
+          "tableId": 5400136542618059462
+        },
+        {
+          "dataType": "INT64",
+          "id": 2810208664289248775,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "mixed_number_2",
+          "position": 3,
+          "tableId": 5400136542618059462
+        },
+        {
+          "dataType": "STRING",
+          "id": -3961919201468412249,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "description",
+          "position": 4,
+          "tableId": 5400136542618059462
+        },
+        {
+          "dataType": "INT32",
+          "id": 8456342527420759736,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "mixed_number_1",
+          "position": 5,
+          "tableId": 5400136542618059462
+        }
+      ],
+      "customProperties": {},
+      "entityId": "d703f9b9",
+      "entityName": "demo.type_test_GSSD_179",
+      "entityObject": {
+        "collection": "type_test_GSSD_179",
+        "id": 5400136542618059462,
+        "scope": "demo"
+      },
+      "entityType": {
+        "maxFetchItemsCountPerIteration": 10000,
+        "maxTransactionMessageKbSize": 1024,
+        "pollingIntervalMilliseconds": 500,
+        "snapshotOnly": false,
+        "type": "Source",
+        "unchangedDataFilterType": "DISABLED"
+      },
+      "orderIndex": 0,
+      "tablesProperties": {
+        "demo.type_test_GSSD_179": {}
+      },
+      "type": "NoSqlEntity"
+    },
+    {
+      "agentEntityId": "26c6ed9c",
+      "agentId": "65785ca0",
+      "columns": [
+        {
+          "dataType": "string",
+          "id": -5262660625305103898,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": true,
+          "name": "_id",
+          "position": 0,
+          "tableId": 866369156
+        },
+        {
+          "dataType": "int",
+          "id": -1615676276825804117,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "int32_field",
+          "position": 1,
+          "tableId": 866369156
+        },
+        {
+          "dataType": "long",
+          "id": -978468266217425689,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "int64_field",
+          "position": 2,
+          "tableId": 866369156
+        },
+        {
+          "dataType": "long",
+          "id": 2810208664289248775,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "mixed_number_2",
+          "position": 3,
+          "tableId": 866369156
+        },
+        {
+          "dataType": "string",
+          "id": -3961919201468412249,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "description",
+          "position": 4,
+          "tableId": 866369156
+        },
+        {
+          "dataType": "int",
+          "id": 8456342527420759736,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "mixed_number_1",
+          "position": 5,
+          "tableId": 866369156
+        }
+      ],
+      "customProperties": {},
+      "entityId": "d703f9b9",
+      "entityName": "demo.type_test_GSSD_179",
+      "entityObject": {
+        "collection": "type_test_GSSD_179",
+        "id": 866369156,
+        "scope": "demo"
+      },
+      "entityType": {
+        "allowedOperations": [
+          "INSERT",
+          "DELETE",
+          "UPDATE",
+          "TRUNCATE"
+        ],
+        "columnsMappingMatrix": [
+          {
+            "sourceColumnIds": [
+              -1615676276825804117
+            ],
+            "sourceTableObjectId": 5400136542618059462,
+            "targetColumnIds": [
+              -1615676276825804117
+            ],
+            "targetTableObjectId": 866369156
+          },
+          {
+            "sourceColumnIds": [
+              -978468266217425689
+            ],
+            "sourceTableObjectId": 5400136542618059462,
+            "targetColumnIds": [
+              -978468266217425689
+            ],
+            "targetTableObjectId": 866369156
+          },
+          {
+            "sourceColumnIds": [
+              2810208664289248775
+            ],
+            "sourceTableObjectId": 5400136542618059462,
+            "targetColumnIds": [
+              2810208664289248775
+            ],
+            "targetTableObjectId": 866369156
+          },
+          {
+            "sourceColumnIds": [
+              -3961919201468412249
+            ],
+            "sourceTableObjectId": 5400136542618059462,
+            "targetColumnIds": [
+              -3961919201468412249
+            ],
+            "targetTableObjectId": 866369156
+          },
+          {
+            "sourceColumnIds": [
+              8456342527420759736
+            ],
+            "sourceTableObjectId": 5400136542618059462,
+            "targetColumnIds": [
+              8456342527420759736
+            ],
+            "targetTableObjectId": 866369156
+          },
+          {
+            "sourceColumnIds": [
+              -5262660625305103898
+            ],
+            "sourceTableObjectId": 5400136542618059462,
+            "targetColumnIds": [
+              -5262660625305103898
+            ],
+            "targetTableObjectId": 866369156
+          }
+        ],
+        "distinctCaseInsensitiveKeyData": false,
+        "fieldFunctions": [],
+        "insertConflictStrategy": "UPSERT",
+        "snapshotWritingConcurrency": 1,
+        "tablesWithUnlockedDataTypes": [],
+        "tablesWithUnlockedSchema": [],
+        "type": "Target",
+        "useBulkOperationsDuringCDC": false,
+        "useBulkOperationsWhileSnapshot": false
+      },
+      "orderIndex": 0,
+      "tablesProperties": {
+        "demo.type_test_GSSD_179": {}
+      },
+      "type": "NoSqlEntity"
+    }
+  ],
+  "entityId": "d703f9b9",
+  "entityName": "demo.type_test_GSSD_179",
+  "groupId": "_default",
+  "orderIndex": 0
+}

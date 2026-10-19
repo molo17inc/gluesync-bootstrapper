@@ -26,7 +26,7 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
 
 import yaml
 
@@ -821,6 +821,63 @@ def _export_target_filters(table_cfg: Dict[str, Any], target_et: Dict[str, Any])
         table_cfg["unlockedSchema"] = True
 
 
+def _fed_target_names(rows: Any) -> Set[str]:
+    """The target column names, lower-cased, the exported ``columns`` rows feed from a source column."""
+    names: Set[str] = set()
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict) or not row.get("source"):
+            continue
+        targets = row.get("target")
+        for target in targets if isinstance(targets, list) else [targets]:
+            if target:
+                names.add(str(target).lower())
+    return names
+
+
+def _target_only_column_entry(tcol: Dict[str, Any]) -> Any:
+    """The ``targetOnlyColumns`` entry of a target column: its name, with what the import rebuilds it from.
+
+    A column that states no data type is written as its name alone, for which the import has defaults.
+    """
+    name = tcol.get("name")
+    data_type = _column_data_type(tcol)
+    if data_type is None:
+        return name
+    entry: Dict[str, Any] = {
+        "name": name,
+        "type": data_type,
+        "dataLength": _column_attr(tcol, "charMaxLength", "dataLength", 0),
+        "numericPrecision": _column_attr(tcol, "numPrec", "numericPrecision", 0),
+        "numericScale": _column_attr(tcol, "numScale", "numericScale", 0),
+        "isNullable": tcol.get("isNullable", False),
+    }
+    position = _target_position(tcol)
+    if position is not None:
+        entry["position"] = position
+    return entry
+
+
+def _export_target_only_columns(table_cfg: Dict[str, Any], target_ae: Dict[str, Any]) -> None:
+    """``targetOnlyColumns`` of an unlocked schema: the target columns no source column feeds.
+
+    A UDF writes them, so the rows have no place for them. One a field function produces is also a
+    ``{target, expression}`` row, which carries the function; the import creates no column for that row of an
+    unlocked table, so the column is listed here as well. The import only adds target-only columns to a table with
+    an unlocked schema, which is the only one that holds such a column.
+    """
+    target_et = target_ae.get("entityType", {}) or {}
+    if not (target_et.get("tablesWithUnlockedSchema") or []):
+        return
+    fed = _fed_target_names(table_cfg.get("columns"))
+    target_only = [
+        _target_only_column_entry(tcol) for tcol in target_ae.get("columns", []) or []
+        if tcol.get("name") and str(tcol["name"]).lower() not in fed
+    ]
+    if target_only:
+        table_cfg["targetOnlyColumns"] = target_only
+        logger.info(f"Exported {len(target_only)} target-only column(s): {[e if isinstance(e, str) else e['name'] for e in target_only]}")
+
+
 def _column_names_by_int_id(columns: List[Dict[str, Any]]) -> Dict[int, str]:
     """Column names by integer column id (columns without a usable id are left out)."""
     id_to_name: Dict[int, str] = {}
@@ -1001,6 +1058,7 @@ def _process_single_entity(
 
     target_et = target_ae.get("entityType", {}) or {}
     _export_target_filters(table_cfg, target_et)
+    _export_target_only_columns(table_cfg, target_ae)
 
     document_key = _document_key_cfg(source_ae, target_ae, source_table_name)
     if document_key:

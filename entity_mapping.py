@@ -31,6 +31,51 @@ class EntityMappingError(ValueError):
     """A column mapping CoreHub would refuse, found before any request; the message names the columns."""
 
 
+class ColumnNames:
+    """The column names of one table, to tell which of them a name in the YAML spells.
+
+    Names that differ by case only are different columns (Cosmos DB's ``id`` next to a document field ``ID``): a
+    name is the column spelt exactly so. Only a name no column is spelt as falls back to the one column that
+    spells it case-insensitively (a SQL source or target may fold case), and is no column at all when several do.
+    """
+
+    def __init__(self, names: Iterable[Any]):
+        self._exact = {str(name) for name in names}
+        self._folded: Dict[str, List[str]] = {}
+        for name in sorted(self._exact):
+            self._folded.setdefault(name.lower(), []).append(name)
+
+    def resolve(self, name: Any) -> Optional[str]:
+        """The spelling of the column ``name`` stands for, None for no column or an ambiguous one."""
+        name = str(name)
+        if name in self._exact:
+            return name
+        folded = self._folded.get(name.lower(), [])
+        return folded[0] if len(folded) == 1 else None
+
+    def key(self, name: Any) -> str:
+        """What identifies the column ``name`` stands for: its spelling, else the name folded, so a name no
+        column matches still compares case-insensitively with the others."""
+        return self.resolve(name) or str(name).lower()
+
+
+def find_by_name(items: Iterable[Any], name: Any, get=lambda item: item.get("name")) -> Optional[Any]:
+    """The item named ``name``: the first spelt exactly so, else the only one spelt so case-insensitively.
+
+    None when no item is, or when several spellings differ from ``name`` by case only (:class:`ColumnNames`).
+    """
+    wanted = str(name)
+    lowered = wanted.lower()
+    folded: List[Any] = []
+    for item in items:
+        spelt = str(get(item))
+        if spelt == wanted:
+            return item
+        if spelt.lower() == lowered:
+            folded.append(item)
+    return folded[0] if len({str(get(item)) for item in folded}) == 1 else None
+
+
 # ---------------------------------------------------------------------------
 # Wire shapes
 # ---------------------------------------------------------------------------
@@ -390,17 +435,17 @@ def yaml_relations(rows: Optional[Sequence[Any]], label: str = "") -> Optional[L
     return [relation for row in rows if isinstance(row, Mapping) for relation in _mapping_row_relations(row, where)]
 
 
-def _claim_targets(target_owner, relation, targets, sources_text, where) -> None:
+def _claim_targets(target_owner, relation, targets, sources_text, where, source_key, target_key) -> None:
     """Make ``relation`` the one relation of each of ``targets``, refusing a target another row names."""
     for target in targets:
-        owner = target_owner.get(target.lower())
+        owner = target_owner.get(target_key(target))
         if owner is None:
-            target_owner[target.lower()] = relation
+            target_owner[target_key(target)] = relation
             continue
         if owner is relation:
             raise EntityMappingError(f"the column row {sources_text} -> {target}{where} is listed twice")
-        known = {o.lower() for o in owner["sources"]}
-        all_sources = owner["sources"] + [s for s in relation["sources"] if s.lower() not in known]
+        known = {source_key(o) for o in owner["sources"]}
+        all_sources = owner["sources"] + [s for s in relation["sources"] if source_key(s) not in known]
         raise EntityMappingError(
             f"target column {target}{where} is named by several rows ({', '.join(owner['sources']) or 'no source'}; "
             f"{sources_text or 'no source'}); a column belongs to one relation: for several sources onto one target "
@@ -408,7 +453,7 @@ def _claim_targets(target_owner, relation, targets, sources_text, where) -> None
         )
 
 
-def _check_one_to_n(existing, source, targets, sources_text, where) -> None:
+def _check_one_to_n(existing, source, targets, sources_text, where, target_key) -> None:
     """A row on the single source of an earlier relation: it may only add targets to a 1:1 or 1:N relation."""
     if len(existing["sources"]) > 1:
         raise EntityMappingError(
@@ -419,47 +464,58 @@ def _check_one_to_n(existing, source, targets, sources_text, where) -> None:
         raise EntityMappingError(
             f"source column {source}{where} is unlinked (target: []) in one row and linked in another; keep one of the two"
         )
-    if any(t.lower() in {e.lower() for e in existing["targets"]} for t in targets):
+    if any(target_key(t) in {target_key(e) for e in existing["targets"]} for t in targets):
         raise EntityMappingError(f"the column row {sources_text} -> {', '.join(targets)}{where} is listed twice")
 
 
-def group_relations(relations: Sequence[Mapping[str, Any]], label: str = "") -> List[Dict[str, Any]]:
-    """The relations of a Gluesync 2.3 entity from the YAML relations, names compared case-insensitively.
+def group_relations(relations: Sequence[Mapping[str, Any]], label: str = "",
+                    source_names: Optional[ColumnNames] = None,
+                    target_names: Optional[ColumnNames] = None) -> List[Dict[str, Any]]:
+    """The relations of a Gluesync 2.3 entity from the YAML relations.
 
     Rows that share a single source are one 1:N relation. Refused, naming ``label`` and the columns: a
     row listed twice, a target named by several rows (the N:1 form lists its sources in one row), a
     source of an N:1 row named by another row (M:N), a source both unlinked (``target: []``) and
-    linked.
+    linked. ``source_names`` and ``target_names`` are the columns of the entity: names that differ by case only
+    are different columns when both exist, and only a name no column is spelt as is compared case-insensitively.
+    Without them every name is.
     """
     where = f" of {label}" if label else ""
+    source_key = (source_names or ColumnNames(())).key
+    target_key = (target_names or ColumnNames(())).key
     grouped: List[Dict[str, Any]] = []
     by_source: Dict[str, Dict[str, Any]] = {}
     target_owner: Dict[str, Dict[str, Any]] = {}
     for relation in relations:
         sources, targets = list(relation["sources"]), list(relation["targets"])
         sources_text = ", ".join(sources)
-        if len(sources) == 1 and sources[0].lower() in by_source:
-            existing = by_source[sources[0].lower()]
-            _check_one_to_n(existing, sources[0], targets, sources_text, where)
-            _claim_targets(target_owner, existing, targets, sources_text, where)
+        if len(sources) == 1 and source_key(sources[0]) in by_source:
+            existing = by_source[source_key(sources[0])]
+            _check_one_to_n(existing, sources[0], targets, sources_text, where, target_key)
+            _claim_targets(target_owner, existing, targets, sources_text, where, source_key, target_key)
             existing["targets"].extend(targets)
             continue
-        named = next((source for source in sources if source.lower() in by_source), None)
+        named = next((source for source in sources if source_key(source) in by_source), None)
         if named is not None:
             raise EntityMappingError(
                 f"source column {named}{where} is named by the N:1 row of {', '.join(targets) or 'no target'} and by "
                 f"another row: merged they would relate several sources to several targets (M:N), which is not supported"
             )
         merged = {"sources": sources, "targets": [], "explicit": relation.get("explicit", True), "row": relation.get("row")}
-        _claim_targets(target_owner, merged, targets, sources_text, where)
+        _claim_targets(target_owner, merged, targets, sources_text, where, source_key, target_key)
         merged["targets"].extend(targets)
-        by_source.update((source.lower(), merged) for source in sources)
+        by_source.update((source_key(source), merged) for source in sources)
         grouped.append(merged)
     return grouped
 
 
-def grouped_only_forms(relations: Optional[Sequence[Mapping[str, Any]]], table_config: Optional[Mapping[str, Any]]) -> List[str]:
-    """The YAML forms of a table that only a Gluesync 2.3 CoreHub can store, one description each."""
+def grouped_only_forms(relations: Optional[Sequence[Mapping[str, Any]]], table_config: Optional[Mapping[str, Any]],
+                       source_names: Optional[ColumnNames] = None) -> List[str]:
+    """The YAML forms of a table that only a Gluesync 2.3 CoreHub can store, one description each.
+
+    ``source_names`` are the source columns of the table (see :func:`group_relations`).
+    """
+    source_key = (source_names or ColumnNames(())).key
     forms: List[str] = []
     seen_sources: Dict[str, int] = {}
     for relation in relations or []:
@@ -469,7 +525,7 @@ def grouped_only_forms(relations: Optional[Sequence[Mapping[str, Any]]], table_c
         if sources and not targets:
             forms.append(f"target: [] on source {', '.join(sources)} (read, never written)")
         if len(sources) == 1:
-            key = sources[0].lower()
+            key = source_key(sources[0])
             seen_sources[key] = seen_sources.get(key, 0) + 1
             if seen_sources[key] == 2:
                 forms.append(f"source {sources[0]} repeated over several rows (one source onto several targets)")

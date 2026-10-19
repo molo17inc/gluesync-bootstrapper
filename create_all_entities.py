@@ -25,6 +25,7 @@ import argparse
 import copy
 import itertools
 from dataclasses import dataclass
+from functools import cached_property
 from typing import Any
 from commons import get_node_info, get_table_columns, fetch_core_hub, get_pipeline_config, get_pipeline_agents, \
     get_agent_tables, create_entity_schedules, map_data_type, create_pipeline_schedules, create_group_schedules, load_yaml_config, \
@@ -34,8 +35,8 @@ from create_all_tables import handle_table_creation
 from create_user_defined_functions import handle_udf_function_definition
 from field_function_utils import build_field_functions_for_entity_type, normalize_expression_for_corehub, \
     produced_target_names
-from entity_mapping import EntityMappingError, build_entries, derive_keys, drop_forbidden_key_links, \
-    encode_entries, group_relations, grouped_only_forms, read_entry, yaml_relations
+from entity_mapping import ColumnNames, EntityMappingError, build_entries, derive_keys, drop_forbidden_key_links, \
+    encode_entries, find_by_name, group_relations, grouped_only_forms, read_entry, yaml_relations
 import create_user_defined_functions as udf_module
 from utils.log import get_logger, create_log_file, log_success, log_failure, lockfile_failure, lockfile_complete, exit_on_fail
 from utils.core_hub_client import CoreHubClient
@@ -52,7 +53,7 @@ _EXPORT_METADATA_FIELDS = {"source", "target", "type", "dataLength", "numericPre
 _CHAR_SET_CLEARED = object()
 
 
-def _build_target_data_type_overrides(yaml_columns):
+def _build_target_data_type_overrides(yaml_columns, names=None):
     """Build a lookup of user-declared target dataType overrides keyed by source column name.
 
     Users can declare a ``targetDataType`` key alongside a column mapping or whitelist
@@ -71,9 +72,13 @@ def _build_target_data_type_overrides(yaml_columns):
     The legacy shorthand mapping ``{COL: "tgt"}`` has no room for extra keys and thus
     cannot carry a ``targetDataType`` override; switch to the explicit form to use it.
 
+    ``names`` (:class:`entity_mapping.ColumnNames` of the source columns) tells names that differ by case only apart.
+
     Returns:
-        dict: { source_column_name_lowercased: targetDataType_string }
+        dict: { source_column_name: targetDataType_string }, the name as ``names.key`` gives it (lower-cased when
+        it names no source column or ``names`` is None)
     """
+    key = (names or ColumnNames(())).key
     overrides = {}
     if not isinstance(yaml_columns, list):
         return overrides
@@ -85,7 +90,7 @@ def _build_target_data_type_overrides(yaml_columns):
             continue
         src = _yaml_row_source_name(entry)
         if src:
-            overrides[str(src).lower()] = override_value
+            overrides[key(src)] = override_value
     return overrides
 
 
@@ -99,7 +104,7 @@ def _yaml_row_source_name(entry):
     return None
 
 
-def _build_char_set_overrides(yaml_columns):
+def _build_char_set_overrides(yaml_columns, names=None):
     """Build a lookup of user-declared ``charSet`` values keyed by source column name.
 
     The source agent publishes on every column the character set the column declares —
@@ -120,9 +125,13 @@ def _build_char_set_overrides(yaml_columns):
     legacy shorthand mapping ``{COL: "tgt"}`` has no room for extra keys — any key it
     carries is read as another column mapping — so switch to the explicit form to use it.
 
+    ``names`` (:class:`entity_mapping.ColumnNames` of the source columns) tells names that differ by case only apart.
+
     Returns:
-        dict: { source_column_name_lowercased: charSet_string | _CHAR_SET_CLEARED }
+        dict: { source_column_name: charSet_string | _CHAR_SET_CLEARED }, the name as ``names.key`` gives it
+        (lower-cased when it names no source column or ``names`` is None)
     """
+    key = (names or ColumnNames(())).key
     overrides = {}
     if not isinstance(yaml_columns, list):
         return overrides
@@ -134,24 +143,25 @@ def _build_char_set_overrides(yaml_columns):
         if not src:
             continue
         value = entry.get('charSet')
-        overrides[str(src).lower()] = _CHAR_SET_CLEARED if value is None else str(value)
+        overrides[key(src)] = _CHAR_SET_CLEARED if value is None else str(value)
     return overrides
 
 
-def _apply_char_set_overrides(columns, overrides, table_name=None):
+def _apply_char_set_overrides(columns, overrides, table_name=None, names=None):
     """Apply ``charSet`` overrides from :func:`_build_char_set_overrides` in place.
 
     Runs on the *source* columns after they have been built from discovery, so the
     user-declared value wins over the one the source published. Columns the YAML says
-    nothing about are left exactly as discovered.
+    nothing about are left exactly as discovered. ``names`` as for :func:`_build_char_set_overrides`.
     """
     if not overrides or not columns:
         return
+    key = (names or ColumnNames(())).key
     where = f' of table {table_name}' if table_name else ''
     for col in columns:
         if not isinstance(col, dict):
             continue
-        override = overrides.get(str(col.get('name', '')).lower())
+        override = overrides.get(key(col.get('name', '')))
         if override is not None:
             _apply_char_set_override(col, override, where)
 
@@ -214,17 +224,23 @@ def _supported_type_match(matrix_entry, needle):
     return None
 
 
-def _is_in_keys(col_name, custom_config):
+def _is_in_keys(col_name, custom_config, names=None):
+    """Whether the YAML ``keys:`` name the column ``col_name``: spelt so, else, when no column is, case-insensitively.
+
+    ``names`` are the :class:`entity_mapping.ColumnNames` of the table: with ``id`` and ``ID`` both columns, the key
+    ``id`` is the column ``id`` alone. Without them a key is compared case-insensitively.
+    """
     if not custom_config or 'keys' not in custom_config or custom_config['keys'] is None:
         return False
+    key = (names or ColumnNames(())).key
     keys = custom_config['keys']
     for k in keys:
-        if isinstance(k, str) and k.lower() == col_name.lower():
+        if isinstance(k, str) and key(k) == key(col_name):
             return True
         elif isinstance(k, dict):
             # keys can be like [{'id': {'name': 'ID'}}] or something else, but let's handle the common case
             key_name = next(iter(k)) if not k.get('name') else k['name']
-            if str(key_name).lower() == col_name.lower():
+            if key(key_name) == key(col_name):
                 return True
     return False
 
@@ -297,24 +313,28 @@ def _relation_pairs(relations):
 _NO_PHYSICAL_KEY_AGENT_TAGS = frozenset({"cassandra", "scylladb"})
 
 
-def _name_relations(relations, columns_def, table_name):
+def _name_relations(relations, columns_def, table_name, target_names=None):
     """The relations of a Gluesync 2.3 entity by column name.
 
     The YAML relations (:func:`entity_mapping.group_relations`), and one relation onto the target of its name
     (guessed, so ``explicit`` is false) for each source column no YAML row names: every column when the YAML maps
-    none, a key column its rows leave out otherwise.
+    none, a key column its rows leave out otherwise. ``target_names`` are the :class:`entity_mapping.ColumnNames` of
+    the target columns: names that differ by case only are different columns.
     """
+    source_names = ColumnNames(c["name"] for c in columns_def)
     stated = [r for r in relations or [] if r["sources"]]
-    named = {s.lower() for r in stated for s in r["sources"]}
+    named = {source_names.key(s) for r in stated for s in r["sources"]}
     by_name = [
         {"sources": [c["name"]], "targets": [c.get("alias") or c["name"]], "explicit": False}
         for c in columns_def
-        if str(c["name"]).lower() not in named
+        if source_names.key(c["name"]) not in named
     ]
     if stated:
         # A key column the YAML keys name but its rows leave out is mapped by name, as it always was.
-        return group_relations(relations, label=table_name) + by_name
-    return by_name + group_relations([r for r in relations or [] if not r["sources"]], label=table_name)
+        return group_relations(relations, label=table_name, source_names=source_names,
+                               target_names=target_names) + by_name
+    return by_name + group_relations([r for r in relations or [] if not r["sources"]], label=table_name,
+                                     source_names=source_names, target_names=target_names)
 
 
 def _id_resolver(columns):
@@ -377,9 +397,9 @@ def _target_table_name(custom_config, table_name, yaml_table_key):
     return raw_target_name
 
 
-def _refuse_forms_of_gluesync_23(relations, custom_config, table_name):
+def _refuse_forms_of_gluesync_23(relations, custom_config, table_name, source_names=None):
     """Refuse the column mapping forms only a Gluesync 2.3 CoreHub can store, for an older one."""
-    forms = grouped_only_forms(relations, custom_config)
+    forms = grouped_only_forms(relations, custom_config, source_names)
     if forms:
         raise EntityMappingError(
             f"Table {table_name} uses column mapping forms that a CoreHub older than Gluesync 2.3 cannot store: "
@@ -438,8 +458,10 @@ def _paint_is_pk_on_columns(columns_def, key_column_dicts):
     """
     if not columns_def or not key_column_dicts:
         return
+    # a name spelt as a column is that column alone: ``id`` and ``ID`` are two columns (a Cosmos DB container has both)
+    names = ColumnNames(c.get("name") for c in columns_def if isinstance(c, dict) and c.get("name") is not None)
     key_names = {
-        str(k.get("name")).lower()
+        names.key(k.get("name"))
         for k in key_column_dicts
         if isinstance(k, dict) and k.get("name") is not None
     }
@@ -449,7 +471,7 @@ def _paint_is_pk_on_columns(columns_def, key_column_dicts):
         if not isinstance(col, dict):
             continue
         name = col.get("name")
-        if name is not None and str(name).lower() in key_names:
+        if name is not None and names.key(name) in key_names:
             col["isPK"] = True
 
 
@@ -476,9 +498,11 @@ def _require_column_id(col, table_name, label=None, detail=True):
     return col_id
 
 
-def _source_is_pk(col, name, custom_config):
-    """Whether a discovered source column is a key: discovery flags it, or the YAML ``keys:`` name ``name``."""
-    return _coerce_is_pk(col.get("isPK")) or _is_in_keys(name, custom_config)
+def _source_is_pk(col, name, custom_config, names=None):
+    """Whether a discovered source column is a key: discovery flags it, or the YAML ``keys:`` name ``name``.
+
+    ``names``: the :class:`entity_mapping.ColumnNames` of the discovered columns."""
+    return _coerce_is_pk(col.get("isPK")) or _is_in_keys(name, custom_config, names)
 
 
 def _source_column_def(col, col_id, name, alias, is_pk, nullable_default=False):
@@ -539,16 +563,17 @@ def _legacy_discovery_types(columns, custom_config, table_name):
     return _discovery_type_by_source
 
 
-def _mapped_source_column(matched_col, target_name, columns_def, custom_config, table_name, grouped):
+def _mapped_source_column(matched_col, target_name, columns_def, custom_config, table_name, grouped, names=None):
     """The source column of a YAML mapping pair whose source discovery found; None for a repeat on 2.3."""
     col_id = _require_column_id(matched_col, table_name, detail=False)
-    if grouped and any(str(c.get("name", "")).lower() == str(matched_col["name"]).lower() for c in columns_def):
+    if grouped and any(c.get("name") == matched_col["name"] for c in columns_def):
         return None
     return _source_column_def(matched_col, col_id, matched_col["name"], target_name,
-                              _source_is_pk(matched_col, matched_col["name"], custom_config))
+                              _source_is_pk(matched_col, matched_col["name"], custom_config, names))
 
 
-def _unmatched_mapping_column(source_name, target_name, idx, custom_config, table_name, source_schema, grouped):
+def _unmatched_mapping_column(source_name, target_name, idx, custom_config, table_name, source_schema, grouped,
+                              names=None):
     """The source column of a YAML mapping pair whose source discovery did not find (refused on 2.3)."""
     if grouped:
         raise EntityMappingError(
@@ -564,13 +589,13 @@ def _unmatched_mapping_column(source_name, target_name, idx, custom_config, tabl
         "name": source_name,
         "alias": target_name,
         "dataType": "VARCHAR", # Fallback type
-        "isPK": _is_in_keys(source_name, custom_config),
+        "isPK": _is_in_keys(source_name, custom_config, names),
         "isIdentity": False,
         "isNullable": True
     }
 
 
-def _source_columns_from_mappings(columns, custom_config, relations, table_name, source_schema, grouped):
+def _source_columns_from_mappings(columns, custom_config, relations, table_name, source_schema, grouped, names=None):
     """The source columns of custom column mappings (source→target)."""
     columns_def = []
     yaml_columns = custom_config.get('columns', [])
@@ -578,19 +603,20 @@ def _source_columns_from_mappings(columns, custom_config, relations, table_name,
     for relation in relations or []:
         idx = row_index.get(id(relation["row"]), 0)
         for source_name, target_name in _relation_pairs([relation]):
-            # Find the matching column from discovered columns
-            matched_col = next((c for c in columns["columns"] if str(c.get("name","")).lower() == str(source_name).lower()), None)
+            # Find the matching column from discovered columns: spelt as the YAML spells it, else case-insensitively
+            matched_col = find_by_name(columns["columns"], source_name)
             if matched_col:
-                col_def = _mapped_source_column(matched_col, target_name, columns_def, custom_config, table_name, grouped)
+                col_def = _mapped_source_column(matched_col, target_name, columns_def, custom_config, table_name,
+                                                grouped, names)
             else:
                 col_def = _unmatched_mapping_column(source_name, target_name, idx, custom_config, table_name,
-                                                    source_schema, grouped)
+                                                    source_schema, grouped, names)
             if col_def is not None:
                 columns_def.append(col_def)
     return columns_def
 
 
-def _source_columns_from_whitelist(columns, custom_config, relations, table_name, grouped):
+def _source_columns_from_whitelist(columns, custom_config, relations, table_name, grouped, names=None):
     """The source columns of a column whitelist, and the relations of the rows the source holds.
 
     Only the specified columns are used, not all discovered ones.
@@ -603,7 +629,7 @@ def _source_columns_from_whitelist(columns, custom_config, relations, table_name
         # sourceName is the source column name; name is the target column name
         source_col_name = yaml_col.get('sourceName') or yaml_col.get('name')
         # Find the matching column from discovered columns
-        col = next((c for c in columns["columns"] if str(c["name"]).lower() == str(source_col_name).lower()), None)
+        col = find_by_name(columns["columns"], source_col_name)
         if col is None:
             logger.warning(f"Column '{source_col_name}' from YAML whitelist not found in discovered columns for table {table_name}")
             unmatched_rows.add(id(yaml_col))
@@ -616,7 +642,7 @@ def _source_columns_from_whitelist(columns, custom_config, relations, table_name
         # On 2.3 the key rules compare names case-sensitively: the spelling discovery reports (BOP-15).
         columns_def.append(_source_column_def(
             col, col_id, col["name"] if grouped else source_col_name, yaml_col.get('name'),
-            _source_is_pk(col, source_col_name, custom_config), nullable_default=True,
+            _source_is_pk(col, source_col_name, custom_config, names), nullable_default=True,
         ))
 
     logger.info(f"Using column whitelist for {table_name}: {len(columns_def)} of {len(yaml_columns)} specified columns matched")
@@ -627,39 +653,36 @@ def _source_columns_from_whitelist(columns, custom_config, relations, table_name
     return columns_def, relations
 
 
-def _source_columns_from_discovery(columns, custom_config, table_name):
+def _source_columns_from_discovery(columns, custom_config, table_name, names=None):
     """Every discovered column as-is (one-to-one source→target mapping)."""
     columns_def = []
     for col in columns["columns"]:
         # Use the id field from CoreHub API as the column ID
         col_id = _require_column_id(col, table_name)
         columns_def.append(_source_column_def(col, col_id, col["name"], col["name"],
-                                              _source_is_pk(col, col["name"], custom_config)))
+                                              _source_is_pk(col, col["name"], custom_config, names)))
     return columns_def
 
 
-def _append_mapped_source_keys(keys, col, col_id, relations, custom_config):
+def _append_mapped_source_keys(keys, col, col_id, relations, custom_config, names):
     """Append the keys the YAML mapping pairs make of the discovered column ``col``."""
+    in_keys = _is_in_keys(col["name"], custom_config, names)
     for column_map in relations or []:
         for source_name, target_name in _relation_pairs([column_map]):
-            name_match = col["name"].lower() == str(source_name).lower()
-            in_keys = _is_in_keys(col["name"], custom_config)
+            name_match = names.key(source_name) == col["name"]
             if name_match and in_keys:
                 keys.append(_source_key_def(col, col_id, target_name))
                 logger.info(f"Key matched: col={col['name']!r}, source_name={source_name!r}, target_name={target_name!r}")
-            elif _is_in_keys(col["name"], custom_config):
+            elif in_keys:
                 logger.warning(f"Key col={col['name']!r} is in keys list but source_name={source_name!r} did not match (name_match={name_match}, in_keys={in_keys})")
 
 
-def _source_key_from_columns_def(key_name, columns_def, keys, found_key_names, table_name, source_schema):
+def _source_key_from_columns_def(key_name, columns_def, keys, found_key_names, table_name, source_schema, names):
     """Resolve a YAML key discovery does not hold from the columns already built, else refuse it."""
-    matched_def = next(
-        (c for c in columns_def if str(c.get("name", "")).lower() == str(key_name).lower()),
-        None,
-    )
+    matched_def = find_by_name(columns_def, key_name)
     if matched_def:
         keys.append(copy.deepcopy(matched_def))
-        found_key_names.add(str(key_name).lower())
+        found_key_names.add(names.key(key_name))
         logger.info(
             f"Key {key_name!r} resolved from columns_def after mapping miss for {table_name}"
         )
@@ -673,57 +696,55 @@ def _source_key_from_columns_def(key_name, columns_def, keys, found_key_names, t
     raise ValueError(error_msg)
 
 
-def _resolve_missed_source_key(key_name, columns, columns_def, keys, found_key_names, table_name, source_schema):
+def _resolve_missed_source_key(key_name, columns, columns_def, keys, found_key_names, table_name, source_schema, names):
     """Resolve from discovery a YAML key the mapping pairs did not find (e.g. historical id-as-metadata skip, or
     key omitted from ``columns:``), re-adding its column to ``columns_def`` when the mapping dropped it."""
     if isinstance(key_name, dict):
         key_name = key_name.get("name") or (next(iter(key_name)) if key_name else None)
-    if key_name is None or str(key_name).lower() in found_key_names:
+    if key_name is None or names.key(key_name) in found_key_names:
         return
-    matched = next(
-        (c for c in columns["columns"] if str(c.get("name", "")).lower() == str(key_name).lower()),
-        None,
-    )
+    matched = find_by_name(columns["columns"], key_name)
     if not matched:
-        _source_key_from_columns_def(key_name, columns_def, keys, found_key_names, table_name, source_schema)
+        _source_key_from_columns_def(key_name, columns_def, keys, found_key_names, table_name, source_schema, names)
         return
     col_id = _require_column_id(matched, table_name, label=key_name)
     keys.append(_source_key_def(matched, col_id, matched["name"]))
-    found_key_names.add(str(matched["name"]).lower())
+    found_key_names.add(names.key(matched["name"]))
     logger.info(
         f"Key {key_name!r} resolved from discovery after mapping miss for {table_name}"
     )
     # Ensure the PK column is present on columns_def (mapping may have dropped it)
-    if not any(str(c.get("name", "")).lower() == str(matched["name"]).lower() for c in columns_def):
+    if not any(c.get("name") == matched["name"] for c in columns_def):
         columns_def.append(_source_column_def(matched, col_id, matched["name"], matched["name"], True))
         logger.info(
             f"Re-added key column {matched['name']!r} to columns_def for {table_name}"
         )
 
 
-def _source_keys_from_mappings(columns, custom_config, relations, columns_def, table_name, source_schema):
+def _source_keys_from_mappings(columns, custom_config, relations, columns_def, table_name, source_schema, names):
     """The source keys of a table with column mappings: the YAML keys through the mapping pairs."""
     logger.info(f"Key extraction via column mappings for {table_name}. Keys to find: {custom_config['keys']}")
     keys = []
     for col in columns["columns"]:
         # Use the id field from CoreHub API as the column ID
         col_id = _require_column_id(col, table_name)
-        _append_mapped_source_keys(keys, col, col_id, relations, custom_config)
+        _append_mapped_source_keys(keys, col, col_id, relations, custom_config, names)
     # If YAML keys: were not paired via mappings, resolve remaining keys from discovery.
     found_key_names = {
-        str(k.get("name")).lower()
+        names.key(k.get("name"))
         for k in keys
         if isinstance(k, dict) and k.get("name") is not None
     }
     for key_name in custom_config["keys"]:
-        _resolve_missed_source_key(key_name, columns, columns_def, keys, found_key_names, table_name, source_schema)
+        _resolve_missed_source_key(key_name, columns, columns_def, keys, found_key_names, table_name, source_schema,
+                                   names)
     return keys
 
 
 def _append_named_source_key(keys, key_name, columns, columns_def, table_name, source_schema):
     """Append the source key a YAML key names, found in discovery, else in the columns already built."""
-    # Find the column (case-insensitive to handle cross-db scenarios like pgsql→oracle)
-    col = next((c for c in columns["columns"] if c["name"].lower() == key_name.lower()), None)
+    # Find the column: spelt as the key is, else case-insensitively (cross-db scenarios like pgsql→oracle)
+    col = find_by_name(columns["columns"], key_name)
     if col is not None:
         # Use the id field from CoreHub API as the column ID
         col_id = _require_column_id(col, table_name, label=key_name)
@@ -732,7 +753,7 @@ def _append_named_source_key(keys, key_name, columns, columns_def, table_name, s
         return
     logger.warning(f"Warning: Key '{key_name}' not found in columns for table '{table_name}'. Searching in columns_def...")
     # Try to find it in the already built columns_def (which might have come from YAML metadata)
-    col_def = next((c for c in columns_def if c.get('name', '').lower() == key_name.lower()), None)
+    col_def = find_by_name(columns_def, key_name)
     if col_def is not None:
         keys.append(copy.deepcopy(col_def))
         logger.info(f"Found key '{key_name}' in columns_def")
@@ -753,7 +774,7 @@ def _source_keys_from_pk(columns, table_name):
     return keys
 
 
-def _assemble_source_keys(columns, custom_config, relations, columns_def, table_name, source_schema):
+def _assemble_source_keys(columns, custom_config, relations, columns_def, table_name, source_schema, names):
     """The source keys of a SingleTable entity: the YAML ``keys:`` when given, else discovery's primary key."""
     if not (custom_config and 'keys' in custom_config and custom_config['keys'] is not None):
         keys = _source_keys_from_pk(columns, table_name)
@@ -763,7 +784,8 @@ def _assemble_source_keys(columns, custom_config, relations, columns_def, table_
     logger.info(f"Has columns section: {bool(custom_config.get('columns'))}")
     if _is_column_mappings(custom_config.get('columns', [])):
         # Use column mappings for keys
-        keys = _source_keys_from_mappings(columns, custom_config, relations, columns_def, table_name, source_schema)
+        keys = _source_keys_from_mappings(columns, custom_config, relations, columns_def, table_name, source_schema,
+                                          names)
     else:
         # No column mappings, use keys directly from source columns
         logger.debug(f"Processing keys for {table_name}: {custom_config['keys']}")
@@ -789,8 +811,10 @@ def _assemble_source_columns(columns, custom_config, table_name, source_schema, 
     :class:`entity_mapping.EntityMappingError`.
     """
     relations = yaml_relations(custom_config.get('columns'), label=table_name)
+    # Columns that differ by case only (Cosmos DB's ``id`` and a field ``ID``) are two: a name is the one spelt so
+    names = ColumnNames(c["name"] for c in columns["columns"])
     if not grouped and check_forms:
-        _refuse_forms_of_gluesync_23(relations, custom_config, table_name)
+        _refuse_forms_of_gluesync_23(relations, custom_config, table_name, names)
 
     # Detect legacy backup YAML where all column types are null.
     _discovery_type_by_source = _legacy_discovery_types(columns, custom_config, table_name)
@@ -800,17 +824,17 @@ def _assemble_source_columns(columns, custom_config, table_name, source_schema, 
 
     if has_column_mappings:
         columns_def = _source_columns_from_mappings(columns, custom_config, relations, table_name, source_schema,
-                                                    grouped)
+                                                    grouped, names)
     elif is_column_whitelist:
         columns_def, relations = _source_columns_from_whitelist(columns, custom_config, relations, table_name,
-                                                                grouped)
+                                                                grouped, names)
     else:
         # If there are no column mappings or whitelist, fall back to
         # using discovery columns as-is (one-to-one source→target mapping).
         # IMPORTANT: Only fall back when NO filter was specified. If a whitelist
         # or mapping was explicitly specified but columns_def is empty, do NOT
         # fall back to all columns - that would silently include unwanted columns.
-        columns_def = _source_columns_from_discovery(columns, custom_config, table_name)
+        columns_def = _source_columns_from_discovery(columns, custom_config, table_name, names)
 
     # GSSD-1355 regression guard: target-only Field Function entries make
     # _is_column_mappings() true but give no source column. Without
@@ -821,11 +845,11 @@ def _assemble_source_columns(columns, custom_config, table_name, source_schema, 
             f"Table {table_name}: column mappings produced no source columns "
             f"(likely target-only Field Function entries). Falling back to discovery."
         )
-        columns_def = _source_columns_from_discovery(columns, custom_config, table_name)
+        columns_def = _source_columns_from_discovery(columns, custom_config, table_name, names)
 
     logger.debug(f"Columns definition for {table_name}: {columns_def}")
 
-    keys = _assemble_source_keys(columns, custom_config, relations, columns_def, table_name, source_schema)
+    keys = _assemble_source_keys(columns, custom_config, relations, columns_def, table_name, source_schema, names)
 
     # Keep column isPK flags aligned with the resolved keys list (CoreHub reads isPK).
     _paint_is_pk_on_columns(columns_def, keys)
@@ -835,8 +859,8 @@ def _assemble_source_columns(columns, custom_config, table_name, source_schema, 
     # mappings, whitelist or plain discovery. Only the source entity's columns are
     # patched: `keys` feeds the target table creation below, where a source-side
     # character set has no business.
-    char_set_overrides = _build_char_set_overrides((custom_config or {}).get('columns', []))
-    _apply_char_set_overrides(columns_def, char_set_overrides, table_name)
+    char_set_overrides = _build_char_set_overrides((custom_config or {}).get('columns', []), names)
+    _apply_char_set_overrides(columns_def, char_set_overrides, table_name, names)
 
     return columns_def, keys, has_column_mappings, is_column_whitelist, _discovery_type_by_source, relations
 
@@ -867,6 +891,11 @@ class _TablePair:
     source_table_id: Any
     target_table_id: Any
     is_unlocked_schema: bool = False
+
+    @cached_property
+    def source_names(self):
+        """The :class:`entity_mapping.ColumnNames` of the source columns of the table."""
+        return ColumnNames(c["name"] for c in (self.columns or {}).get("columns") or [] if c.get("name"))
 
 
 def _map_target_type(ctx, data_type, target_table_column_types):
@@ -907,13 +936,23 @@ class _TargetBuild:
     from them, as they always have.
     """
 
-    def __init__(self, ctx, pair, discovered, discovery_type_by_source):
+    def __init__(self, ctx, pair, discovered, discovery_type_by_source, relations=None):
         self.ctx = ctx
         self.pair = pair
         self.discovered = discovered
         self.exact = {
             c.get('name'): c for c in reversed((discovered or {}).get('columns') or []) if c.get('name')
         }
+        # The target columns a name may stand for: those discovery reports, and the names the YAML writes onto that
+        # differ by case only (a Cosmos DB ``id`` next to a field ``ID``), which are two columns even where the target
+        # does not hold both yet. A name no column is spelt as stands for the one column that spells it so
+        # case-insensitively.
+        yaml_targets = {t for r in relations or [] for t in r["targets"]}
+        folded = {}
+        for name in sorted(yaml_targets):
+            folded.setdefault(name.lower(), []).append(name)
+        self.known_target_names = [*self.exact, *(n for names in folded.values() if len(names) > 1 for n in names)]
+        self.base_target_names = ColumnNames(self.known_target_names)
         if ctx.target_is_nosql:
             self.exact = {name: _InferredColumn(id=c.get('id'), name=name) for name, c in self.exact.items()}
             discovered = None  # inferred types are no types a source type should be kept as
@@ -927,11 +966,9 @@ class _TargetBuild:
         self.last_column = None
 
     def target_col(self, name, default=None):
-        """The discovered target column spelt ``name``, else the one spelt so case-insensitively (``default`` if none)."""
-        found = self.exact.get(str(name))
-        if found is None:
-            matches = [c for c in self.exact.values() if c['name'].lower() == str(name).lower()]
-            found = matches[0] if len(matches) == 1 else None
+        """The discovered target column spelt ``name``, else the one spelt so case-insensitively (``default`` if none),
+        unless the YAML names a column spelt ``name`` next to one that differs by case only."""
+        found = self.exact.get(self.base_target_names.resolve(name))
         return found if found is not None else default
 
     def seen(self, discovered_target_col):
@@ -956,14 +993,25 @@ class _TargetBuild:
         """
         if not self.ctx.target_is_nosql:
             return None
-        wanted = str(col.get("name", "")).lower()
+        names = self.pair.source_names
         for row in self.pair.custom_config.get('columns') or []:
-            if isinstance(row, dict) and isinstance(row.get('source'), str) and row['source'].lower() == wanted:
+            if isinstance(row, dict) and isinstance(row.get('source'), str) and names.key(row['source']) == col.get("name"):
                 return _canonicalize_target_type(row.get('type'), self.ctx.target_node_info)
         return None
 
+    def target_names(self):
+        """The :class:`entity_mapping.ColumnNames` of the target columns known so far: discovered, written onto by
+        the YAML and built."""
+        return ColumnNames([*self.known_target_names, *(c["name"] for c in self.columns_def if c.get("name"))])
+
     def has_target_column(self, name):
-        return any(str(c.get("name", "")).lower() == str(name).lower() for c in self.columns_def)
+        """Whether the target column spelt ``name``, else the only one spelt so case-insensitively, is built."""
+        built = self.target_names().resolve(name)
+        return built is not None and any(c.get("name") == built for c in self.columns_def)
+
+    def override_for(self, source_name):
+        """The ``targetDataType`` the YAML declares for the source column ``source_name`` (see ``overrides``)."""
+        return self.overrides.get(self.pair.source_names.key(source_name))
 
 
 def _discover_target_columns(ctx, target_table_name):
@@ -1029,18 +1077,26 @@ def _yaml_mapping_row(tb, source_name, target_name):
     Empty for a column the YAML states in any other form (shorthand ``{SRC: tgt}`` or whitelist rows), whose keys
     are column names or describe the source side. A row naming several sources (N:1) is found by any of them.
     """
-    wanted_source, wanted_target = str(source_name).lower(), str(target_name).lower()
+    source_key, target_key = tb.pair.source_names.key, tb.target_names().key
+    wanted_source, wanted_target = source_key(source_name), target_key(target_name)
     for row in tb.pair.custom_config.get('columns') or []:
-        if not isinstance(row, dict) or 'source' not in row:
-            continue
-        sources = row['source'] if isinstance(row['source'], list) else [row['source']]
-        if wanted_source not in {str(s).lower() for s in sources}:
-            continue
-        targets = row.get('target')
-        targets = [targets if targets is not None else sources[0]] if not isinstance(targets, list) else targets
-        if wanted_target in {str(t).lower() for t in targets}:
+        sides = _mapping_row_sides(row)
+        if sides and wanted_source in {source_key(s) for s in sides[0]} \
+                and wanted_target in {target_key(t) for t in sides[1]}:
             return row
     return {}
+
+
+def _mapping_row_sides(row):
+    """``(sources, targets)`` an exported mapping row names (a row without ``target`` writes its source's name),
+    None for anything else than such a row."""
+    if not isinstance(row, dict) or 'source' not in row:
+        return None
+    sources = row['source'] if isinstance(row['source'], list) else [row['source']]
+    targets = row.get('target')
+    if not isinstance(targets, list):
+        targets = [targets if targets is not None else sources[0]]
+    return sources, targets
 
 
 def _target_position(discovered_target_col, col, yaml_row=None):
@@ -1058,12 +1114,74 @@ def _target_position(discovered_target_col, col, yaml_row=None):
     return discovered if _is_position(discovered) else col.get("position", 0)
 
 
-def _target_is_pk(discovered_target_col, col, custom_config, coerce_target=False):
-    """isPrimaryKey of a target column: from the discovered target column, else from the source column."""
+def _exported_source_positions(custom_config):
+    """``{source name: ordinalPosition}`` of the exported mapping rows that state one."""
+    positions = {}
+    for row in (custom_config or {}).get('columns') or []:
+        if isinstance(row, dict) and isinstance(row.get('source'), str) and _is_position(row.get('ordinalPosition')):
+            positions.setdefault(row['source'], row['ordinalPosition'])
+    return positions
+
+
+def _exported_position_by_column(exported, discovered):
+    """``({discovered name: exported position}, exported names matched)``.
+
+    A name is matched as spelt, else case-insensitively, but only when it names one discovered column: a schemaless
+    source may hold names that differ by case only (``id`` and ``ID``), which are two columns each with its own row, and
+    a row never gives its position to two columns.
+    """
+    names = ColumnNames(c.get('name') for c in discovered if c.get('name'))
+    position_by_column, matched = {}, set()
+    for exact in (True, False):
+        for name, position in exported.items():
+            column = names.resolve(name)
+            if column is not None and (column == name) == exact and column not in position_by_column:
+                position_by_column[column] = position
+                matched.add(name)
+    return position_by_column, matched
+
+
+def _with_exported_source_positions(columns, custom_config, table_name):
+    """The source discovery ``columns`` of a schemaless source, with the order the exported rows give its columns.
+
+    A source with no schema (MongoDB, Cosmos DB, Couchbase, DynamoDB) infers its columns by sampling documents,
+    so the position discovery reports depends on the data at restore time, not on the configuration. The
+    ``ordinalPosition`` of the rows is the place of each column in the table the export came from: the listed
+    columns take, in that order, the positions discovery gave them (which keeps the numbering the agent uses, 0-based
+    for MongoDB). A discovered column no row lists keeps its discovered position; a row naming a column discovery
+    does not return gets none (the mapping reports it).
+    """
+    exported = _exported_source_positions(custom_config)
+    discovered = (columns or {}).get('columns') or []
+    if not exported or not discovered:
+        return columns
+    exported_position, matched = _exported_position_by_column(exported, discovered)
+    listed = [c for c in discovered if exported_position.get(c.get('name')) is not None]
+    if any(not _is_position(c.get('position'), least=0) for c in listed):
+        logger.warning(f"Table {table_name}: a discovered column has no position, keeping the discovered order")
+        return columns
+    missing = sorted(name for name in exported if name not in matched)
+    if missing:
+        logger.warning(f"Table {table_name}: exported column(s) {missing} not found in discovery, they get no position")
+    unlisted = [c.get('name') for c in discovered if exported_position.get(c.get('name')) is None]
+    if unlisted:
+        logger.warning(f"Table {table_name}: discovered column(s) {unlisted} not listed in the YAML, "
+                       f"keeping their discovered position")
+    slots = sorted(c['position'] for c in listed)
+    in_exported_order = sorted(listed, key=lambda c: (exported_position[c.get('name')], c['position']))
+    position_of = {id(col): slot for col, slot in zip(in_exported_order, slots)}
+    return {**columns, 'columns': [{**c, 'position': position_of[id(c)]} if id(c) in position_of else c
+                                   for c in discovered]}
+
+
+def _target_is_pk(discovered_target_col, col, custom_config, coerce_target=False, names=None):
+    """isPrimaryKey of a target column: from the discovered target column, else from the source column.
+
+    ``names``: the :class:`entity_mapping.ColumnNames` of the source columns."""
     target_pk = discovered_target_col.get("isPK") if discovered_target_col else False
     if coerce_target:
         target_pk = _coerce_is_pk(target_pk)
-    return target_pk or _coerce_is_pk(col.get("isPK")) or _is_in_keys(col["name"], custom_config)
+    return target_pk or _coerce_is_pk(col.get("isPK")) or _is_in_keys(col["name"], custom_config, names)
 
 
 def _target_column_def(col, discovered_target_col, target_col_id, name, data_type, is_pk, position=0):
@@ -1101,14 +1219,15 @@ def _append_mapped_target_column(tb, col, source_col_id, discovered_target_col, 
     # a target reports its own spelling of a type (Cassandra reads varchar back as text).
     exported_type = _canonicalize_target_type(yaml_row.get('type'), tb.ctx.target_node_info)
     # User-declared targetDataType override takes highest priority
-    resolved_target_type = tb.overrides.get(col["name"].lower()) or exported_type or resolved_target_type
+    resolved_target_type = tb.override_for(col["name"]) or exported_type or resolved_target_type
     # Fallback for legacy null-type backups: if we still have no
     # resolved type, use the live discovery type for this source column
     if not resolved_target_type and tb.discovery_type_by_source:
         resolved_target_type = _legacy_fallback_target_type(tb, col, resolved_target_type)
     tb.max_id = max(tb.max_id, target_col_id)
     # Get isPrimaryKey from discovered target column or fall back to source column
-    target_is_primary_key = _target_is_pk(discovered_target_col, col, tb.pair.custom_config)
+    target_is_primary_key = _target_is_pk(discovered_target_col, col, tb.pair.custom_config,
+                                          names=tb.pair.source_names)
     tb.columns_def.append(_target_column_def(col, discovered_target_col, target_col_id, target_name,
                                              resolved_target_type, target_is_primary_key,
                                              position=_target_position(discovered_target_col, col, yaml_row)))
@@ -1126,7 +1245,7 @@ def _map_onto_target_column(tb, col, source_col_id, column_map, grouped):
     for source_name, target_name in _relation_pairs([column_map]):
         if not column_map["targets"]:
             return  # read, never written (1:null): no target column
-        if str(col["name"]).lower() != str(source_name).lower():
+        if tb.pair.source_names.key(source_name) != col["name"]:
             continue
         discovered_target_col = tb.seen(tb.target_col(target_name))
         if grouped:
@@ -1162,7 +1281,7 @@ def _whitelist_target_type(tb, col, yaml_col, discovered_target_col):
     5. The mapped value as-is (preserves observable behavior).
     """
     _source_dt = col.get("dataType")
-    _override = yaml_col.get('targetDataType') or tb.overrides.get(col["name"].lower())
+    _override = yaml_col.get('targetDataType') or tb.override_for(col["name"])
     if _override:
         return _override
     target_node_info = tb.ctx.target_node_info
@@ -1196,7 +1315,8 @@ def _append_whitelist_target_column(tb, col, yaml_col, grouped):
     tb.max_id = max(tb.max_id, target_col_id)
     # Target columns are serialised with `dataType` (not `type`) in the
     # UpsertEntitiesDto contract. Align with the mapping/default branches.
-    target_is_primary_key = _target_is_pk(discovered_target_col, col, tb.pair.custom_config)
+    target_is_primary_key = _target_is_pk(discovered_target_col, col, tb.pair.custom_config,
+                                          names=tb.pair.source_names)
     tb.columns_def.append(_target_column_def(col, discovered_target_col, target_col_id, target_col_name,
                                              resolved_target_type, target_is_primary_key,
                                              position=col.get("position", 0)))
@@ -1209,7 +1329,7 @@ def _target_columns_from_whitelist(tb, grouped):
     for yaml_col in yaml_columns:
         source_col_name = yaml_col.get('sourceName') or yaml_col.get('name')
         # Find the matching column from discovered source columns
-        col = next((c for c in source_columns if str(c["name"]).lower() == str(source_col_name).lower()), None)
+        col = find_by_name(source_columns, source_col_name)
         if col is None:
             if source_columns:
                 tb.last_column = source_columns[-1]
@@ -1234,11 +1354,11 @@ def _target_columns_from_discovery(tb, apply_override, coerce_target_pk):
         resolved_target_type, target_col_id = _discovered_or_mapped(tb, col, discovered_target_col, source_col_id)
         if apply_override:
             # User-declared targetDataType override takes highest priority
-            resolved_target_type = tb.overrides.get(col["name"].lower()) or resolved_target_type
+            resolved_target_type = tb.override_for(col["name"]) or resolved_target_type
         tb.max_id = max(tb.max_id, target_col_id)
         target_col_name = discovered_target_col.get('name') if discovered_target_col else col["name"]
         target_is_primary_key = _target_is_pk(discovered_target_col, col, tb.pair.custom_config,
-                                              coerce_target=coerce_target_pk)
+                                              coerce_target=coerce_target_pk, names=tb.pair.source_names)
         tb.columns_def.append(_target_column_def(col, discovered_target_col, target_col_id, target_col_name,
                                                  resolved_target_type, target_is_primary_key,
                                                  position=_target_position(discovered_target_col, col)))
@@ -1304,7 +1424,7 @@ def _add_produced_columns(tb, relations, grouped):
         return
     for relation in produced_rows:
         target_name = relation["targets"][0]
-        if any(str(c.get("name", "")).lower() == target_name.lower() for c in tb.columns_def):
+        if tb.has_target_column(target_name):
             continue
         row = relation["row"] or {}
         discovered_target_col = tb.seen(tb.target_col(target_name))
@@ -1328,6 +1448,12 @@ def _target_only_defaults(target_col):
         target_col.get('numScale', 0),  # Default numeric scale
         target_col.get('isNullable', False),  # Default nullable
     )
+
+
+def _target_only_position(target_col):
+    """The position a target-only column declares (the export writes it), 0 when it declares none."""
+    exported = target_col.get('position') if isinstance(target_col, dict) else None
+    return exported if _is_position(exported, least=0) else 0
 
 
 def _check_target_only_properties(target_col, col_name, skip_errors, where):
@@ -1411,7 +1537,7 @@ def _add_target_only_columns(tb):
 
         tb.columns_def.append(_enrich_column({
             "id": tb.max_id,  # Continue from last target column ID
-            "position": 0,
+            "position": _target_only_position(target_col),
             "name": col_name,
             "alias": col_name,
             "dataType": mapped_type,
@@ -1429,14 +1555,14 @@ def _add_name_relation_column(tb, relation, columns_def):
     if relation.get("explicit", True) or not relation["targets"]:
         return
     target_name = relation["targets"][0]
-    if any(str(c.get("name", "")).lower() == target_name.lower() for c in tb.columns_def):
+    if tb.has_target_column(target_name):
         return
     col = next(c for c in columns_def if c["name"] == relation["sources"][0])
     discovered_target_col = tb.seen(tb.target_col(target_name))
     resolved_target_type = discovered_target_col.get('dataType') if discovered_target_col else None
     if not resolved_target_type:
         resolved_target_type = tb.yaml_target_type(col) or tb.map_type(col.get("dataType"))
-    resolved_target_type = tb.overrides.get(str(col["name"]).lower()) or resolved_target_type
+    resolved_target_type = tb.override_for(col["name"]) or resolved_target_type
     relation["targets"] = [discovered_target_col.get('name') if discovered_target_col else target_name]
     target_col_id = discovered_target_col.get('id') \
         if discovered_target_col and discovered_target_col.get('id') is not None else col.get('id')
@@ -1458,7 +1584,7 @@ def _physical_keys(tb):
 def _add_udf_target_keys(tb, physical_target):
     """The UDF writes every target column, a target primary key no source feeds included."""
     for key_name in physical_target:
-        if not any(str(c.get("name", "")).lower() == key_name.lower() for c in tb.columns_def):
+        if not tb.has_target_column(key_name):
             key_col = tb.target_col(key_name)
             tb.columns_def.append(_enrich_column({
                 "id": key_col.get("id"), "position": 0, "name": key_col["name"], "alias": key_col["name"],
@@ -1530,9 +1656,10 @@ def _target_key_def(target_col_id, name, data_type, enrich_from, position=0):
 
 def _append_mapped_target_keys(tb, target_keys, col, source_col_id, relations):
     """Append the target keys the YAML mapping pairs make of the discovered source column ``col``."""
+    names = tb.pair.source_names
     for column_map in relations or []:
         for source_name, target_name in _relation_pairs([column_map]):
-            if col["name"].lower() == str(source_name).lower() and _is_in_keys(col["name"], tb.pair.custom_config):
+            if names.key(source_name) == col["name"] and _is_in_keys(col["name"], tb.pair.custom_config, names):
                 target_keys.append(_mapped_target_key(tb, col, source_col_id, source_name, target_name))
                 break
 
@@ -1542,7 +1669,7 @@ def _mapped_target_key(tb, col, source_col_id, source_name, target_name):
     discovered_target_col = tb.target_col(target_name)
     resolved_target_type, target_col_id = _discovered_or_mapped(tb, col, discovered_target_col, source_col_id)
     # User-declared targetDataType override takes highest priority
-    resolved_target_type = tb.overrides.get(col["name"].lower()) or resolved_target_type
+    resolved_target_type = tb.override_for(col["name"]) or resolved_target_type
     target_key = _target_key_def(target_col_id, target_name, resolved_target_type,
                                  _enrich_from(discovered_target_col, col))
     logger.debug(f"Target key: {source_name} -> {target_name} (source ID={source_col_id}, target ID={target_col_id})")
@@ -1552,10 +1679,7 @@ def _mapped_target_key(tb, col, source_col_id, source_name, target_name):
 def _missed_target_key_source(tb, key_name):
     """The discovered source column of a YAML key the mapping pairs missed, refused when there is none."""
     pair = tb.pair
-    matched = next(
-        (c for c in pair.columns["columns"] if str(c.get("name", "")).lower() == str(key_name).lower()),
-        None,
-    )
+    matched = find_by_name(pair.columns["columns"], key_name)
     if not matched:
         error_msg = (
             f"CRITICAL ERROR: Target key '{key_name}' not found in discovery for table "
@@ -1570,21 +1694,18 @@ def _resolve_missed_target_key(tb, key_name, target_keys, found_target_key_names
     """Resolve a YAML key missed by the mapping pairs (same defense as the source path) onto its target column."""
     if isinstance(key_name, dict):
         key_name = key_name.get("name") or (next(iter(key_name)) if key_name else None)
-    if key_name is None or str(key_name).lower() in found_target_key_names:
+    if key_name is None or tb.target_names().key(key_name) in found_target_key_names:
         return
     matched, source_col_id = _missed_target_key_source(tb, key_name)
     # Prefer mapped target alias if present on source columns_def; else source name.
-    src_def = next(
-        (c for c in columns_def if str(c.get("name", "")).lower() == str(matched["name"]).lower()),
-        None,
-    )
+    src_def = find_by_name(columns_def, matched["name"])
     target_name = (src_def.get("alias") if src_def and src_def.get("alias") else matched["name"])
     discovered_target_col = tb.target_col(str(target_name))
     resolved_target_type, target_col_id = _discovered_or_mapped(tb, matched, discovered_target_col, source_col_id)
-    resolved_target_type = tb.overrides.get(matched["name"].lower()) or resolved_target_type
+    resolved_target_type = tb.override_for(matched["name"]) or resolved_target_type
     enrich_from = _enrich_from(discovered_target_col, matched)
     target_keys.append(_target_key_def(target_col_id, target_name, resolved_target_type, enrich_from))
-    found_target_key_names.add(str(target_name).lower())
+    found_target_key_names.add(tb.target_names().key(target_name))
     if not tb.has_target_column(target_name):
         tb.columns_def.append(_enrich_column({
             "id": target_col_id,
@@ -1609,8 +1730,9 @@ def _target_keys_from_mappings(tb, columns_def, relations):
         source_col_id = _require_column_id(col, tb.pair.table_name)
         _append_mapped_target_keys(tb, target_keys, col, source_col_id, relations)
     # Resolve YAML keys: missed by mapping pairs (same defense as source path).
+    target_names = tb.target_names()
     found_target_key_names = {
-        str(k.get("name")).lower()
+        target_names.key(k.get("name"))
         for k in target_keys
         if isinstance(k, dict) and k.get("name") is not None
     }
@@ -1626,7 +1748,7 @@ def _append_named_target_key(tb, target_keys, col, key_name):
     discovered_target_col = tb.target_col(key_name)
     resolved_target_type, target_col_id = _discovered_or_mapped(tb, col, discovered_target_col, source_col_id)
     # User-declared targetDataType override takes highest priority
-    resolved_target_type = tb.overrides.get(col["name"].lower()) or resolved_target_type
+    resolved_target_type = tb.override_for(col["name"]) or resolved_target_type
     target_key_name = discovered_target_col.get('name') if discovered_target_col else col["name"]
     target_keys.append(_enrich_column({
         "id": target_col_id,  # Use target column ID
@@ -1640,7 +1762,7 @@ def _append_named_target_key(tb, target_keys, col, key_name):
 def _target_key_from_columns(tb, target_keys, key_name):
     """Whether a YAML key discovery lacks is a target column already built (appended to ``target_keys`` if so)."""
     logger.warning(f"Warning: Target key '{key_name}' not found in columns for table '{tb.pair.table_name}'. Searching in target_columns_def...")
-    col_def = next((c for c in tb.columns_def if c.get('name', '').lower() == key_name.lower()), None)
+    col_def = find_by_name(tb.columns_def, key_name)
     if col_def is None:
         return False
     target_keys.append(copy.deepcopy(col_def))
@@ -1655,8 +1777,8 @@ def _target_keys_from_names(tb):
     """
     target_keys = []
     for key_name in tb.pair.custom_config['keys']:
-        # Find the column and its ID (case-insensitive)
-        col = next((c for c in tb.pair.columns["columns"] if c["name"].lower() == key_name.lower()), None)
+        # Find the column and its ID (spelt as the key is, else case-insensitively)
+        col = find_by_name(tb.pair.columns["columns"], key_name)
         found = col is not None
         if found:
             _append_named_target_key(tb, target_keys, col, key_name)
@@ -1678,7 +1800,7 @@ def _target_keys_from_pk(tb):
             col_id = _require_column_id(col, tb.pair.table_name)
             _resolved_dt = tb.target_col(col["name"], {}).get('type') or tb.map_type(col.get("dataType"))
             # User-declared targetDataType override takes highest priority
-            _resolved_dt = tb.overrides.get(col["name"].lower()) or _resolved_dt
+            _resolved_dt = tb.override_for(col["name"]) or _resolved_dt
             target_keys.append(_target_key_def(col_id, col["name"], _resolved_dt, tb.last_discovered or col,
                                                position=col.get("position", 0)))
     logger.debug(f"Using primary target keys for {tb.pair.table_name}: {target_keys}")
@@ -1703,7 +1825,7 @@ def _assemble_target_keys(tb, columns_def, relations, grouped, target_entity_typ
     """
     pair = tb.pair
     rules_apply = grouped and not pair.is_unlocked_schema and not tb.ctx.target_is_nosql
-    name_relations = _name_relations(relations, columns_def, pair.table_name) \
+    name_relations = _name_relations(relations, columns_def, pair.table_name, tb.target_names()) \
         if grouped and not pair.is_unlocked_schema else []
     for relation in name_relations:
         _add_name_relation_column(tb, relation, columns_def)
@@ -1786,13 +1908,14 @@ def _assemble_target_side(ctx, pair, columns_def, has_filter, discovery_type_by_
     before 2.3 have always received. Refusals raise :class:`entity_mapping.EntityMappingError`.
     """
     # Discover target columns first (needed for columnsMappingMatrix)
-    tb = _TargetBuild(ctx, pair, _discover_target_columns(ctx, pair.target_table_name), discovery_type_by_source)
+    tb = _TargetBuild(ctx, pair, _discover_target_columns(ctx, pair.target_table_name), discovery_type_by_source,
+                      relations)
 
     # The column mapping matrix is written once the target columns are known (see below).
     _set_unlocked_schema_arrays(target_entity_type, pair)
 
-    # User-declared per-column target dataType overrides (by source column name, lower-cased)
-    tb.overrides = _build_target_data_type_overrides(pair.custom_config.get('columns', []))
+    # User-declared per-column target dataType overrides (by source column name)
+    tb.overrides = _build_target_data_type_overrides(pair.custom_config.get('columns', []), pair.source_names)
     if tb.overrides:
         logger.info(
             f"Table {pair.table_name}: applying {len(tb.overrides)} user-declared targetDataType overrides"
@@ -1822,11 +1945,12 @@ def _fill_missing_target_types(tb, columns_def):
     A column is left without one when no mapping, discovery or YAML row supplied it; it takes the type its source
     column maps to, else the target's string type.
     """
-    source_types = {str(c.get("name", "")).lower(): c.get("dataType") for c in columns_def}
+    source_types = {c.get("name"): c.get("dataType") for c in columns_def}
+    source_names = ColumnNames(source_types)
     for target_col in tb.columns_def:
         if target_col.get("dataType"):
             continue
-        source_type = source_types.get(str(target_col.get("name", "")).lower())
+        source_type = source_types.get(source_names.resolve(target_col.get("name", "")))
         target_col["dataType"] = tb.map_type(source_type)
         logger.warning(f"Table {tb.pair.table_name}: target column {target_col.get('name')} had no dataType, "
                        f"using {target_col['dataType']}")
@@ -2447,10 +2571,14 @@ class _EntityRun:
         if not self.ctx.skip_errors:
             raise error
 
-    def table_columns(self, table_name):
-        """The source discovery of a table of the schema."""
+    def table_columns(self, table_name, custom_config=None):
+        """The source discovery of a table of the schema, in the order the YAML ``custom_config`` of the table gives
+        the columns when the source has no schema (see :func:`_with_exported_source_positions`)."""
         ctx = self.ctx
-        return get_table_columns(ctx.token, ctx.pipeline_id, self.source_agent_id, self.source_schema, table_name)
+        columns = get_table_columns(ctx.token, ctx.pipeline_id, self.source_agent_id, self.source_schema, table_name)
+        if ctx.source_is_nosql and custom_config:
+            columns = _with_exported_source_positions(columns, custom_config, table_name)
+        return columns
 
     def queue_partition_request(self, entity_name, partition_settings, max_partitions):
         if partition_settings:
@@ -2768,9 +2896,9 @@ def _skip_discovered_table(run, table_name, table_schema):
     return not _in_schema_whitelist(run, table_name, bare_table_name)
 
 
-def _discover_source_table(run, table_name):
+def _discover_source_table(run, table_name, custom_config=None):
     """The source discovery of a table, None (refused unless errors are skipped) when it has no columns."""
-    columns = run.table_columns(table_name)
+    columns = run.table_columns(table_name, custom_config)
 
     # Debug logging for column discovery
     if columns and columns.get('columns'):
@@ -3014,11 +3142,11 @@ def _process_discovered_table(run, table):
     if _skip_discovered_table(run, table_name, table_schema):
         return
 
-    columns = _discover_source_table(run, table_name)
+    custom_config, yaml_table_key = _custom_config_of(run.schema.custom_tables, table_name)
+    columns = _discover_source_table(run, table_name, custom_config)
     if columns is None:
         return
 
-    custom_config, yaml_table_key = _custom_config_of(run.schema.custom_tables, table_name)
     # Mark this YAML key as processed
     run.processed_yaml_keys.add(yaml_table_key)
 
@@ -3073,10 +3201,10 @@ def _duplicate_table_label(run, yaml_table_key, custom_config):
     return table_name
 
 
-def _duplicate_table_columns(run, yaml_table_key, table_name):
+def _duplicate_table_columns(run, yaml_table_key, table_name, custom_config):
     """``(discovered, columns)``: the source discovery of a duplicate table, by its actual source table name."""
     try:
-        return True, run.table_columns(table_name)
+        return True, run.table_columns(table_name, custom_config)
     except Exception as e:
         logger.error(f"Failed to get columns for duplicate table {yaml_table_key}: {str(e)}")
         if not run.ctx.skip_errors:
@@ -3165,7 +3293,7 @@ def _process_duplicate_table(run, yaml_table_key, custom_config, unprocessed_cou
     unprocessed_count += 1
     logger.info(f"Processing duplicate table #{unprocessed_count}: {yaml_table_key} (source table: {table_name})")
 
-    discovered, columns = _duplicate_table_columns(run, yaml_table_key, table_name)
+    discovered, columns = _duplicate_table_columns(run, yaml_table_key, table_name, custom_config)
     if not discovered:
         return unprocessed_count
 
@@ -3224,23 +3352,26 @@ def _chain_table_ref(table_id, table_key, schema):
 
 
 def _match_column_tracking(run, columns, key_name):
-    """The discovered column spelt ``key_name`` case-insensitively, remembering each column looked at."""
-    for col in columns["columns"]:
-        run.last_col = col
-        if col["name"].lower() == key_name.lower():
-            return col
-    return None
+    """The discovered column spelt ``key_name``, else the only one spelt so case-insensitively, remembering the last
+    column looked at."""
+    found = find_by_name(columns["columns"], key_name)
+    if found is not None:
+        run.last_col = found
+    elif columns["columns"]:
+        run.last_col = columns["columns"][-1]
+    return found
 
 
 def _chain_source_columns(run, columns, table_data):
     """The source columns of a chain table: every discovered column."""
     table_columns = []
+    names = ColumnNames(c["name"] for c in columns["columns"])
     for col in columns["columns"]:
         run.last_col = col
         # Use the id field from CoreHub API as the column ID
         col_id = _require_column_id(col, run.last_table_name)
         table_columns.append(_source_column_def(col, col_id, col["name"], col["name"],
-                                                col.get("isPK", False) or _is_in_keys(col["name"], table_data)))
+                                                col.get("isPK", False) or _is_in_keys(col["name"], table_data, names)))
     return table_columns
 
 
@@ -3276,7 +3407,7 @@ def _chain_source_key(run, columns, key_def, table_columns, table_key, source_ta
         }, col)
 
     logger.warning(f"Warning: Key '{key_name}' not found in columns for table '{table_key}'. Searching in table_columns...")
-    col_def = next((c for c in table_columns if c.get('name', '').lower() == key_name.lower()), None)
+    col_def = find_by_name(table_columns, key_name)
     if col_def is not None:
         key_entry = copy.deepcopy(col_def)
         key_entry['table'] = _chain_table_ref(source_table_id, table_key, source_schema)
@@ -3322,7 +3453,7 @@ def _add_chain_source_table(cb, table_key, table_data):
 
     source_table_id = _resolve_table_id(source_schema, actual_table_name, run.source_tables_lookup, _SOURCE_ROLE)
     # Get columns for this table using the actual table name
-    columns = run.table_columns(actual_table_name)
+    columns = run.table_columns(actual_table_name, table_data)
 
     # Add table to the list (use actual table name, not YAML key)
     cb.multi_tables.append({
@@ -3352,10 +3483,12 @@ def _add_chain_source_table(cb, table_key, table_data):
     # Apply the charSet declared in the YAML on this component's source columns.
     # table_columns is already referenced by multi_columns, so patching it in place
     # is enough.
+    names = ColumnNames(c["name"] for c in columns["columns"])
     _apply_char_set_overrides(
         table_columns,
-        _build_char_set_overrides((table_data or {}).get('columns', [])),
-        table_key
+        _build_char_set_overrides((table_data or {}).get('columns', []), names),
+        table_key,
+        names
     )
 
     # Add keys for this table
@@ -3419,13 +3552,16 @@ def _grouped_chain_pair_columns(cb, pair):
     return target_table_columns, pair_relations, max_target_col_id
 
 
-def _chain_source_to_target_mapping(table_has_mappings, table_has_whitelist, table_relations, table_yaml_columns):
-    """Lookup from source column name -> (target_name, yaml_type) of a chain table's YAML columns."""
+def _chain_source_to_target_mapping(table_has_mappings, table_has_whitelist, table_relations, table_yaml_columns,
+                                    names):
+    """Lookup from source column name -> (target_name, yaml_type) of a chain table's YAML columns.
+
+    ``names``: the :class:`entity_mapping.ColumnNames` of the discovered source columns, which the lookup is by."""
     source_to_target_mapping = {}
     if table_has_mappings:
         for relation in table_relations or []:
             for source_name, target_name in _relation_pairs([relation]):
-                source_to_target_mapping[source_name.lower()] = {
+                source_to_target_mapping[names.key(source_name)] = {
                     'target_name': target_name,
                     'yaml_type': relation["row"].get('type')
                 }
@@ -3434,24 +3570,24 @@ def _chain_source_to_target_mapping(table_has_mappings, table_has_whitelist, tab
             source_name = yaml_col.get('sourceName') or yaml_col.get('name')
             target_name = yaml_col.get('name')
             if source_name:
-                source_to_target_mapping[source_name.lower()] = {
+                source_to_target_mapping[names.key(source_name)] = {
                     'target_name': target_name,
                     'yaml_type': yaml_col.get('type')
                 }
     return source_to_target_mapping
 
 
-def _legacy_chain_target_column(run, col, col_id, mapping_info, table_data, overrides, column_types):
+def _legacy_chain_target_column(run, col, col_id, mapping_info, table_data, overrides, column_types, names):
     """A target column of a chain table pair for a CoreHub before Gluesync 2.3."""
     # Use target name from mapping if available, otherwise source name
     target_name = mapping_info['target_name'] if mapping_info else col["name"]
-    _resolved_dt = overrides.get(col["name"].lower()) or _map_target_type(run.ctx, col.get("dataType"), column_types)
+    _resolved_dt = overrides.get(col["name"]) or _map_target_type(run.ctx, col.get("dataType"), column_types)
     return _enrich_column({
         "id": col_id,  # Use actual ordinal position from database
         "position": col.get("position", 0),
         "name": target_name,
         "dataType": _resolved_dt,
-        "isPK": col.get("isPK", False) or _is_in_keys(col["name"], table_data), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
+        "isPK": col.get("isPK", False) or _is_in_keys(col["name"], table_data, names), "isIdentity": col.get("isIdentity", False), "isNullable": col.get("isNullable", False)
     }, col)
 
 
@@ -3475,12 +3611,13 @@ def _legacy_chain_pair_columns(cb, table_key, table_data, columns, overrides, co
         cb.chain_refusals.append(str(error))
         table_relations = None
 
+    names = ColumnNames(c["name"] for c in columns["columns"])
     source_to_target_mapping = _chain_source_to_target_mapping(table_has_mappings, table_has_whitelist,
-                                                               table_relations, table_yaml_columns)
+                                                               table_relations, table_yaml_columns, names)
 
     has_filter = table_has_mappings or table_has_whitelist
     try:
-        _refuse_forms_of_gluesync_23(table_relations, table_data, table_key)
+        _refuse_forms_of_gluesync_23(table_relations, table_data, table_key, names)
     except EntityMappingError as error:
         cb.chain_refusals.append(str(error))
 
@@ -3491,14 +3628,14 @@ def _legacy_chain_pair_columns(cb, table_key, table_data, columns, overrides, co
         col_id = _require_column_id(col, run.last_table_name)
 
         # When filter is active, skip columns not in the whitelist/mapping
-        mapping_info = source_to_target_mapping.get(col["name"].lower())
+        mapping_info = source_to_target_mapping.get(col["name"])
         if has_filter and not mapping_info:
             logger.debug(f"Skipping column {col['name']} for MultiTable target: not in whitelist/mapping for table {table_key}")
             continue
 
         max_target_col_id = max(max_target_col_id, col_id)
         target_table_columns.append(_legacy_chain_target_column(run, col, col_id, mapping_info, table_data,
-                                                                overrides, column_types))
+                                                                overrides, column_types, names))
     return target_table_columns, source_to_target_mapping, max_target_col_id
 
 
@@ -3589,10 +3726,10 @@ def _legacy_chain_target_key(cb, key_def, columns, table_key, source_to_target_m
         col_id = _require_column_id(col, table_key, label=key_name)
 
         # Use target name from mapping if available, otherwise source name
-        key_mapping_info = source_to_target_mapping.get(col["name"].lower())
+        key_mapping_info = source_to_target_mapping.get(col["name"])
         target_key_name = key_mapping_info['target_name'] if key_mapping_info else col["name"]
 
-        _resolved_dt = overrides.get(col["name"].lower()) or _map_target_type(run.ctx, col.get("dataType"), column_types)
+        _resolved_dt = overrides.get(col["name"]) or _map_target_type(run.ctx, col.get("dataType"), column_types)
         return _enrich_column({
             "id": col_id,  # Use actual ordinal position from database
             "position": col.get("position", 0),
@@ -3601,7 +3738,7 @@ def _legacy_chain_target_key(cb, key_def, columns, table_key, source_to_target_m
         }, col)
 
     logger.warning(f"Warning: Target key '{key_name}' not found in columns for table '{table_key}'. Searching in target_table_columns...")
-    col_def = next((c for c in target_table_columns if c.get('name', '').lower() == key_name.lower()), None)
+    col_def = find_by_name(target_table_columns, key_name)
     if col_def is not None:
         return copy.deepcopy(col_def)
 
@@ -3622,7 +3759,7 @@ def _legacy_chain_target_pk_keys(run, columns, overrides, column_types):
                 # Fallback to finding position if not provided
                 col_id = next((i for i, c in enumerate(columns["columns"], 1) if c == col), 1)
 
-            _resolved_dt = overrides.get(col["name"].lower()) or _map_target_type(run.ctx, col.get("dataType"), column_types)
+            _resolved_dt = overrides.get(col["name"]) or _map_target_type(run.ctx, col.get("dataType"), column_types)
             keys.append(_enrich_column({
                 "id": col_id,  # Use actual ordinal position from database
                 "position": col.get("position", 0),
@@ -3654,14 +3791,15 @@ def _add_chain_target_table(cb, table_key, table_data):
     cb.target_tables_properties[f"{target_schema}.{pair_target_name}"] = {}
 
     # Get columns for this table using actual source table name
-    columns = run.table_columns(actual_table_name)
+    columns = run.table_columns(actual_table_name, table_data)
 
     # Discover target columns for this specific table to enable type-mapping fallback
     table_target_columns = _chain_target_discovery(run, pair_target_name)
     target_table_column_types = extract_target_column_types(table_target_columns)
 
-    # Per-table user-declared targetDataType overrides (by source column name, lower-cased)
-    overrides = _build_target_data_type_overrides(table_data.get('columns', []) if table_data else [])
+    # Per-table user-declared targetDataType overrides (by source column name)
+    overrides = _build_target_data_type_overrides(table_data.get('columns', []) if table_data else [],
+                                                  ColumnNames(c["name"] for c in columns["columns"]))
 
     pair = _TablePair(table_key, pair_target_name, columns, table_data or {}, run.chain_source_ids[table_key],
                       target_table_id)
@@ -3718,7 +3856,7 @@ def _legacy_chain_matrix(run, tables_list):
         logger.info(f"Table mapping for {table_key}: source_id={source_table_id}, target_id={target_table_id}")
 
         # Get columns for this table to create mappings for each column (use actual table name)
-        columns = run.table_columns(actual_table_name)
+        columns = run.table_columns(actual_table_name, table_data)
         if not (columns and 'columns' in columns):
             continue
         for col in columns['columns']:

@@ -763,8 +763,11 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
 
     key_lookup = _KeyLookup(keys)
 
-    # Check if targetOnlyColumns are defined - if so, use them instead of source columns
-    if target_only_columns:
+    # Check if targetOnlyColumns are defined - if so, use them instead of source columns, unless the YAML maps
+    # source columns onto the target: an export lists the columns a UDF writes next to its rows, and a table of
+    # those columns alone would not be the one the rows write
+    has_mapping_rows = any(isinstance(entry, dict) and 'source' in entry for entry in column_entries)
+    if target_only_columns and not has_mapping_rows:
         logger.info(f"Using targetOnlyColumns definition for table {target_table_name}")
         column_dtos = _target_only_column_dtos(target_only_columns, key_lookup, source_node_info, target_node_info)
     else:
