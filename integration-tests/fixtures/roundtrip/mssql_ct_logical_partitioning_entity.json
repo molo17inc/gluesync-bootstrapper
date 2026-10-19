@@ -1,0 +1,546 @@
+{
+  "agentEntities": [
+    {
+      "agentEntityId": "0ce65fc5",
+      "agentId": "044cbfcb",
+      "columns": [
+        {
+          "charMaxLength": 0,
+          "charOctetLength": 0,
+          "dataType": "int",
+          "id": 4054250243860915464,
+          "isIdentity": false,
+          "isNullable": false,
+          "isPK": true,
+          "name": "ID",
+          "numPrec": 10,
+          "numPrecRadix": 10,
+          "numScale": 0,
+          "position": 1,
+          "tableId": -1233542859207714228
+        },
+        {
+          "charMaxLength": 100,
+          "charOctetLength": 100,
+          "charSet": "iso_1",
+          "collation": "SQL_Latin1_General_CP1_CI_AS",
+          "dataType": "varchar",
+          "id": -2535010772162726999,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "Name",
+          "numPrecRadix": 0,
+          "position": 2,
+          "tableId": -1233542859207714228
+        },
+        {
+          "charMaxLength": 500,
+          "charOctetLength": 500,
+          "charSet": "iso_1",
+          "collation": "SQL_Latin1_General_CP1_CI_AS",
+          "dataType": "varchar",
+          "id": 5939685541795538253,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "Description",
+          "numPrecRadix": 0,
+          "position": 3,
+          "tableId": -1233542859207714228
+        },
+        {
+          "charMaxLength": 0,
+          "charOctetLength": 0,
+          "dataType": "decimal",
+          "id": -7797669921747710953,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "Price",
+          "numPrec": 10,
+          "numPrecRadix": 10,
+          "numScale": 2,
+          "position": 4,
+          "tableId": -1233542859207714228
+        },
+        {
+          "charMaxLength": 0,
+          "charOctetLength": 0,
+          "dataType": "int",
+          "id": -9066964801598740265,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "Quantity",
+          "numPrec": 10,
+          "numPrecRadix": 10,
+          "numScale": 0,
+          "position": 5,
+          "tableId": -1233542859207714228
+        },
+        {
+          "charMaxLength": 0,
+          "charOctetLength": 0,
+          "dataType": "datetime2",
+          "datetimePrec": 7,
+          "id": -4616069558112627381,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "DateCreated",
+          "numPrecRadix": 0,
+          "position": 6,
+          "tableId": -1233542859207714228
+        },
+        {
+          "charMaxLength": 50,
+          "charOctetLength": 50,
+          "charSet": "iso_1",
+          "collation": "SQL_Latin1_General_CP1_CI_AS",
+          "dataType": "varchar",
+          "id": 2966753882465256912,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "Category",
+          "numPrecRadix": 0,
+          "position": 7,
+          "tableId": -1233542859207714228
+        },
+        {
+          "charMaxLength": 20,
+          "charOctetLength": 20,
+          "charSet": "iso_1",
+          "collation": "SQL_Latin1_General_CP1_CI_AS",
+          "dataType": "varchar",
+          "id": -7922322966442861727,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "Status",
+          "numPrecRadix": 0,
+          "position": 8,
+          "tableId": -1233542859207714228
+        },
+        {
+          "charMaxLength": 10,
+          "charOctetLength": 10,
+          "charSet": "iso_1",
+          "collation": "SQL_Latin1_General_CP1_CI_AS",
+          "dataType": "varchar",
+          "id": 3751294187465669981,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "Code",
+          "numPrecRadix": 0,
+          "position": 9,
+          "tableId": -1233542859207714228
+        },
+        {
+          "charMaxLength": 1000,
+          "charOctetLength": 1000,
+          "charSet": "iso_1",
+          "collation": "SQL_Latin1_General_CP1_CI_AS",
+          "dataType": "varchar",
+          "id": -8469822080833046456,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "Notes",
+          "numPrecRadix": 0,
+          "position": 10,
+          "tableId": -1233542859207714228
+        }
+      ],
+      "customProperties": {
+        "maxItemsCountPerIteration": 1000,
+        "pollingIntervalMilliseconds": 500,
+        "unchangedDataFilterType": "FIELDS"
+      },
+      "entityId": "38cb4624",
+      "entityName": "dbo.TEST_LOGICAL_PARTITIONING",
+      "entityType": {
+        "maxFetchItemsCountPerIteration": 10000,
+        "maxTransactionMessageKbSize": 1024,
+        "partitionSettings": {
+          "column": {
+            "charMaxLength": 0,
+            "charOctetLength": 0,
+            "dataType": "int",
+            "id": 4054250243860915464,
+            "isIdentity": false,
+            "isNullable": false,
+            "isPK": true,
+            "name": "ID",
+            "numPrec": 10,
+            "numPrecRadix": 10,
+            "numScale": 0,
+            "position": 1,
+            "tableId": -1233542859207714228
+          },
+          "partitions": [
+            {
+              "endValue": "100001",
+              "id": 1,
+              "startValue": "1"
+            },
+            {
+              "endValue": "200001",
+              "id": 2,
+              "startValue": "100001"
+            },
+            {
+              "endValue": "300001",
+              "id": 3,
+              "startValue": "200001"
+            },
+            {
+              "endValue": "400001",
+              "id": 4,
+              "startValue": "300001"
+            },
+            {
+              "endValue": "500001",
+              "id": 5,
+              "startValue": "400001"
+            },
+            {
+              "endValue": "600001",
+              "id": 6,
+              "startValue": "500001"
+            },
+            {
+              "endValue": "700001",
+              "id": 7,
+              "startValue": "600001"
+            },
+            {
+              "endValue": "800001",
+              "id": 8,
+              "startValue": "700001"
+            },
+            {
+              "endValue": "900001",
+              "id": 9,
+              "startValue": "800001"
+            },
+            {
+              "endValue": "1000000",
+              "id": 10,
+              "startValue": "900001"
+            }
+          ]
+        },
+        "pollingIntervalMilliseconds": 500,
+        "snapshotOnly": false,
+        "type": "Source",
+        "unchangedDataFilterType": "FIELDS"
+      },
+      "orderIndex": 0,
+      "table": {
+        "id": -1233542859207714228,
+        "name": "TEST_LOGICAL_PARTITIONING",
+        "schema": "dbo",
+        "type": "TABLE"
+      },
+      "tablesProperties": {
+        "dbo.TEST_LOGICAL_PARTITIONING": {}
+      },
+      "type": "SingleTable"
+    },
+    {
+      "agentEntityId": "6645f31f",
+      "agentId": "59860e22",
+      "columns": [
+        {
+          "charMaxLength": 0,
+          "charOctetLength": 0,
+          "dataType": "int",
+          "id": 4054250243860915464,
+          "isIdentity": false,
+          "isNullable": false,
+          "isPK": true,
+          "name": "ID",
+          "numPrec": 10,
+          "numPrecRadix": 10,
+          "numScale": 0,
+          "position": 0,
+          "tableId": -6004483104256012804
+        },
+        {
+          "charMaxLength": 100,
+          "charOctetLength": 100,
+          "charSet": "iso_1",
+          "collation": "SQL_Latin1_General_CP1_CI_AS",
+          "dataType": "varchar",
+          "id": -2535010772162726999,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "Name",
+          "numPrecRadix": 0,
+          "position": 0,
+          "tableId": -6004483104256012804
+        },
+        {
+          "charMaxLength": 500,
+          "charOctetLength": 500,
+          "charSet": "iso_1",
+          "collation": "SQL_Latin1_General_CP1_CI_AS",
+          "dataType": "varchar",
+          "id": 5939685541795538253,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "Description",
+          "numPrecRadix": 0,
+          "position": 0,
+          "tableId": -6004483104256012804
+        },
+        {
+          "charMaxLength": 0,
+          "charOctetLength": 0,
+          "dataType": "decimal",
+          "id": -7797669921747710953,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "Price",
+          "numPrec": 10,
+          "numPrecRadix": 10,
+          "numScale": 2,
+          "position": 0,
+          "tableId": -6004483104256012804
+        },
+        {
+          "charMaxLength": 0,
+          "charOctetLength": 0,
+          "dataType": "int",
+          "id": -9066964801598740265,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "Quantity",
+          "numPrec": 10,
+          "numPrecRadix": 10,
+          "numScale": 0,
+          "position": 0,
+          "tableId": -6004483104256012804
+        },
+        {
+          "charMaxLength": 0,
+          "charOctetLength": 0,
+          "dataType": "datetime2",
+          "datetimePrec": 7,
+          "id": -4616069558112627381,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "DateCreated",
+          "numPrecRadix": 0,
+          "position": 0,
+          "tableId": -6004483104256012804
+        },
+        {
+          "charMaxLength": 50,
+          "charOctetLength": 50,
+          "charSet": "iso_1",
+          "collation": "SQL_Latin1_General_CP1_CI_AS",
+          "dataType": "varchar",
+          "id": 2966753882465256912,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "Category",
+          "numPrecRadix": 0,
+          "position": 0,
+          "tableId": -6004483104256012804
+        },
+        {
+          "charMaxLength": 20,
+          "charOctetLength": 20,
+          "charSet": "iso_1",
+          "collation": "SQL_Latin1_General_CP1_CI_AS",
+          "dataType": "varchar",
+          "id": -7922322966442861727,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "Status",
+          "numPrecRadix": 0,
+          "position": 0,
+          "tableId": -6004483104256012804
+        },
+        {
+          "charMaxLength": 10,
+          "charOctetLength": 10,
+          "charSet": "iso_1",
+          "collation": "SQL_Latin1_General_CP1_CI_AS",
+          "dataType": "varchar",
+          "id": 3751294187465669981,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "Code",
+          "numPrecRadix": 0,
+          "position": 0,
+          "tableId": -6004483104256012804
+        },
+        {
+          "charMaxLength": 1000,
+          "charOctetLength": 1000,
+          "charSet": "iso_1",
+          "collation": "SQL_Latin1_General_CP1_CI_AS",
+          "dataType": "varchar",
+          "id": -8469822080833046456,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "Notes",
+          "numPrecRadix": 0,
+          "position": 0,
+          "tableId": -6004483104256012804
+        }
+      ],
+      "customProperties": {},
+      "entityId": "38cb4624",
+      "entityName": "dbo.TEST_LOGICAL_PARTITIONING",
+      "entityType": {
+        "allowedOperations": [
+          "INSERT",
+          "DELETE",
+          "UPDATE",
+          "TRUNCATE"
+        ],
+        "columnsMappingMatrix": [
+          {
+            "sourceColumnIds": [
+              4054250243860915464
+            ],
+            "sourceTableObjectId": -1233542859207714228,
+            "targetColumnIds": [
+              4054250243860915464
+            ],
+            "targetTableObjectId": -6004483104256012804
+          },
+          {
+            "sourceColumnIds": [
+              -2535010772162726999
+            ],
+            "sourceTableObjectId": -1233542859207714228,
+            "targetColumnIds": [
+              -2535010772162726999
+            ],
+            "targetTableObjectId": -6004483104256012804
+          },
+          {
+            "sourceColumnIds": [
+              5939685541795538253
+            ],
+            "sourceTableObjectId": -1233542859207714228,
+            "targetColumnIds": [
+              5939685541795538253
+            ],
+            "targetTableObjectId": -6004483104256012804
+          },
+          {
+            "sourceColumnIds": [
+              -7797669921747710953
+            ],
+            "sourceTableObjectId": -1233542859207714228,
+            "targetColumnIds": [
+              -7797669921747710953
+            ],
+            "targetTableObjectId": -6004483104256012804
+          },
+          {
+            "sourceColumnIds": [
+              -9066964801598740265
+            ],
+            "sourceTableObjectId": -1233542859207714228,
+            "targetColumnIds": [
+              -9066964801598740265
+            ],
+            "targetTableObjectId": -6004483104256012804
+          },
+          {
+            "sourceColumnIds": [
+              -4616069558112627381
+            ],
+            "sourceTableObjectId": -1233542859207714228,
+            "targetColumnIds": [
+              -4616069558112627381
+            ],
+            "targetTableObjectId": -6004483104256012804
+          },
+          {
+            "sourceColumnIds": [
+              2966753882465256912
+            ],
+            "sourceTableObjectId": -1233542859207714228,
+            "targetColumnIds": [
+              2966753882465256912
+            ],
+            "targetTableObjectId": -6004483104256012804
+          },
+          {
+            "sourceColumnIds": [
+              -7922322966442861727
+            ],
+            "sourceTableObjectId": -1233542859207714228,
+            "targetColumnIds": [
+              -7922322966442861727
+            ],
+            "targetTableObjectId": -6004483104256012804
+          },
+          {
+            "sourceColumnIds": [
+              3751294187465669981
+            ],
+            "sourceTableObjectId": -1233542859207714228,
+            "targetColumnIds": [
+              3751294187465669981
+            ],
+            "targetTableObjectId": -6004483104256012804
+          },
+          {
+            "sourceColumnIds": [
+              -8469822080833046456
+            ],
+            "sourceTableObjectId": -1233542859207714228,
+            "targetColumnIds": [
+              -8469822080833046456
+            ],
+            "targetTableObjectId": -6004483104256012804
+          }
+        ],
+        "distinctCaseInsensitiveKeyData": false,
+        "fieldFunctions": [],
+        "insertConflictStrategy": "UPSERT",
+        "snapshotWritingConcurrency": 1,
+        "tablesWithUnlockedDataTypes": [],
+        "tablesWithUnlockedSchema": [],
+        "type": "Target",
+        "useBulkOperationsDuringCDC": false,
+        "useBulkOperationsWhileSnapshot": false
+      },
+      "orderIndex": 0,
+      "table": {
+        "id": -6004483104256012804,
+        "name": "TEST_LOGICAL_PARTITIONING",
+        "schema": "target_schema",
+        "type": "TABLE"
+      },
+      "tablesProperties": {
+        "target_schema.TEST_LOGICAL_PARTITIONING": {}
+      },
+      "type": "SingleTable"
+    }
+  ],
+  "entityId": "38cb4624",
+  "entityName": "dbo.TEST_LOGICAL_PARTITIONING",
+  "groupId": "_default",
+  "orderIndex": 0
+}

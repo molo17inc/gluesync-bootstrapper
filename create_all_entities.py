@@ -880,6 +880,24 @@ def _is_physical_key_honoured(tag):
     return str(tag or "").strip().lower() not in _NO_PHYSICAL_KEY_AGENT_TAGS
 
 
+class _InferredColumn(dict):
+    """A column a NoSQL target reports, kept for its id and name only.
+
+    A NoSQL target has no schema to read back: it infers a column from the documents it holds, so its type is empty
+    for a field that is always null, "number" for an int and a long alike, and every field is "not nullable". A
+    collection that already exists must not change the columns of an entity, so only the id and the spelling of the
+    name are taken from it; the type, nullability and the rest come from the source column and the YAML, as for a
+    collection that does not exist yet.
+    """
+
+
+def _enrich_from(discovered_target_col, source_col):
+    """The column the optional fields (lengths, precision, character set) of a target column are copied from."""
+    if discovered_target_col and not isinstance(discovered_target_col, _InferredColumn):
+        return discovered_target_col
+    return source_col
+
+
 class _TargetBuild:
     """The working state of :func:`_assemble_target_side` for one table pair.
 
@@ -896,6 +914,9 @@ class _TargetBuild:
         self.exact = {
             c.get('name'): c for c in reversed((discovered or {}).get('columns') or []) if c.get('name')
         }
+        if ctx.target_is_nosql:
+            self.exact = {name: _InferredColumn(id=c.get('id'), name=name) for name, c in self.exact.items()}
+            discovered = None  # inferred types are no types a source type should be kept as
         # Set of dataTypes already present in the target table, for the type-mapping fallback
         self.column_types = extract_target_column_types(discovered)
         self.discovery_type_by_source = discovery_type_by_source
@@ -920,10 +941,26 @@ class _TargetBuild:
 
     def enrichment_source(self):
         """The column the target-only columns and the target primary keys copy their optional fields from."""
-        return self.last_discovered or self.last_column
+        return _enrich_from(self.last_discovered, self.last_column) if self.last_discovered else self.last_column
 
     def map_type(self, data_type):
         return _map_target_type(self.ctx, data_type, self.column_types)
+
+    def yaml_target_type(self, col):
+        """The target type an exported mapping row (``{source, target, type, ...}``) gives the source column ``col``.
+
+        Only for a NoSQL target, whose columns are not read back from the target (see :func:`_assemble_target_side`):
+        the export writes the target dataType of each row, and a type the target advertises is restored as it was,
+        where mapping the source type alone would lose a type that was changed after the entity was created. None
+        for any other target, and when the row has no type or one the target does not know.
+        """
+        if not self.ctx.target_is_nosql:
+            return None
+        wanted = str(col.get("name", "")).lower()
+        for row in self.pair.custom_config.get('columns') or []:
+            if isinstance(row, dict) and isinstance(row.get('source'), str) and row['source'].lower() == wanted:
+                return _canonicalize_target_type(row.get('type'), self.ctx.target_node_info)
+        return None
 
     def has_target_column(self, name):
         return any(str(c.get("name", "")).lower() == str(name).lower() for c in self.columns_def)
@@ -963,7 +1000,11 @@ def _set_unlocked_schema_arrays(target_entity_type, pair):
 
 
 def _discovered_or_mapped(tb, col, discovered_target_col, source_col_id):
-    """``(type, id)`` of a target column: the discovered target column's, else the mapped type and the source id."""
+    """``(type, id)`` of a target column: the discovered target column's, else the mapped type and the source id.
+
+    A discovered column without a type (a NoSQL target infers the type of a field from its values: a field that
+    is always null has none) is no type at all: the mapped one stands in, so the payload never carries a null.
+    """
     resolved_target_type = None
     target_col_id = source_col_id  # Default to source ID
     if discovered_target_col:
@@ -971,8 +1012,8 @@ def _discovered_or_mapped(tb, col, discovered_target_col, source_col_id):
             resolved_target_type = discovered_target_col.get('dataType')
         if discovered_target_col.get('id') is not None:
             target_col_id = discovered_target_col.get('id')
-    else:
-        resolved_target_type = tb.map_type(col.get("dataType"))
+    if not resolved_target_type:
+        resolved_target_type = tb.yaml_target_type(col) or tb.map_type(col.get("dataType"))
     return resolved_target_type, target_col_id
 
 
@@ -995,7 +1036,7 @@ def _target_column_def(col, discovered_target_col, target_col_id, name, data_typ
         "isPK": is_pk,
         "isIdentity": (discovered_target_col.get("isIdentity") if discovered_target_col else None) or col.get("isIdentity", False),
         "isNullable": discovered_target_col.get("isNullable") if discovered_target_col and "isNullable" in discovered_target_col else col.get("isNullable", False),
-    }, discovered_target_col if discovered_target_col else col)
+    }, _enrich_from(discovered_target_col, col))
 
 
 def _legacy_fallback_target_type(tb, col, resolved_target_type):
@@ -1346,8 +1387,8 @@ def _add_name_relation_column(tb, relation, columns_def):
     col = next(c for c in columns_def if c["name"] == relation["sources"][0])
     discovered_target_col = tb.seen(tb.target_col(target_name))
     resolved_target_type = discovered_target_col.get('dataType') if discovered_target_col else None
-    if not discovered_target_col:
-        resolved_target_type = tb.map_type(col.get("dataType"))
+    if not resolved_target_type:
+        resolved_target_type = tb.yaml_target_type(col) or tb.map_type(col.get("dataType"))
     resolved_target_type = tb.overrides.get(str(col["name"]).lower()) or resolved_target_type
     relation["targets"] = [discovered_target_col.get('name') if discovered_target_col else target_name]
     target_col_id = discovered_target_col.get('id') \
@@ -1456,7 +1497,7 @@ def _mapped_target_key(tb, col, source_col_id, source_name, target_name):
     # User-declared targetDataType override takes highest priority
     resolved_target_type = tb.overrides.get(col["name"].lower()) or resolved_target_type
     target_key = _target_key_def(target_col_id, target_name, resolved_target_type,
-                                 discovered_target_col if discovered_target_col else col)
+                                 _enrich_from(discovered_target_col, col))
     logger.debug(f"Target key: {source_name} -> {target_name} (source ID={source_col_id}, target ID={target_col_id})")
     return target_key
 
@@ -1494,7 +1535,7 @@ def _resolve_missed_target_key(tb, key_name, target_keys, found_target_key_names
     discovered_target_col = tb.target_col(str(target_name))
     resolved_target_type, target_col_id = _discovered_or_mapped(tb, matched, discovered_target_col, source_col_id)
     resolved_target_type = tb.overrides.get(matched["name"].lower()) or resolved_target_type
-    enrich_from = discovered_target_col if discovered_target_col else matched
+    enrich_from = _enrich_from(discovered_target_col, matched)
     target_keys.append(_target_key_def(target_col_id, target_name, resolved_target_type, enrich_from))
     found_target_key_names.add(str(target_name).lower())
     if not tb.has_target_column(target_name):
@@ -1545,7 +1586,7 @@ def _append_named_target_key(tb, target_keys, col, key_name):
         "name": target_key_name,
         "alias": target_key_name,
         "dataType": resolved_target_type
-    }, discovered_target_col if discovered_target_col else col))
+    }, _enrich_from(discovered_target_col, col)))
     logger.debug(f"Target key: {key_name} (source ID={source_col_id}, target ID={target_col_id})")
 
 
@@ -1713,6 +1754,7 @@ def _assemble_target_side(ctx, pair, columns_def, has_filter, discovery_type_by_
     _build_target_columns(tb, relations, grouped)
     _add_produced_columns(tb, relations, grouped)
     _add_target_only_columns(tb)
+    _fill_missing_target_types(tb, columns_def)
 
     print(f"Columns definition for {pair.table_name}: {columns_def}")
 
@@ -1725,6 +1767,22 @@ def _assemble_target_side(ctx, pair, columns_def, has_filter, discovery_type_by_
     _attach_field_functions(tb, target_entity_type, name_relations, grouped)
 
     return tb.columns_def, target_keys
+
+
+def _fill_missing_target_types(tb, columns_def):
+    """Give every target column a dataType: CoreHub refuses a payload with a null one (400 on the whole PUT).
+
+    A column is left without one when no mapping, discovery or YAML row supplied it; it takes the type its source
+    column maps to, else the target's string type.
+    """
+    source_types = {str(c.get("name", "")).lower(): c.get("dataType") for c in columns_def}
+    for target_col in tb.columns_def:
+        if target_col.get("dataType"):
+            continue
+        source_type = source_types.get(str(target_col.get("name", "")).lower())
+        target_col["dataType"] = tb.map_type(source_type)
+        logger.warning(f"Table {tb.pair.table_name}: target column {target_col.get('name')} had no dataType, "
+                       f"using {target_col['dataType']}")
 
 
 def _assemble_chain_pair(ctx, pair, source_schema):

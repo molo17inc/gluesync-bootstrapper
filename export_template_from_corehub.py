@@ -567,8 +567,34 @@ def _columns_in_table_order(columns: List[Dict[str, Any]]) -> List[Tuple[int, Di
     return sorted(enumerate(columns, start=1), key=lambda pair: _column_position(pair[1], pair[0]))
 
 
-# "type" is implied by the side, and partitions are recomputed on import.
+# "type" is implied by the side. partitionSettings is not written as it is: the computed ranges are recomputed on
+# import, and what survives (the column and the number of partitions) is written as ``partitions`` (see below).
 _SOURCE_EXCLUDED_SETTINGS = frozenset({"type", "partitionSettings"})
+
+# The partition count the import asks CoreHub for when a table does not say (create_all_entities reads the same
+# environment variable), so a table that has exactly this many ranges exports as a plain column name.
+_DEFAULT_MAX_LOGICAL_PARTITIONS = int(os.getenv("MAX_LOGICAL_PARTITIONS", "10"))
+
+
+def _partition_config(source_et: Dict[str, Any]) -> Any:
+    """``customProperties.source.partitions`` of a table: the logical partition column, None without one.
+
+    CoreHub keeps the column, and the ranges it computed for it, in ``entityType.partitionSettings``. The ranges
+    are recomputed by the import and are never exported. The maximum number of partitions asked for is not stored
+    anywhere, so the number of computed ranges stands for it (CoreHub never returns more than were asked for;
+    fewer only when the column has fewer distinct values): it is written, as the extended ``{column,
+    maxPartitionsNumber}`` form, when it is not the default, and the plain column name form otherwise.
+    """
+    settings = source_et.get("partitionSettings")
+    column = settings.get("column") if isinstance(settings, dict) else None
+    column_name = column.get("name") if isinstance(column, dict) else None
+    if not column_name:
+        return None
+    ranges = settings.get("partitions")
+    count = len(ranges) if isinstance(ranges, list) else 0
+    if count and count != _DEFAULT_MAX_LOGICAL_PARTITIONS:
+        return {"column": column_name, "maxPartitionsNumber": count}
+    return column_name
 
 
 def _source_custom_properties(source_ae: Dict[str, Any]) -> Dict[str, Any]:
@@ -583,7 +609,11 @@ def _source_custom_properties(source_ae: Dict[str, Any]) -> Dict[str, Any]:
         k: v for k, v in (source_ae.get("customProperties") or {}).items() if k not in source_et
     }
     settings = {**user_only, **source_et}
-    return {k: v for k, v in settings.items() if k not in _SOURCE_EXCLUDED_SETTINGS}
+    exported = {k: v for k, v in settings.items() if k not in _SOURCE_EXCLUDED_SETTINGS}
+    partitions = _partition_config(source_et)
+    if partitions is not None:
+        exported["partitions"] = partitions
+    return exported
 
 
 def _single_source_location(entity_name: str, source_table: Dict[str, Any]) -> Tuple[Any, Any]:

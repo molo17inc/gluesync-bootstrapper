@@ -1241,6 +1241,8 @@ PUT /pipelines/{pipelineId}/config/entities
 - Only single-table entities support logical partitions at the moment.
 - The partition column must exist in the discovery metadata; otherwise the bootstrapper logs a warning and skips the feature for that table.
 - Computed ranges are stored in Gluesync so that subsequent snapshots reuse the same configuration without recomputation.
+- The export writes the partition column back as `customProperties.source.partitions`, so a restore partitions the same column. The computed ranges are never exported. Core Hub does not store the maximum number of partitions that was asked for, so the number of computed ranges stands for it: a table that has exactly the default number (10, or `MAX_LOGICAL_PARTITIONS`) exports the plain column name, any other count exports `{column, maxPartitionsNumber}`. A column with fewer distinct values than the maximum therefore restores with that smaller maximum.
+- On a NoSQL target (Couchbase, MongoDB) the columns of an entity come from the source and the YAML, not from the collection: a NoSQL target infers its columns from the documents it holds (an int is `number`, a field that is always null has no type, every field is not nullable), so a restore onto a collection that already has documents no longer changes the column types, nullability or lengths. Only the column ids and the spelling of the names are taken from the collection. A `type` on an exported mapping row that the target advertises is restored as written.
 
 ## Support
 

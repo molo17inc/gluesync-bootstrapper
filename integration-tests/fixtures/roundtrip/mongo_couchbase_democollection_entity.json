@@ -1,0 +1,163 @@
+{
+  "agentEntities": [
+    {
+      "agentEntityId": "5e3cf67b",
+      "agentId": "9baa2c47",
+      "columns": [
+        {
+          "dataType": "OBJECT_ID",
+          "id": -5262660625305103898,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": true,
+          "name": "_id",
+          "position": 0,
+          "tableId": 5532825073060253908
+        },
+        {
+          "dataType": "STRING",
+          "id": -9033284618608193922,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "name",
+          "position": 1,
+          "tableId": 5532825073060253908
+        },
+        {
+          "dataType": "INT32",
+          "id": 89883151635241480,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "age",
+          "position": 2,
+          "tableId": 5532825073060253908
+        }
+      ],
+      "customProperties": {},
+      "entityId": "1b4eff4d",
+      "entityName": "demo.democollection",
+      "entityObject": {
+        "collection": "democollection",
+        "id": 5532825073060253908,
+        "scope": "demo"
+      },
+      "entityType": {
+        "maxFetchItemsCountPerIteration": 10000,
+        "maxTransactionMessageKbSize": 1024,
+        "pollingIntervalMilliseconds": 500,
+        "snapshotOnly": false,
+        "type": "Source",
+        "unchangedDataFilterType": "DISABLED"
+      },
+      "orderIndex": 0,
+      "tablesProperties": {
+        "demo.democollection": {}
+      },
+      "type": "NoSqlEntity"
+    },
+    {
+      "agentEntityId": "0e60a86f",
+      "agentId": "bf5e86e6",
+      "columns": [
+        {
+          "dataType": "string",
+          "id": -5262660625305103898,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": true,
+          "name": "_id",
+          "position": 0,
+          "tableId": -227335124
+        },
+        {
+          "dataType": "string",
+          "id": -9033284618608193922,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "name",
+          "position": 0,
+          "tableId": -227335124
+        },
+        {
+          "dataType": "int",
+          "id": 89883151635241480,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "age",
+          "position": 0,
+          "tableId": -227335124
+        }
+      ],
+      "customProperties": {},
+      "entityId": "1b4eff4d",
+      "entityName": "demo.democollection",
+      "entityObject": {
+        "collection": "democollection",
+        "id": -227335124,
+        "scope": "demo"
+      },
+      "entityType": {
+        "allowedOperations": [
+          "INSERT",
+          "DELETE",
+          "UPDATE",
+          "TRUNCATE"
+        ],
+        "columnsMappingMatrix": [
+          {
+            "sourceColumnIds": [
+              -9033284618608193922
+            ],
+            "sourceTableObjectId": 5532825073060253908,
+            "targetColumnIds": [
+              -9033284618608193922
+            ],
+            "targetTableObjectId": -227335124
+          },
+          {
+            "sourceColumnIds": [
+              89883151635241480
+            ],
+            "sourceTableObjectId": 5532825073060253908,
+            "targetColumnIds": [
+              89883151635241480
+            ],
+            "targetTableObjectId": -227335124
+          },
+          {
+            "sourceColumnIds": [
+              -5262660625305103898
+            ],
+            "sourceTableObjectId": 5532825073060253908,
+            "targetColumnIds": [
+              -5262660625305103898
+            ],
+            "targetTableObjectId": -227335124
+          }
+        ],
+        "distinctCaseInsensitiveKeyData": false,
+        "fieldFunctions": [],
+        "insertConflictStrategy": "UPSERT",
+        "snapshotWritingConcurrency": 1,
+        "tablesWithUnlockedDataTypes": [],
+        "tablesWithUnlockedSchema": [],
+        "type": "Target",
+        "useBulkOperationsDuringCDC": false,
+        "useBulkOperationsWhileSnapshot": false
+      },
+      "orderIndex": 0,
+      "tablesProperties": {
+        "demo.democollection": {}
+      },
+      "type": "NoSqlEntity"
+    }
+  ],
+  "entityId": "1b4eff4d",
+  "entityName": "demo.democollection",
+  "groupId": "_default",
+  "orderIndex": 0
+}

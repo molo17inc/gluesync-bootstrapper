@@ -1,0 +1,366 @@
+{
+  "agentEntities": [
+    {
+      "agentEntityId": "98d2d0f0",
+      "agentId": "662830bc",
+      "columns": [
+        {
+          "charMaxLength": 0,
+          "charOctetLength": 0,
+          "dataType": "int",
+          "id": 4054250243860915464,
+          "isIdentity": false,
+          "isNullable": false,
+          "isPK": true,
+          "name": "ID",
+          "numPrec": 10,
+          "numPrecRadix": 10,
+          "numScale": 0,
+          "position": 1,
+          "tableId": -6596103237241044744
+        },
+        {
+          "charMaxLength": 1000,
+          "charOctetLength": 1000,
+          "charSet": "iso_1",
+          "collation": "SQL_Latin1_General_CP1_CI_AS",
+          "dataType": "varchar",
+          "id": 5525177281213771110,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "ARTICLE_NAME",
+          "numPrecRadix": 0,
+          "position": 2,
+          "tableId": -6596103237241044744
+        },
+        {
+          "charMaxLength": 1000,
+          "charOctetLength": 1000,
+          "charSet": "iso_1",
+          "collation": "SQL_Latin1_General_CP1_CI_AS",
+          "dataType": "varchar",
+          "id": -7150774750069269664,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "DESCRIPTION",
+          "numPrecRadix": 0,
+          "position": 3,
+          "tableId": -6596103237241044744
+        },
+        {
+          "charMaxLength": 0,
+          "charOctetLength": 0,
+          "dataType": "float",
+          "id": 1369727909485014455,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "PRICE",
+          "numPrec": 53,
+          "numPrecRadix": 2,
+          "position": 4,
+          "tableId": -6596103237241044744
+        },
+        {
+          "charMaxLength": 1000,
+          "charOctetLength": 1000,
+          "charSet": "iso_1",
+          "collation": "SQL_Latin1_General_CP1_CI_AS",
+          "dataType": "varchar",
+          "id": -5257706643083258012,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "CURRENCY",
+          "numPrecRadix": 0,
+          "position": 5,
+          "tableId": -6596103237241044744
+        },
+        {
+          "charMaxLength": 0,
+          "charOctetLength": 0,
+          "dataType": "int",
+          "id": 4664554630715149376,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "AVAILABILITY",
+          "numPrec": 10,
+          "numPrecRadix": 10,
+          "numScale": 0,
+          "position": 6,
+          "tableId": -6596103237241044744
+        },
+        {
+          "charMaxLength": 1000,
+          "charOctetLength": 1000,
+          "charSet": "iso_1",
+          "collation": "SQL_Latin1_General_CP1_CI_AS",
+          "dataType": "varchar",
+          "id": -8625077132120294859,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "IMAGE_URL",
+          "numPrecRadix": 0,
+          "position": 7,
+          "tableId": -6596103237241044744
+        }
+      ],
+      "customProperties": {
+        "maxItemsCountPerIteration": 1000,
+        "maxMigrationItemsCountPerIteration": 1000
+      },
+      "entityId": "09ac02c6",
+      "entityName": "dbo.ARTICLES",
+      "entityType": {
+        "maxFetchItemsCountPerIteration": 10000,
+        "maxTransactionMessageKbSize": 1024,
+        "pollingIntervalMilliseconds": 500,
+        "snapshotOnly": false,
+        "type": "Source",
+        "unchangedDataFilterType": "DISABLED"
+      },
+      "orderIndex": 0,
+      "table": {
+        "id": -6596103237241044744,
+        "name": "ARTICLES",
+        "schema": "dbo",
+        "type": "TABLE"
+      },
+      "tablesProperties": {
+        "dbo.ARTICLES": {}
+      },
+      "type": "SingleTable"
+    },
+    {
+      "agentEntityId": "85d5eeb0",
+      "agentId": "1fd116db",
+      "columns": [
+        {
+          "charMaxLength": 0,
+          "charOctetLength": 0,
+          "dataType": "int",
+          "id": 4054250243860915464,
+          "isIdentity": false,
+          "isNullable": false,
+          "isPK": true,
+          "name": "ID",
+          "numPrec": 10,
+          "numPrecRadix": 10,
+          "numScale": 0,
+          "position": 0,
+          "tableId": 1987823578
+        },
+        {
+          "charMaxLength": 1000,
+          "charOctetLength": 1000,
+          "charSet": "iso_1",
+          "collation": "SQL_Latin1_General_CP1_CI_AS",
+          "dataType": "string",
+          "id": 5525177281213771110,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "ARTICLE_NAME",
+          "numPrecRadix": 0,
+          "position": 0,
+          "tableId": 1987823578
+        },
+        {
+          "charMaxLength": 1000,
+          "charOctetLength": 1000,
+          "charSet": "iso_1",
+          "collation": "SQL_Latin1_General_CP1_CI_AS",
+          "dataType": "string",
+          "id": -7150774750069269664,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "DESCRIPTION",
+          "numPrecRadix": 0,
+          "position": 0,
+          "tableId": 1987823578
+        },
+        {
+          "charMaxLength": 0,
+          "charOctetLength": 0,
+          "dataType": "double",
+          "id": 1369727909485014455,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "PRICE",
+          "numPrec": 53,
+          "numPrecRadix": 2,
+          "position": 0,
+          "tableId": 1987823578
+        },
+        {
+          "charMaxLength": 1000,
+          "charOctetLength": 1000,
+          "charSet": "iso_1",
+          "collation": "SQL_Latin1_General_CP1_CI_AS",
+          "dataType": "string",
+          "id": -5257706643083258012,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "CURRENCY",
+          "numPrecRadix": 0,
+          "position": 0,
+          "tableId": 1987823578
+        },
+        {
+          "charMaxLength": 0,
+          "charOctetLength": 0,
+          "dataType": "int",
+          "id": 4664554630715149376,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "AVAILABILITY",
+          "numPrec": 10,
+          "numPrecRadix": 10,
+          "numScale": 0,
+          "position": 0,
+          "tableId": 1987823578
+        },
+        {
+          "charMaxLength": 1000,
+          "charOctetLength": 1000,
+          "charSet": "iso_1",
+          "collation": "SQL_Latin1_General_CP1_CI_AS",
+          "dataType": "string",
+          "id": -8625077132120294859,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "IMAGE_URL",
+          "numPrecRadix": 0,
+          "position": 0,
+          "tableId": 1987823578
+        }
+      ],
+      "customProperties": {
+        "ttlValue": 0
+      },
+      "entityId": "09ac02c6",
+      "entityName": "dbo.ARTICLES",
+      "entityObject": {
+        "collection": "ARTICLES",
+        "id": 1987823578,
+        "scope": "dbo"
+      },
+      "entityType": {
+        "allowedOperations": [
+          "INSERT",
+          "DELETE",
+          "UPDATE",
+          "TRUNCATE"
+        ],
+        "columnsMappingMatrix": [
+          {
+            "sourceColumnIds": [
+              4054250243860915464
+            ],
+            "sourceTableObjectId": -6596103237241044744,
+            "targetColumnIds": [
+              4054250243860915464
+            ],
+            "targetTableObjectId": 1987823578
+          },
+          {
+            "sourceColumnIds": [
+              5525177281213771110
+            ],
+            "sourceTableObjectId": -6596103237241044744,
+            "targetColumnIds": [
+              5525177281213771110
+            ],
+            "targetTableObjectId": 1987823578
+          },
+          {
+            "sourceColumnIds": [
+              -7150774750069269664
+            ],
+            "sourceTableObjectId": -6596103237241044744,
+            "targetColumnIds": [
+              -7150774750069269664
+            ],
+            "targetTableObjectId": 1987823578
+          },
+          {
+            "sourceColumnIds": [
+              1369727909485014455
+            ],
+            "sourceTableObjectId": -6596103237241044744,
+            "targetColumnIds": [
+              1369727909485014455
+            ],
+            "targetTableObjectId": 1987823578
+          },
+          {
+            "sourceColumnIds": [
+              -5257706643083258012
+            ],
+            "sourceTableObjectId": -6596103237241044744,
+            "targetColumnIds": [
+              -5257706643083258012
+            ],
+            "targetTableObjectId": 1987823578
+          },
+          {
+            "sourceColumnIds": [
+              4664554630715149376
+            ],
+            "sourceTableObjectId": -6596103237241044744,
+            "targetColumnIds": [
+              4664554630715149376
+            ],
+            "targetTableObjectId": 1987823578
+          },
+          {
+            "sourceColumnIds": [
+              -8625077132120294859
+            ],
+            "sourceTableObjectId": -6596103237241044744,
+            "targetColumnIds": [
+              -8625077132120294859
+            ],
+            "targetTableObjectId": 1987823578
+          }
+        ],
+        "distinctCaseInsensitiveKeyData": false,
+        "fieldFunctions": [],
+        "insertConflictStrategy": "UPSERT",
+        "snapshotWritingConcurrency": 1,
+        "tablesWithUnlockedDataTypes": [],
+        "tablesWithUnlockedSchema": [],
+        "type": "Target",
+        "useBulkOperationsDuringCDC": false,
+        "useBulkOperationsWhileSnapshot": false
+      },
+      "keyMapping": {
+        "keys": [
+          4054250243860915464,
+          5525177281213771110
+        ],
+        "prefix": "TESTPREFIX",
+        "separator": "**",
+        "suffix": "TESTSUFFIX"
+      },
+      "orderIndex": 0,
+      "tablesProperties": {
+        "dbo.ARTICLES": {}
+      },
+      "type": "NoSqlEntity"
+    }
+  ],
+  "entityId": "09ac02c6",
+  "entityName": "dbo.ARTICLES",
+  "groupId": "_default",
+  "orderIndex": 0
+}
