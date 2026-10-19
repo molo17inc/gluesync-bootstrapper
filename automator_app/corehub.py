@@ -2323,6 +2323,8 @@ def export_full_corehub_backup(
       - schedules.yaml
       - pipelines/ (individual pipeline YAMLs)
       - agents-config.yaml
+      - user-groups.yaml (user groups with their members and data-access policies, Core Hub 2.3.0.1+)
+      - data-access-policies.yaml (the Query Studio data-access policies of each user)
       - ai-settings.json (Core Hub 2.3.0.1+; its secrets are included only with
         include_secrets and an ai_settings_passphrase, sealed with it, and need
         ai_settings_current_password, the signed-in user's password)
@@ -2413,6 +2415,12 @@ def export_full_corehub_backup(
             logger.warning("Failed to export OIDC config: %s", exc)
             zip_file.writestr(_OIDC_BACKUP_FILE, _dump_to_yaml({"error": str(exc)}).encode("utf-8"))
 
+        # User groups (members and data-access policies) and the data-access policies of each user
+        _write_section(zip_file, USER_GROUPS_FILENAME, "user groups", export_user_groups,
+                       token=token, base_url=base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+        _write_section(zip_file, DATA_ACCESS_POLICIES_FILENAME, "data-access policies", export_data_access_policies,
+                       token=token, base_url=base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+
         # AI settings: one bundle from Core Hub. An older Core Hub has none to back up.
         _write_ai_settings(
             zip_file,
@@ -2448,6 +2456,15 @@ def export_full_corehub_backup(
 
 
 AI_SETTINGS_ERROR_FILENAME = "ai-settings.error.yaml"
+
+
+def _write_section(zip_file: zipfile.ZipFile, filename: str, label: str, export: Callable[..., Dict[str, Any]], **kwargs: Any) -> None:
+    try:
+        data = export(**kwargs)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("Failed to export %s: %s", label, exc)
+        data = {"error": str(exc)}
+    zip_file.writestr(filename, _dump_to_yaml(data).encode("utf-8"))
 
 
 def _write_ai_settings(
@@ -3036,6 +3053,408 @@ def _pipelines_zip_status(extract_dir: Path) -> Dict[str, Any]:
     return {"status": "pending", "zip_size": len(pipelines_zip)}
 
 
+# ---------------------------------------------------------------------------
+# User groups and Query Studio data-access policies (Core Hub 2.3.0.1+ for groups)
+# ---------------------------------------------------------------------------
+
+USER_GROUPS_FILENAME = "user-groups.yaml"
+DATA_ACCESS_POLICIES_FILENAME = "data-access-policies.yaml"
+DATA_ACCESS_BASE_PATH = "/query-studio/data-access"
+USER_GROUPS_PATH = "/user-groups"
+_CONNECTIONS_PATH = "/connections"
+_UNSUPPORTED = "unsupported"
+_POLICY_FIELDS = ("mode", "rules", "piiUnmaskGrants")
+
+
+def _is_not_found(exc: Exception) -> bool:
+    """True when Core Hub answered 404, which for these endpoints means a Core Hub without the feature."""
+    cause = exc.__cause__
+    response = getattr(cause, "response", None) or getattr(exc, "response", None)
+    if response is not None and getattr(response, "status_code", None) == 404:
+        return True
+    return "404" in str(exc) or "Not Found" in str(exc)
+
+
+def _as_list(response: Any, key: str = "items") -> list:
+    """Core Hub answers either a bare list or an object holding it under ``key``."""
+    if isinstance(response, list):
+        return response
+    if isinstance(response, dict):
+        items = response.get(key)
+        if isinstance(items, list):
+            return items
+    return []
+
+
+def _usernames_by_id(token: str) -> Dict[str, str]:
+    users = _as_list(fetch_core_hub(_USERS_PATH, token=token), key="users")
+    return {
+        str(user["id"]): str(user["username"])
+        for user in users
+        if isinstance(user, dict) and user.get("id") and user.get("username")
+    }
+
+
+def _connection_names(token: str) -> Dict[str, str]:
+    """Connection name by connection id on this Core Hub; empty when the connections cannot be listed."""
+    try:
+        connections = _as_list(fetch_core_hub(_CONNECTIONS_PATH, token=token))
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("Failed to list the connections of the data-access policies: %s", exc)
+        return {}
+    return {
+        str(connection["connectionId"]): str(connection["name"])
+        for connection in connections
+        if isinstance(connection, dict) and connection.get("connectionId") and connection.get("name")
+    }
+
+
+def _policy_entry(policy: Dict[str, Any], connection_names: Dict[str, str]) -> Dict[str, Any]:
+    """The part of a policy a restore sends back: the connection (id and name) and the matrix, no principal or audit fields."""
+    connection_id = str(policy.get("connectionId"))
+    entry = {"connectionId": connection_id, "connectionName": connection_names.get(connection_id)}
+    entry.update({field: policy[field] for field in _POLICY_FIELDS if field in policy})
+    return entry
+
+
+def _policies_of(token: str, principal_path: str, connection_names: Dict[str, str]) -> list:
+    response = fetch_core_hub(f"{DATA_ACCESS_BASE_PATH}/{principal_path}", token=token)
+    return [
+        _policy_entry(policy, connection_names)
+        for policy in _as_list(response)
+        if isinstance(policy, dict) and policy.get("connectionId")
+    ]
+
+
+def export_user_groups(
+    *,
+    token: str,
+    base_url: str,
+    use_ssl: Optional[bool],
+    skip_verify: Optional[bool],
+) -> Dict[str, Any]:
+    """Export the user groups with their members and their Query Studio data-access policies.
+
+    Members are kept with their username next to their id, so a restore can find them again on a
+    Core Hub where the same user got another id. A Core Hub without user groups answers 404 and the
+    export says so instead of failing.
+    """
+    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+
+    try:
+        groups = _as_list(fetch_core_hub(USER_GROUPS_PATH, token=token, expected_error_statuses={404}))
+    except Exception as exc:  # pylint: disable=broad-except
+        if _is_not_found(exc):
+            return {"user_groups": {_UNSUPPORTED: "this Core Hub has no user groups"}}
+        logger.warning("Failed to fetch user groups: %s", exc)
+        return {"user_groups": {"error": str(exc)}}
+
+    try:
+        usernames = _usernames_by_id(token)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("Failed to fetch the users of the user groups: %s", exc)
+        usernames = {}
+    connection_names = _connection_names(token)
+
+    exported: list[dict] = []
+    for group in groups:
+        if not isinstance(group, dict) or not group.get("id"):
+            continue
+        group_id = str(group["id"])
+        entry: Dict[str, Any] = {
+            "id": group_id,
+            "name": group.get("name"),
+            "description": group.get("description"),
+            "members": [
+                {"id": str(member_id), "username": usernames.get(str(member_id))}
+                for member_id in group.get("memberIds") or []
+            ],
+        }
+        try:
+            entry["policies"] = _policies_of(token, f"groups/{group_id}", connection_names)
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("Failed to fetch the data-access policies of user group %s: %s", group_id, exc)
+            entry["policies"] = {"error": str(exc)}
+        exported.append(entry)
+
+    return {"user_groups": exported}
+
+
+def export_data_access_policies(
+    *,
+    token: str,
+    base_url: str,
+    use_ssl: Optional[bool],
+    skip_verify: Optional[bool],
+) -> Dict[str, Any]:
+    """Export the Query Studio data-access policies of every user, by user id and username."""
+    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+
+    try:
+        usernames = _usernames_by_id(token)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("Failed to fetch users for the data-access policies: %s", exc)
+        return {"user_policies": {"error": str(exc)}}
+    connection_names = _connection_names(token)
+
+    exported: list[dict] = []
+    errors: list[str] = []
+    for user_id, username in usernames.items():
+        try:
+            policies = _policies_of(token, f"users/{user_id}", connection_names)
+        except Exception as exc:  # pylint: disable=broad-except
+            if _is_not_found(exc):
+                return {"user_policies": {_UNSUPPORTED: "this Core Hub has no data-access policies"}}
+            logger.warning("Failed to fetch the data-access policies of user %s: %s", username, exc)
+            errors.append(f"{username}: {exc}")
+            continue
+        if policies:
+            exported.append({"userId": user_id, "username": username, "policies": policies})
+
+    result: Dict[str, Any] = {"user_policies": exported}
+    if errors:
+        result["errors"] = errors
+    return result
+
+
+def _skip_reason(section: Any) -> Optional[str]:
+    if section is None:
+        return _REASON_NOT_PRESENT_IN_BACKUP
+    if isinstance(section, dict) and _UNSUPPORTED in section:
+        return f"not exported: {section[_UNSUPPORTED]}"
+    if isinstance(section, dict) and "error" in section:
+        return _REASON_EXPORTED_WITH_ERROR
+    if not isinstance(section, list):
+        return "invalid format"
+    return None
+
+
+def _target_user_ids(token: str) -> Tuple[Dict[str, str], set]:
+    """The users of the Core Hub being restored: id by username, and every id."""
+    by_id = _usernames_by_id(token)
+    return {username: user_id for user_id, username in by_id.items()}, set(by_id)
+
+
+def _resolve_user(backup_id: Optional[str], username: Optional[str], ids_by_username: Dict[str, str], known_ids: set) -> Optional[str]:
+    """The id a backed-up user has on this Core Hub: found by username first, by the same id otherwise."""
+    if username and username in ids_by_username:
+        return ids_by_username[username]
+    if backup_id and backup_id in known_ids:
+        return backup_id
+    return None
+
+
+class _TargetConnections:
+    """The connections of the Core Hub being restored, to point each backed-up policy at one of them.
+
+    A policy keeps its connection when this Core Hub has the same connection id; otherwise it moves to the
+    only connection with the same name, which is what an import of the pipelines recreates. A policy whose
+    connection is not found is not restored: it would protect nothing and still switch data-access
+    enforcement on for the whole installation.
+    """
+
+    def __init__(self, token: str):
+        try:
+            connections = _as_list(fetch_core_hub(_CONNECTIONS_PATH, token=token))
+            self.error: Optional[str] = None
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("Failed to list the connections to restore the data-access policies on: %s", exc)
+            connections = []
+            self.error = str(exc)
+        connections = [c for c in connections if isinstance(c, dict) and c.get("connectionId")]
+        self.ids = {str(c["connectionId"]) for c in connections}
+        ids_by_name: Dict[str, list] = {}
+        for connection in connections:
+            ids_by_name.setdefault(str(connection.get("name")), []).append(str(connection["connectionId"]))
+        self.id_by_name = {name: ids[0] for name, ids in ids_by_name.items() if len(ids) == 1}
+
+    def resolve(self, policy: Dict[str, Any]) -> Optional[str]:
+        connection_id = str(policy.get("connectionId"))
+        if connection_id in self.ids:
+            return connection_id
+        return self.id_by_name.get(str(policy.get("connectionName")))
+
+
+def _restore_policies(
+    token: str,
+    principal_path: str,
+    policies: Any,
+    label: str,
+    connections: _TargetConnections,
+    report: Dict[str, list],
+) -> int:
+    errors = report["errors"]
+    if not isinstance(policies, list):
+        if policies is not None:
+            errors.append(f"{label}: policies exported with error")
+        return 0
+    restored = 0
+    for policy in policies:
+        if not isinstance(policy, dict) or not policy.get("connectionId"):
+            continue
+        connection_id = connections.resolve(policy)
+        if not connection_id:
+            report["skipped_policies"].append(
+                f"{label} on {policy.get('connectionName') or policy['connectionId']}: connection not found on this Core Hub"
+            )
+            continue
+        body = {field: policy[field] for field in _POLICY_FIELDS if field in policy}
+        try:
+            fetch_core_hub(
+                f"{DATA_ACCESS_BASE_PATH}/{principal_path}/connections/{connection_id}",
+                method="PUT",
+                token=token,
+                body=body,
+            )
+            restored += 1
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("Failed to restore the data-access policy of %s on %s: %s", label, connection_id, exc)
+            errors.append(f"{label} on {connection_id}: {exc}")
+    return restored
+
+
+def _new_report() -> Dict[str, list]:
+    return {"errors": [], "warnings": [], "skipped_policies": []}
+
+
+def _restore_result(counts: Dict[str, int], report: Dict[str, list], connections: _TargetConnections) -> Dict[str, Any]:
+    skipped = report["skipped_policies"]
+    summary = ", ".join(f"{count} {name}" for name, count in counts.items())
+    if skipped:
+        summary += f", {len(skipped)} policies skipped (connection not found; import the pipelines, then restore again)"
+    result: Dict[str, Any] = {"status": "restored", "summary": summary, **counts}
+    if skipped and connections.error:
+        report["warnings"].append(f"the connections of this Core Hub could not be listed: {connections.error}")
+    result.update({key: values for key, values in report.items() if values})
+    return result
+
+
+def import_user_groups(
+    *,
+    token: str,
+    base_url: str,
+    use_ssl: Optional[bool],
+    skip_verify: Optional[bool],
+    groups_data: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Restore the user groups, their members and their data-access policies.
+
+    Runs after the users: a member is found by username first, then by id, and a member this Core Hub
+    does not have is left out with a warning. A group is matched by name, ignoring case: an existing one
+    gets the description and the members of the backup, a missing one is created. The policies of the
+    backup are then saved on the group; policies the group has and the backup does not are left alone.
+    """
+    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+
+    groups = (groups_data or {}).get("user_groups")
+    reason = _skip_reason(groups)
+    if reason:
+        return {"status": "skipped", "reason": reason}
+
+    try:
+        existing = _as_list(fetch_core_hub(USER_GROUPS_PATH, token=token, expected_error_statuses={404}))
+    except Exception as exc:  # pylint: disable=broad-except
+        if _is_not_found(exc):
+            return {"status": "skipped", "reason": "this Core Hub has no user groups"}
+        raise
+    existing_by_name = {
+        str(group.get("name", "")).casefold(): group for group in existing if isinstance(group, dict) and group.get("id")
+    }
+    ids_by_username, known_ids = _target_user_ids(token)
+    connections = _TargetConnections(token)
+
+    counts = {"created": 0, "updated": 0, "policies": 0}
+    report = _new_report()
+    for group in groups:
+        name = group.get("name") if isinstance(group, dict) else None
+        if not name:
+            continue
+        member_ids = _resolve_members(group, ids_by_username, known_ids, report["warnings"])
+        current = existing_by_name.get(str(name).casefold())
+        try:
+            group_id = _upsert_group(token, group, current, member_ids)
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("Failed to restore user group %s: %s", name, exc)
+            report["errors"].append(f"{name}: {exc}")
+            continue
+        counts["updated" if current else "created"] += 1
+        counts["policies"] += _restore_policies(
+            token, f"groups/{group_id}", group.get("policies"), f"group {name}", connections, report,
+        )
+
+    return _restore_result(counts, report, connections)
+
+
+def _resolve_members(group: Dict[str, Any], ids_by_username: Dict[str, str], known_ids: set, warnings: list) -> list:
+    member_ids: list[str] = []
+    for member in group.get("members") or []:
+        resolved = _resolve_user(member.get("id"), member.get("username"), ids_by_username, known_ids)
+        if resolved:
+            member_ids.append(resolved)
+        else:
+            warnings.append(f"{group['name']}: member {member.get('username') or member.get('id')} not found, left out")
+    return member_ids
+
+
+def _upsert_group(token: str, group: Dict[str, Any], current: Optional[Dict[str, Any]], member_ids: list) -> str:
+    """Updates the group this Core Hub already has under that name, or creates it; returns its id here."""
+    if current:
+        group_id = str(current["id"])
+        fetch_core_hub(
+            f"{USER_GROUPS_PATH}/{group_id}",
+            method="PUT",
+            token=token,
+            body={"description": group.get("description") or ""},
+        )
+        fetch_core_hub(f"{USER_GROUPS_PATH}/{group_id}/members", method="PUT", token=token, body={"memberIds": member_ids})
+        return group_id
+    created = fetch_core_hub(
+        USER_GROUPS_PATH,
+        method="POST",
+        token=token,
+        body={"name": group["name"], "description": group.get("description"), "memberIds": member_ids},
+    )
+    if not isinstance(created, dict) or not created.get("id"):
+        raise RuntimeError("Core Hub did not answer the id of the created group")
+    return str(created["id"])
+
+
+def import_data_access_policies(
+    *,
+    token: str,
+    base_url: str,
+    use_ssl: Optional[bool],
+    skip_verify: Optional[bool],
+    policies_data: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Restore the data-access policies of each user, found by username first and by id otherwise."""
+    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+
+    entries = (policies_data or {}).get("user_policies")
+    reason = _skip_reason(entries)
+    if reason:
+        return {"status": "skipped", "reason": reason}
+
+    ids_by_username, known_ids = _target_user_ids(token)
+    connections = _TargetConnections(token)
+    counts = {"users": 0, "policies": 0}
+    report = _new_report()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        label = entry.get("username") or entry.get("userId")
+        user_id = _resolve_user(entry.get("userId"), entry.get("username"), ids_by_username, known_ids)
+        if not user_id:
+            report["warnings"].append(f"user {label} not found, policies left out")
+            continue
+        restored = _restore_policies(token, f"users/{user_id}", entry.get("policies"), f"user {label}", connections, report)
+        if restored:
+            counts["users"] += 1
+            counts["policies"] += restored
+
+    return _restore_result(counts, report, connections)
+
+
 def import_full_corehub_backup(
     *,
     token: str,
@@ -3088,6 +3507,12 @@ def import_full_corehub_backup(
              lambda data: import_users(**connection, users_data=data)),
             ("oidc", _OIDC_BACKUP_FILE,
              lambda data: import_oidc_config(**connection, oidc_data=data)),
+            # User groups, then the policies of each user: both need the users restored above
+            ("user_groups", USER_GROUPS_FILENAME,
+             lambda data: restore_safely(USER_GROUPS_FILENAME, lambda: import_user_groups(**connection, groups_data=data))),
+            ("data_access_policies", DATA_ACCESS_POLICIES_FILENAME,
+             lambda data: restore_safely(
+                 DATA_ACCESS_POLICIES_FILENAME, lambda: import_data_access_policies(**connection, policies_data=data))),
         )
         for key, filename, restore in sections:
             data = _read_backup_yaml(extract_dir, filename)
@@ -3105,6 +3530,15 @@ def import_full_corehub_backup(
         shutil.rmtree(extract_dir, ignore_errors=True)
 
     return results
+
+
+def restore_safely(filename: str, restore: Callable[[], Dict[str, Any]]) -> Dict[str, Any]:
+    """Runs one restore; a failure becomes a failed result instead of stopping the other sections."""
+    try:
+        return restore()
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("Failed to restore %s: %s", filename, exc)
+        return {"status": "failed", "error": str(exc)}
 
 
 def _restore_ai_settings_file(extract_dir: Path, token: str, passphrase: Optional[str]) -> Dict[str, Any]:
