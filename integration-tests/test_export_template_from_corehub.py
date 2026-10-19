@@ -137,6 +137,61 @@ class ColumnOrderTests(unittest.TestCase):
         self.assertEqual([c["source"] for c in cfg["columns"]][:3], ["id", "first_name", "last_name"])
 
 
+class TargetPositionTests(unittest.TestCase):
+    """A row also carries the position of its target column, which the import restores."""
+
+    def test_it_is_the_position_of_the_target_column_not_the_one_of_the_source_column(self):
+        entity = _drivers_entity()
+        target_ae = entity["agentEntities"][1]
+        for position, col in enumerate(reversed(target_ae["columns"]), start=10):
+            col["position"] = position
+        cfg = _drivers_table_cfg(entity)
+        self.assertEqual([c["targetPosition"] for c in cfg["columns"]], [16, 15, 14, 13, 12, 11, 10])
+        self.assertEqual([c["ordinalPosition"] for c in cfg["columns"]], [1, 2, 3, 4, 5, 6, 7])
+
+    def test_zero_is_exported_as_a_position_of_its_own(self):
+        cfg = _drivers_table_cfg(_drivers_entity())  # the MySQL target of the kit reports 0 for every column
+        self.assertEqual([c["targetPosition"] for c in cfg["columns"]], [0] * 7)
+
+    def test_a_target_column_without_a_position_has_no_target_position(self):
+        entity = _drivers_entity()
+        for col in entity["agentEntities"][1]["columns"]:
+            col.pop("position")
+        cfg = _drivers_table_cfg(entity)
+        self.assertTrue(all("targetPosition" not in c for c in cfg["columns"]))
+
+    def test_target_position_comes_after_the_keys_a_row_has_always_had(self):
+        row = _drivers_table_cfg(_drivers_entity())["columns"][0]
+        self.assertEqual(
+            list(row),
+            ["source", "target", "type", "dataLength", "numericPrecision", "numericScale", "isNullable", "isPK",
+             "id", "ordinalPosition", "charSet", "targetPosition"],
+        )
+
+    def test_a_column_that_feeds_nothing_has_no_target_position(self):
+        entity = _drivers_entity()
+        target_ae = entity["agentEntities"][1]
+        matrix = target_ae["entityType"]["columnsMappingMatrix"]
+        entity["agentEntities"][1]["entityType"]["columnsMappingMatrix"] = matrix[1:]
+        row = _drivers_table_cfg(entity)["columns"][0]
+        self.assertEqual((row["source"], row["target"]), ("id", []))
+        self.assertNotIn("targetPosition", row)
+
+
+class OrdinalPositionTests(unittest.TestCase):
+    """ordinalPosition is the place of the column in the table, whatever order the entity stores its columns in."""
+
+    def test_an_entity_that_stores_its_columns_in_another_order_exports_the_same_ordinals(self):
+        entity = _drivers_entity()
+        expected = _drivers_table_cfg(entity)["columns"]
+        shuffled = _drivers_entity()
+        for ae in shuffled["agentEntities"]:
+            ae["columns"] = ae["columns"][3:] + ae["columns"][:3]  # an entity built from a whitelist
+        cfg = _drivers_table_cfg(shuffled)
+        self.assertEqual(cfg["columns"], expected)
+        self.assertEqual([c["ordinalPosition"] for c in cfg["columns"]], [1, 2, 3, 4, 5, 6, 7])
+
+
 class SourceCustomPropertiesTests(unittest.TestCase):
     """The source settings CoreHub runs with are exported, user-only keys included."""
 

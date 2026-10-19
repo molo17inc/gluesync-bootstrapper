@@ -78,7 +78,7 @@
                 "name": "id",
                 "numPrec": 0,
                 "numScale": 0,
-                "position": 0,
+                "position": 101,
                 "tableId": 9001
               },
               {
@@ -91,7 +91,7 @@
                 "name": "name",
                 "numPrec": 0,
                 "numScale": 0,
-                "position": 0,
+                "position": 102,
                 "tableId": 9001
               },
               {
@@ -104,7 +104,7 @@
                 "name": "email_address",
                 "numPrec": 0,
                 "numScale": 0,
-                "position": 0,
+                "position": 103,
                 "tableId": 9001
               }
             ],

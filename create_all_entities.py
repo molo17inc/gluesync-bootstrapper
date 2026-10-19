@@ -44,7 +44,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Metadata-only fields used in the export format {source: ..., target: ..., type: ..., ...}
 # These are never column names in the explicit export format.
-_EXPORT_METADATA_FIELDS = {"source", "target", "type", "dataLength", "numericPrecision", "numericScale", "isNullable", "id", "ordinalPosition", "targetDataType", "charSet", "expression"}
+_EXPORT_METADATA_FIELDS = {"source", "target", "type", "dataLength", "numericPrecision", "numericScale", "isNullable", "id", "ordinalPosition", "targetPosition", "targetDataType", "charSet", "expression"}
 
 # Tells "the YAML declared charSet: null" apart from "the YAML said nothing about charSet".
 # The first must clear the character set discovered on the column, the second must leave it
@@ -1017,6 +1017,47 @@ def _discovered_or_mapped(tb, col, discovered_target_col, source_col_id):
     return resolved_target_type, target_col_id
 
 
+def _is_position(value, least=1):
+    """Whether ``value`` is a position of a column in its table: an int of at least ``least`` (0 is what a target that
+    keeps no order reports, and what an entity the bootstrapper built without positions carries)."""
+    return isinstance(value, int) and not isinstance(value, bool) and value >= least
+
+
+def _yaml_mapping_row(tb, source_name, target_name):
+    """The exported mapping row ``{source, target, ...}`` of the YAML that writes ``source_name`` onto ``target_name``.
+
+    Empty for a column the YAML states in any other form (shorthand ``{SRC: tgt}`` or whitelist rows), whose keys
+    are column names or describe the source side. A row naming several sources (N:1) is found by any of them.
+    """
+    wanted_source, wanted_target = str(source_name).lower(), str(target_name).lower()
+    for row in tb.pair.custom_config.get('columns') or []:
+        if not isinstance(row, dict) or 'source' not in row:
+            continue
+        sources = row['source'] if isinstance(row['source'], list) else [row['source']]
+        if wanted_source not in {str(s).lower() for s in sources}:
+            continue
+        targets = row.get('target')
+        targets = [targets if targets is not None else sources[0]] if not isinstance(targets, list) else targets
+        if wanted_target in {str(t).lower() for t in targets}:
+            return row
+    return {}
+
+
+def _target_position(discovered_target_col, col, yaml_row=None):
+    """The position of a target column in its table.
+
+    In order: the ``targetPosition`` the export wrote on the YAML row (0 included: the entity had none), the
+    position of the discovered target column (a target that keeps no order reports 0 for every column, a NoSQL one
+    none) and the position of the source column ``col``, which is what a column built from a whitelist row has
+    always had.
+    """
+    exported = (yaml_row or {}).get("targetPosition")
+    if _is_position(exported, least=0):
+        return exported
+    discovered = (discovered_target_col or {}).get("position")
+    return discovered if _is_position(discovered) else col.get("position", 0)
+
+
 def _target_is_pk(discovered_target_col, col, custom_config, coerce_target=False):
     """isPrimaryKey of a target column: from the discovered target column, else from the source column."""
     target_pk = discovered_target_col.get("isPK") if discovered_target_col else False
@@ -1055,8 +1096,12 @@ def _legacy_fallback_target_type(tb, col, resolved_target_type):
 def _append_mapped_target_column(tb, col, source_col_id, discovered_target_col, target_name):
     """Append the target column of a YAML mapping pair whose source is the discovered column ``col``."""
     resolved_target_type, target_col_id = _discovered_or_mapped(tb, col, discovered_target_col, source_col_id)
+    yaml_row = _yaml_mapping_row(tb, col["name"], target_name)
+    # The type an exported row gives the target column, when the target advertises it, is the one the entity had:
+    # a target reports its own spelling of a type (Cassandra reads varchar back as text).
+    exported_type = _canonicalize_target_type(yaml_row.get('type'), tb.ctx.target_node_info)
     # User-declared targetDataType override takes highest priority
-    resolved_target_type = tb.overrides.get(col["name"].lower()) or resolved_target_type
+    resolved_target_type = tb.overrides.get(col["name"].lower()) or exported_type or resolved_target_type
     # Fallback for legacy null-type backups: if we still have no
     # resolved type, use the live discovery type for this source column
     if not resolved_target_type and tb.discovery_type_by_source:
@@ -1065,7 +1110,8 @@ def _append_mapped_target_column(tb, col, source_col_id, discovered_target_col, 
     # Get isPrimaryKey from discovered target column or fall back to source column
     target_is_primary_key = _target_is_pk(discovered_target_col, col, tb.pair.custom_config)
     tb.columns_def.append(_target_column_def(col, discovered_target_col, target_col_id, target_name,
-                                             resolved_target_type, target_is_primary_key))
+                                             resolved_target_type, target_is_primary_key,
+                                             position=_target_position(discovered_target_col, col, yaml_row)))
 
 
 def _discovered_spelling(discovered_target_col, target_name):
@@ -1194,7 +1240,8 @@ def _target_columns_from_discovery(tb, apply_override, coerce_target_pk):
         target_is_primary_key = _target_is_pk(discovered_target_col, col, tb.pair.custom_config,
                                               coerce_target=coerce_target_pk)
         tb.columns_def.append(_target_column_def(col, discovered_target_col, target_col_id, target_col_name,
-                                                 resolved_target_type, target_is_primary_key))
+                                                 resolved_target_type, target_is_primary_key,
+                                                 position=_target_position(discovered_target_col, col)))
 
 
 def _build_target_columns(tb, relations, grouped):
