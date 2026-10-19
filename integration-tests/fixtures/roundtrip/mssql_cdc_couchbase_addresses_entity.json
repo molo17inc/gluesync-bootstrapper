@@ -1,0 +1,394 @@
+{
+  "agentEntities": [
+    {
+      "agentEntityId": "035bdcfd",
+      "agentId": "e6f09a38",
+      "columns": [
+        {
+          "charMaxLength": 0,
+          "charOctetLength": 0,
+          "dataType": "int",
+          "id": 4054250243860915464,
+          "isIdentity": false,
+          "isNullable": false,
+          "isPK": true,
+          "name": "ID",
+          "numPrec": 10,
+          "numPrecRadix": 10,
+          "numScale": 0,
+          "position": 1,
+          "tableId": 4852864995698257722
+        },
+        {
+          "charMaxLength": 1000,
+          "charOctetLength": 1000,
+          "charSet": "iso_1",
+          "collation": "SQL_Latin1_General_CP1_CI_AS",
+          "dataType": "varchar",
+          "id": 1321187693704105539,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "STREET",
+          "numPrecRadix": 0,
+          "position": 2,
+          "tableId": 4852864995698257722
+        },
+        {
+          "charMaxLength": 1000,
+          "charOctetLength": 1000,
+          "charSet": "iso_1",
+          "collation": "SQL_Latin1_General_CP1_CI_AS",
+          "dataType": "varchar",
+          "id": 3577542283041938912,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "CITY",
+          "numPrecRadix": 0,
+          "position": 3,
+          "tableId": 4852864995698257722
+        },
+        {
+          "charMaxLength": 0,
+          "charOctetLength": 0,
+          "dataType": "int",
+          "id": 4929499116792326978,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "STREET_NUMBER",
+          "numPrec": 10,
+          "numPrecRadix": 10,
+          "numScale": 0,
+          "position": 4,
+          "tableId": 4852864995698257722
+        },
+        {
+          "charMaxLength": 1000,
+          "charOctetLength": 1000,
+          "charSet": "iso_1",
+          "collation": "SQL_Latin1_General_CP1_CI_AS",
+          "dataType": "varchar",
+          "id": -7627200539533256332,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "STREET_SUFFIX",
+          "numPrecRadix": 0,
+          "position": 5,
+          "tableId": 4852864995698257722
+        },
+        {
+          "charMaxLength": 1000,
+          "charOctetLength": 1000,
+          "charSet": "iso_1",
+          "collation": "SQL_Latin1_General_CP1_CI_AS",
+          "dataType": "varchar",
+          "id": 4930804573854400536,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "COUNTRY",
+          "numPrecRadix": 0,
+          "position": 6,
+          "tableId": 4852864995698257722
+        },
+        {
+          "charMaxLength": 1000,
+          "charOctetLength": 1000,
+          "charSet": "iso_1",
+          "collation": "SQL_Latin1_General_CP1_CI_AS",
+          "dataType": "varchar",
+          "id": 303060642948967946,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "POSTAL_CODE",
+          "numPrecRadix": 0,
+          "position": 7,
+          "tableId": 4852864995698257722
+        },
+        {
+          "charMaxLength": 1000,
+          "charOctetLength": 1000,
+          "charSet": "iso_1",
+          "collation": "SQL_Latin1_General_CP1_CI_AS",
+          "dataType": "varchar",
+          "id": 8933653772890505923,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "NOTES",
+          "numPrecRadix": 0,
+          "position": 8,
+          "tableId": 4852864995698257722
+        }
+      ],
+      "customProperties": {},
+      "entityId": "92d4c102",
+      "entityName": "dbo.ADDRESSES",
+      "entityType": {
+        "maxFetchItemsCountPerIteration": 10000,
+        "maxTransactionMessageKbSize": 1024,
+        "pollingIntervalMilliseconds": 500,
+        "snapshotOnly": false,
+        "type": "Source",
+        "unchangedDataFilterType": "DISABLED"
+      },
+      "orderIndex": 0,
+      "table": {
+        "id": 4852864995698257722,
+        "name": "ADDRESSES",
+        "schema": "dbo",
+        "type": "TABLE"
+      },
+      "tablesProperties": {
+        "dbo.ADDRESSES": {}
+      },
+      "type": "SingleTable"
+    },
+    {
+      "agentEntityId": "55997ba1",
+      "agentId": "fd4179c2",
+      "columns": [
+        {
+          "charMaxLength": 0,
+          "charOctetLength": 0,
+          "dataType": "int",
+          "id": 4054250243860915464,
+          "isIdentity": false,
+          "isNullable": false,
+          "isPK": true,
+          "name": "ID",
+          "numPrec": 10,
+          "numPrecRadix": 10,
+          "numScale": 0,
+          "position": 0,
+          "tableId": 1808021893
+        },
+        {
+          "charMaxLength": 1000,
+          "charOctetLength": 1000,
+          "charSet": "iso_1",
+          "collation": "SQL_Latin1_General_CP1_CI_AS",
+          "dataType": "string",
+          "id": 1321187693704105539,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "STREET",
+          "numPrecRadix": 0,
+          "position": 0,
+          "tableId": 1808021893
+        },
+        {
+          "charMaxLength": 1000,
+          "charOctetLength": 1000,
+          "charSet": "iso_1",
+          "collation": "SQL_Latin1_General_CP1_CI_AS",
+          "dataType": "string",
+          "id": 3577542283041938912,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "CITY",
+          "numPrecRadix": 0,
+          "position": 0,
+          "tableId": 1808021893
+        },
+        {
+          "charMaxLength": 0,
+          "charOctetLength": 0,
+          "dataType": "int",
+          "id": 4929499116792326978,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "STREET_NUMBER",
+          "numPrec": 10,
+          "numPrecRadix": 10,
+          "numScale": 0,
+          "position": 0,
+          "tableId": 1808021893
+        },
+        {
+          "charMaxLength": 1000,
+          "charOctetLength": 1000,
+          "charSet": "iso_1",
+          "collation": "SQL_Latin1_General_CP1_CI_AS",
+          "dataType": "string",
+          "id": -7627200539533256332,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "STREET_SUFFIX",
+          "numPrecRadix": 0,
+          "position": 0,
+          "tableId": 1808021893
+        },
+        {
+          "charMaxLength": 1000,
+          "charOctetLength": 1000,
+          "charSet": "iso_1",
+          "collation": "SQL_Latin1_General_CP1_CI_AS",
+          "dataType": "string",
+          "id": 4930804573854400536,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "COUNTRY",
+          "numPrecRadix": 0,
+          "position": 0,
+          "tableId": 1808021893
+        },
+        {
+          "charMaxLength": 1000,
+          "charOctetLength": 1000,
+          "charSet": "iso_1",
+          "collation": "SQL_Latin1_General_CP1_CI_AS",
+          "dataType": "string",
+          "id": 303060642948967946,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "POSTAL_CODE",
+          "numPrecRadix": 0,
+          "position": 0,
+          "tableId": 1808021893
+        },
+        {
+          "charMaxLength": 1000,
+          "charOctetLength": 1000,
+          "charSet": "iso_1",
+          "collation": "SQL_Latin1_General_CP1_CI_AS",
+          "dataType": "string",
+          "id": 8933653772890505923,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "NOTES",
+          "numPrecRadix": 0,
+          "position": 0,
+          "tableId": 1808021893
+        }
+      ],
+      "customProperties": {},
+      "entityId": "92d4c102",
+      "entityName": "dbo.ADDRESSES",
+      "entityObject": {
+        "collection": "ADDRESSES",
+        "id": 1808021893,
+        "scope": "dbo"
+      },
+      "entityType": {
+        "allowedOperations": [
+          "INSERT",
+          "DELETE",
+          "UPDATE",
+          "TRUNCATE"
+        ],
+        "columnsMappingMatrix": [
+          {
+            "sourceColumnIds": [
+              4054250243860915464
+            ],
+            "sourceTableObjectId": 4852864995698257722,
+            "targetColumnIds": [
+              4054250243860915464
+            ],
+            "targetTableObjectId": 1808021893
+          },
+          {
+            "sourceColumnIds": [
+              1321187693704105539
+            ],
+            "sourceTableObjectId": 4852864995698257722,
+            "targetColumnIds": [
+              1321187693704105539
+            ],
+            "targetTableObjectId": 1808021893
+          },
+          {
+            "sourceColumnIds": [
+              3577542283041938912
+            ],
+            "sourceTableObjectId": 4852864995698257722,
+            "targetColumnIds": [
+              3577542283041938912
+            ],
+            "targetTableObjectId": 1808021893
+          },
+          {
+            "sourceColumnIds": [
+              4929499116792326978
+            ],
+            "sourceTableObjectId": 4852864995698257722,
+            "targetColumnIds": [
+              4929499116792326978
+            ],
+            "targetTableObjectId": 1808021893
+          },
+          {
+            "sourceColumnIds": [
+              -7627200539533256332
+            ],
+            "sourceTableObjectId": 4852864995698257722,
+            "targetColumnIds": [
+              -7627200539533256332
+            ],
+            "targetTableObjectId": 1808021893
+          },
+          {
+            "sourceColumnIds": [
+              4930804573854400536
+            ],
+            "sourceTableObjectId": 4852864995698257722,
+            "targetColumnIds": [
+              4930804573854400536
+            ],
+            "targetTableObjectId": 1808021893
+          },
+          {
+            "sourceColumnIds": [
+              303060642948967946
+            ],
+            "sourceTableObjectId": 4852864995698257722,
+            "targetColumnIds": [
+              303060642948967946
+            ],
+            "targetTableObjectId": 1808021893
+          },
+          {
+            "sourceColumnIds": [
+              8933653772890505923
+            ],
+            "sourceTableObjectId": 4852864995698257722,
+            "targetColumnIds": [
+              8933653772890505923
+            ],
+            "targetTableObjectId": 1808021893
+          }
+        ],
+        "distinctCaseInsensitiveKeyData": false,
+        "fieldFunctions": [],
+        "insertConflictStrategy": "UPSERT",
+        "snapshotWritingConcurrency": 1,
+        "tablesWithUnlockedDataTypes": [],
+        "tablesWithUnlockedSchema": [],
+        "type": "Target",
+        "useBulkOperationsDuringCDC": false,
+        "useBulkOperationsWhileSnapshot": false
+      },
+      "orderIndex": 0,
+      "tablesProperties": {
+        "dbo.ADDRESSES": {}
+      },
+      "type": "NoSqlEntity"
+    }
+  ],
+  "entityId": "92d4c102",
+  "entityName": "dbo.ADDRESSES",
+  "groupId": "_default",
+  "orderIndex": 0
+}

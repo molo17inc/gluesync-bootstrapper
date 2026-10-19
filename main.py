@@ -26,6 +26,7 @@ from faker import Faker
 import urllib.parse
 import time
 import subprocess
+import sys
 import uuid
 import urllib3
 from typing import Optional
@@ -1241,7 +1242,11 @@ def _verify_registered_agents(token, pipeline_id):
 
 def _run_entity_creation(schema_label, source_schema, target_schema, pipeline_id, token,
                          effective_source_type, effective_target_type):
-    """Run create_all_entities.py for one schema pair; a failing run is logged and skipped."""
+    """Run create_all_entities.py for one schema pair; return whether it succeeded.
+
+    A failing run is logged and reported to the caller, which carries on with the
+    next schema and fails the whole run once every schema was tried.
+    """
     entity_creation_script = 'create_all_entities.py'
     try:
         cmd = [
@@ -1268,21 +1273,44 @@ def _run_entity_creation(schema_label, source_schema, target_schema, pipeline_id
             f"{schema_label} Entity creation completed for "
             f"source {source_schema} -> target {target_schema or source_schema}"
         )
+        return True
     except subprocess.CalledProcessError as e:
-        # Continue with next schema without failing entire process
-        log_failure(logger, f"{schema_label} Error running entity creation script: {e}")
+        # not {e}: its text carries the whole command line, token included
+        log_failure(logger, f"{schema_label} Error running entity creation script: exit code {e.returncode}")
+        return False
 
 
 def _create_schema_entities(schema_pairs, pipeline_id, token, effective_source_type, effective_target_type):
-    """Create entities sequentially for each schema pair."""
+    """Create entities sequentially for each schema pair; return the pairs whose creation failed."""
+    failed_schemas = []
     for idx, (source_schema, target_schema) in enumerate(schema_pairs, start=1):
         schema_label = f"[Schema {idx}/{len(schema_pairs)}]"
         logger.info(
             f"{schema_label} Starting entity creation for "
             f"source='{source_schema}', target='{target_schema}'"
         )
-        _run_entity_creation(schema_label, source_schema, target_schema, pipeline_id, token,
-                             effective_source_type, effective_target_type)
+        if not _run_entity_creation(schema_label, source_schema, target_schema, pipeline_id, token,
+                                    effective_source_type, effective_target_type):
+            failed_schemas.append(f"{schema_label} source '{source_schema}' -> target '{target_schema or source_schema}'")
+    return failed_schemas
+
+
+def _fail_on_schema_errors(failed_schemas, pipeline_id, pipeline_name):
+    """End the run with a failure when entity creation failed for any schema.
+
+    The pipeline is not marked ready and nothing is started: it would run with
+    only the entities that happened to be created.
+    """
+    if not failed_schemas:
+        return
+    log_failure(
+        logger,
+        f"Entity creation failed for {len(failed_schemas)} schema(s): {'; '.join(failed_schemas)}. "
+        f"Pipeline {pipeline_id} is left incomplete and was not started"
+    )
+    write_run_result(pipeline_id, pipeline_name, 'failure')
+    lockfile_failure()
+    sys.exit(1)
 
 
 def _find_transactions_audit_config(yaml_content):
@@ -1368,7 +1396,10 @@ def main():
     _verify_registered_agents(token, pipeline_id)
 
     if schema_pairs:
-        _create_schema_entities(schema_pairs, pipeline_id, token, effective_source_type, effective_target_type)
+        failed_schemas = _create_schema_entities(
+            schema_pairs, pipeline_id, token, effective_source_type, effective_target_type
+        )
+        _fail_on_schema_errors(failed_schemas, pipeline_id, pipeline_name)
 
     _complete_pipeline(token, pipeline_id, pipeline_name)
 

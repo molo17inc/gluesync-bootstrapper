@@ -42,6 +42,7 @@ import copy
 import difflib
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -83,7 +84,19 @@ JOB_IDENTITY_KEYS = frozenset({
     "last_successful_run", "last_error_message", "last_run_error_time",
 })
 
+# Fields that reference a table by id. A target table that does not exist when
+# a pipeline is created gets an id the bootstrapper makes up (a 32-bit hash of
+# its name); once the table exists, a restore discovers it with CoreHub's own
+# id. The id says nothing about the configuration, the table's name does.
+TABLE_ID_REFERENCE_KEYS = {
+    "tableId": None,
+    "sourceTableObjectId": "SOURCE",
+    "targetTableObjectId": "TARGET",
+}
+
 MAX_DIFF_LINES = 400
+RESTORE_ERROR_LINES = 3
+_ANSI_ESCAPES = re.compile(r"\x1b\[[0-9;]*m")
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +161,102 @@ def normalize(value: Any, id_map: Dict[str, str], drop_keys: frozenset = VOLATIL
                 value = value.replace(raw_id, placeholder)
         return value
     return value
+
+
+def _agent_entity_side(agent_entity: Dict[str, Any], agent_sides: Dict[str, str]) -> str:
+    fallback = str(agent_entity.get("type") or "?").upper()
+    return agent_sides.get(str(agent_entity.get("agentId")), fallback if fallback in ("SOURCE", "TARGET") else "?")
+
+
+def _table_ref_name(ref: Dict[str, Any]) -> Optional[str]:
+    """``schema.name`` of a table reference (``scope``/``collection`` for a NoSQL entity)."""
+    schema = ref.get("schema") if ref.get("schema") is not None else ref.get("scope")
+    name = ref.get("name") if ref.get("name") is not None else ref.get("collection")
+    if name is None:
+        return None
+    return f"{schema}.{name}" if schema not in (None, "") else str(name)
+
+
+def _is_table_ref(node: Any) -> bool:
+    """A dict that names a table and carries its id: ``{id, schema, name}`` or ``{id, scope, collection}``."""
+    return (
+        isinstance(node, dict)
+        and isinstance(node.get("id"), (int, str))
+        and not isinstance(node.get("id"), bool)
+        and _table_ref_name(node) is not None
+        and (node.get("schema") is not None or node.get("scope") is not None)
+    )
+
+
+def _walk_table_refs(node: Any):
+    if _is_table_ref(node):
+        yield node
+    if isinstance(node, dict):
+        for child in node.values():
+            yield from _walk_table_refs(child)
+    elif isinstance(node, list):
+        for child in node:
+            yield from _walk_table_refs(child)
+
+
+def _replace_table_ids(node: Any, side: str, tables: Dict[str, Dict[str, str]]) -> None:
+    """Replace, in place, every table id of an agent entity by its table's placeholder."""
+    if isinstance(node, list):
+        for child in node:
+            _replace_table_ids(child, side, tables)
+        return
+    if not isinstance(node, dict):
+        return
+    if _is_table_ref(node):
+        node["id"] = f"<table:{side}:{_table_ref_name(node)}>"
+    for key, child in node.items():
+        if key in TABLE_ID_REFERENCE_KEYS and isinstance(child, (int, str)) and not isinstance(child, bool):
+            preferred = TABLE_ID_REFERENCE_KEYS[key] or side
+            for lookup_side in [preferred] + [s for s in tables if s != preferred]:
+                placeholder = tables.get(lookup_side, {}).get(str(child))
+                if placeholder:
+                    node[key] = placeholder
+                    break
+        else:
+            _replace_table_ids(child, side, tables)
+
+
+def normalize_table_ids(entity: Dict[str, Any], agent_sides: Dict[str, str]) -> Dict[str, Any]:
+    """Return a copy of an entity whose table ids are replaced by name-based placeholders.
+
+    Every table reference of an agent entity (its ``table``, a NoSQL ``entityObject``,
+    the tables and headers of a MultiTable) gives ``<table:SIDE:schema.name>``, and the
+    fields that point at a table by id (a column's ``tableId``, the mapping matrix's
+    ``sourceTableObjectId`` / ``targetTableObjectId``, a partition or filter column) get
+    the placeholder of the table that id belongs to on the matching side. This is done per
+    entity and per side because CoreHub gives the source and the target table the same id
+    when they have the same name. An id that matches no table is left as it is.
+    """
+    result = copy.deepcopy(entity)
+    agent_entities = [(ae, _agent_entity_side(ae, agent_sides)) for ae in result.get("agentEntities") or []
+                      if isinstance(ae, dict)]
+    tables: Dict[str, Dict[str, str]] = {"SOURCE": {}, "TARGET": {}, "?": {}}
+    for agent_entity, side in agent_entities:
+        for ref in _walk_table_refs(agent_entity):
+            tables[side].setdefault(str(ref["id"]), f"<table:{side}:{_table_ref_name(ref)}>")
+    for agent_entity, side in agent_entities:
+        _replace_table_ids(agent_entity, side, tables)
+    return result
+
+
+def drop_computed_partitions(entity: Dict[str, Any]) -> Dict[str, Any]:
+    """Remove ``entityType.partitionSettings.partitions`` from every agent entity, in place.
+
+    CoreHub computes those ranges when the snapshot runs, and an import writes an empty list.
+    The partition column and the rest of ``partitionSettings`` stay compared, and so does a
+    ``partitionSettings`` that is missing on one side.
+    """
+    for agent_entity in entity.get("agentEntities") or []:
+        entity_type = agent_entity.get("entityType") if isinstance(agent_entity, dict) else None
+        settings = entity_type.get("partitionSettings") if isinstance(entity_type, dict) else None
+        if isinstance(settings, dict):
+            settings.pop("partitions", None)
+    return entity
 
 
 # Lists whose items all carry one of these keys are sets of named things
@@ -276,10 +385,18 @@ def align_source_custom_properties(original: Dict[str, Any], restored: Dict[str,
             right_ae["customProperties"] = {k: v for k, v in right_cp.items() if k in left_cp}
 
 
+def _normalize_entities(side: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    agent_sides = _agent_sides(side.get("agents") or [])
+    return {
+        name: drop_computed_partitions(normalize(normalize_table_ids(entity, agent_sides), side["idMap"]))
+        for name, entity in key_by_name(side["entities"], "entityName").items()
+    }
+
+
 def check_entities(original: Dict[str, Any], restored: Dict[str, Any]) -> Check:
     check = Check("restored-entities-match", "Every entity is restored with the same configuration")
-    left = {k: normalize(v, original["idMap"]) for k, v in key_by_name(original["entities"], "entityName").items()}
-    right = {k: normalize(v, restored["idMap"]) for k, v in key_by_name(restored["entities"], "entityName").items()}
+    left = _normalize_entities(original)
+    right = _normalize_entities(restored)
     for name in set(left) & set(right):
         align_source_custom_properties(left[name], right[name])
     if not left:
@@ -477,14 +594,32 @@ def snapshot_pipeline(token: str, pipeline_id: str) -> Dict[str, Any]:
     }
 
 
+def restore_error_lines(log_path: Path, limit: int = RESTORE_ERROR_LINES) -> str:
+    """The last ERROR / FATAL / Traceback lines of a restore log, joined for one message."""
+    try:
+        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return ""
+    found = []
+    for line in lines:
+        plain = _ANSI_ESCAPES.sub("", line).strip()
+        if re.search(r"\b(ERROR|FATAL|CRITICAL)\b|Traceback", plain):
+            found.append(plain[:300])
+    return " | ".join(found[-limit:])
+
+
 def restore_export(
     export_path: Path,
     pipeline_name: str,
     out_dir: Path,
     timeout: int,
 ) -> Tuple[Optional[str], str]:
-    """Run main.py on the export; return (restored pipeline id, error)."""
+    """Run main.py on the export; return (restored pipeline id, error).
+
+    The restore counts as done only when main.py exits 0 and reports ``complete``.
+    """
     result_file = out_dir / "restore-result.json"
+    result_file.unlink(missing_ok=True)  # a result left by an earlier run says nothing about this one
     env = dict(os.environ)
     env.update({
         "TABLE_LIST_YAML": str(export_path),
@@ -494,18 +629,24 @@ def restore_export(
     })
     cmd = [sys.executable, str(SCRIPT_DIR / "main.py"), "--pipeline-name", pipeline_name]
     logger.info(f"Restoring {export_path} as pipeline '{pipeline_name}'")
-    with open(out_dir / "restore.log", "w", encoding="utf-8") as log:
+    log_path = out_dir / "restore.log"
+    with open(log_path, "w", encoding="utf-8") as log:
         try:
             proc = subprocess.run(cmd, cwd=str(SCRIPT_DIR), env=env, stdout=log,
                                   stderr=subprocess.STDOUT, timeout=timeout, check=False)
         except subprocess.TimeoutExpired:
             return None, f"restore did not finish within {timeout}s"
+    detail = restore_error_lines(log_path)
+    suffix = f": {detail}" if detail else ""
     if not result_file.exists():
-        return None, f"restore exited with code {proc.returncode} before creating a pipeline (see restore.log)"
+        return None, f"restore exited with code {proc.returncode} before creating a pipeline (see restore.log){suffix}"
     result = json.loads(result_file.read_text(encoding="utf-8"))
+    pipeline_id = result.get("pipelineId")
     if result.get("status") != "complete":
-        return result.get("pipelineId"), f"restore of pipeline {result.get('pipelineId')} failed (see restore.log)"
-    return result.get("pipelineId"), ""
+        return pipeline_id, f"restore of pipeline {pipeline_id} failed (see restore.log){suffix}"
+    if proc.returncode != 0:
+        return pipeline_id, f"restore of pipeline {pipeline_id} exited with code {proc.returncode} (see restore.log){suffix}"
+    return pipeline_id, ""
 
 
 def write_json(path: Path, value: Any) -> None:

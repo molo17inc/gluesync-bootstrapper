@@ -121,37 +121,35 @@ def _load_agent_type_catalog() -> Dict[str, str]:
     return mapping
 
 
-def infer_pipeline_schema_types_from_agents(token: str, pipeline_id: str) -> Tuple[str, str]:
-    """Infer (sourceType, targetType) as SQL/NoSQL from pipeline agents.
+def infer_pipeline_schema_types_from_agents(token: str, pipeline_id: str) -> Tuple[Optional[str], Optional[str]]:
+    """Return (sourceType, targetType) as SQL/NoSQL according to the agents.json catalog.
 
-    Uses agents.json as the primary source of truth and falls back to SQL when
-    the agent tag is unknown.
+    A side is None when the catalog cannot tell: the agent has no tag, the tag is
+    not listed in agents.json (for example ``couchbase-dcp``), the pipeline has no
+    agent for that side, or the pipeline config could not be fetched. The caller
+    decides what an unknown side falls back to.
     """
 
     try:
         config = fetch_core_hub(f"/pipelines/{pipeline_id}/config", token=token)
     except Exception as exc:  # pylint: disable=broad-except
         logger.warning("Failed to fetch pipeline %s config for type inference: %s", pipeline_id, exc)
-        return "SQL", "SQL"
+        return None, None
 
     agents = config.get("agents") if isinstance(config, dict) else None
     if not isinstance(agents, list):
-        return "SQL", "SQL"
+        return None, None
 
     catalog = _load_agent_type_catalog()
 
-    def _classify(agent: Dict[str, Any]) -> str:
-        tag = str(agent.get("agentTag") or "").lower()
-        if not tag:
-            return "SQL"
-        if tag in catalog:
-            return catalog[tag]
-        return "SQL"
+    def _classify(agent: Optional[Dict[str, Any]]) -> Optional[str]:
+        tag = str((agent or {}).get("agentTag") or "").lower()
+        return catalog.get(tag) if tag else None
 
     source_agent = next((a for a in agents if isinstance(a, dict) and a.get("agentType") == "SOURCE"), None)
     target_agent = next((a for a in agents if isinstance(a, dict) and a.get("agentType") == "TARGET"), None)
 
-    return _classify(source_agent or {}), _classify(target_agent or {})
+    return _classify(source_agent), _classify(target_agent)
 
 
 def fetch_pipeline_entities(token: str, pipeline_id: str) -> List[Dict[str, Any]]:
@@ -567,8 +565,34 @@ def _columns_in_table_order(columns: List[Dict[str, Any]]) -> List[Tuple[int, Di
     return sorted(enumerate(columns, start=1), key=lambda pair: _column_position(pair[1], pair[0]))
 
 
-# "type" is implied by the side, and partitions are recomputed on import.
+# "type" is implied by the side. partitionSettings is not written as it is: the computed ranges are recomputed on
+# import, and what survives (the column and the number of partitions) is written as ``partitions`` (see below).
 _SOURCE_EXCLUDED_SETTINGS = frozenset({"type", "partitionSettings"})
+
+# The partition count the import asks CoreHub for when a table does not say (create_all_entities reads the same
+# environment variable), so a table that has exactly this many ranges exports as a plain column name.
+_DEFAULT_MAX_LOGICAL_PARTITIONS = int(os.getenv("MAX_LOGICAL_PARTITIONS", "10"))
+
+
+def _partition_config(source_et: Dict[str, Any]) -> Any:
+    """``customProperties.source.partitions`` of a table: the logical partition column, None without one.
+
+    CoreHub keeps the column, and the ranges it computed for it, in ``entityType.partitionSettings``. The ranges
+    are recomputed by the import and are never exported. The maximum number of partitions asked for is not stored
+    anywhere, so the number of computed ranges stands for it (CoreHub never returns more than were asked for;
+    fewer only when the column has fewer distinct values): it is written, as the extended ``{column,
+    maxPartitionsNumber}`` form, when it is not the default, and the plain column name form otherwise.
+    """
+    settings = source_et.get("partitionSettings")
+    column = settings.get("column") if isinstance(settings, dict) else None
+    column_name = column.get("name") if isinstance(column, dict) else None
+    if not column_name:
+        return None
+    ranges = settings.get("partitions")
+    count = len(ranges) if isinstance(ranges, list) else 0
+    if count and count != _DEFAULT_MAX_LOGICAL_PARTITIONS:
+        return {"column": column_name, "maxPartitionsNumber": count}
+    return column_name
 
 
 def _source_custom_properties(source_ae: Dict[str, Any]) -> Dict[str, Any]:
@@ -583,7 +607,11 @@ def _source_custom_properties(source_ae: Dict[str, Any]) -> Dict[str, Any]:
         k: v for k, v in (source_ae.get("customProperties") or {}).items() if k not in source_et
     }
     settings = {**user_only, **source_et}
-    return {k: v for k, v in settings.items() if k not in _SOURCE_EXCLUDED_SETTINGS}
+    exported = {k: v for k, v in settings.items() if k not in _SOURCE_EXCLUDED_SETTINGS}
+    partitions = _partition_config(source_et)
+    if partitions is not None:
+        exported["partitions"] = partitions
+    return exported
 
 
 def _single_source_location(entity_name: str, source_table: Dict[str, Any]) -> Tuple[Any, Any]:
@@ -1621,6 +1649,15 @@ def enrich_null_column_types_from_discovery(
     return enriched
 
 
+def _decide_schema_type(catalog_type: Optional[str], entity_type: Optional[str]) -> Tuple[str, str]:
+    """Pick one side's SQL/NoSQL type and say which source decided it."""
+    if catalog_type:
+        return catalog_type, "agents.json"
+    if entity_type:
+        return entity_type, "entities"
+    return "SQL", "default"
+
+
 def render_pipeline_export(token: str, pipeline_id: str) -> str:
     """Export one pipeline and return the YAML text, provenance header included.
 
@@ -1632,17 +1669,18 @@ def render_pipeline_export(token: str, pipeline_id: str) -> str:
     group_id_to_name, _, groups_by_name = fetch_groups_map(token, pipeline_id)
     schemas = build_schemas_from_entities(entities, group_id_to_name)
 
-    # Override schema-level type hints using agents.json catalog when possible
-    src_type, tgt_type = infer_pipeline_schema_types_from_agents(token, pipeline_id)
-    if src_type and tgt_type:
+    # agents.json wins for a side it knows. For a side it does not know (unlisted
+    # agentTag, no tag, config fetch failed) the type inferred from the entities
+    # stays; SQL is only the last default when the entities gave no answer either.
+    catalog_src, catalog_tgt = infer_pipeline_schema_types_from_agents(token, pipeline_id)
+    for schema_cfg in schemas.values():
+        schema_cfg["sourceType"], src_origin = _decide_schema_type(catalog_src, schema_cfg.get("sourceType"))
+        schema_cfg["targetType"], tgt_origin = _decide_schema_type(catalog_tgt, schema_cfg.get("targetType"))
+    if schemas:
         logger.info(
-            "Using agents.json to set pipeline types: sourceType=%s, targetType=%s",
-            src_type,
-            tgt_type,
+            "Pipeline types: sourceType=%s (%s), targetType=%s (%s)",
+            schema_cfg["sourceType"], src_origin, schema_cfg["targetType"], tgt_origin,
         )
-        for schema_cfg in schemas.values():
-            schema_cfg["sourceType"] = src_type
-            schema_cfg["targetType"] = tgt_type
 
     jobs = fetch_pipeline_jobs(pipeline_id, token=token)
     attach_schedules_from_jobs(jobs, entities_by_id, schemas, group_id_to_name)
