@@ -1,0 +1,254 @@
+{
+  "agentEntities": [
+    {
+      "agentEntityId": "6ab00ea5",
+      "agentId": "5707f560",
+      "columns": [
+        {
+          "dataType": "INT32",
+          "id": 4054250243860915464,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": true,
+          "name": "ID",
+          "position": 1,
+          "tableId": 6820662257471930357
+        },
+        {
+          "dataType": "STRING",
+          "id": 3280626576278720473,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "FIRST_NAME",
+          "position": 2,
+          "tableId": 6820662257471930357
+        },
+        {
+          "dataType": "STRING",
+          "id": 7696657422409895801,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "LAST_NAME",
+          "position": 3,
+          "tableId": 6820662257471930357
+        },
+        {
+          "dataType": "STRING",
+          "id": 8275657831543607410,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "EMAIL",
+          "position": 4,
+          "tableId": 6820662257471930357
+        },
+        {
+          "dataType": "STRING",
+          "id": 751284306666685497,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "GENDER",
+          "position": 5,
+          "tableId": 6820662257471930357
+        },
+        {
+          "dataType": "STRING",
+          "id": 8404640664226742139,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "DRIVING_LICENSE_ID",
+          "position": 6,
+          "tableId": 6820662257471930357
+        }
+      ],
+      "customProperties": {},
+      "entityId": "681c2b61",
+      "entityName": "demo.drivers_seed",
+      "entityObject": {
+        "collection": "drivers_seed",
+        "id": 6820662257471930357,
+        "scope": "demo"
+      },
+      "entityType": {
+        "maxFetchItemsCountPerIteration": 10000,
+        "maxTransactionMessageKbSize": 1024,
+        "pollingIntervalMilliseconds": 500,
+        "snapshotOnly": false,
+        "type": "Source",
+        "unchangedDataFilterType": "DISABLED"
+      },
+      "orderIndex": 0,
+      "tablesProperties": {
+        "demo.drivers_seed": {}
+      },
+      "type": "NoSqlEntity"
+    },
+    {
+      "agentEntityId": "f2902517",
+      "agentId": "bbc14e4d",
+      "columns": [
+        {
+          "dataType": "int",
+          "id": 4054250243860915464,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": true,
+          "name": "ID",
+          "position": 1,
+          "tableId": 1698479708
+        },
+        {
+          "dataType": "string",
+          "id": 3280626576278720473,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "FIRST_NAME",
+          "position": 2,
+          "tableId": 1698479708
+        },
+        {
+          "dataType": "string",
+          "id": 7696657422409895801,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "LAST_NAME",
+          "position": 3,
+          "tableId": 1698479708
+        },
+        {
+          "dataType": "string",
+          "id": 8275657831543607410,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "EMAIL",
+          "position": 4,
+          "tableId": 1698479708
+        },
+        {
+          "dataType": "string",
+          "id": 751284306666685497,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "GENDER",
+          "position": 5,
+          "tableId": 1698479708
+        },
+        {
+          "dataType": "string",
+          "id": 8404640664226742139,
+          "isIdentity": false,
+          "isNullable": true,
+          "isPK": false,
+          "name": "DRIVING_LICENSE_ID",
+          "position": 6,
+          "tableId": 1698479708
+        }
+      ],
+      "customProperties": {},
+      "entityId": "681c2b61",
+      "entityName": "demo.drivers_seed",
+      "entityType": {
+        "allowedOperations": [
+          "INSERT",
+          "DELETE",
+          "UPDATE",
+          "TRUNCATE"
+        ],
+        "columnsMappingMatrix": [
+          {
+            "sourceColumnIds": [
+              4054250243860915464
+            ],
+            "sourceTableObjectId": 6820662257471930357,
+            "targetColumnIds": [
+              4054250243860915464
+            ],
+            "targetTableObjectId": 1698479708
+          },
+          {
+            "sourceColumnIds": [
+              3280626576278720473
+            ],
+            "sourceTableObjectId": 6820662257471930357,
+            "targetColumnIds": [
+              3280626576278720473
+            ],
+            "targetTableObjectId": 1698479708
+          },
+          {
+            "sourceColumnIds": [
+              7696657422409895801
+            ],
+            "sourceTableObjectId": 6820662257471930357,
+            "targetColumnIds": [
+              7696657422409895801
+            ],
+            "targetTableObjectId": 1698479708
+          },
+          {
+            "sourceColumnIds": [
+              8275657831543607410
+            ],
+            "sourceTableObjectId": 6820662257471930357,
+            "targetColumnIds": [
+              8275657831543607410
+            ],
+            "targetTableObjectId": 1698479708
+          },
+          {
+            "sourceColumnIds": [
+              751284306666685497
+            ],
+            "sourceTableObjectId": 6820662257471930357,
+            "targetColumnIds": [
+              751284306666685497
+            ],
+            "targetTableObjectId": 1698479708
+          },
+          {
+            "sourceColumnIds": [
+              8404640664226742139
+            ],
+            "sourceTableObjectId": 6820662257471930357,
+            "targetColumnIds": [
+              8404640664226742139
+            ],
+            "targetTableObjectId": 1698479708
+          }
+        ],
+        "distinctCaseInsensitiveKeyData": false,
+        "fieldFunctions": [],
+        "insertConflictStrategy": "UPSERT",
+        "snapshotWritingConcurrency": 1,
+        "tablesWithUnlockedDataTypes": [],
+        "tablesWithUnlockedSchema": [],
+        "type": "Target",
+        "useBulkOperationsDuringCDC": false,
+        "useBulkOperationsWhileSnapshot": false
+      },
+      "orderIndex": 0,
+      "table": {
+        "id": 1698479708,
+        "name": "DRIVERS_integration_test",
+        "schema": "demo",
+        "type": "TABLE"
+      },
+      "tablesProperties": {
+        "demo.DRIVERS_integration_test": {}
+      },
+      "type": "SingleTable"
+    }
+  ],
+  "entityId": "681c2b61",
+  "entityName": "demo.drivers_seed",
+  "groupId": "_default",
+  "orderIndex": 0
+}
