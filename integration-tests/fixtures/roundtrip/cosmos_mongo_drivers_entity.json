@@ -1,0 +1,201 @@
+{
+  "agentEntities": [
+    {
+      "agentEntityId": "e05c0024",
+      "agentId": "83d376b1",
+      "columns": [
+        {
+          "charMaxLength": 0,
+          "dataType": "string",
+          "id": 3280626576278720473,
+          "isIdentity": false,
+          "isNullable": false,
+          "isPK": false,
+          "name": "FIRST_NAME",
+          "position": 3,
+          "tableId": -2595096586999075197
+        },
+        {
+          "charMaxLength": 0,
+          "dataType": "string",
+          "id": 4054250243860915464,
+          "isIdentity": false,
+          "isNullable": false,
+          "isPK": true,
+          "name": "ID",
+          "position": 5,
+          "tableId": -2595096586999075197
+        },
+        {
+          "charMaxLength": 0,
+          "dataType": "string",
+          "id": -5411567434751089343,
+          "isIdentity": false,
+          "isNullable": false,
+          "isPK": false,
+          "name": "_etag",
+          "position": 8,
+          "tableId": -2595096586999075197
+        },
+        {
+          "charMaxLength": 0,
+          "dataType": "string",
+          "id": -6529861950688021570,
+          "isIdentity": false,
+          "isNullable": false,
+          "isPK": true,
+          "name": "id",
+          "position": 12,
+          "tableId": -2595096586999075197
+        }
+      ],
+      "customProperties": {},
+      "entityId": "74267e5f",
+      "entityName": "integration_tests.drivers",
+      "entityObject": {
+        "collection": "drivers",
+        "id": -2595096586999075197,
+        "scope": "integration_tests"
+      },
+      "entityType": {
+        "maxFetchItemsCountPerIteration": 10000,
+        "maxTransactionMessageKbSize": 1024,
+        "pollingIntervalMilliseconds": 500,
+        "snapshotOnly": false,
+        "type": "Source",
+        "unchangedDataFilterType": "DISABLED"
+      },
+      "orderIndex": 0,
+      "tablesProperties": {
+        "integration_tests.drivers": {}
+      },
+      "type": "NoSqlEntity"
+    },
+    {
+      "agentEntityId": "0c427fd1",
+      "agentId": "a72ca413",
+      "columns": [
+        {
+          "charMaxLength": 0,
+          "dataType": "STRING",
+          "id": 3280626576278720473,
+          "isIdentity": false,
+          "isNullable": false,
+          "isPK": false,
+          "name": "FIRST_NAME",
+          "position": 3,
+          "tableId": 696051776
+        },
+        {
+          "charMaxLength": 0,
+          "dataType": "STRING",
+          "id": 4054250243860915464,
+          "isIdentity": false,
+          "isNullable": false,
+          "isPK": true,
+          "name": "ID",
+          "position": 5,
+          "tableId": 696051776
+        },
+        {
+          "charMaxLength": 0,
+          "dataType": "STRING",
+          "id": -5411567434751089343,
+          "isIdentity": false,
+          "isNullable": false,
+          "isPK": false,
+          "name": "_etag",
+          "position": 8,
+          "tableId": 696051776
+        },
+        {
+          "charMaxLength": 0,
+          "dataType": "STRING",
+          "id": -6529861950688021570,
+          "isIdentity": false,
+          "isNullable": false,
+          "isPK": true,
+          "name": "id",
+          "position": 12,
+          "tableId": 696051776
+        }
+      ],
+      "customProperties": {},
+      "entityId": "74267e5f",
+      "entityName": "integration_tests.drivers",
+      "entityObject": {
+        "collection": "drivers",
+        "id": 696051776,
+        "scope": "demo"
+      },
+      "entityType": {
+        "allowedOperations": [
+          "INSERT",
+          "DELETE",
+          "UPDATE",
+          "TRUNCATE"
+        ],
+        "columnsMappingMatrix": [
+          {
+            "sourceColumnIds": [
+              3280626576278720473
+            ],
+            "sourceTableObjectId": -2595096586999075197,
+            "targetColumnIds": [
+              3280626576278720473
+            ],
+            "targetTableObjectId": 696051776
+          },
+          {
+            "sourceColumnIds": [
+              4054250243860915464
+            ],
+            "sourceTableObjectId": -2595096586999075197,
+            "targetColumnIds": [
+              4054250243860915464
+            ],
+            "targetTableObjectId": 696051776
+          },
+          {
+            "sourceColumnIds": [
+              -5411567434751089343
+            ],
+            "sourceTableObjectId": -2595096586999075197,
+            "targetColumnIds": [
+              -5411567434751089343
+            ],
+            "targetTableObjectId": 696051776
+          },
+          {
+            "sourceColumnIds": [
+              -6529861950688021570
+            ],
+            "sourceTableObjectId": -2595096586999075197,
+            "targetColumnIds": [
+              -6529861950688021570
+            ],
+            "targetTableObjectId": 696051776
+          }
+        ],
+        "distinctCaseInsensitiveKeyData": false,
+        "fieldFunctions": [],
+        "insertConflictStrategy": "UPSERT",
+        "snapshotWritingConcurrency": 1,
+        "tablesWithUnlockedDataTypes": [],
+        "tablesWithUnlockedSchema": [],
+        "type": "Target",
+        "useBulkOperationsDuringCDC": false,
+        "useBulkOperationsWhileSnapshot": false
+      },
+      "orderIndex": 0,
+      "tablesProperties": {
+        "demo.drivers": {}
+      },
+      "type": "NoSqlEntity"
+    }
+  ],
+  "entityId": "74267e5f",
+  "entityName": "integration_tests.drivers",
+  "groupId": "_default",
+  "orderIndex": 0
+}
