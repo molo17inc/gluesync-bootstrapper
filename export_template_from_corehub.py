@@ -121,37 +121,35 @@ def _load_agent_type_catalog() -> Dict[str, str]:
     return mapping
 
 
-def infer_pipeline_schema_types_from_agents(token: str, pipeline_id: str) -> Tuple[str, str]:
-    """Infer (sourceType, targetType) as SQL/NoSQL from pipeline agents.
+def infer_pipeline_schema_types_from_agents(token: str, pipeline_id: str) -> Tuple[Optional[str], Optional[str]]:
+    """Return (sourceType, targetType) as SQL/NoSQL according to the agents.json catalog.
 
-    Uses agents.json as the primary source of truth and falls back to SQL when
-    the agent tag is unknown.
+    A side is None when the catalog cannot tell: the agent has no tag, the tag is
+    not listed in agents.json (for example ``couchbase-dcp``), the pipeline has no
+    agent for that side, or the pipeline config could not be fetched. The caller
+    decides what an unknown side falls back to.
     """
 
     try:
         config = fetch_core_hub(f"/pipelines/{pipeline_id}/config", token=token)
     except Exception as exc:  # pylint: disable=broad-except
         logger.warning("Failed to fetch pipeline %s config for type inference: %s", pipeline_id, exc)
-        return "SQL", "SQL"
+        return None, None
 
     agents = config.get("agents") if isinstance(config, dict) else None
     if not isinstance(agents, list):
-        return "SQL", "SQL"
+        return None, None
 
     catalog = _load_agent_type_catalog()
 
-    def _classify(agent: Dict[str, Any]) -> str:
-        tag = str(agent.get("agentTag") or "").lower()
-        if not tag:
-            return "SQL"
-        if tag in catalog:
-            return catalog[tag]
-        return "SQL"
+    def _classify(agent: Optional[Dict[str, Any]]) -> Optional[str]:
+        tag = str((agent or {}).get("agentTag") or "").lower()
+        return catalog.get(tag) if tag else None
 
     source_agent = next((a for a in agents if isinstance(a, dict) and a.get("agentType") == "SOURCE"), None)
     target_agent = next((a for a in agents if isinstance(a, dict) and a.get("agentType") == "TARGET"), None)
 
-    return _classify(source_agent or {}), _classify(target_agent or {})
+    return _classify(source_agent), _classify(target_agent)
 
 
 def fetch_pipeline_entities(token: str, pipeline_id: str) -> List[Dict[str, Any]]:
@@ -1651,6 +1649,15 @@ def enrich_null_column_types_from_discovery(
     return enriched
 
 
+def _decide_schema_type(catalog_type: Optional[str], entity_type: Optional[str]) -> Tuple[str, str]:
+    """Pick one side's SQL/NoSQL type and say which source decided it."""
+    if catalog_type:
+        return catalog_type, "agents.json"
+    if entity_type:
+        return entity_type, "entities"
+    return "SQL", "default"
+
+
 def render_pipeline_export(token: str, pipeline_id: str) -> str:
     """Export one pipeline and return the YAML text, provenance header included.
 
@@ -1662,17 +1669,18 @@ def render_pipeline_export(token: str, pipeline_id: str) -> str:
     group_id_to_name, _, groups_by_name = fetch_groups_map(token, pipeline_id)
     schemas = build_schemas_from_entities(entities, group_id_to_name)
 
-    # Override schema-level type hints using agents.json catalog when possible
-    src_type, tgt_type = infer_pipeline_schema_types_from_agents(token, pipeline_id)
-    if src_type and tgt_type:
+    # agents.json wins for a side it knows. For a side it does not know (unlisted
+    # agentTag, no tag, config fetch failed) the type inferred from the entities
+    # stays; SQL is only the last default when the entities gave no answer either.
+    catalog_src, catalog_tgt = infer_pipeline_schema_types_from_agents(token, pipeline_id)
+    for schema_cfg in schemas.values():
+        schema_cfg["sourceType"], src_origin = _decide_schema_type(catalog_src, schema_cfg.get("sourceType"))
+        schema_cfg["targetType"], tgt_origin = _decide_schema_type(catalog_tgt, schema_cfg.get("targetType"))
+    if schemas:
         logger.info(
-            "Using agents.json to set pipeline types: sourceType=%s, targetType=%s",
-            src_type,
-            tgt_type,
+            "Pipeline types: sourceType=%s (%s), targetType=%s (%s)",
+            schema_cfg["sourceType"], src_origin, schema_cfg["targetType"], tgt_origin,
         )
-        for schema_cfg in schemas.values():
-            schema_cfg["sourceType"] = src_type
-            schema_cfg["targetType"] = tgt_type
 
     jobs = fetch_pipeline_jobs(pipeline_id, token=token)
     attach_schedules_from_jobs(jobs, entities_by_id, schemas, group_id_to_name)

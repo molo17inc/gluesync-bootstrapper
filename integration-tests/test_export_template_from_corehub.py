@@ -5,6 +5,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import yaml
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -253,6 +255,73 @@ class NoSqlTargetExportTests(unittest.TestCase):
         cfg = _table_cfg(_fixture_entity("mongo_couchbase_democollection_entity.json"), "democollection")
         types = {row["source"]: row["type"] for row in cfg["columns"]}
         self.assertEqual(types, {"_id": "string", "name": "string", "age": "int"})
+
+
+class PipelineTypesTests(unittest.TestCase):
+    """agents.json decides a side only when it lists that side's agentTag."""
+
+    CATALOG = {"mssql-cdc": "SQL", "couchbase": "NoSQL", "mongodb": "NoSQL"}
+
+    def _export_types(self, entity_file, source_tag, target_tag, config_error=None):
+        import export_template_from_corehub as export_mod
+
+        entity = _fixture_entity(entity_file)
+        config = {
+            "agents": [
+                {"agentId": "a1", "agentTag": source_tag, "agentType": "SOURCE"},
+                {"agentId": "a2", "agentTag": target_tag, "agentType": "TARGET"},
+            ]
+        }
+
+        def fake_core_hub(path, token=None, **_kwargs):
+            if path.endswith("/config") and config_error:
+                raise config_error
+            if path.endswith("/config"):
+                return config
+            if path.endswith("/entities"):
+                return [entity]
+            return []
+
+        with mock.patch.object(export_mod, "fetch_core_hub", side_effect=fake_core_hub), \
+                mock.patch.object(export_mod, "_load_agent_type_catalog", return_value=self.CATALOG), \
+                mock.patch.object(export_mod, "fetch_pipeline_jobs", return_value=[]), \
+                mock.patch.object(export_mod, "enrich_null_column_types_from_discovery", return_value=0), \
+                mock.patch.object(export_mod, "build_export_header", return_value=""):
+            data = yaml.safe_load(export_mod.render_pipeline_export("t", "p1"))
+        schema = next(v for v in data.values() if isinstance(v, dict) and "targetType" in v)
+        return schema["sourceType"], schema["targetType"]
+
+    def test_an_unlisted_target_tag_keeps_the_type_of_the_entities(self):
+        types = self._export_types("mssql_cdc_couchbase_addresses_entity.json", "mssql-cdc", "couchbase-dcp")
+        self.assertEqual(types, ("SQL", "NoSQL"))
+
+    def test_a_listed_tag_overrides_the_entities(self):
+        # the entities say NoSQL on the target, the catalog says the agent is relational
+        catalog = dict(self.CATALOG, **{"couchbase-dcp": "SQL"})
+        with mock.patch.object(type(self), "CATALOG", catalog):
+            types = self._export_types("mssql_cdc_couchbase_addresses_entity.json", "mssql-cdc", "couchbase-dcp")
+        self.assertEqual(types, ("SQL", "SQL"))
+
+    def test_an_unlisted_source_tag_keeps_the_type_of_the_entities(self):
+        types = self._export_types("mongo_couchbase_democollection_entity.json", "mongodb-cdc", "couchbase")
+        self.assertEqual(types, ("NoSQL", "NoSQL"))
+
+    def test_a_failed_config_fetch_keeps_the_type_of_the_entities(self):
+        types = self._export_types(
+            "mssql_cdc_couchbase_addresses_entity.json", "mssql-cdc", "couchbase", config_error=RuntimeError("boom")
+        )
+        self.assertEqual(types, ("SQL", "NoSQL"))
+
+    def test_the_catalog_answer_is_none_per_side_when_it_does_not_know_the_tag(self):
+        import export_template_from_corehub as export_mod
+
+        config = {"agents": [
+            {"agentTag": "mssql-cdc", "agentType": "SOURCE"},
+            {"agentTag": "couchbase-dcp", "agentType": "TARGET"},
+        ]}
+        with mock.patch.object(export_mod, "fetch_core_hub", return_value=config), \
+                mock.patch.object(export_mod, "_load_agent_type_catalog", return_value=self.CATALOG):
+            self.assertEqual(export_mod.infer_pipeline_schema_types_from_agents("t", "p1"), ("SQL", None))
 
 
 if __name__ == "__main__":
