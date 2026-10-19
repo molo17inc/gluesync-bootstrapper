@@ -83,7 +83,7 @@
                 "name": "ID",
                 "numPrec": 0,
                 "numScale": 0,
-                "position": 0,
+                "position": 1,
                 "tableId": 9000
               },
               {
@@ -96,7 +96,7 @@
                 "name": "LAST_NAME",
                 "numPrec": 0,
                 "numScale": 0,
-                "position": 0,
+                "position": 2,
                 "tableId": 9000
               },
               {
@@ -109,7 +109,7 @@
                 "name": "GENDER",
                 "numPrec": 0,
                 "numScale": 0,
-                "position": 0,
+                "position": 3,
                 "tableId": 9000
               }
             ],
@@ -247,7 +247,7 @@
                 "name": "ID",
                 "numPrec": 0,
                 "numScale": 0,
-                "position": 0,
+                "position": 1,
                 "tableId": 9001
               },
               {
@@ -260,7 +260,7 @@
                 "name": "GENDER",
                 "numPrec": 0,
                 "numScale": 0,
-                "position": 0,
+                "position": 2,
                 "tableId": 9001
               }
             ],

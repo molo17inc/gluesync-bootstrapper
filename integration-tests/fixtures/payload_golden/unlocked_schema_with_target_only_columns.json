@@ -65,7 +65,7 @@
                 "name": "PART_ID",
                 "numPrec": 0,
                 "numScale": 0,
-                "position": 0,
+                "position": 1,
                 "tableId": 1173570291
               },
               {
@@ -78,7 +78,7 @@
                 "name": "LABEL",
                 "numPrec": 0,
                 "numScale": 0,
-                "position": 0,
+                "position": 2,
                 "tableId": 1173570291
               },
               {

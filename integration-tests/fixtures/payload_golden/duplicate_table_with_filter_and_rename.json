@@ -91,7 +91,7 @@
                 "name": "id",
                 "numPrec": 0,
                 "numScale": 0,
-                "position": 0,
+                "position": 101,
                 "tableId": 9001
               },
               {
@@ -104,7 +104,7 @@
                 "name": "name",
                 "numPrec": 0,
                 "numScale": 0,
-                "position": 0,
+                "position": 102,
                 "tableId": 9001
               },
               {
@@ -117,7 +117,7 @@
                 "name": "EMAIL",
                 "numPrec": 0,
                 "numScale": 0,
-                "position": 0,
+                "position": 3,
                 "tableId": 9001
               },
               {
@@ -130,7 +130,7 @@
                 "name": "created",
                 "numPrec": 0,
                 "numScale": 0,
-                "position": 0,
+                "position": 104,
                 "tableId": 9001
               }
             ],
@@ -257,7 +257,7 @@
                 "name": "ID",
                 "numPrec": 0,
                 "numScale": 0,
-                "position": 0,
+                "position": 1,
                 "tableId": 164927084
               },
               {
@@ -270,7 +270,7 @@
                 "name": "FULL_NAME",
                 "numPrec": 0,
                 "numScale": 0,
-                "position": 0,
+                "position": 2,
                 "tableId": 164927084
               }
             ],

@@ -91,7 +91,7 @@
                 "name": "ID",
                 "numPrec": 0,
                 "numScale": 0,
-                "position": 0,
+                "position": 1,
                 "tableId": 9001
               },
               {
@@ -104,7 +104,7 @@
                 "name": "NAME",
                 "numPrec": 0,
                 "numScale": 0,
-                "position": 0,
+                "position": 2,
                 "tableId": 9001
               },
               {
@@ -117,7 +117,7 @@
                 "name": "EMAIL",
                 "numPrec": 0,
                 "numScale": 0,
-                "position": 0,
+                "position": 3,
                 "tableId": 9001
               },
               {
@@ -130,7 +130,7 @@
                 "name": "CREATED",
                 "numPrec": 0,
                 "numScale": 0,
-                "position": 0,
+                "position": 4,
                 "tableId": 9001
               }
             ],

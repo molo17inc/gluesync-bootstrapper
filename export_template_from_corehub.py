@@ -404,6 +404,19 @@ def _is_grouped_matrix(matrix: List[Dict[str, Any]]) -> bool:
     return any(isinstance(entry, dict) and ("sourceColumnIds" in entry or "targetColumnIds" in entry) for entry in matrix)
 
 
+def _target_position(tcol: Optional[Dict[str, Any]]) -> Optional[int]:
+    """Where the target column sits in its table, None when the column states no position.
+
+    0 is a position: a target that keeps no order reports it for every column, and an entity the bootstrapper
+    built before it carried positions has it, so it is exported as it is and restored as it was.
+    """
+    for key in ("position", "ordinalPosition"):
+        value = (tcol or {}).get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            return value
+    return None
+
+
 def _mapping_row(scol: Optional[Dict[str, Any]], tcol: Optional[Dict[str, Any]], ordinal: Optional[int]) -> Dict[str, Any]:
     """The YAML row of source column ``scol`` onto target column ``tcol``, with the metadata of both."""
     source_name = scol.get("name") if scol else None
@@ -432,6 +445,11 @@ def _mapping_row(scol: Optional[Dict[str, Any]], tcol: Optional[Dict[str, Any]],
         # instead of the way it was backed up.
         "charSet": scol.get("charSet"),
     })
+    # The position of the target column, which is not the one of its source column when the entity was created from
+    # a whitelist or the target keeps its own order: on import it is the position the restored column gets.
+    target_position = _target_position(tcol)
+    if target_position is not None:
+        row["targetPosition"] = target_position
     return row
 
 
@@ -561,8 +579,14 @@ def _column_position(col: Dict[str, Any], stored_index: int) -> int:
 
 
 def _columns_in_table_order(columns: List[Dict[str, Any]]) -> List[Tuple[int, Dict[str, Any]]]:
-    """``(1-based stored index, column)`` pairs sorted by position in the table."""
-    return sorted(enumerate(columns, start=1), key=lambda pair: _column_position(pair[1], pair[0]))
+    """``(1-based place in the table, column)`` pairs sorted by position in the table.
+
+    The place is the ``ordinalPosition`` a row exports. It is not where the entity stores the column: an entity
+    created from a whitelist stores its columns in the order of the whitelist, a restored one in the order of the
+    exported rows, so the stored index would make an export and the export of its restore differ.
+    """
+    by_position = sorted(enumerate(columns, start=1), key=lambda pair: _column_position(pair[1], pair[0]))
+    return [(place, col) for place, (_, col) in enumerate(by_position, start=1)]
 
 
 # "type" is implied by the side. partitionSettings is not written as it is: the computed ranges are recomputed on

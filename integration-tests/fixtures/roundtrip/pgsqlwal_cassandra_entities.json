@@ -1,0 +1,610 @@
+[
+  {
+    "agentEntities": [
+      {
+        "agentEntityId": "0744ffc1",
+        "agentId": "71df4743",
+        "columns": [
+          {
+            "charMaxLength": 0,
+            "charOctetLength": 0,
+            "dataType": "integer",
+            "id": -6529861950688021570,
+            "isIdentity": false,
+            "isNullable": false,
+            "isPK": true,
+            "name": "id",
+            "numPrec": 32,
+            "numPrecRadix": 2,
+            "numScale": 0,
+            "position": 1,
+            "tableId": 8445190040466294150,
+            "udtName": "int4"
+          },
+          {
+            "charMaxLength": 0,
+            "charOctetLength": 0,
+            "dataType": "integer",
+            "id": -5819984998695428414,
+            "isIdentity": false,
+            "isNullable": false,
+            "isPK": false,
+            "name": "tinyint_value",
+            "numPrec": 32,
+            "numPrecRadix": 2,
+            "numScale": 0,
+            "position": 2,
+            "tableId": 8445190040466294150,
+            "udtName": "int4"
+          },
+          {
+            "charMaxLength": 64,
+            "charOctetLength": 256,
+            "dataType": "character varying",
+            "id": 5379351921072300069,
+            "isIdentity": false,
+            "isNullable": false,
+            "isPK": false,
+            "name": "varchar_value",
+            "numPrecRadix": 0,
+            "position": 3,
+            "tableId": 8445190040466294150,
+            "udtName": "varchar"
+          },
+          {
+            "charMaxLength": 0,
+            "charOctetLength": 0,
+            "dataType": "time without time zone",
+            "datetimePrec": 6,
+            "id": -6781069529439493004,
+            "isIdentity": false,
+            "isNullable": false,
+            "isPK": false,
+            "name": "time_value",
+            "numPrecRadix": 0,
+            "position": 4,
+            "tableId": 8445190040466294150,
+            "udtName": "time"
+          },
+          {
+            "charMaxLength": 0,
+            "charOctetLength": 0,
+            "dataType": "uuid",
+            "id": -526097083764544270,
+            "isIdentity": false,
+            "isNullable": false,
+            "isPK": false,
+            "name": "timeuuid_value",
+            "numPrecRadix": 0,
+            "position": 5,
+            "tableId": 8445190040466294150,
+            "udtName": "uuid"
+          }
+        ],
+        "customProperties": {},
+        "entityId": "28af4450",
+        "entityName": "public.cassandra_missing_types_test",
+        "entityType": {
+          "maxFetchItemsCountPerIteration": 10000,
+          "maxTransactionMessageKbSize": 1024,
+          "pollingIntervalMilliseconds": 500,
+          "snapshotOnly": false,
+          "type": "Source",
+          "unchangedDataFilterType": "DISABLED"
+        },
+        "orderIndex": 0,
+        "table": {
+          "id": 8445190040466294150,
+          "name": "cassandra_missing_types_test",
+          "schema": "public",
+          "type": "TABLE"
+        },
+        "tablesProperties": {
+          "public.cassandra_missing_types_test": {}
+        },
+        "type": "SingleTable"
+      },
+      {
+        "agentEntityId": "144e371c",
+        "agentId": "bb030509",
+        "columns": [
+          {
+            "dataType": "int",
+            "id": -6529861950688021570,
+            "isIdentity": false,
+            "isNullable": false,
+            "isPK": true,
+            "name": "id",
+            "position": 1,
+            "tableId": 24598803
+          },
+          {
+            "dataType": "tinyint",
+            "id": -5819984998695428414,
+            "isIdentity": false,
+            "isNullable": false,
+            "isPK": false,
+            "name": "tinyint_value",
+            "position": 2,
+            "tableId": 24598803
+          },
+          {
+            "dataType": "varchar",
+            "id": 5379351921072300069,
+            "isIdentity": false,
+            "isNullable": false,
+            "isPK": false,
+            "name": "varchar_value",
+            "position": 3,
+            "tableId": 24598803
+          },
+          {
+            "dataType": "time",
+            "id": -6781069529439493004,
+            "isIdentity": false,
+            "isNullable": false,
+            "isPK": false,
+            "name": "time_value",
+            "position": 4,
+            "tableId": 24598803
+          },
+          {
+            "dataType": "timeuuid",
+            "id": -526097083764544270,
+            "isIdentity": false,
+            "isNullable": false,
+            "isPK": false,
+            "name": "timeuuid_value",
+            "position": 5,
+            "tableId": 24598803
+          }
+        ],
+        "customProperties": {},
+        "entityId": "28af4450",
+        "entityName": "public.cassandra_missing_types_test",
+        "entityType": {
+          "allowedOperations": [
+            "INSERT",
+            "DELETE",
+            "UPDATE",
+            "TRUNCATE"
+          ],
+          "columnsMappingMatrix": [
+            {
+              "sourceColumnIds": [
+                -6529861950688021570
+              ],
+              "sourceTableObjectId": 8445190040466294150,
+              "targetColumnIds": [
+                -6529861950688021570
+              ],
+              "targetTableObjectId": 24598803
+            },
+            {
+              "sourceColumnIds": [
+                -5819984998695428414
+              ],
+              "sourceTableObjectId": 8445190040466294150,
+              "targetColumnIds": [
+                -5819984998695428414
+              ],
+              "targetTableObjectId": 24598803
+            },
+            {
+              "sourceColumnIds": [
+                5379351921072300069
+              ],
+              "sourceTableObjectId": 8445190040466294150,
+              "targetColumnIds": [
+                5379351921072300069
+              ],
+              "targetTableObjectId": 24598803
+            },
+            {
+              "sourceColumnIds": [
+                -6781069529439493004
+              ],
+              "sourceTableObjectId": 8445190040466294150,
+              "targetColumnIds": [
+                -6781069529439493004
+              ],
+              "targetTableObjectId": 24598803
+            },
+            {
+              "sourceColumnIds": [
+                -526097083764544270
+              ],
+              "sourceTableObjectId": 8445190040466294150,
+              "targetColumnIds": [
+                -526097083764544270
+              ],
+              "targetTableObjectId": 24598803
+            }
+          ],
+          "distinctCaseInsensitiveKeyData": false,
+          "fieldFunctions": [],
+          "insertConflictStrategy": "UPSERT",
+          "snapshotWritingConcurrency": 1,
+          "tablesWithUnlockedDataTypes": [],
+          "tablesWithUnlockedSchema": [],
+          "type": "Target",
+          "useBulkOperationsDuringCDC": false,
+          "useBulkOperationsWhileSnapshot": false
+        },
+        "orderIndex": 0,
+        "table": {
+          "id": 24598803,
+          "name": "cassandra_missing_types_test",
+          "schema": "demo",
+          "type": "TABLE"
+        },
+        "tablesProperties": {
+          "demo.cassandra_missing_types_test": {}
+        },
+        "type": "SingleTable"
+      }
+    ],
+    "entityId": "28af4450",
+    "entityName": "public.cassandra_missing_types_test",
+    "groupId": "_default",
+    "orderIndex": 0
+  },
+  {
+    "agentEntities": [
+      {
+        "agentEntityId": "eb1ca6db",
+        "agentId": "71df4743",
+        "columns": [
+          {
+            "charMaxLength": 0,
+            "charOctetLength": 0,
+            "dataType": "integer",
+            "id": -6529861950688021570,
+            "isIdentity": false,
+            "isNullable": false,
+            "isPK": true,
+            "name": "id",
+            "numPrec": 32,
+            "numPrecRadix": 2,
+            "numScale": 0,
+            "position": 1,
+            "tableId": 3087399026961698047,
+            "udtName": "int4"
+          },
+          {
+            "charMaxLength": 0,
+            "charOctetLength": 0,
+            "dataType": "smallint",
+            "id": 1818777280004760396,
+            "isIdentity": false,
+            "isNullable": true,
+            "isPK": false,
+            "name": "tn",
+            "numPrec": 16,
+            "numPrecRadix": 2,
+            "numScale": 0,
+            "position": 6,
+            "tableId": 3087399026961698047,
+            "udtName": "int2"
+          },
+          {
+            "charMaxLength": 0,
+            "charOctetLength": 0,
+            "dataType": "bigint",
+            "id": 3975690994541857167,
+            "isIdentity": false,
+            "isNullable": true,
+            "isPK": false,
+            "name": "bint",
+            "numPrec": 64,
+            "numPrecRadix": 2,
+            "numScale": 0,
+            "position": 7,
+            "tableId": 3087399026961698047,
+            "udtName": "int8"
+          },
+          {
+            "charMaxLength": 0,
+            "charOctetLength": 0,
+            "dataType": "integer",
+            "id": 6747417845381436482,
+            "isIdentity": false,
+            "isNullable": true,
+            "isPK": false,
+            "name": "nil",
+            "numPrec": 32,
+            "numPrecRadix": 2,
+            "numScale": 0,
+            "position": 8,
+            "tableId": 3087399026961698047,
+            "udtName": "int4"
+          },
+          {
+            "charMaxLength": 0,
+            "charOctetLength": 0,
+            "dataType": "bytea",
+            "id": 6991230170215432195,
+            "isIdentity": false,
+            "isNullable": true,
+            "isPK": false,
+            "name": "image",
+            "numPrecRadix": 0,
+            "position": 2,
+            "tableId": 3087399026961698047,
+            "udtName": "bytea"
+          },
+          {
+            "charMaxLength": 0,
+            "charOctetLength": 0,
+            "dataType": "timestamp without time zone",
+            "datetimePrec": 6,
+            "id": 4948721473946711771,
+            "isIdentity": false,
+            "isNullable": true,
+            "isPK": false,
+            "name": "ts",
+            "numPrecRadix": 0,
+            "position": 3,
+            "tableId": 3087399026961698047,
+            "udtName": "timestamp"
+          },
+          {
+            "charMaxLength": 0,
+            "charOctetLength": 0,
+            "dataType": "date",
+            "datetimePrec": 0,
+            "id": 1046914482580477072,
+            "isIdentity": false,
+            "isNullable": true,
+            "isPK": false,
+            "name": "date",
+            "numPrecRadix": 0,
+            "position": 4,
+            "tableId": 3087399026961698047,
+            "udtName": "date"
+          },
+          {
+            "charMaxLength": 0,
+            "charOctetLength": 0,
+            "dataType": "timestamp with time zone",
+            "datetimePrec": 6,
+            "id": -73223730746960528,
+            "isIdentity": false,
+            "isNullable": true,
+            "isPK": false,
+            "name": "dt",
+            "numPrecRadix": 0,
+            "position": 5,
+            "tableId": 3087399026961698047,
+            "udtName": "timestamptz"
+          }
+        ],
+        "customProperties": {},
+        "entityId": "1af80eee",
+        "entityName": "public.test_create_table",
+        "entityType": {
+          "maxFetchItemsCountPerIteration": 10000,
+          "maxTransactionMessageKbSize": 1024,
+          "pollingIntervalMilliseconds": 500,
+          "snapshotOnly": false,
+          "type": "Source",
+          "unchangedDataFilterType": "DISABLED"
+        },
+        "orderIndex": 0,
+        "table": {
+          "id": 3087399026961698047,
+          "name": "test_create_table",
+          "schema": "public",
+          "type": "TABLE"
+        },
+        "tablesProperties": {
+          "public.test_create_table": {}
+        },
+        "type": "SingleTable"
+      },
+      {
+        "agentEntityId": "56da70de",
+        "agentId": "bb030509",
+        "columns": [
+          {
+            "dataType": "int",
+            "id": -6529861950688021570,
+            "isIdentity": false,
+            "isNullable": false,
+            "isPK": true,
+            "name": "id",
+            "position": 1,
+            "tableId": -674872819
+          },
+          {
+            "dataType": "smallint",
+            "id": 1818777280004760396,
+            "isIdentity": false,
+            "isNullable": false,
+            "isPK": false,
+            "name": "tn",
+            "position": 6,
+            "tableId": -674872819
+          },
+          {
+            "dataType": "bigint",
+            "id": 3975690994541857167,
+            "isIdentity": false,
+            "isNullable": false,
+            "isPK": false,
+            "name": "bint",
+            "position": 7,
+            "tableId": -674872819
+          },
+          {
+            "dataType": "int",
+            "id": 6747417845381436482,
+            "isIdentity": false,
+            "isNullable": false,
+            "isPK": false,
+            "name": "nil",
+            "position": 8,
+            "tableId": -674872819
+          },
+          {
+            "dataType": "blob",
+            "id": 6991230170215432195,
+            "isIdentity": false,
+            "isNullable": false,
+            "isPK": false,
+            "name": "image",
+            "position": 2,
+            "tableId": -674872819
+          },
+          {
+            "dataType": "timestamp",
+            "id": 4948721473946711771,
+            "isIdentity": false,
+            "isNullable": false,
+            "isPK": false,
+            "name": "ts",
+            "position": 3,
+            "tableId": -674872819
+          },
+          {
+            "dataType": "date",
+            "id": 1046914482580477072,
+            "isIdentity": false,
+            "isNullable": false,
+            "isPK": false,
+            "name": "date",
+            "position": 4,
+            "tableId": -674872819
+          },
+          {
+            "dataType": "timestamp",
+            "id": -73223730746960528,
+            "isIdentity": false,
+            "isNullable": false,
+            "isPK": false,
+            "name": "dt",
+            "position": 5,
+            "tableId": -674872819
+          }
+        ],
+        "customProperties": {},
+        "entityId": "1af80eee",
+        "entityName": "public.test_create_table",
+        "entityType": {
+          "allowedOperations": [
+            "INSERT",
+            "DELETE",
+            "UPDATE",
+            "TRUNCATE"
+          ],
+          "columnsMappingMatrix": [
+            {
+              "sourceColumnIds": [
+                -6529861950688021570
+              ],
+              "sourceTableObjectId": 3087399026961698047,
+              "targetColumnIds": [
+                -6529861950688021570
+              ],
+              "targetTableObjectId": -674872819
+            },
+            {
+              "sourceColumnIds": [
+                6991230170215432195
+              ],
+              "sourceTableObjectId": 3087399026961698047,
+              "targetColumnIds": [
+                6991230170215432195
+              ],
+              "targetTableObjectId": -674872819
+            },
+            {
+              "sourceColumnIds": [
+                4948721473946711771
+              ],
+              "sourceTableObjectId": 3087399026961698047,
+              "targetColumnIds": [
+                4948721473946711771
+              ],
+              "targetTableObjectId": -674872819
+            },
+            {
+              "sourceColumnIds": [
+                1046914482580477072
+              ],
+              "sourceTableObjectId": 3087399026961698047,
+              "targetColumnIds": [
+                1046914482580477072
+              ],
+              "targetTableObjectId": -674872819
+            },
+            {
+              "sourceColumnIds": [
+                -73223730746960528
+              ],
+              "sourceTableObjectId": 3087399026961698047,
+              "targetColumnIds": [
+                -73223730746960528
+              ],
+              "targetTableObjectId": -674872819
+            },
+            {
+              "sourceColumnIds": [
+                1818777280004760396
+              ],
+              "sourceTableObjectId": 3087399026961698047,
+              "targetColumnIds": [
+                1818777280004760396
+              ],
+              "targetTableObjectId": -674872819
+            },
+            {
+              "sourceColumnIds": [
+                3975690994541857167
+              ],
+              "sourceTableObjectId": 3087399026961698047,
+              "targetColumnIds": [
+                3975690994541857167
+              ],
+              "targetTableObjectId": -674872819
+            },
+            {
+              "sourceColumnIds": [
+                6747417845381436482
+              ],
+              "sourceTableObjectId": 3087399026961698047,
+              "targetColumnIds": [
+                6747417845381436482
+              ],
+              "targetTableObjectId": -674872819
+            }
+          ],
+          "distinctCaseInsensitiveKeyData": false,
+          "fieldFunctions": [],
+          "insertConflictStrategy": "UPSERT",
+          "snapshotWritingConcurrency": 1,
+          "tablesWithUnlockedDataTypes": [],
+          "tablesWithUnlockedSchema": [],
+          "type": "Target",
+          "useBulkOperationsDuringCDC": false,
+          "useBulkOperationsWhileSnapshot": false
+        },
+        "orderIndex": 0,
+        "table": {
+          "id": -674872819,
+          "name": "test_create_table",
+          "schema": "demo",
+          "type": "TABLE"
+        },
+        "tablesProperties": {
+          "demo.test_create_table": {}
+        },
+        "type": "SingleTable"
+      }
+    ],
+    "entityId": "1af80eee",
+    "entityName": "public.test_create_table",
+    "groupId": "_default",
+    "orderIndex": 0
+  }
+]
