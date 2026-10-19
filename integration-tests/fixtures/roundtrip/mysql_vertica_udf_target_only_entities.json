@@ -1,0 +1,353 @@
+[
+  {
+    "agentEntities": [
+      {
+        "agentEntityId": "a5448205",
+        "agentId": "1f62f590",
+        "columns": [
+          {
+            "charMaxLength": 0,
+            "charOctetLength": 0,
+            "dataType": "int",
+            "id": 4054250243860915464,
+            "isIdentity": false,
+            "isNullable": false,
+            "isPK": true,
+            "name": "ID",
+            "numPrec": 10,
+            "numScale": 0,
+            "position": 1,
+            "tableId": -2193933075632907025,
+            "udtName": "int"
+          },
+          {
+            "charMaxLength": 0,
+            "charOctetLength": 0,
+            "dataType": "int",
+            "id": -4297625194162521403,
+            "isIdentity": false,
+            "isNullable": false,
+            "isPK": false,
+            "name": "DAY",
+            "numPrec": 10,
+            "numScale": 0,
+            "position": 2,
+            "tableId": -2193933075632907025,
+            "udtName": "int"
+          },
+          {
+            "charMaxLength": 0,
+            "charOctetLength": 0,
+            "dataType": "int",
+            "id": 3441038186372641271,
+            "isIdentity": false,
+            "isNullable": false,
+            "isPK": false,
+            "name": "MONTH",
+            "numPrec": 10,
+            "numScale": 0,
+            "position": 3,
+            "tableId": -2193933075632907025,
+            "udtName": "int"
+          },
+          {
+            "charMaxLength": 0,
+            "charOctetLength": 0,
+            "dataType": "int",
+            "id": -7778356090760129533,
+            "isIdentity": false,
+            "isNullable": false,
+            "isPK": false,
+            "name": "YEAR",
+            "numPrec": 10,
+            "numScale": 0,
+            "position": 4,
+            "tableId": -2193933075632907025,
+            "udtName": "int"
+          }
+        ],
+        "customProperties": {},
+        "entityId": "56af8cf5",
+        "entityName": "demo_default.UDF_TEST_DATE",
+        "entityType": {
+          "maxFetchItemsCountPerIteration": 10000,
+          "maxTransactionMessageKbSize": 1024,
+          "pollingIntervalMilliseconds": 500,
+          "snapshotOnly": false,
+          "type": "Source",
+          "unchangedDataFilterType": "DISABLED"
+        },
+        "orderIndex": 0,
+        "table": {
+          "id": -2193933075632907025,
+          "name": "UDF_TEST_DATE",
+          "schema": "demo_default",
+          "type": "TABLE"
+        },
+        "tablesProperties": {
+          "demo_default.UDF_TEST_DATE": {}
+        },
+        "type": "SingleTable"
+      },
+      {
+        "agentEntityId": "ef8f077a",
+        "agentId": "fef45952",
+        "columns": [
+          {
+            "charMaxLength": 0,
+            "charOctetLength": 0,
+            "charSet": "0",
+            "dataType": "int",
+            "id": 4054250243860915464,
+            "isIdentity": false,
+            "isNullable": false,
+            "isPK": true,
+            "name": "ID",
+            "numPrecRadix": 0,
+            "position": 1,
+            "tableId": -7494539674240982626
+          },
+          {
+            "charMaxLength": 0,
+            "charOctetLength": 0,
+            "charSet": "0",
+            "dataType": "int",
+            "id": -4297625194162521403,
+            "isIdentity": false,
+            "isNullable": false,
+            "isPK": false,
+            "name": "DAY",
+            "numPrecRadix": 0,
+            "position": 2,
+            "tableId": -7494539674240982626
+          },
+          {
+            "charMaxLength": 0,
+            "charOctetLength": 0,
+            "charSet": "0",
+            "dataType": "int",
+            "id": 3441038186372641271,
+            "isIdentity": false,
+            "isNullable": false,
+            "isPK": false,
+            "name": "MONTH",
+            "numPrecRadix": 0,
+            "position": 3,
+            "tableId": -7494539674240982626
+          },
+          {
+            "charMaxLength": 0,
+            "charOctetLength": 0,
+            "charSet": "0",
+            "dataType": "int",
+            "id": -7778356090760129533,
+            "isIdentity": false,
+            "isNullable": false,
+            "isPK": false,
+            "name": "YEAR",
+            "numPrecRadix": 0,
+            "position": 4,
+            "tableId": -7494539674240982626
+          },
+          {
+            "charMaxLength": 0,
+            "charOctetLength": 0,
+            "charSet": "0",
+            "dataType": "varchar",
+            "id": 4054250243860915465,
+            "isIdentity": false,
+            "isNullable": false,
+            "isPK": false,
+            "name": "EPOCH_FIELD",
+            "numPrec": 0,
+            "numPrecRadix": 0,
+            "numScale": 0,
+            "position": 0,
+            "tableId": -7494539674240982626
+          }
+        ],
+        "customProperties": {},
+        "entityId": "56af8cf5",
+        "entityName": "demo_default.UDF_TEST_DATE",
+        "entityType": {
+          "allowedOperations": [
+            "INSERT",
+            "DELETE",
+            "UPDATE",
+            "TRUNCATE"
+          ],
+          "columnsMappingMatrix": [
+            {
+              "sourceColumnIds": [],
+              "sourceTableObjectId": -2193933075632907025,
+              "targetColumnIds": [],
+              "targetTableObjectId": -7494539674240982626
+            }
+          ],
+          "distinctCaseInsensitiveKeyData": false,
+          "fieldFunctions": [],
+          "insertConflictStrategy": "UPSERT",
+          "mappingFunctionInfo": {
+            "name": "UserDefinedFunctionTemplateForUDF_TEST_EPOCH_FIELD",
+            "type": "Java"
+          },
+          "snapshotWritingConcurrency": 1,
+          "tablesWithUnlockedDataTypes": [],
+          "tablesWithUnlockedSchema": [
+            -7494539674240982626
+          ],
+          "type": "Target",
+          "useBulkOperationsDuringCDC": false,
+          "useBulkOperationsWhileSnapshot": false
+        },
+        "orderIndex": 0,
+        "table": {
+          "id": -7494539674240982626,
+          "name": "UDF_TEST_DATE",
+          "schema": "public_default",
+          "type": "TABLE"
+        },
+        "tablesProperties": {
+          "public_default.UDF_TEST_DATE": {}
+        },
+        "type": "SingleTable"
+      }
+    ],
+    "entityId": "56af8cf5",
+    "entityName": "demo_default.UDF_TEST_DATE",
+    "groupId": "_default",
+    "orderIndex": 0
+  },
+  {
+    "agentEntities": [
+      {
+        "agentEntityId": "0a10a986",
+        "agentId": "1f62f590",
+        "columns": [
+          {
+            "charMaxLength": 0,
+            "charOctetLength": 0,
+            "dataType": "int",
+            "id": 4054250243860915464,
+            "isIdentity": false,
+            "isNullable": false,
+            "isPK": true,
+            "name": "ID",
+            "numPrec": 10,
+            "numScale": 0,
+            "position": 1,
+            "tableId": -7182694588372010931,
+            "udtName": "int"
+          }
+        ],
+        "customProperties": {},
+        "entityId": "7beda62c",
+        "entityName": "demo_default.UDF_TEST_TF",
+        "entityType": {
+          "maxFetchItemsCountPerIteration": 10000,
+          "maxTransactionMessageKbSize": 1024,
+          "pollingIntervalMilliseconds": 500,
+          "snapshotOnly": false,
+          "type": "Source",
+          "unchangedDataFilterType": "DISABLED"
+        },
+        "orderIndex": 0,
+        "table": {
+          "id": -7182694588372010931,
+          "name": "UDF_TEST_TF",
+          "schema": "demo_default",
+          "type": "TABLE"
+        },
+        "tablesProperties": {
+          "demo_default.UDF_TEST_TF": {}
+        },
+        "type": "SingleTable"
+      },
+      {
+        "agentEntityId": "652cd123",
+        "agentId": "fef45952",
+        "columns": [
+          {
+            "charMaxLength": 0,
+            "charOctetLength": 0,
+            "charSet": "0",
+            "dataType": "int",
+            "id": 4054250243860915464,
+            "isIdentity": false,
+            "isNullable": false,
+            "isPK": true,
+            "name": "ID",
+            "numPrecRadix": 0,
+            "position": 1,
+            "tableId": 4104019412257052621
+          },
+          {
+            "charMaxLength": 0,
+            "charOctetLength": 0,
+            "charSet": "0",
+            "dataType": "varchar",
+            "id": 4054250243860915465,
+            "isIdentity": false,
+            "isNullable": false,
+            "isPK": false,
+            "name": "TECHNICAL_FIELD",
+            "numPrec": 0,
+            "numPrecRadix": 0,
+            "numScale": 0,
+            "position": 0,
+            "tableId": 4104019412257052621
+          }
+        ],
+        "customProperties": {},
+        "entityId": "7beda62c",
+        "entityName": "demo_default.UDF_TEST_TF",
+        "entityType": {
+          "allowedOperations": [
+            "INSERT",
+            "DELETE",
+            "UPDATE",
+            "TRUNCATE"
+          ],
+          "columnsMappingMatrix": [
+            {
+              "sourceColumnIds": [],
+              "sourceTableObjectId": -7182694588372010931,
+              "targetColumnIds": [],
+              "targetTableObjectId": 4104019412257052621
+            }
+          ],
+          "distinctCaseInsensitiveKeyData": false,
+          "fieldFunctions": [],
+          "insertConflictStrategy": "UPSERT",
+          "mappingFunctionInfo": {
+            "name": "UserDefinedFunctionTemplateForUDF_TEST_TF",
+            "type": "Java"
+          },
+          "snapshotWritingConcurrency": 1,
+          "tablesWithUnlockedDataTypes": [],
+          "tablesWithUnlockedSchema": [
+            4104019412257052621
+          ],
+          "type": "Target",
+          "useBulkOperationsDuringCDC": false,
+          "useBulkOperationsWhileSnapshot": false
+        },
+        "orderIndex": 0,
+        "table": {
+          "id": 4104019412257052621,
+          "name": "UDF_TEST_TF",
+          "schema": "public_default",
+          "type": "TABLE"
+        },
+        "tablesProperties": {
+          "public_default.UDF_TEST_TF": {}
+        },
+        "type": "SingleTable"
+      }
+    ],
+    "entityId": "7beda62c",
+    "entityName": "demo_default.UDF_TEST_TF",
+    "groupId": "_default",
+    "orderIndex": 0
+  }
+]

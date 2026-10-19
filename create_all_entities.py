@@ -1058,6 +1058,52 @@ def _target_position(discovered_target_col, col, yaml_row=None):
     return discovered if _is_position(discovered) else col.get("position", 0)
 
 
+def _exported_source_positions(custom_config):
+    """``{source name: ordinalPosition}`` of the exported mapping rows that state one."""
+    positions = {}
+    for row in (custom_config or {}).get('columns') or []:
+        if isinstance(row, dict) and isinstance(row.get('source'), str) and _is_position(row.get('ordinalPosition')):
+            positions.setdefault(row['source'], row['ordinalPosition'])
+    return positions
+
+
+def _with_exported_source_positions(columns, custom_config, table_name):
+    """The source discovery ``columns`` of a schemaless source, with the order the exported rows give its columns.
+
+    A source with no schema (MongoDB, Cosmos DB, Couchbase, DynamoDB) infers its columns by sampling documents,
+    so the position discovery reports depends on the data at restore time, not on the configuration. The
+    ``ordinalPosition`` of the rows is the place of each column in the table the export came from: the listed
+    columns take, in that order, the positions discovery gave them (which keeps the numbering the agent uses, 0-based
+    for MongoDB). A discovered column no row lists keeps its discovered position; a row naming a column discovery
+    does not return gets none (the mapping reports it).
+    """
+    exported = _exported_source_positions(custom_config)
+    discovered = (columns or {}).get('columns') or []
+    if not exported or not discovered:
+        return columns
+    # A name is matched as spelt, else case-insensitively (a schemaless source may hold names that differ by case only)
+    by_lower = {name.lower(): position for name, position in reversed(list(exported.items()))}
+    exported_position = {id(c): exported.get(c.get('name'), by_lower.get(str(c.get('name', '')).lower()))
+                         for c in discovered}
+    listed = [c for c in discovered if exported_position[id(c)] is not None]
+    if any(not _is_position(c.get('position'), least=0) for c in listed):
+        logger.warning(f"Table {table_name}: a discovered column has no position, keeping the discovered order")
+        return columns
+    found = {str(c['name']).lower() for c in listed}
+    missing = sorted(name for name in exported if name.lower() not in found)
+    if missing:
+        logger.warning(f"Table {table_name}: exported column(s) {missing} not found in discovery, they get no position")
+    unlisted = [c.get('name') for c in discovered if exported_position[id(c)] is None]
+    if unlisted:
+        logger.warning(f"Table {table_name}: discovered column(s) {unlisted} not listed in the YAML, "
+                       f"keeping their discovered position")
+    slots = sorted(c['position'] for c in listed)
+    in_exported_order = sorted(listed, key=lambda c: (exported_position[id(c)], c['position']))
+    position_of = {id(col): slot for col, slot in zip(in_exported_order, slots)}
+    return {**columns, 'columns': [{**c, 'position': position_of[id(c)]} if id(c) in position_of else c
+                                   for c in discovered]}
+
+
 def _target_is_pk(discovered_target_col, col, custom_config, coerce_target=False):
     """isPrimaryKey of a target column: from the discovered target column, else from the source column."""
     target_pk = discovered_target_col.get("isPK") if discovered_target_col else False
@@ -1330,6 +1376,12 @@ def _target_only_defaults(target_col):
     )
 
 
+def _target_only_position(target_col):
+    """The position a target-only column declares (the export writes it), 0 when it declares none."""
+    exported = target_col.get('position') if isinstance(target_col, dict) else None
+    return exported if _is_position(exported, least=0) else 0
+
+
 def _check_target_only_properties(target_col, col_name, skip_errors, where):
     """Refuse a user-defined target-only column the target table lacks unless it declares every property."""
     if not isinstance(target_col, dict):
@@ -1411,7 +1463,7 @@ def _add_target_only_columns(tb):
 
         tb.columns_def.append(_enrich_column({
             "id": tb.max_id,  # Continue from last target column ID
-            "position": 0,
+            "position": _target_only_position(target_col),
             "name": col_name,
             "alias": col_name,
             "dataType": mapped_type,
@@ -2447,10 +2499,14 @@ class _EntityRun:
         if not self.ctx.skip_errors:
             raise error
 
-    def table_columns(self, table_name):
-        """The source discovery of a table of the schema."""
+    def table_columns(self, table_name, custom_config=None):
+        """The source discovery of a table of the schema, in the order the YAML ``custom_config`` of the table gives
+        the columns when the source has no schema (see :func:`_with_exported_source_positions`)."""
         ctx = self.ctx
-        return get_table_columns(ctx.token, ctx.pipeline_id, self.source_agent_id, self.source_schema, table_name)
+        columns = get_table_columns(ctx.token, ctx.pipeline_id, self.source_agent_id, self.source_schema, table_name)
+        if ctx.source_is_nosql and custom_config:
+            columns = _with_exported_source_positions(columns, custom_config, table_name)
+        return columns
 
     def queue_partition_request(self, entity_name, partition_settings, max_partitions):
         if partition_settings:
@@ -2768,9 +2824,9 @@ def _skip_discovered_table(run, table_name, table_schema):
     return not _in_schema_whitelist(run, table_name, bare_table_name)
 
 
-def _discover_source_table(run, table_name):
+def _discover_source_table(run, table_name, custom_config=None):
     """The source discovery of a table, None (refused unless errors are skipped) when it has no columns."""
-    columns = run.table_columns(table_name)
+    columns = run.table_columns(table_name, custom_config)
 
     # Debug logging for column discovery
     if columns and columns.get('columns'):
@@ -3014,11 +3070,11 @@ def _process_discovered_table(run, table):
     if _skip_discovered_table(run, table_name, table_schema):
         return
 
-    columns = _discover_source_table(run, table_name)
+    custom_config, yaml_table_key = _custom_config_of(run.schema.custom_tables, table_name)
+    columns = _discover_source_table(run, table_name, custom_config)
     if columns is None:
         return
 
-    custom_config, yaml_table_key = _custom_config_of(run.schema.custom_tables, table_name)
     # Mark this YAML key as processed
     run.processed_yaml_keys.add(yaml_table_key)
 
@@ -3073,10 +3129,10 @@ def _duplicate_table_label(run, yaml_table_key, custom_config):
     return table_name
 
 
-def _duplicate_table_columns(run, yaml_table_key, table_name):
+def _duplicate_table_columns(run, yaml_table_key, table_name, custom_config):
     """``(discovered, columns)``: the source discovery of a duplicate table, by its actual source table name."""
     try:
-        return True, run.table_columns(table_name)
+        return True, run.table_columns(table_name, custom_config)
     except Exception as e:
         logger.error(f"Failed to get columns for duplicate table {yaml_table_key}: {str(e)}")
         if not run.ctx.skip_errors:
@@ -3165,7 +3221,7 @@ def _process_duplicate_table(run, yaml_table_key, custom_config, unprocessed_cou
     unprocessed_count += 1
     logger.info(f"Processing duplicate table #{unprocessed_count}: {yaml_table_key} (source table: {table_name})")
 
-    discovered, columns = _duplicate_table_columns(run, yaml_table_key, table_name)
+    discovered, columns = _duplicate_table_columns(run, yaml_table_key, table_name, custom_config)
     if not discovered:
         return unprocessed_count
 
@@ -3322,7 +3378,7 @@ def _add_chain_source_table(cb, table_key, table_data):
 
     source_table_id = _resolve_table_id(source_schema, actual_table_name, run.source_tables_lookup, _SOURCE_ROLE)
     # Get columns for this table using the actual table name
-    columns = run.table_columns(actual_table_name)
+    columns = run.table_columns(actual_table_name, table_data)
 
     # Add table to the list (use actual table name, not YAML key)
     cb.multi_tables.append({
@@ -3654,7 +3710,7 @@ def _add_chain_target_table(cb, table_key, table_data):
     cb.target_tables_properties[f"{target_schema}.{pair_target_name}"] = {}
 
     # Get columns for this table using actual source table name
-    columns = run.table_columns(actual_table_name)
+    columns = run.table_columns(actual_table_name, table_data)
 
     # Discover target columns for this specific table to enable type-mapping fallback
     table_target_columns = _chain_target_discovery(run, pair_target_name)
@@ -3718,7 +3774,7 @@ def _legacy_chain_matrix(run, tables_list):
         logger.info(f"Table mapping for {table_key}: source_id={source_table_id}, target_id={target_table_id}")
 
         # Get columns for this table to create mappings for each column (use actual table name)
-        columns = run.table_columns(actual_table_name)
+        columns = run.table_columns(actual_table_name, table_data)
         if not (columns and 'columns' in columns):
             continue
         for col in columns['columns']:
