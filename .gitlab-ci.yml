@@ -610,8 +610,15 @@ deploy:
 
     - docker tag $DEFAULT_NAME:latest "${NEXUS_NAME}:${TAGPART}"
     - docker push "${NEXUS_NAME}:${TAGPART}"
-    - docker tag $DEFAULT_NAME:latest "${NEXUS_NAME}:latest"
-    - docker push "${NEXUS_NAME}:latest"
+
+    # latest follows releases only: an alpha, rc or beta- tag publishes its own version and leaves latest alone
+    - |
+      if echo "$CI_COMMIT_TAG" | grep -qE '^tag-v?[0-9]+\.[0-9]+\.[0-9]+$'; then
+        docker tag $DEFAULT_NAME:latest "${NEXUS_NAME}:latest"
+        docker push "${NEXUS_NAME}:latest"
+      else
+        echo "${CI_COMMIT_TAG} is not a release tag: ${NEXUS_NAME}:latest is not updated"
+      fi
   rules:
     - if: "$CI_COMMIT_TAG =~ /^tag-/"
     - if: "$CI_COMMIT_TAG =~ /^beta-/"
