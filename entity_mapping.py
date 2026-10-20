@@ -182,6 +182,21 @@ def _pair_entries(source_table_id, target_table_id, relations, where) -> List[En
     return entries
 
 
+def _check_target_ids(target_columns, where) -> None:
+    """Refuse two target columns of different names that share an id: a relation names columns by id, so it could not
+    tell them apart (a source column fanned out onto several target columns must not give them its id)."""
+    named: Dict[Any, Any] = {}
+    for column in target_columns or []:
+        if not isinstance(column, Mapping) or column.get("id") is None:
+            continue
+        first = named.setdefault(column["id"], column.get("name"))
+        if str(first) != str(column.get("name")):
+            raise EntityMappingError(
+                f"target columns {first} and {column.get('name')}{where} share the id {column['id']}; every target "
+                f"column needs its own id"
+            )
+
+
 def _check_side(side, ids, by_id, index, owner, described, where) -> None:
     """M5 and M7 on one side of relation ``index``: every id a column of the entity, listed once, in one relation."""
     unknown = [i for i in ids if i not in by_id]
@@ -233,6 +248,7 @@ def build_entries(
 
     sources_by_id = _columns_by_id(source_columns)
     targets_by_id = _columns_by_id(target_columns)
+    _check_target_ids(target_columns, where)
     owner: Dict[Tuple[str, Any], int] = {}
     linked: List[Tuple[List[Any], List[Any]]] = []
     for index, relation in enumerate(relations):

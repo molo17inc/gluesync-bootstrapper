@@ -927,6 +927,20 @@ def _enrich_from(discovered_target_col, source_col):
     return source_col
 
 
+_LONG_MIN, _LONG_MAX = -2 ** 63, 2 ** 63 - 1  # the ids of CoreHub are Java Longs
+
+
+def _fresh_target_column_id(held, name, table_name):
+    """An id no target column holds: the one above the highest, else (a Java Long overflows) the one below the lowest."""
+    fresh = max([*held, 0]) + 1
+    if fresh <= _LONG_MAX:
+        return fresh
+    fresh = min(held) - 1
+    if fresh < _LONG_MIN:
+        raise EntityMappingError(f"Table {table_name}: no id is left for the target column {name}")
+    return fresh
+
+
 class _TargetBuild:
     """The working state of :func:`_assemble_target_side` for one table pair.
 
@@ -961,7 +975,15 @@ class _TargetBuild:
         self.discovery_type_by_source = discovery_type_by_source
         self.overrides = {}
         self.columns_def = []
-        self.max_id = 0
+        # Source columns that differ by case only (Cosmos DB's ``id`` next to a field ``ID``) are mapped onto target
+        # columns that do, whether or not the target holds them yet.
+        by_lower = {}
+        for source_col in (pair.columns or {}).get("columns") or []:
+            by_lower.setdefault(str(source_col.get("name", "")).lower(), set()).add(source_col.get("name", ""))
+        self._case_only_source_names = [n for names in by_lower.values() if len(names) > 1 for n in sorted(names)]
+        # The id of every target column by name: those discovery reports first, so that no other column takes one
+        # (see target_column_id).
+        self._target_ids = {name: c.get('id') for name, c in self.exact.items() if c.get('id') is not None}
         self.last_discovered = None
         self.last_column = None
 
@@ -1003,6 +1025,40 @@ class _TargetBuild:
         """The :class:`entity_mapping.ColumnNames` of the target columns known so far: discovered, written onto by
         the YAML and built."""
         return ColumnNames([*self.known_target_names, *(c["name"] for c in self.columns_def if c.get("name"))])
+
+    @property
+    def max_id(self):
+        """The highest id a target column holds, 0 when none does."""
+        return max([i for i in self._target_ids.values() if isinstance(i, int)] + [0])
+
+    def _target_id_owner(self, name):
+        """The spelling the id of the target column ``name`` is kept under: the target column ``name`` stands for
+        (see :class:`entity_mapping.ColumnNames`), else ``name`` itself."""
+        names = ColumnNames([*self.known_target_names, *self._case_only_source_names,
+                             *(c["name"] for c in self.columns_def if c.get("name")), *self._target_ids])
+        return names.resolve(name) or str(name)
+
+    def registered_target_id(self, name):
+        """The id the target column ``name`` holds, None when it holds none yet."""
+        return self._target_ids.get(self._target_id_owner(name))
+
+    def target_column_id(self, name, preferred_id=None):
+        """The id of the target column ``name``: the only place a target column (or key) takes its id from.
+
+        A column keeps the id it first got, so a target key and its target column share one whatever order they are
+        built in. A new one takes ``preferred_id`` (the id of the column discovery reports, else of the source column
+        that feeds it) unless another target column holds it already: one source column fanned out onto several
+        target columns would give them all its id. Else it takes a fresh id: above every id held, or below them all
+        when that would overflow a Java Long.
+        """
+        owner = self._target_id_owner(name)
+        if owner in self._target_ids:
+            return self._target_ids[owner]
+        held = {i for i in self._target_ids.values() if isinstance(i, int)}
+        if preferred_id is None or preferred_id in held:
+            preferred_id = _fresh_target_column_id(held, owner, self.pair.table_name)
+        self._target_ids[owner] = preferred_id
+        return preferred_id
 
     def has_target_column(self, name):
         """Whether the target column spelt ``name``, else the only one spelt so case-insensitively, is built."""
@@ -1047,19 +1103,24 @@ def _set_unlocked_schema_arrays(target_entity_type, pair):
         target_entity_type["tablesWithUnlockedDataTypes"] = []
 
 
-def _discovered_or_mapped(tb, col, discovered_target_col, source_col_id):
-    """``(type, id)`` of a target column: the discovered target column's, else the mapped type and the source id.
+def _preferred_target_id(discovered_target_col, source_col_id):
+    """The id a target column asks for: the discovered target column's, else the id of the source column."""
+    if discovered_target_col and discovered_target_col.get('id') is not None:
+        return discovered_target_col.get('id')
+    return source_col_id
+
+
+def _discovered_or_mapped(tb, col, discovered_target_col, source_col_id, target_name):
+    """``(type, id)`` of the target column ``target_name``: the discovered target column's, else the mapped type, and
+    the id :meth:`_TargetBuild.target_column_id` gives it (the source id when no other target column holds it).
 
     A discovered column without a type (a NoSQL target infers the type of a field from its values: a field that
     is always null has none) is no type at all: the mapped one stands in, so the payload never carries a null.
     """
     resolved_target_type = None
-    target_col_id = source_col_id  # Default to source ID
-    if discovered_target_col:
-        if discovered_target_col.get('dataType'):
-            resolved_target_type = discovered_target_col.get('dataType')
-        if discovered_target_col.get('id') is not None:
-            target_col_id = discovered_target_col.get('id')
+    if discovered_target_col and discovered_target_col.get('dataType'):
+        resolved_target_type = discovered_target_col.get('dataType')
+    target_col_id = tb.target_column_id(target_name, _preferred_target_id(discovered_target_col, source_col_id))
     if not resolved_target_type:
         resolved_target_type = tb.yaml_target_type(col) or tb.map_type(col.get("dataType"))
     return resolved_target_type, target_col_id
@@ -1235,7 +1296,8 @@ def _legacy_fallback_target_type(tb, col, resolved_target_type):
 
 def _append_mapped_target_column(tb, col, source_col_id, discovered_target_col, target_name):
     """Append the target column of a YAML mapping pair whose source is the discovered column ``col``."""
-    resolved_target_type, target_col_id = _discovered_or_mapped(tb, col, discovered_target_col, source_col_id)
+    resolved_target_type, target_col_id = _discovered_or_mapped(tb, col, discovered_target_col, source_col_id,
+                                                                target_name)
     yaml_row = _yaml_mapping_row(tb, col["name"], target_name)
     # The type an exported row gives the target column, when the target advertises it, is the one the entity had:
     # a target reports its own spelling of a type (Cassandra reads varchar back as text).
@@ -1246,7 +1308,6 @@ def _append_mapped_target_column(tb, col, source_col_id, discovered_target_col, 
     # resolved type, use the live discovery type for this source column
     if not resolved_target_type and tb.discovery_type_by_source:
         resolved_target_type = _legacy_fallback_target_type(tb, col, resolved_target_type)
-    tb.max_id = max(tb.max_id, target_col_id)
     # A NoSQL target reports every column not nullable whatever it holds, so its columns take the nullability of the
     # source column, as they always have: the exported targetIsNullable is for a SQL target.
     nullable_row = {} if tb.ctx.target_is_nosql else yaml_row
@@ -1334,11 +1395,8 @@ def _append_whitelist_target_column(tb, col, yaml_col, grouped):
     discovered_target_col = tb.seen(tb.target_col(target_col_name))
     if grouped:
         target_col_name = _discovered_spelling(discovered_target_col, target_col_name)  # BOP-15, as for mapping rows
-    target_col_id = source_col_id  # Default to source ID
-    if discovered_target_col and discovered_target_col.get('id') is not None:
-        target_col_id = discovered_target_col.get('id')
+    target_col_id = tb.target_column_id(target_col_name, _preferred_target_id(discovered_target_col, source_col_id))
     resolved_target_type = _whitelist_target_type(tb, col, yaml_col, discovered_target_col)
-    tb.max_id = max(tb.max_id, target_col_id)
     # Target columns are serialised with `dataType` (not `type`) in the
     # UpsertEntitiesDto contract. Align with the mapping/default branches.
     target_is_primary_key = _target_is_pk(discovered_target_col, col, tb.pair.custom_config,
@@ -1377,12 +1435,12 @@ def _target_columns_from_discovery(tb, apply_override, coerce_target_pk):
         # Use the id field from CoreHub API as the source column ID
         source_col_id = _require_column_id(col, tb.pair.table_name)
         discovered_target_col = tb.seen(tb.target_col(col["name"]))
-        resolved_target_type, target_col_id = _discovered_or_mapped(tb, col, discovered_target_col, source_col_id)
+        target_col_name = discovered_target_col.get('name') if discovered_target_col else col["name"]
+        resolved_target_type, target_col_id = _discovered_or_mapped(tb, col, discovered_target_col, source_col_id,
+                                                                    target_col_name)
         if apply_override:
             # User-declared targetDataType override takes highest priority
             resolved_target_type = tb.override_for(col["name"]) or resolved_target_type
-        tb.max_id = max(tb.max_id, target_col_id)
-        target_col_name = discovered_target_col.get('name') if discovered_target_col else col["name"]
         target_is_primary_key = _target_is_pk(discovered_target_col, col, tb.pair.custom_config,
                                               coerce_target=coerce_target_pk, names=tb.pair.source_names)
         tb.columns_def.append(_target_column_def(col, discovered_target_col, target_col_id, target_col_name,
@@ -1410,11 +1468,11 @@ def _build_target_columns(tb, relations, grouped):
         _target_columns_from_discovery(tb, apply_override=False, coerce_target_pk=True)
 
 
-def _produced_column(row, discovered_target_col, target_name, used_ids):
-    """The target column of a ``{target, expression}`` row (null:1), fed by no source column."""
+def _produced_column(row, discovered_target_col, target_name, target_col_id):
+    """The target column ``target_col_id`` of a ``{target, expression}`` row (null:1), fed by no source column."""
     if not discovered_target_col:
         return {
-            "id": max(used_ids + [0]) + 1,
+            "id": target_col_id,
             "position": 0,
             "name": target_name,
             "alias": target_name,
@@ -1424,8 +1482,7 @@ def _produced_column(row, discovered_target_col, target_name, used_ids):
             "isNullable": row.get("isNullable", True),
         }
     produced_col = {
-        "id": discovered_target_col.get("id") if discovered_target_col.get("id") is not None
-        else max(used_ids + [0]) + 1,
+        "id": target_col_id,
         "position": 0,
         "name": discovered_target_col.get("name"),
         "alias": discovered_target_col.get("name"),
@@ -1454,8 +1511,9 @@ def _add_produced_columns(tb, relations, grouped):
             continue
         row = relation["row"] or {}
         discovered_target_col = tb.seen(tb.target_col(target_name))
-        used_ids = [c.get("id") for c in tb.columns_def if isinstance(c.get("id"), int)]
-        produced_col = _produced_column(row, discovered_target_col, target_name, used_ids)
+        target_col_id = tb.target_column_id(_discovered_spelling(discovered_target_col, target_name),
+                                            discovered_target_col.get("id") if discovered_target_col else None)
+        produced_col = _produced_column(row, discovered_target_col, target_name, target_col_id)
         tb.columns_def.append(produced_col)
         logger.info(f"Table {tb.pair.table_name}: target column {produced_col['name']} is fed by no source column (null:1)")
 
@@ -1553,16 +1611,16 @@ def _add_target_only_columns(tb):
         logger.debug(f"Could not get target columns for {ctx.yaml_target_schema}.{pair.target_table_name}: {str(e)}")
 
     for target_col in target_only_columns:
-        # Increment from the maximum target column ID
-        tb.max_id += 1
         col_name, col_type, col_data_length, col_numeric_precision, col_numeric_scale, col_is_nullable = \
             _target_only_properties(target_col, target_columns, ctx.skip_errors)
+        # A column the target table holds keeps its id, a new one takes the next free one
+        col_id = tb.target_column_id(col_name)
 
         # Map the column type to target node type
         mapped_type = tb.map_type(col_type)
 
         tb.columns_def.append(_enrich_column({
-            "id": tb.max_id,  # Continue from last target column ID
+            "id": col_id,
             "position": _target_only_position(target_col),
             "name": col_name,
             "alias": col_name,
@@ -1573,7 +1631,7 @@ def _add_target_only_columns(tb):
             "isNullable": col_is_nullable, "isIdentity": False,
             "isPK": False  # Target-only columns are not primary keys
         }, tb.enrichment_source()))
-        logger.debug(f"Added target-only column: {col_name} (type: {mapped_type}, id: {tb.max_id})")
+        logger.debug(f"Added target-only column: {col_name} (type: {mapped_type}, id: {col_id})")
 
 
 def _add_name_relation_column(tb, relation, columns_def):
@@ -1590,8 +1648,7 @@ def _add_name_relation_column(tb, relation, columns_def):
         resolved_target_type = tb.yaml_target_type(col) or tb.map_type(col.get("dataType"))
     resolved_target_type = tb.override_for(col["name"]) or resolved_target_type
     relation["targets"] = [discovered_target_col.get('name') if discovered_target_col else target_name]
-    target_col_id = discovered_target_col.get('id') \
-        if discovered_target_col and discovered_target_col.get('id') is not None else col.get('id')
+    target_col_id = tb.target_column_id(relation["targets"][0], _preferred_target_id(discovered_target_col, col.get('id')))
     tb.columns_def.append(_target_column_def(col, discovered_target_col, target_col_id, relation["targets"][0],
                                              resolved_target_type, False))
 
@@ -1613,7 +1670,8 @@ def _add_udf_target_keys(tb, physical_target):
         if not tb.has_target_column(key_name):
             key_col = tb.target_col(key_name)
             tb.columns_def.append(_enrich_column({
-                "id": key_col.get("id"), "position": 0, "name": key_col["name"], "alias": key_col["name"],
+                "id": tb.target_column_id(key_col["name"], key_col.get("id")), "position": 0, "name": key_col["name"],
+                "alias": key_col["name"],
                 "dataType": key_col.get("dataType"), "isPK": True, "isIdentity": key_col.get("isIdentity", False),
                 "isNullable": key_col.get("isNullable", False),
             }, key_col))
@@ -1693,7 +1751,8 @@ def _append_mapped_target_keys(tb, target_keys, col, source_col_id, relations):
 def _mapped_target_key(tb, col, source_col_id, source_name, target_name):
     """The target key a YAML mapping pair makes of the discovered source key column ``col``."""
     discovered_target_col = tb.target_col(target_name)
-    resolved_target_type, target_col_id = _discovered_or_mapped(tb, col, discovered_target_col, source_col_id)
+    resolved_target_type, target_col_id = _discovered_or_mapped(tb, col, discovered_target_col, source_col_id,
+                                                                target_name)
     # User-declared targetDataType override takes highest priority
     resolved_target_type = tb.override_for(col["name"]) or resolved_target_type
     target_key = _target_key_def(target_col_id, target_name, resolved_target_type,
@@ -1727,7 +1786,8 @@ def _resolve_missed_target_key(tb, key_name, target_keys, found_target_key_names
     src_def = find_by_name(columns_def, matched["name"])
     target_name = (src_def.get("alias") if src_def and src_def.get("alias") else matched["name"])
     discovered_target_col = tb.target_col(str(target_name))
-    resolved_target_type, target_col_id = _discovered_or_mapped(tb, matched, discovered_target_col, source_col_id)
+    resolved_target_type, target_col_id = _discovered_or_mapped(tb, matched, discovered_target_col, source_col_id,
+                                                                target_name)
     resolved_target_type = tb.override_for(matched["name"]) or resolved_target_type
     enrich_from = _enrich_from(discovered_target_col, matched)
     target_keys.append(_target_key_def(target_col_id, target_name, resolved_target_type, enrich_from))
@@ -1772,10 +1832,11 @@ def _append_named_target_key(tb, target_keys, col, key_name):
     # Use the id field from CoreHub API as the column ID
     source_col_id = _require_column_id(col, tb.pair.table_name, label=key_name)
     discovered_target_col = tb.target_col(key_name)
-    resolved_target_type, target_col_id = _discovered_or_mapped(tb, col, discovered_target_col, source_col_id)
+    target_key_name = discovered_target_col.get('name') if discovered_target_col else col["name"]
+    resolved_target_type, target_col_id = _discovered_or_mapped(tb, col, discovered_target_col, source_col_id,
+                                                                target_key_name)
     # User-declared targetDataType override takes highest priority
     resolved_target_type = tb.override_for(col["name"]) or resolved_target_type
-    target_key_name = discovered_target_col.get('name') if discovered_target_col else col["name"]
     target_keys.append(_enrich_column({
         "id": target_col_id,  # Use target column ID
         "name": target_key_name,
@@ -1791,7 +1852,9 @@ def _target_key_from_columns(tb, target_keys, key_name):
     col_def = find_by_name(tb.columns_def, key_name)
     if col_def is None:
         return False
-    target_keys.append(copy.deepcopy(col_def))
+    target_key = copy.deepcopy(col_def)
+    target_key["id"] = tb.target_column_id(col_def["name"], col_def.get("id"))
+    target_keys.append(target_key)
     logger.info(f"Found target key '{key_name}' in target_columns_def")
     return True
 
@@ -1827,7 +1890,8 @@ def _target_keys_from_pk(tb):
             _resolved_dt = tb.target_col(col["name"], {}).get('type') or tb.map_type(col.get("dataType"))
             # User-declared targetDataType override takes highest priority
             _resolved_dt = tb.override_for(col["name"]) or _resolved_dt
-            target_keys.append(_target_key_def(col_id, col["name"], _resolved_dt, tb.last_discovered or col,
+            target_keys.append(_target_key_def(tb.target_column_id(col["name"], col_id), col["name"], _resolved_dt,
+                                               tb.last_discovered or col,
                                                position=col.get("position", 0)))
     logger.debug(f"Using primary target keys for {tb.pair.table_name}: {target_keys}")
     return target_keys
@@ -1881,9 +1945,9 @@ def _legacy_matrix_relations(tb, columns_def, has_filter):
 
 
 def _target_id_by_name(tb, target_col_name, default_id):
-    """The id of the discovered target column named ``target_col_name``, else ``default_id``."""
-    target_col = tb.target_col(str(target_col_name))
-    return target_col.get('id') if target_col and target_col.get('id') is not None else default_id
+    """The id the target column named ``target_col_name`` got when it was built, else ``default_id``."""
+    registered = tb.registered_target_id(str(target_col_name))
+    return registered if registered is not None else default_id
 
 
 def _mapping_entries(tb, columns_def, name_relations, has_filter, grouped):
