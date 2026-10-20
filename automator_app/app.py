@@ -44,6 +44,7 @@ import re
 import requests
 import yaml
 import create_user_defined_functions
+import function_collection
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -846,7 +847,7 @@ def _is_entity_yaml(lower: str) -> bool:
 
 
 def _extract_upload_members(contents: bytes, extract_dir: Path) -> Optional[Path]:
-    """Extract the YAML and UDF source files of an uploaded ZIP; return the primary YAML, if any."""
+    """Extract the YAML, UDF and function collection source files of an uploaded ZIP; return the primary YAML, if any."""
     yaml_path: Optional[Path] = None
     with zipfile.ZipFile(io.BytesIO(contents)) as zf:
         for member in zf.namelist():
@@ -863,6 +864,8 @@ def _extract_upload_members(contents: bytes, extract_dir: Path) -> Optional[Path
             # Extract UDF source files (under udf-* paths)
             elif _is_udf_source(member):
                 _extract_udf_source(zf, member, extract_dir)
+        # ... and the function collection (function-collection/), which a run publishes before it creates entities
+        function_collection.extract_function_collection_members(zf, extract_dir)
     return yaml_path
 
 
@@ -1484,6 +1487,8 @@ def _register_pipeline_routes(app: FastAPI) -> None:
         are present, returns a ZIP containing the YAML plus ``udf-<agentId>/``
         source folders (same layout full backup / import already understand)
         so entity-only export round-trips mapping-function sources (GSSD-1355).
+        A pipeline with a function collection (Gluesync 2.3) always gets the ZIP, with
+        the collection under ``function-collection/``.
 
         Duplicate source tables are handled by creating unique keys (e.g., table@@2, table@@3)
         within the same YAML file to avoid key conflicts.
@@ -1492,7 +1497,7 @@ def _register_pipeline_routes(app: FastAPI) -> None:
 
     @app.get("/api/export/pipeline/{pipeline_id}/full", responses=_PIPELINE_EXPORT_RESPONSES)
     async def export_pipeline_full_backup(pipeline_id: str, include_secrets: bool = False):
-        """Export a full backup (YAML + agents-config + UDFs) for a single pipeline."""
+        """Export a full backup (YAML + agents-config + UDFs + function collection) for a single pipeline."""
         return _export_pipeline_full_backup(pipeline_id, include_secrets)
 
     @app.post(
@@ -1641,7 +1646,7 @@ def _parse_agents_config(agents_text: str, operation: str) -> tuple[Any, list]:
 
 
 def _extract_import_udf_sources(contents: bytes) -> Optional[Path]:
-    """Extract the UDF source files of a backup ZIP into a new session directory and point UDF_PATH at it."""
+    """Extract the UDF and function collection sources of a backup ZIP into a new session directory; point UDF_PATH at it."""
     # Extract UDF source files (if present) into an app-owned session
     # directory so they can be compiled automatically during import. Both
     # Export All and single-pipeline Full backup ZIPs place UDFs under
@@ -1658,6 +1663,8 @@ def _extract_import_udf_sources(contents: bytes) -> Optional[Path]:
                 if _is_macos_metadata(member) or not _is_udf_source(member):
                     continue
                 _extract_udf_source(zf_udf, member, udf_root)
+            # The function collections, each under its pipeline_<id>/ folder of the ZIP (or at the root)
+            function_collection.extract_function_collection_members(zf_udf, udf_root)
 
         # Point the UDF helper module to this directory so it can resolve
         # files via UDF_NAME + extension lookups.
@@ -2153,14 +2160,14 @@ def _create_schema_pair_entities(job: _ArchiveImport, entities: _PipelineEntitie
             source_type=entities.source_type,
             target_type=entities.target_type,
             yaml_file=str(entities.yaml_path),
-            skip_errors=True,
-            chunk_size=50,
             enable_scheduling=entities.enable_scheduling,
             create_tables=entities.create_tables,
             use_ssl=state.use_ssl,
             skip_verify=state.skip_verify,
-            log_callback=None,
-            chronos_token=state.chronos_token,
+            options=corehub.EntityRunOptions(
+                chronos_token=state.chronos_token,
+                restore_function_collection=False,  # published once for the pipeline, before its first schema pair
+            ),
         )
         if not result_run.get("success"):
             success = False
@@ -2236,6 +2243,25 @@ def _create_imported_entities(job: _ArchiveImport, name: str, yaml_path: Path, n
         _mark_configuration_completed(new_pipeline_id, new_pipeline_name)
 
 
+def _restore_imported_function_collection(job: _ArchiveImport, name: str, old_pipeline_id: Optional[str], new_pipeline_id: Any) -> bool:
+    """Publish and install the function collection of the backup on the new pipeline; False when CoreHub refuses it."""
+    try:
+        directory = function_collection.find_function_collection_dir([job.udf_root], old_pipeline_id)
+        if directory is None:
+            return True
+        function_collection.restore_function_collection(
+            state.token,
+            new_pipeline_id,
+            function_collection.read_function_collection_dir(directory),
+            fetch=corehub.fetch_core_hub,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Failed to restore the function collection of %s on pipeline %s", name, new_pipeline_id)
+        job.errors.append(f"{name}: function collection not restored, so its entities were not created: {exc}")
+        return False
+    return True
+
+
 def _import_archive_pipeline(job: _ArchiveImport, name: str, stem_no_ext: str, yaml_text: str) -> None:
     """Recreate one pipeline of a backup ZIP: pipeline, agents, certificates, entities and UDFs."""
     # Resolve original pipeline identity.
@@ -2273,6 +2299,11 @@ def _import_archive_pipeline(job: _ArchiveImport, name: str, stem_no_ext: str, y
 
     yaml_path = _materialize_import_yaml(job, name, yaml_text)
     if yaml_path is None:
+        return
+
+    # The function collection goes in before any UDF is compiled and any entity is saved: the UDFs may call its
+    # classes and the entities bind its functions. A refused collection stops the restore of this pipeline.
+    if not _restore_imported_function_collection(job, name, old_pipeline_id, new_pipeline_id):
         return
 
     _create_imported_entities(job, name, yaml_path, new_pipeline_id, new_pipeline_name)
@@ -2782,14 +2813,16 @@ def _run_create_entities(request: RunRequest, settings: _RunSettings, source_sch
         source_type=settings.source_type,
         target_type=settings.target_type,
         yaml_file=settings.yaml_file,
-        skip_errors=request.skip_errors,
-        chunk_size=request.chunk_size,
         enable_scheduling=settings.enable_scheduling,
         create_tables=settings.create_tables,
         use_ssl=settings.use_ssl,
         skip_verify=settings.skip_verify,
-        log_callback=settings.log_callback,
-        chronos_token=state.chronos_token,
+        options=corehub.EntityRunOptions(
+            skip_errors=request.skip_errors,
+            chunk_size=request.chunk_size,
+            log_callback=settings.log_callback,
+            chronos_token=state.chronos_token,
+        ),
     )
 
 

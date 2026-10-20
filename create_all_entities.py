@@ -38,6 +38,7 @@ from field_function_utils import build_field_functions_for_entity_type, normaliz
 from entity_mapping import ColumnNames, EntityMappingError, build_entries, derive_keys, drop_forbidden_key_links, \
     encode_entries, find_by_name, group_relations, grouped_only_forms, read_entry, yaml_relations
 import create_user_defined_functions as udf_module
+import function_collection
 from utils.log import get_logger, create_log_file, log_success, log_failure, lockfile_failure, lockfile_complete, exit_on_fail
 from utils.core_hub_client import CoreHubClient
 
@@ -879,6 +880,11 @@ class _PipelineContext:
     skip_errors: bool = True
     source_is_nosql: bool = False
     target_is_nosql: bool = False
+    # The functions the pipeline's installed function collection exports, when the YAML binds a column to one of them:
+    # a ``CustomFn`` naming another one is refused before the request. ``function_collection.NO_COLLECTION``: none is
+    # installed (a warning, as CoreHub accepts the entity). None: nothing to check (see
+    # :func:`_exported_custom_functions`).
+    exported_functions: Any = None
 
 
 @dataclass
@@ -1964,6 +1970,35 @@ def _mapping_entries(tb, columns_def, name_relations, has_filter, grouped):
                          grouped=False, unlocked=pair.is_unlocked_schema, label=pair.table_name)
 
 
+def _refuse_unbound_custom_functions(tb, field_functions):
+    """Refuse a table whose ``CustomFn`` columns name a function the installed function collection does not export.
+
+    A Gluesync 2.3 target agent refuses such an entity with a message about the column alone; this one names the
+    table, the column and the function, and says the collection must be restored or published first. Raises
+    :class:`entity_mapping.EntityMappingError`. CoreHub does not check the functions while the pipeline has no
+    collection installed (one may be published after the entity is configured), and neither does this: it only
+    warns, naming what is bound.
+    """
+    exported = tb.ctx.exported_functions
+    if exported is None:
+        return
+    none_installed = exported is function_collection.NO_COLLECTION
+    column_names = {c.get("id"): c.get("name") for c in tb.columns_def}
+    unbound = {}
+    for field_function in field_functions:
+        missing = [name for name in function_collection.custom_function_names(field_function.get("expression"))
+                   if none_installed or name not in exported]
+        if missing:
+            unbound[column_names.get(field_function.get("columnId"), field_function.get("columnId"))] = missing
+    if not unbound:
+        return
+    if none_installed:
+        logger.warning(function_collection.no_collection_message(tb.pair.table_name, unbound, tb.ctx.pipeline_id))
+        return
+    raise EntityMappingError(
+        function_collection.unbound_functions_message(tb.pair.table_name, unbound, tb.ctx.pipeline_id, exported))
+
+
 def _attach_field_functions(tb, target_entity_type, name_relations, grouped):
     """Field Functions from YAML columns[].expression → entityType.fieldFunctions (GSSD-1355)."""
     pair = tb.pair
@@ -1975,6 +2010,7 @@ def _attach_field_functions(tb, target_entity_type, name_relations, grouped):
         label=pair.table_name,
     )
     if _ff:
+        _refuse_unbound_custom_functions(tb, _ff)
         target_entity_type["fieldFunctions"] = _ff
         logger.info(
             f"Table {pair.table_name}: attaching {len(_ff)} field function(s) on target entityType"
@@ -4565,6 +4601,23 @@ def _print_summary(counts):
     print(f"- Failed MultiTable entities: {counts['failed_multi']}")
 
 
+def _exported_custom_functions(token, pipeline_id, yaml_config, grouped):
+    """The names the pipeline's installed function collection exports, when the YAML has a ``CustomFn`` bound to one.
+
+    A CoreHub before Gluesync 2.3 has no function collections and no ``CustomFn``, and a YAML without one has nothing
+    to check: None. A pipeline with no collection installed gives ``function_collection.NO_COLLECTION``. When the
+    collection cannot be read the check is left to CoreHub, which refuses the entity itself.
+    """
+    if not grouped or not function_collection.custom_function_names(yaml_config):
+        return None
+    try:
+        return function_collection.installed_function_names(
+            function_collection.fetch_function_collection(token, pipeline_id, fetch=fetch_core_hub))
+    except function_collection.FunctionCollectionError as error:
+        logger.warning(f"{error}; the functions the YAML binds are not checked before saving the entities")
+        return None
+
+
 def _start_entity_run(token, pipeline_id, yaml_config, source_schema, target_schema, source_agent_id, target_agent_id,
                       source_type, target_type, skip_errors, source_agent_tag, target_agent_tag):
     """The run state of create_entities, once the node infos and the CoreHub version are read."""
@@ -4581,7 +4634,7 @@ def _start_entity_run(token, pipeline_id, yaml_config, source_schema, target_sch
     schema = _SchemaSettings(yaml_config, source_schema, target_schema)
     ctx = _PipelineContext(token, pipeline_id, target_agent_id, schema.yaml_target_schema, source_node_info,
                            target_node_info, source_agent_tag, target_agent_tag, skip_errors, is_source_nosql_type,
-                           is_target_nosql_type)
+                           is_target_nosql_type, _exported_custom_functions(token, pipeline_id, yaml_config, grouped))
     return _EntityRun(ctx, schema, source_schema, target_schema, source_agent_id, source_type, target_type, grouped)
 
 
@@ -4664,75 +4717,118 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
     return result
 
 
+def _function_collection_sources(yaml_file, yaml_config):
+    """The ``{fileName, code}`` sources of the function collection that comes with the YAML, [] when there is none.
+
+    ``FUNCTION_COLLECTION_PATH`` names a folder of sources. Otherwise the ``function-collection`` folder of a backup
+    ZIP is looked for under ``UDF_PATH`` and next to the YAML (what the Automator extracts a ZIP into), in the
+    ``pipeline_<id>`` folder of the pipeline the YAML was exported from when it says which.
+    """
+    explicit = os.getenv('FUNCTION_COLLECTION_PATH')
+    if explicit:
+        directory = explicit if os.path.isdir(explicit) else None
+        if directory is None:
+            raise FileNotFoundError(f"FUNCTION_COLLECTION_PATH {explicit!r} is not a directory")
+    else:
+        export_metadata = (yaml_config or {}).get('exportMetadata')
+        exported_from = export_metadata.get('pipelineId') if isinstance(export_metadata, dict) else None
+        roots = [udf_module.UDF_PATH, os.path.dirname(os.path.abspath(yaml_file)) if yaml_file else None]
+        directory = function_collection.find_function_collection_dir(roots, exported_from)
+    return function_collection.read_function_collection_dir(directory) if directory else []
+
+
+def _restore_function_collection(token, pipeline_id, yaml_file, yaml_config):
+    """Publish and install the function collection of the backup before any UDF is compiled or entity saved.
+
+    The UDFs may call its classes and the entities bind its functions. Raises
+    :class:`function_collection.FunctionCollectionError` when CoreHub refuses it.
+    """
+    sources = _function_collection_sources(yaml_file, yaml_config)
+    if sources:
+        function_collection.restore_function_collection(token, pipeline_id, sources, fetch=fetch_core_hub)
+
+
+def _resolve_udf_path(yaml_file):
+    """Resolve UDF_PATH when it is not already set.
+
+    With the app-owned workspace design, the Automator UI extracts each upload/import's YAML + UDF files into a single
+    session directory under the workspace root, and sets UDF_PATH to it. When running standalone (no UDF_PATH), fall
+    back to the YAML's own directory — which, for Automator-driven runs, IS that session directory and therefore
+    already contains the UDF files. find_udf_definition_in_path additionally scans the whole workspace root, so UDFs
+    are found even without this hint.
+    """
+    if yaml_file and not udf_module.UDF_PATH:
+        yaml_dir = os.path.dirname(os.path.abspath(yaml_file))
+        if yaml_dir and os.path.isdir(yaml_dir):
+            udf_module.UDF_PATH = yaml_dir
+            logger.info(f"UDF_PATH not set; falling back to YAML directory: {yaml_dir}")
+
+
+def _fail_run(error_msg):
+    """Log a failure of :func:`main` and leave the failure lockfile; raises it."""
+    log_failure(logger, error_msg)
+    lockfile_failure()
+    raise Exception(error_msg)
+
+
+def _pipeline_agents(token, pipeline_id, source_type, target_type):
+    """``(source_agent, target_agent, source_agent_id, target_agent_id)`` of a pipeline; :func:`_fail_run` without them."""
+    agents = get_pipeline_agents(token, pipeline_id)
+
+    if not agents or len(agents) != 2:
+        _fail_run(f"Expected 2 agents, found {len(agents) if agents else 0}")
+
+    # Identify source and target agents based on type
+    source_agent = next((agent for agent in agents if agent['agentType'] == 'SOURCE'), None)
+    target_agent = next((agent for agent in agents if agent['agentType'] == 'TARGET'), None)
+
+    if not source_agent or not target_agent:
+        _fail_run(f"Could not find required agents. Source ({source_type}): {source_agent}, Target ({target_type}): {target_agent}")
+
+    # Extract agent IDs with fallback for different field names
+    source_agent_id = source_agent.get('agentId') or source_agent.get('id')
+    target_agent_id = target_agent.get('agentId') or target_agent.get('id')
+
+    if not source_agent_id or not target_agent_id:
+        _fail_run(f"Agents missing IDs. Source ID: {source_agent_id}, Target ID: {target_agent_id}. Source agent: {source_agent}, Target agent: {target_agent}")
+
+    logger.info(f"Using source agent ID: {source_agent_id}, target agent ID: {target_agent_id}")
+    return source_agent, target_agent, source_agent_id, target_agent_id
+
+
 def main(pipeline_id, source_schema, target_schema, source_type, target_type, yaml_file, token, skip_errors=True,
-         chunk_size=50, chronos_token=None):
+         chunk_size=50, chronos_token=None, restore_function_collection=True):
     """
     Main function to create entities for a pipeline.
 
     Returns the result of create_entities (successful, failed and total counts, and under ``errors`` each entity
     not created with its reason), or, when an error is skipped, that error alone, so a caller such as the
     Automator can tell a failed run from a successful one (BOP-18 A).
+
+    The function collection that comes with the YAML (see :func:`_function_collection_sources`) is published and
+    installed first, unless ``restore_function_collection`` is False because the caller has done it.
     """
     logger.info(f"Starting entity creation for pipeline {pipeline_id}")
     try:
         yaml_config = load_yaml_config(yaml_file) if yaml_file else None
 
-        # Resolve UDF_PATH when it is not already set.
-        # With the app-owned workspace design, the Automator UI extracts each
-        # upload/import's YAML + UDF files into a single session directory under
-        # the workspace root, and sets UDF_PATH to it. When running standalone
-        # (no UDF_PATH), fall back to the YAML's own directory — which, for
-        # Automator-driven runs, IS that session directory and therefore already
-        # contains the UDF files. find_udf_definition_in_path additionally scans
-        # the whole workspace root, so UDFs are found even without this hint.
-        if yaml_file and not udf_module.UDF_PATH:
-            yaml_dir = os.path.dirname(os.path.abspath(yaml_file))
-            if yaml_dir and os.path.isdir(yaml_dir):
-                udf_module.UDF_PATH = yaml_dir
-                logger.info(f"UDF_PATH not set; falling back to YAML directory: {yaml_dir}")
+        _resolve_udf_path(yaml_file)
 
-        # Get pipeline configuration
-        pipeline_config = get_pipeline_config(token, pipeline_id)
+        if restore_function_collection:
+            _restore_function_collection(token, pipeline_id, yaml_file, yaml_config)
+
+        # Read the pipeline configuration: fails early on a pipeline that does not exist
+        get_pipeline_config(token, pipeline_id)
 
         # Get agents information
-        agents = get_pipeline_agents(token, pipeline_id)
-
-        if not agents or len(agents) != 2:
-            error_msg = f"Expected 2 agents, found {len(agents) if agents else 0}"
-            log_failure(logger, error_msg)
-            lockfile_failure()
-            raise Exception(error_msg)
-
-        # Identify source and target agents based on type
-        source_agent = next((agent for agent in agents if agent['agentType'] == 'SOURCE'), None)
-        target_agent = next((agent for agent in agents if agent['agentType'] == 'TARGET'), None)
-
-        if not source_agent or not target_agent:
-            error_msg = f"Could not find required agents. Source ({source_type}): {source_agent}, Target ({target_type}): {target_agent}"
-            log_failure(logger, error_msg)
-            lockfile_failure()
-            raise Exception(error_msg)
-
-        # Extract agent IDs with fallback for different field names
-        source_agent_id = source_agent.get('agentId') or source_agent.get('id')
-        target_agent_id = target_agent.get('agentId') or target_agent.get('id')
-        
-        if not source_agent_id or not target_agent_id:
-            error_msg = f"Agents missing IDs. Source ID: {source_agent_id}, Target ID: {target_agent_id}. Source agent: {source_agent}, Target agent: {target_agent}"
-            log_failure(logger, error_msg)
-            lockfile_failure()
-            raise Exception(error_msg)
-        
-        logger.info(f"Using source agent ID: {source_agent_id}, target agent ID: {target_agent_id}")
+        source_agent, target_agent, source_agent_id, target_agent_id = _pipeline_agents(
+            token, pipeline_id, source_type, target_type)
 
         # Get tables from source agent
         tables = get_agent_tables(token, pipeline_id, source_agent_id, source_schema)
 
         if not tables:
-            error_msg = f"No tables found in schema {source_schema}"
-            log_failure(logger, error_msg)
-            lockfile_failure()
-            raise Exception(error_msg)
+            _fail_run(f"No tables found in schema {source_schema}")
 
         # Debug logging before calling create_entities
         logger.debug(f"main() about to call create_entities with: source_type='{source_type}', target_type='{target_type}'")
@@ -4746,7 +4842,7 @@ def main(pipeline_id, source_schema, target_schema, source_type, target_type, ya
             target_agent_tag=target_agent.get('agentTag'),
             chronos_token=chronos_token
         )
-        
+
         if result.get('skipped_discovery', False):
             logger.info("Entity discovery was skipped as tables will be created on demand")
 

@@ -158,13 +158,10 @@ class RunCreateEntitiesInferenceTests(unittest.TestCase):
                 source_type="SQL",
                 target_type=supplied_target,
                 yaml_file="/tmp/does-not-matter.yaml",
-                skip_errors=True,
-                chunk_size=50,
                 enable_scheduling=False,
                 create_tables=supplied_create_tables,
                 use_ssl=False,
                 skip_verify=True,
-                log_callback=None,
             )
 
         return observed

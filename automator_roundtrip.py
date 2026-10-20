@@ -22,12 +22,14 @@
 
 Given a pipeline that is already configured, this:
 
-1. exports it to a table-list YAML (the same export the CLI and Automator use);
+1. exports it to a table-list YAML (the same export the CLI and Automator use), and its
+   function collection (the Java sources its UDFs and Custom Field Functions call) to a folder;
 2. restores that YAML as a second pipeline, with the same agent config file,
-   through ``main.py`` with ``START_SYNC=false`` so nothing is synced twice;
+   through ``main.py`` with ``START_SYNC=false`` so nothing is synced twice, publishing the
+   function collection first (``FUNCTION_COLLECTION_PATH``);
 3. exports the restored pipeline again;
 4. checks that the restored pipeline is configured like the original
-   (entities, groups, Chronos schedules) and that the two exports match.
+   (entities, groups, Chronos schedules, function collection) and that the two exports match.
 
 Everything lands in ``--output-dir``: both exports, both CoreHub snapshots,
 the restore log, ``report.json``, a per-check diff and a JUnit file.
@@ -53,6 +55,7 @@ from xml.sax.saxutils import escape, quoteattr
 import yaml
 
 from commons import admin_credentials_path, fetch_core_hub, load_admin_password, login_password_candidates
+from function_collection import fetch_function_collection
 from export_template_from_corehub import (
     fetch_pipeline_entities,
     read_pipeline_jobs,
@@ -412,6 +415,14 @@ def check_groups(original: Dict[str, Any], restored: Dict[str, Any]) -> Check:
     return compare_keyed(check, left, right, "groups")
 
 
+def check_function_collection(original: Dict[str, Any], restored: Dict[str, Any]) -> Check:
+    """Compare the function collection sources of the two pipelines, file by file."""
+    check = Check("restored-function-collection-matches", "The function collection is restored with the same sources")
+    left = {name: code.splitlines() for name, code in (original.get("functionCollection") or {}).items()}
+    right = {name: code.splitlines() for name, code in (restored.get("functionCollection") or {}).items()}
+    return compare_keyed(check, left, right, "function collection sources")
+
+
 def declares_schedules(template: Any) -> bool:
     """Whether a table-list template asks for any Chronos schedule."""
     if isinstance(template, dict):
@@ -466,12 +477,15 @@ def check_export_stable(original: Dict[str, Any], restored: Dict[str, Any]) -> C
 
 
 def run_checks(original: Dict[str, Any], restored: Dict[str, Any], expects_schedules: bool = False) -> List[Check]:
-    return [
+    checks = [
         check_entities(original, restored),
         check_groups(original, restored),
         check_schedules(original, restored, expects_schedules),
         check_export_stable(original, restored),
     ]
+    if original.get("functionCollection") or restored.get("functionCollection"):
+        checks.append(check_function_collection(original, restored))
+    return checks
 
 
 def junit_xml(suite_name: str, checks: List[Check], duration: float) -> str:
@@ -602,6 +616,12 @@ def snapshot_pipeline(token: str, pipeline_id: str) -> Dict[str, Any]:
         logger.warning(f"No groups for pipeline {pipeline_id}: {exc}")
         groups = []
     jobs = read_pipeline_jobs(pipeline_id, token=token)  # None: Chronos could not be read
+    # The sources of the function collection by file name; none when the pipeline has no collection.
+    collection = fetch_function_collection(token, pipeline_id, fetch=fetch_core_hub)
+    function_collection_sources = {
+        s["fileName"]: s["code"] for s in (collection or {}).get("sources") or []
+        if isinstance(s, dict) and s.get("fileName") and isinstance(s.get("code"), str)
+    }
     return {
         "pipelineId": pipeline_id,
         "pipeline": pipeline,
@@ -609,6 +629,7 @@ def snapshot_pipeline(token: str, pipeline_id: str) -> Dict[str, Any]:
         "entities": entities,
         "groups": groups,
         "jobs": jobs,
+        "functionCollection": function_collection_sources,
         "idMap": build_id_map(pipeline_id, agents, entities, groups),
     }
 
@@ -632,8 +653,12 @@ def restore_export(
     pipeline_name: str,
     out_dir: Path,
     timeout: int,
+    function_collection_dir: Optional[Path] = None,
 ) -> Tuple[Optional[str], str]:
     """Run main.py on the export; return (restored pipeline id, error).
+
+    ``function_collection_dir`` holds the sources of the function collection to publish on the restored pipeline
+    before its entities are created (the YAML alone cannot recreate it).
 
     The restore counts as done only when main.py exits 0 and reports ``complete``.
     """
@@ -646,6 +671,10 @@ def restore_export(
         "CREATE_TABLE_IF_NOT_EXISTS": "false",
         "BOOTSTRAPPER_RESULT_FILE": str(result_file),
     })
+    if function_collection_dir is not None:
+        env["FUNCTION_COLLECTION_PATH"] = str(function_collection_dir)
+    else:
+        env.pop("FUNCTION_COLLECTION_PATH", None)  # one left by the caller's environment belongs to another pipeline
     cmd = [sys.executable, str(SCRIPT_DIR / "main.py"), "--pipeline-name", pipeline_name]
     logger.info(f"Restoring {export_path} as pipeline '{pipeline_name}'")
     log_path = out_dir / "restore.log"
@@ -693,6 +722,10 @@ def capture(token: str, pipeline_id: str, out_dir: Path, label: str) -> Dict[str
     side["export"] = render_pipeline_export(token, pipeline_id)
     (out_dir / f"{label}-export.yaml").write_text(side["export"], encoding="utf-8")
     write_json(out_dir / f"{label}-snapshot.json", {k: v for k, v in side.items() if k != "export"})
+    for file_name, code in (side.get("functionCollection") or {}).items():
+        source = out_dir / f"{label}-function-collection" / file_name
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text(code, encoding="utf-8")
     return side
 
 
@@ -708,7 +741,9 @@ def export_and_restore(
 
     pipeline = original["pipeline"] if isinstance(original["pipeline"], dict) else {}
     restore_name = f"{pipeline.get('name') or pipeline_id}{ROUND_TRIP_SUFFIX}"
-    restored_id, error = restore_export(out_dir / "original-export.yaml", restore_name, out_dir, timeout)
+    collection_dir = out_dir / "original-function-collection" if original.get("functionCollection") else None
+    restored_id, error = restore_export(out_dir / "original-export.yaml", restore_name, out_dir, timeout,
+                                        function_collection_dir=collection_dir)
     if error:
         raise RoundTripError(error)
 

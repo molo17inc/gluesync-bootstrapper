@@ -155,7 +155,7 @@ class AutomatorRunTests(unittest.TestCase):
              mock.patch.object(create_all_entities, "lockfile_failure"):
             return corehub.run_create_entities(
                 token="tok", base_url="http://test", pipeline_id="pipe", source_schema="src", target_schema="tgt",
-                source_type="SQL", target_type="SQL", yaml_file=None, skip_errors=True, chunk_size=50,
+                source_type="SQL", target_type="SQL", yaml_file=None,
                 enable_scheduling=False, create_tables=False, use_ssl=False, skip_verify=False,
             )
 

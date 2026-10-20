@@ -513,6 +513,15 @@ The bootstrapper stops with an error, and compiles nothing, when it cannot adapt
 
 UDFs already deployed on a CoreHub are migrated by the CoreHub itself when it starts on 2.3.
 
+### Function Collection (Gluesync 2.3.0.0+)
+
+A pipeline's function collection is a set of Java sources whose `@GsFunction` methods every UDF and every Custom Field Function (`expression.type: CustomFn`) of the pipeline can call. The target agent refuses an entity whose `CustomFn` names a function the installed collection does not export, so the collection is part of a backup:
+
+- **Backup / export**: the Automator writes the collection under `function-collection/` next to the YAML (`pipeline_<id>/function-collection/` in a ZIP of several pipelines). A pipeline without a collection (or a CoreHub before 2.3) writes nothing. A collection that cannot be read fails a single-pipeline export; an all-pipelines backup lists it in `function-collection-errors.txt`.
+- **Restore / import**: before any UDF is compiled and any entity is saved, the collection of the ZIP is published on the target pipeline and installed. A collection the pipeline already has with identical sources is only installed. A running publication (409) is waited for; a collection CoreHub refuses stops the restore of that pipeline, listing the compiler, UDF and binding findings. Set `FUNCTION_COLLECTION_PUBLICATION_TIMEOUT_SECONDS` (default 1800) and `FUNCTION_COLLECTION_POLL_SECONDS` (default 2) to tune the wait.
+- **Standalone runs**: `FUNCTION_COLLECTION_PATH` names a folder of sources to publish before the entities are created; otherwise a `function-collection/` folder next to the YAML (or under `UDF_PATH`) is used.
+- **Pre-flight check**: on a CoreHub 2.3 or later, a YAML with `CustomFn` columns is checked against the functions the pipeline's installed collection exports. A function the installed collection does not export fails that table before any request, naming the table, column and function. While no collection is installed CoreHub accepts the entity (one may be published later), so the bootstrapper only logs a warning naming the table, columns and functions; the entity fails on every row until the collection is restored or published. Backups made with an Automator older than this release do not contain the collection.
+
 ### Docker Integration
 
 When running in a Docker container:
