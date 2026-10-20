@@ -44,6 +44,8 @@ from utils.gluesync_sdk_client import initialize_gluesync_sdk, get_token, get_gl
 from utils.core_hub_client import CoreHubClient
 from utils.transactions_audit_client import TransactionsAuditClient
 from commons import extract_schemas_from_yaml, extract_all_schemas_from_yaml, extract_schema_types_from_yaml, configure_core_hub
+from commons import admin_credentials_path, admin_password_problem, load_admin_password, login_password_candidates, save_admin_credentials
+from utils.redact import redact
 
 def _connect_requested(argv):
     """True for the kit command: python main.py --connect-import PATH --connect-setup."""
@@ -312,6 +314,8 @@ if not core_hub_url:
 default_user = 'admin'
 default_password = ''
 user_defined_password = os.getenv('DEFAULT_PASSWORD', default_password)
+# Optional: the admin password to set when Core Hub requires the change (a random one when empty).
+admin_password = os.getenv('ADMIN_PASSWORD', '')
 _raw_source_type = os.getenv('SOURCE_TYPE')
 _raw_target_type = os.getenv('TARGET_TYPE')
 source_type = _raw_source_type.strip() if _raw_source_type else None
@@ -322,6 +326,9 @@ ssl_skip_verify = os.getenv('SSL_SKIP_VERIFY', 'False').lower() == 'true'
 
 # Schema extraction will be done after logger initialization
 AUTH_TOKEN_PATH = os.path.join('/opt/config', 'auth_token.json')
+# The admin password the bootstrapper set at the first login, next to the token file: the token expires
+# and does not survive a Core Hub restart, the password does (a re-run and the Automator round trip log in with it).
+ADMIN_CREDENTIALS_PATH = admin_credentials_path(AUTH_TOKEN_PATH)
 
 # Allow sub-second pauses when starting entities
 ENTITY_START_TIMEOUT = float(os.getenv('ENTITY_START_TIMEOUT', '1'))
@@ -491,7 +498,7 @@ def upload_agent_certificate(
         headers={'Certificate-Ext': certificate_ext},
     )
     
-    logger.debug(f"Certificate upload response: {response}")
+    logger.debug(f"Certificate upload response: {redact(response)}")
 
 
 def resolve_certificate_path(certificate_path: str) -> Path:
@@ -562,6 +569,17 @@ def save_token(token):
     except Exception as e:
         print(f"Warning: Failed to save authentication token: {e}")
 
+def save_admin_password(password):
+    """Store the admin password the bootstrapper now uses (0600, never logged); return whether it was saved."""
+    try:
+        save_admin_credentials(ADMIN_CREDENTIALS_PATH, password, default_user)
+    except Exception as e:
+        # the exception type only: the message could carry the file content, the password never goes to a log
+        logger.warning(f"Failed to save the admin credentials to {ADMIN_CREDENTIALS_PATH}: {type(e).__name__}")
+        return False
+    return True
+
+
 def change_password(token, old_password, new_password):
     """Change the user password and return the new token."""
     response = fetch_core_hub(
@@ -604,6 +622,21 @@ def _login(password):
     )
 
 
+def _login_with_known_passwords():
+    """Log in with the saved admin password, else ADMIN_PASSWORD, else DEFAULT_PASSWORD."""
+    saved_password = load_admin_password(ADMIN_CREDENTIALS_PATH)
+    if saved_password:
+        logger.info(f"Logging in with the admin password saved in {ADMIN_CREDENTIALS_PATH}")
+    passwords = login_password_candidates(saved_password, admin_password, user_defined_password)
+    for position, password in enumerate(passwords):
+        try:
+            return _login(password)
+        except Exception:
+            if position == len(passwords) - 1:
+                raise
+            logger.warning("Login failed with one of the known admin passwords, trying the next")
+
+
 def _load_saved_token():
     """Return the token saved in AUTH_TOKEN_PATH, or None when it is missing or rejected (401)."""
     try:
@@ -640,16 +673,31 @@ def _complete_default_login(token, change_required):
         return token
 
     logger.info("Password change required")
-    # Generate a new random password and change it
-    new_password = generate_random_password()
+    # The password ADMIN_PASSWORD asks for, else a random one
+    new_password = admin_password or generate_random_password()
+    if admin_password:
+        problem = admin_password_problem(admin_password, user_defined_password)
+        if problem:
+            log_failure(logger, f"ADMIN_PASSWORD is not acceptable as the admin password: {problem}")
+            lockfile_failure()
+            raise BootstrapperError(f"ADMIN_PASSWORD is not acceptable as the admin password: {problem}")
     try:
         # Change password and get new token
         token = change_password(token, user_defined_password, new_password)
-        log_success(logger, f"[NEW PASSWORD] Successfully changed password to: {new_password}")
+        if save_admin_password(new_password):
+            log_success(logger, f"Admin password changed; the new password is stored in {ADMIN_CREDENTIALS_PATH}")
+        else:
+            log_failure(logger, f"Admin password changed but could not be stored in {ADMIN_CREDENTIALS_PATH}")
     except Exception as e:
-        log_failure(logger, f"Password change failed, attempting to continue with default password: {str(e)}")
-        # Try to get a fresh token with the user-defined password
-        auth_response = _login(user_defined_password)
+        reason = str(e).replace(new_password, '***')
+        if admin_password:
+            # The tester asked for this password: do not fall back to the default one.
+            log_failure(logger, f"Core Hub did not accept ADMIN_PASSWORD as the admin password: {reason}")
+            lockfile_failure()
+            raise BootstrapperError("Core Hub did not accept ADMIN_PASSWORD as the admin password") from None
+        log_failure(logger, f"Password change failed, attempting to continue with default password: {reason}")
+        # Try to get a fresh token with the saved admin password, else the user-defined one
+        auth_response = _login_with_known_passwords()
         token = auth_response.get('apiToken')
         if not token:
             log_failure(logger, "Failed to re-authenticate with user-defined password")
@@ -715,7 +763,7 @@ if True:
 
         if not token:
             # Initial authentication
-            auth_response = _login(user_defined_password)
+            auth_response = _login_with_known_passwords()
             token = auth_response.get('apiToken')
             if not token:
                 log_failure(logger, "Failed to authenticate")
@@ -1048,7 +1096,7 @@ def _login_with_default_credentials(sdk_token):
     logger.info("Attempting authentication with default credentials")
     change_required = False
     try:
-        auth_response = _login(user_defined_password)
+        auth_response = _login_with_known_passwords()
         token = auth_response.get('apiToken')
 
         change_required = auth_response.get('changeRequired', False)

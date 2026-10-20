@@ -716,10 +716,13 @@ Available environment variables:
 - `FILE_CONF_PATH`: Path to the configuration file (default: `./config.json`)
 - `CORE_HUB_URL`: URL of the CoreHub service (default: `https://localhost:1717`)
 - `DEFAULT_PASSWORD`: Password for authentication (default: `admin`)
+- `ADMIN_PASSWORD`: Optional. The admin password to set when Core Hub requires the change at the first login (at least 12 characters with a lowercase letter, an uppercase letter, a digit and a symbol, different from `DEFAULT_PASSWORD`); a random one when unset. A password that is not acceptable, or that Core Hub refuses, fails the run with a message that does not include it
 - `SOURCE_TYPE`: Source agent type (default: `RDBMS`)
 - `TARGET_TYPE`: Target agent type (default: `NoSQL`)
 - `START_SYNC`: Set to `false` to configure the pipeline and leave every entity stopped (default: `true`)
 - `BOOTSTRAPPER_RESULT_FILE`: Where the run writes `{"pipelineId", "pipelineName", "status"}` (`complete` or `failure`) when it ends (default: `bootstrapper-result.json` next to `main.py`, `/opt/python/bootstrapper-result.json` in the image; empty turns it off)
+
+**Admin credentials**: When Core Hub asks for the default password to be changed at the first login, the bootstrapper sets `ADMIN_PASSWORD` when it is set, else a random one, and stores it in `/opt/config/admin_credentials.json` (`{"username": "admin", "password": ...}`, written atomically, permissions `0600`), next to the login token in `/opt/config/auth_token.json`. The token expires after minutes and does not survive a Core Hub restart; the password does. A re-run in the same container and the Automator round trip log in with the saved password first, then with `ADMIN_PASSWORD`, then with `DEFAULT_PASSWORD` (a password is never tried twice), so `ADMIN_PASSWORD` also works when no credentials file exists yet. The password is never logged.
 
 **Note**: Source and target schema information is now automatically read from the `table-list-template.yaml` file in the `schemas` section, eliminating the need for `CREATE_ENTITIES_FROM_SCHEMA` and `TARGET_SCHEMA` environment variables.
 
@@ -736,7 +739,7 @@ Available environment variables:
 python automator_roundtrip.py --pipeline <PIPELINE_ID> --output-dir ./roundtrip
 ```
 
-The output directory holds both exports, both CoreHub snapshots, `restore.log`, `report.json`, a `.diff` per failed check and `junit.xml`. The exit code is 0 when every check passes. It authenticates with a Gluesync SDK token when `USE_SDK` is on (keeping that session open, since Chronos only accepts the token while it is), else by logging in as `admin` with `DEFAULT_PASSWORD`, else with the token saved in `--token-file` (default `/opt/config/auth_token.json`). Chronos is read at CoreHub's `/chronos` path, then at `CHRONOS_URL`; when the template in `TABLE_LIST_YAML` declares schedules, a Chronos that cannot be read fails the check.
+The output directory holds both exports, both CoreHub snapshots, `restore.log`, `report.json`, a `.diff` per failed check and `junit.xml`. The exit code is 0 when every check passes. It authenticates with a Gluesync SDK token when `USE_SDK` is on (keeping that session open, since Chronos only accepts the token while it is), else by logging in as `admin` with the password the bootstrapper saved when it changed the default one (`admin_credentials.json`, next to `--token-file`), else by logging in with `ADMIN_PASSWORD`, else with `DEFAULT_PASSWORD`, else with the token saved in `--token-file` (default `/opt/config/auth_token.json`). Chronos is read at CoreHub's `/chronos` path, then at `CHRONOS_URL`; when the template in `TABLE_LIST_YAML` declares schedules, a Chronos that cannot be read fails the check.
 
 The gluesync-demo-kits integration tests run it for every bootstrapper service of a kit once the kit's own tests are green, and a failed round trip fails the kit.
 ### AI Studio settings backup (`ai_settings.py`)

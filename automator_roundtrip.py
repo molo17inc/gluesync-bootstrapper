@@ -52,7 +52,7 @@ from xml.sax.saxutils import escape, quoteattr
 
 import yaml
 
-from commons import fetch_core_hub
+from commons import admin_credentials_path, fetch_core_hub, load_admin_password, login_password_candidates
 from export_template_from_corehub import (
     fetch_pipeline_entities,
     read_pipeline_jobs,
@@ -527,12 +527,12 @@ def _sdk_token() -> Optional[str]:
         return None
 
 
-def _login_token() -> Optional[str]:
+def _login_token(password: str) -> Optional[str]:
     try:
         response = fetch_core_hub(
             "/authentication/login",
             method="POST",
-            body={"username": "admin", "password": os.getenv("DEFAULT_PASSWORD", "")},
+            body={"username": "admin", "password": password},
         )
     except Exception as exc:  # pylint: disable=broad-except
         logger.warning(f"Admin login failed: {exc}")
@@ -540,6 +540,20 @@ def _login_token() -> Optional[str]:
     if not isinstance(response, dict) or response.get("changeRequired"):
         return None
     return response.get("apiToken")
+
+
+def _password_token(token_file: str) -> Optional[str]:
+    """An admin login with the saved password, else ADMIN_PASSWORD, else DEFAULT_PASSWORD (no password twice)."""
+    passwords = login_password_candidates(
+        load_admin_password(admin_credentials_path(token_file)),
+        os.getenv("ADMIN_PASSWORD", ""),
+        os.getenv("DEFAULT_PASSWORD", ""),
+    )
+    for password in passwords:
+        token = _login_token(password)
+        if token:
+            return token
+    return None
 
 
 def _saved_token(token_file: str) -> Optional[str]:
@@ -554,15 +568,20 @@ def _saved_token(token_file: str) -> Optional[str]:
 
 
 def authenticate(token_file: str) -> str:
-    """A token Chronos accepts too: an SDK token, else an admin login, else the saved one.
+    """A token Chronos accepts too: an SDK token, else an admin login, else the saved token.
 
-    The saved token comes last: once its run has ended Chronos may refuse it
-    (an SDK token whose session is closed) although CoreHub still accepts it,
-    and the schedules could then not be read.
+    The admin login tries the password the bootstrapper saved when it changed the default one, then
+    ADMIN_PASSWORD, then DEFAULT_PASSWORD. The saved token comes last: once its run has ended Chronos may refuse it
+    (an SDK token whose session is closed) although CoreHub still accepts it, and the schedules could
+    then not be read. It also expires after minutes, which the saved password does not.
     """
-    token = _sdk_token() or _login_token() or _saved_token(token_file)
+    token = _sdk_token() or _password_token(token_file) or _saved_token(token_file)
     if not token:
-        raise RuntimeError("cannot authenticate to CoreHub: admin login failed and no usable saved token")
+        raise RuntimeError(
+            "cannot authenticate to CoreHub: tried the SDK token, an admin login with the saved password "
+            f"({admin_credentials_path(token_file)}), ADMIN_PASSWORD and DEFAULT_PASSWORD, and the saved token "
+            f"({token_file}); none worked"
+        )
     return token
 
 
