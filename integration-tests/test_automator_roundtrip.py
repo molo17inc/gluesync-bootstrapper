@@ -483,6 +483,77 @@ class AuthenticateTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 rt.authenticate("/nonexistent")
 
+    def _saved_files(self, tmp, jwt="expired-jwt", password="bootstrapper-new-pw"):
+        token_file = Path(tmp) / "auth_token.json"
+        token_file.write_text(json.dumps({"token": jwt}))
+        if password:
+            credentials = Path(tmp) / "admin_credentials.json"
+            credentials.write_text(json.dumps({"username": "admin", "password": password}))
+        return token_file
+
+    def test_saved_password_logs_in_when_the_jwt_is_invalid_and_default_password_is_wrong(self):
+        logins = []
+
+        def fetch(path, **kwargs):
+            if path == "/authentication/login":
+                logins.append(kwargs["body"]["password"])
+                if kwargs["body"]["password"] != "bootstrapper-new-pw":
+                    raise RuntimeError("401")
+                return {"apiToken": "fresh", "changeRequired": False}
+            raise RuntimeError("401")  # the saved JWT is refused
+
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.dict("os.environ", {"USE_SDK": "false", "DEFAULT_PASSWORD": "old-default"}), \
+                mock.patch.object(rt, "fetch_core_hub", side_effect=fetch):
+            self.assertEqual(rt.authenticate(str(self._saved_files(tmp))), "fresh")
+        self.assertEqual(logins, ["bootstrapper-new-pw"])
+
+    def test_fallback_order_is_sdk_saved_password_default_password_saved_jwt(self):
+        calls = []
+
+        def fetch(path, **kwargs):
+            if path == "/authentication/login":
+                calls.append(kwargs["body"]["password"])
+                raise RuntimeError("401")
+            calls.append("jwt:" + kwargs["token"])
+            return []
+
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.dict("os.environ", {"USE_SDK": "true", "DEFAULT_PASSWORD": "old-default"}), \
+                mock.patch("utils.gluesync_sdk_client.initialize_gluesync_sdk"), \
+                mock.patch("utils.gluesync_sdk_client.get_token", return_value=None) as sdk, \
+                mock.patch.object(rt, "fetch_core_hub", side_effect=fetch):
+            self.assertEqual(rt.authenticate(str(self._saved_files(tmp, jwt="the-jwt"))), "the-jwt")
+        sdk.assert_called_once()
+        self.assertEqual(calls, ["bootstrapper-new-pw", "old-default", "jwt:the-jwt"])
+
+    def test_saved_password_is_skipped_when_there_is_none(self):
+        logins = []
+
+        def fetch(path, **kwargs):
+            logins.append(kwargs["body"]["password"])
+            return {"apiToken": "fresh"}
+
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.dict("os.environ", {"USE_SDK": "false", "DEFAULT_PASSWORD": "old-default"}), \
+                mock.patch.object(rt, "fetch_core_hub", side_effect=fetch):
+            self.assertEqual(rt.authenticate(str(self._saved_files(tmp, password=None))), "fresh")
+        self.assertEqual(logins, ["old-default"])
+
+    def test_the_error_names_what_was_tried_and_no_secret(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.dict("os.environ", {"USE_SDK": "false", "DEFAULT_PASSWORD": "old-default"}), \
+                mock.patch.object(rt, "fetch_core_hub", side_effect=RuntimeError("401")):
+            token_file = self._saved_files(tmp, jwt="secret-jwt")
+            with self.assertRaises(RuntimeError) as raised:
+                rt.authenticate(str(token_file))
+        message = str(raised.exception)
+        self.assertIn("cannot authenticate to CoreHub", message)
+        for tried in ("SDK token", "saved password", "DEFAULT_PASSWORD", "saved token"):
+            self.assertIn(tried, message)
+        for secret in ("bootstrapper-new-pw", "old-default", "secret-jwt"):
+            self.assertNotIn(secret, message)
+
 
 class RestoreExportTests(unittest.TestCase):
     def test_restore_runs_main_without_sync_and_reads_result(self):

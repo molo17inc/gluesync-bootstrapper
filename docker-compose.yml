@@ -11,6 +11,7 @@ services:
       - CORE_HUB_URL=http://host.docker.internal:1717
       - CHRONOS_URL=http://gluesync-chronos:8000
       - DEFAULT_PASSWORD=admin
+      # - ADMIN_PASSWORD=<password to set when Core Hub asks for the change, random when unset>
       - TARGET_TYPE=NoSQL
       - ENTITY_START_TIMEOUT=4
       - ENABLE_SCHEDULING=true

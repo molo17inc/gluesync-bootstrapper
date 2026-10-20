@@ -204,7 +204,7 @@ def _read_error_payload(error, is_expected):
         return None
     try:
         error_payload = error.response.json()
-        _log_error_response(is_expected, json.dumps(error_payload, indent=2))
+        _log_error_response(is_expected, json.dumps(redact(error_payload), indent=2))
     except Exception:
         error_payload = error.response.text
         _log_error_response(is_expected, error_payload)
@@ -252,6 +252,85 @@ def fetch_core_hub(path, method='GET', token=None, body=None, params=None, heade
     except Exception as e:
         message = _describe_core_hub_failure(e, method, path, expected_error_statuses)
         raise RuntimeError(message) from e
+
+
+ADMIN_CREDENTIALS_FILENAME = "admin_credentials.json"
+
+
+def admin_credentials_path(token_file):
+    """Where the admin credentials live: next to the saved token file."""
+    return os.path.join(os.path.dirname(os.path.abspath(token_file)), ADMIN_CREDENTIALS_FILENAME)
+
+
+def save_admin_credentials(path, password, username="admin"):
+    """Write the admin credentials to ``path`` atomically with permissions 0600.
+
+    The file is written under a private name in the same directory and renamed over ``path``, so a reader
+    never sees a partial file and the password is never readable by anybody but its owner.
+    """
+    directory = os.path.dirname(os.path.abspath(path))
+    os.makedirs(directory, exist_ok=True)
+    tmp_path = os.path.join(directory, f".{os.path.basename(path)}.{os.getpid()}.tmp")
+    try:
+        fd = os.open(tmp_path, os.O_WRONLY + os.O_CREAT + os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump({"username": username, "password": password}, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def load_admin_password(path):
+    """The admin password saved in ``path``, or None when the file is missing, unreadable or has none."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            password = json.load(f).get("password")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return password if isinstance(password, str) and password else None
+
+
+ADMIN_PASSWORD_MIN_LENGTH = 12
+
+
+def admin_password_problem(password, default_password=None):
+    """Why ``password`` cannot be the admin password, or None when it can (never contains the password).
+
+    The rules are the ones ``generate_random_password`` satisfies: at least 12 characters with a lowercase
+    letter, an uppercase letter, a digit and a symbol. It must also differ from the password it replaces.
+    """
+    if len(password) < ADMIN_PASSWORD_MIN_LENGTH:
+        return f"it must be at least {ADMIN_PASSWORD_MIN_LENGTH} characters long"
+    classes = (
+        ("a lowercase letter", any(c.islower() for c in password)),
+        ("an uppercase letter", any(c.isupper() for c in password)),
+        ("a digit", any(c.isdigit() for c in password)),
+        ("a symbol", any(not c.isalnum() and not c.isspace() for c in password)),
+    )
+    missing = [name for name, present in classes if not present]
+    if missing:
+        return "it must contain " + ", ".join(missing)
+    if default_password is not None and password == default_password:
+        return "it must differ from DEFAULT_PASSWORD"
+    return None
+
+
+def login_password_candidates(saved_password, admin_password, default_password):
+    """The admin passwords to try, in order: the saved one, ADMIN_PASSWORD, DEFAULT_PASSWORD; no duplicates."""
+    candidates = []
+    for password in (saved_password, admin_password, default_password):
+        if password is None or (password == "" and password is not default_password):
+            continue
+        if password not in candidates:
+            candidates.append(password)
+    return candidates
 
 
 def generate_short_guid():
@@ -768,7 +847,7 @@ def load_yaml_config(file_path):
     try:
         with open(file_path, 'r', encoding='utf-8') as file:
             config = yaml.safe_load(file)
-            print(f"Loaded YAML config: {json.dumps(config, indent=2)}")
+            print(f"Loaded YAML config: {json.dumps(redact(config), indent=2)}")
             return config
     except FileNotFoundError:
         print(f"YAML file not found at {file_path}. Proceeding without it.")
