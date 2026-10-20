@@ -45,7 +45,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Metadata-only fields used in the export format {source: ..., target: ..., type: ..., ...}
 # These are never column names in the explicit export format.
-_EXPORT_METADATA_FIELDS = {"source", "target", "type", "dataLength", "numericPrecision", "numericScale", "isNullable", "id", "ordinalPosition", "targetPosition", "targetDataType", "charSet", "expression"}
+_EXPORT_METADATA_FIELDS = {"source", "target", "type", "dataLength", "numericPrecision", "numericScale", "isNullable", "id", "ordinalPosition", "targetPosition", "targetIsNullable", "targetDataType", "charSet", "expression"}
 
 # Tells "the YAML declared charSet: null" apart from "the YAML said nothing about charSet".
 # The first must clear the character set discovered on the column, the second must leave it
@@ -1114,6 +1114,21 @@ def _target_position(discovered_target_col, col, yaml_row=None):
     return discovered if _is_position(discovered) else col.get("position", 0)
 
 
+def _target_is_nullable(discovered_target_col, col, yaml_row=None):
+    """Whether a target column is nullable.
+
+    In order: the ``targetIsNullable`` the export wrote on the YAML row (the entity had it: a target that does not
+    keep nullability reports every column not nullable), the nullability of the discovered target column and the one
+    of the source column ``col``, which is what a column built from a whitelist row has always had.
+    """
+    exported = (yaml_row or {}).get("targetIsNullable")
+    if isinstance(exported, bool):
+        return exported
+    if discovered_target_col and "isNullable" in discovered_target_col:
+        return discovered_target_col.get("isNullable")
+    return col.get("isNullable", False)
+
+
 def _exported_source_positions(custom_config):
     """``{source name: ordinalPosition}`` of the exported mapping rows that state one."""
     positions = {}
@@ -1184,8 +1199,15 @@ def _target_is_pk(discovered_target_col, col, custom_config, coerce_target=False
     return target_pk or _coerce_is_pk(col.get("isPK")) or _is_in_keys(col["name"], custom_config, names)
 
 
-def _target_column_def(col, discovered_target_col, target_col_id, name, data_type, is_pk, position=0):
-    """A target column of a SingleTable entity, fed by the source column ``col``."""
+def _target_column_def(col, discovered_target_col, target_col_id, name, data_type, is_pk, position=0,
+                       is_nullable=None):
+    """A target column of a SingleTable entity, fed by the source column ``col``.
+
+    ``is_nullable``: the nullability to give it, when the caller knows it (see :func:`_target_is_nullable`); else the
+    discovered target column's, else the source column's.
+    """
+    if is_nullable is None:
+        is_nullable = _target_is_nullable(discovered_target_col, col)
     return _enrich_column({
         "id": target_col_id,  # Use target column ID
         "position": position,
@@ -1194,7 +1216,7 @@ def _target_column_def(col, discovered_target_col, target_col_id, name, data_typ
         "dataType": data_type,
         "isPK": is_pk,
         "isIdentity": (discovered_target_col.get("isIdentity") if discovered_target_col else None) or col.get("isIdentity", False),
-        "isNullable": discovered_target_col.get("isNullable") if discovered_target_col and "isNullable" in discovered_target_col else col.get("isNullable", False),
+        "isNullable": is_nullable,
     }, _enrich_from(discovered_target_col, col))
 
 
@@ -1225,12 +1247,16 @@ def _append_mapped_target_column(tb, col, source_col_id, discovered_target_col, 
     if not resolved_target_type and tb.discovery_type_by_source:
         resolved_target_type = _legacy_fallback_target_type(tb, col, resolved_target_type)
     tb.max_id = max(tb.max_id, target_col_id)
+    # A NoSQL target reports every column not nullable whatever it holds, so its columns take the nullability of the
+    # source column, as they always have: the exported targetIsNullable is for a SQL target.
+    nullable_row = {} if tb.ctx.target_is_nosql else yaml_row
     # Get isPrimaryKey from discovered target column or fall back to source column
     target_is_primary_key = _target_is_pk(discovered_target_col, col, tb.pair.custom_config,
                                           names=tb.pair.source_names)
     tb.columns_def.append(_target_column_def(col, discovered_target_col, target_col_id, target_name,
                                              resolved_target_type, target_is_primary_key,
-                                             position=_target_position(discovered_target_col, col, yaml_row)))
+                                             position=_target_position(discovered_target_col, col, yaml_row),
+                                             is_nullable=_target_is_nullable(discovered_target_col, col, nullable_row)))
 
 
 def _discovered_spelling(discovered_target_col, target_name):

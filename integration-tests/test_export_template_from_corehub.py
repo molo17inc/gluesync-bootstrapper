@@ -165,7 +165,7 @@ class TargetPositionTests(unittest.TestCase):
         self.assertEqual(
             list(row),
             ["source", "target", "type", "dataLength", "numericPrecision", "numericScale", "isNullable", "isPK",
-             "id", "ordinalPosition", "charSet", "targetPosition"],
+             "id", "ordinalPosition", "charSet", "targetPosition", "targetIsNullable"],
         )
 
     def test_a_column_that_feeds_nothing_has_no_target_position(self):
@@ -176,6 +176,42 @@ class TargetPositionTests(unittest.TestCase):
         row = _drivers_table_cfg(entity)["columns"][0]
         self.assertEqual((row["source"], row["target"]), ("id", []))
         self.assertNotIn("targetPosition", row)
+
+
+class TargetIsNullableTests(unittest.TestCase):
+    """A row also carries the nullability of its target column, which the import restores."""
+
+    def test_it_is_the_nullability_of_the_target_column_not_the_one_of_the_source_column(self):
+        entity = _drivers_entity()
+        source_ae, target_ae = entity["agentEntities"]
+        for index, (scol, tcol) in enumerate(zip(source_ae["columns"], target_ae["columns"])):
+            scol["isNullable"] = bool(index % 2)
+            tcol["isNullable"] = not index % 2
+        cfg = _drivers_table_cfg(entity)
+        self.assertEqual([c["isNullable"] for c in cfg["columns"]], [False, True] * 3 + [False])
+        self.assertEqual([c["targetIsNullable"] for c in cfg["columns"]], [True, False] * 3 + [True])
+
+    def test_a_target_column_without_nullability_has_no_target_is_nullable(self):
+        entity = _drivers_entity()
+        for col in entity["agentEntities"][1]["columns"]:
+            col.pop("isNullable", None)
+        cfg = _drivers_table_cfg(entity)
+        self.assertTrue(all("targetIsNullable" not in c for c in cfg["columns"]))
+
+    def test_a_value_that_is_not_a_boolean_is_not_exported(self):
+        entity = _drivers_entity()
+        for col in entity["agentEntities"][1]["columns"]:
+            col["isNullable"] = None
+        cfg = _drivers_table_cfg(entity)
+        self.assertTrue(all("targetIsNullable" not in c for c in cfg["columns"]))
+
+    def test_a_column_that_feeds_nothing_has_no_target_is_nullable(self):
+        entity = _drivers_entity()
+        matrix = entity["agentEntities"][1]["entityType"]["columnsMappingMatrix"]
+        entity["agentEntities"][1]["entityType"]["columnsMappingMatrix"] = matrix[1:]
+        row = _drivers_table_cfg(entity)["columns"][0]
+        self.assertEqual((row["source"], row["target"]), ("id", []))
+        self.assertNotIn("targetIsNullable", row)
 
 
 class OrdinalPositionTests(unittest.TestCase):

@@ -450,6 +450,11 @@ def _mapping_row(scol: Optional[Dict[str, Any]], tcol: Optional[Dict[str, Any]],
     target_position = _target_position(tcol)
     if target_position is not None:
         row["targetPosition"] = target_position
+    # The nullability of the target column, which a target that keeps none (DynamoDB reports every column not
+    # nullable) does not give back: on import it is the nullability the restored column gets.
+    target_nullable = (tcol or {}).get("isNullable")
+    if isinstance(target_nullable, bool):
+        row["targetIsNullable"] = target_nullable
     return row
 
 
