@@ -54,6 +54,7 @@ from create_all_entities import (
     set_create_table_if_not_exists,
 )
 import create_user_defined_functions
+import function_collection
 import ai_settings
 from export_template_from_corehub import (
     fetch_pipeline_entities,
@@ -367,8 +368,13 @@ def run_create_entities(
     skip_verify: Optional[bool],
     log_callback: Optional[Callable[[str], None]] = None,
     chronos_token: Optional[str] = None,
+    restore_function_collection: bool = True,
 ) -> Dict[str, Any]:
-    """Invoke create_all_entities.main and capture output."""
+    """Invoke create_all_entities.main and capture output.
+
+    ``restore_function_collection``: publish and install the function collection that comes with the YAML before
+    anything else (False when the caller has done it, or has none to restore).
+    """
 
     set_scheduling_enabled(enable_scheduling)
     configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
@@ -420,6 +426,7 @@ def run_create_entities(
                 skip_errors,
                 chunk_size,
                 chronos_token=chronos_token,
+                restore_function_collection=restore_function_collection,
             )
     except Exception as exc:  # pylint: disable=broad-except
         logger.exception("create_all_entities execution failed")
@@ -1311,6 +1318,34 @@ def write_udf_sources_to_dir(
     return written
 
 
+def _function_collection_files(token: str, pipeline_id: str) -> List[Tuple[str, str]]:
+    """``(path, code)`` of the sources of the function collection of a pipeline; empty when it has none.
+
+    A pipeline without a collection (CoreHub answers 404, as a CoreHub before 2.3 does) has no files. Any other
+    failure raises :class:`function_collection.FunctionCollectionError`, so a backup does not silently lose the
+    collection a restore needs.
+    """
+    return function_collection.function_collection_files(token, pipeline_id, fetch=fetch_core_hub)
+
+
+def write_function_collection_to_zip(
+    zip_file: zipfile.ZipFile,
+    *,
+    pipeline_id: str,
+    files: List[Tuple[str, str]],
+    root_prefix: str = "",
+) -> int:
+    """Write the function collection sources of a pipeline under ``function-collection/`` in the ZIP.
+
+    Returns the number of files written.
+    """
+    for relative_path, code in files:
+        member = f"{root_prefix}{function_collection.FUNCTION_COLLECTION_FOLDER}/{relative_path}"
+        zip_file.writestr(member, code.encode("utf-8"))
+        logger.info("Exported function collection source of pipeline %s to %s", pipeline_id, member)
+    return len(files)
+
+
 def _entity_udf_names(entities: Any) -> Dict[str, str]:
     """``{entityName: UDF name}`` of the entities whose target refers to a mapping function."""
     names: Dict[str, str] = {}
@@ -1332,14 +1367,16 @@ def export_pipeline_entities_package(
     include_secrets: bool = False,
     chronos_token: Optional[str] = None,
 ) -> Tuple[bytes, str, str]:
-    """Export entities YAML and, when referenced, UDF sources (GSSD-1355).
+    """Export entities YAML and, when referenced, UDF sources (GSSD-1355) and the function collection.
 
     Entity-only export historically returned bare YAML, which references UDFs
     via ``customProperties.target.udf`` / ``mappingFunctionInfo`` but omitted
     the source files. Full pipeline backup already wrote ``udf-<agentId>/``.
     This package brings entity-only export in line: when UDFs are referenced,
     return a ZIP containing the YAML plus those sources so import can compile
-    them; otherwise return plain YAML for backward compatibility.
+    them; otherwise return plain YAML for backward compatibility. A pipeline with a function collection
+    (Gluesync 2.3) always gets the ZIP, with the collection sources under ``function-collection/``: the entities
+    bind its functions, so they cannot be restored without it.
 
     Returns:
         (payload_bytes, media_type, download_filename)
@@ -1368,6 +1405,7 @@ def export_pipeline_entities_package(
         entities = []
 
     udfs_to_export = discover_udfs_from_entities(entities)
+    collection_files = _function_collection_files(token, pipeline_id)
 
     pipeline_name = pipeline_id
     try:
@@ -1385,11 +1423,11 @@ def export_pipeline_entities_package(
     ).rstrip() or pipeline_id
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    if not udfs_to_export:
+    if not udfs_to_export and not collection_files:
         filename = f"backup_{pipeline_id}_{timestamp}.yaml"
         return yaml_content.encode("utf-8"), "application/x-yaml", filename
 
-    # ZIP: YAML + udf-<agentId>/ sources (flat layout; import already handles this).
+    # ZIP: YAML + udf-<agentId>/ sources + function-collection/ sources (flat layout; import already handles this).
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
         yaml_name = f"backup_{safe_name}_{pipeline_id}_{timestamp}.yaml"
@@ -1401,13 +1439,15 @@ def export_pipeline_entities_package(
             udfs_to_export=udfs_to_export,
             root_prefix="",
         )
+        write_function_collection_to_zip(zip_file, pipeline_id=pipeline_id, files=collection_files)
 
     zip_buffer.seek(0)
     filename = f"backup_{safe_name}_{pipeline_id}_{timestamp}.zip"
     logger.info(
-        "Entity-only export for pipeline %s includes %d UDF source(s)",
+        "Entity-only export for pipeline %s includes %d UDF source(s) and %d function collection source(s)",
         pipeline_id,
         len(udfs_to_export),
+        len(collection_files),
     )
     return zip_buffer.read(), "application/zip", filename
 
@@ -1611,6 +1651,7 @@ class _PipelinesBackup:
     agents: List[Dict[str, Any]] = field(default_factory=list)
     seen_agents: set = field(default_factory=set)
     pipelines_meta: List[Dict[str, Any]] = field(default_factory=list)
+    function_collection_errors: List[str] = field(default_factory=list)
 
 
 def _backup_pipeline_meta(backup: _PipelinesBackup, pipeline_id: str, pipeline_name: str) -> Dict[str, Any]:
@@ -1824,7 +1865,7 @@ def export_pipeline_full_backup(
     include_secrets: bool = False,
     chronos_token: Optional[str] = None,
 ) -> bytes:
-    """Export a full backup (YAML + agents-config + UDFs) for a single pipeline."""
+    """Export a full backup (YAML + agents-config + UDFs + function collection) for a single pipeline."""
 
     configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
 
@@ -1861,6 +1902,14 @@ def export_pipeline_full_backup(
 
         # Discover mapping functions (UDFs) referenced by this pipeline
         udfs_to_export = discover_udfs_from_entities(_fetch_udf_entities(token, pipeline_id))
+
+        # The function collection the entities and UDFs call (a failure to read it fails the backup)
+        write_function_collection_to_zip(
+            zip_file,
+            pipeline_id=pipeline_id,
+            files=_function_collection_files(token, pipeline_id),
+            root_prefix=root_prefix,
+        )
 
         _add_backup_pipeline_agents(backup, pipeline_id, pipeline_meta)
         _write_backup_agents_config(zip_file, backup, root_prefix)
@@ -1899,7 +1948,7 @@ def _export_pipeline_into_backup(
     pipeline_name: str,
     udfs_to_export: Dict[Tuple[str, str], Dict[str, Any]],
 ) -> None:
-    """Add one pipeline to an all-pipelines backup: its YAML, its mapping functions and its agents."""
+    """Add one pipeline to an all-pipelines backup: its YAML, function collection, mapping functions and agents."""
     pipeline_meta = _backup_pipeline_meta(backup, pipeline_id, pipeline_name)
 
     try:
@@ -1921,6 +1970,19 @@ def _export_pipeline_into_backup(
     except Exception as exc:  # pylint: disable=broad-except
         logger.exception("Failed to export pipeline %s: %s", pipeline_id, exc)
         # Continue with other pipelines
+
+    # The function collection stays with its pipeline, under pipeline_<id>/ (UDFs are told apart by agentId, a
+    # collection is not). One that cannot be read is listed in the ZIP and logged, and the other pipelines go on.
+    try:
+        write_function_collection_to_zip(
+            zip_file,
+            pipeline_id=pipeline_id,
+            files=_function_collection_files(backup.token, pipeline_id),
+            root_prefix=f"pipeline_{pipeline_id}/",
+        )
+    except function_collection.FunctionCollectionError as exc:
+        logger.error("Function collection of pipeline %s is NOT in the backup: %s", pipeline_id, exc)
+        backup.function_collection_errors.append(f"{pipeline_name} ({pipeline_id}): {exc}")
 
     # Discover mapping functions (UDFs) referenced by this pipeline so we can
     # export their source code once per (pipeline, udfName) pair.
@@ -1945,6 +2007,25 @@ def _write_all_pipelines_udf_sources(
         ):
             # Store source code as UTF-8 text inside the ZIP
             zip_file.writestr(udf_filename, code.encode("utf-8"))
+
+
+def _write_function_collection_errors_note(zip_file: zipfile.ZipFile, errors: List[str]) -> None:
+    """List in the ZIP the pipelines whose function collection could not be read, so the gap is not silent."""
+    if not errors:
+        return
+    lines = [
+        "# The function collection of the following pipelines could not be read at backup",
+        "# time and is NOT in this archive: restoring their entities that call its functions",
+        "# fails until the collection is published again. Fix the cause and run the backup again.",
+        "",
+    ]
+    lines.extend(f"- {error}" for error in errors)
+    zip_file.writestr("function-collection-errors.txt", ("\n".join(lines) + "\n").encode("utf-8"))
+    logger.warning(
+        "Backup completed but the function collection of %d pipeline(s) is missing: see "
+        "function-collection-errors.txt in the archive",
+        len(errors),
+    )
 
 
 def _write_skipped_maintenance_note(
@@ -1994,7 +2075,7 @@ def export_all_pipelines_yaml(
     include_secrets: bool = False,
     chronos_token: Optional[str] = None,
 ) -> bytes:
-    """Export all pipelines to a ZIP file containing individual YAML files.
+    """Export all pipelines to a ZIP file containing individual YAML files (and UDF and function collection sources).
 
     Args:
         skip_schedules: If True, do not embed schedules in pipeline YAMLs.
@@ -2070,6 +2151,7 @@ def export_all_pipelines_yaml(
             )
 
         _write_all_pipelines_udf_sources(zip_file, token, udfs_to_export)
+        _write_function_collection_errors_note(zip_file, backup.function_collection_errors)
         _write_skipped_maintenance_note(zip_file, skipped_maintenance, len(backup.pipelines_meta))
 
     zip_buffer.seek(0)
@@ -4067,6 +4149,10 @@ def duplicate_pipeline(
                 if not schema_pairs:
                     entity_clone_status = "empty"
 
+                # The function collection goes first: the UDFs may call its classes and the entities bind its
+                # functions, so a clone without it is refused (a pipeline without one copies nothing).
+                function_collection.copy_function_collection(token, pipeline_id, new_pipeline_id, fetch=fetch_core_hub)
+
                 # The UDF sources go in place before any entity is created: create_entities compiles each
                 # table's UDF into the new pipeline before saving its entity, and a Gluesync 2.3 CoreHub
                 # drops the reference to a UDF it cannot find before its mapping stage, which then refuses
@@ -4108,6 +4194,7 @@ def duplicate_pipeline(
                             use_ssl=use_ssl,
                             skip_verify=skip_verify,
                             chronos_token=chronos_token,
+                            restore_function_collection=False,
                         )
                         if not result.get("success"):
                             entity_clone_status = "failed"
