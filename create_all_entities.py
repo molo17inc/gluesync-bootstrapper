@@ -4748,6 +4748,54 @@ def _restore_function_collection(token, pipeline_id, yaml_file, yaml_config):
         function_collection.restore_function_collection(token, pipeline_id, sources, fetch=fetch_core_hub)
 
 
+def _resolve_udf_path(yaml_file):
+    """Resolve UDF_PATH when it is not already set.
+
+    With the app-owned workspace design, the Automator UI extracts each upload/import's YAML + UDF files into a single
+    session directory under the workspace root, and sets UDF_PATH to it. When running standalone (no UDF_PATH), fall
+    back to the YAML's own directory — which, for Automator-driven runs, IS that session directory and therefore
+    already contains the UDF files. find_udf_definition_in_path additionally scans the whole workspace root, so UDFs
+    are found even without this hint.
+    """
+    if yaml_file and not udf_module.UDF_PATH:
+        yaml_dir = os.path.dirname(os.path.abspath(yaml_file))
+        if yaml_dir and os.path.isdir(yaml_dir):
+            udf_module.UDF_PATH = yaml_dir
+            logger.info(f"UDF_PATH not set; falling back to YAML directory: {yaml_dir}")
+
+
+def _fail_run(error_msg):
+    """Log a failure of :func:`main` and leave the failure lockfile; raises it."""
+    log_failure(logger, error_msg)
+    lockfile_failure()
+    raise Exception(error_msg)
+
+
+def _pipeline_agents(token, pipeline_id, source_type, target_type):
+    """``(source_agent, target_agent, source_agent_id, target_agent_id)`` of a pipeline; :func:`_fail_run` without them."""
+    agents = get_pipeline_agents(token, pipeline_id)
+
+    if not agents or len(agents) != 2:
+        _fail_run(f"Expected 2 agents, found {len(agents) if agents else 0}")
+
+    # Identify source and target agents based on type
+    source_agent = next((agent for agent in agents if agent['agentType'] == 'SOURCE'), None)
+    target_agent = next((agent for agent in agents if agent['agentType'] == 'TARGET'), None)
+
+    if not source_agent or not target_agent:
+        _fail_run(f"Could not find required agents. Source ({source_type}): {source_agent}, Target ({target_type}): {target_agent}")
+
+    # Extract agent IDs with fallback for different field names
+    source_agent_id = source_agent.get('agentId') or source_agent.get('id')
+    target_agent_id = target_agent.get('agentId') or target_agent.get('id')
+
+    if not source_agent_id or not target_agent_id:
+        _fail_run(f"Agents missing IDs. Source ID: {source_agent_id}, Target ID: {target_agent_id}. Source agent: {source_agent}, Target agent: {target_agent}")
+
+    logger.info(f"Using source agent ID: {source_agent_id}, target agent ID: {target_agent_id}")
+    return source_agent, target_agent, source_agent_id, target_agent_id
+
+
 def main(pipeline_id, source_schema, target_schema, source_type, target_type, yaml_file, token, skip_errors=True,
          chunk_size=50, chronos_token=None, restore_function_collection=True):
     """
@@ -4764,19 +4812,7 @@ def main(pipeline_id, source_schema, target_schema, source_type, target_type, ya
     try:
         yaml_config = load_yaml_config(yaml_file) if yaml_file else None
 
-        # Resolve UDF_PATH when it is not already set.
-        # With the app-owned workspace design, the Automator UI extracts each
-        # upload/import's YAML + UDF files into a single session directory under
-        # the workspace root, and sets UDF_PATH to it. When running standalone
-        # (no UDF_PATH), fall back to the YAML's own directory — which, for
-        # Automator-driven runs, IS that session directory and therefore already
-        # contains the UDF files. find_udf_definition_in_path additionally scans
-        # the whole workspace root, so UDFs are found even without this hint.
-        if yaml_file and not udf_module.UDF_PATH:
-            yaml_dir = os.path.dirname(os.path.abspath(yaml_file))
-            if yaml_dir and os.path.isdir(yaml_dir):
-                udf_module.UDF_PATH = yaml_dir
-                logger.info(f"UDF_PATH not set; falling back to YAML directory: {yaml_dir}")
+        _resolve_udf_path(yaml_file)
 
         if restore_function_collection:
             _restore_function_collection(token, pipeline_id, yaml_file, yaml_config)
@@ -4785,44 +4821,14 @@ def main(pipeline_id, source_schema, target_schema, source_type, target_type, ya
         pipeline_config = get_pipeline_config(token, pipeline_id)
 
         # Get agents information
-        agents = get_pipeline_agents(token, pipeline_id)
-
-        if not agents or len(agents) != 2:
-            error_msg = f"Expected 2 agents, found {len(agents) if agents else 0}"
-            log_failure(logger, error_msg)
-            lockfile_failure()
-            raise Exception(error_msg)
-
-        # Identify source and target agents based on type
-        source_agent = next((agent for agent in agents if agent['agentType'] == 'SOURCE'), None)
-        target_agent = next((agent for agent in agents if agent['agentType'] == 'TARGET'), None)
-
-        if not source_agent or not target_agent:
-            error_msg = f"Could not find required agents. Source ({source_type}): {source_agent}, Target ({target_type}): {target_agent}"
-            log_failure(logger, error_msg)
-            lockfile_failure()
-            raise Exception(error_msg)
-
-        # Extract agent IDs with fallback for different field names
-        source_agent_id = source_agent.get('agentId') or source_agent.get('id')
-        target_agent_id = target_agent.get('agentId') or target_agent.get('id')
-        
-        if not source_agent_id or not target_agent_id:
-            error_msg = f"Agents missing IDs. Source ID: {source_agent_id}, Target ID: {target_agent_id}. Source agent: {source_agent}, Target agent: {target_agent}"
-            log_failure(logger, error_msg)
-            lockfile_failure()
-            raise Exception(error_msg)
-        
-        logger.info(f"Using source agent ID: {source_agent_id}, target agent ID: {target_agent_id}")
+        source_agent, target_agent, source_agent_id, target_agent_id = _pipeline_agents(
+            token, pipeline_id, source_type, target_type)
 
         # Get tables from source agent
         tables = get_agent_tables(token, pipeline_id, source_agent_id, source_schema)
 
         if not tables:
-            error_msg = f"No tables found in schema {source_schema}"
-            log_failure(logger, error_msg)
-            lockfile_failure()
-            raise Exception(error_msg)
+            _fail_run(f"No tables found in schema {source_schema}")
 
         # Debug logging before calling create_entities
         logger.debug(f"main() about to call create_entities with: source_type='{source_type}', target_type='{target_type}'")
@@ -4836,7 +4842,7 @@ def main(pipeline_id, source_schema, target_schema, source_type, target_type, ya
             target_agent_tag=target_agent.get('agentTag'),
             chronos_token=chronos_token
         )
-        
+
         if result.get('skipped_discovery', False):
             logger.info("Entity discovery was skipped as tables will be created on demand")
 

@@ -232,15 +232,19 @@ class RestoreTests(FunctionCollectionTestCase):
         self.assertNotIn(("POST", "/install"), collection.requests)
 
     def test_a_publication_that_cannot_be_carried_out_says_why(self):
+        collection = FakeFunctionCollections(failure="no JDK on the host")
+
         with self.assertRaises(function_collection.FunctionCollectionError) as raised:
-            self.restore(FakeFunctionCollections(failure="no JDK on the host"))
+            self.restore(collection)
 
         self.assertIn("no JDK on the host", str(raised.exception))
 
     def test_a_publication_that_never_ends_times_out(self):
+        collection = FakeFunctionCollections(polls=10 ** 9)
+
         with mock.patch.dict(os.environ, {"FUNCTION_COLLECTION_PUBLICATION_TIMEOUT_SECONDS": "0.05"}):
             with self.assertRaises(function_collection.FunctionCollectionError) as raised:
-                self.restore(FakeFunctionCollections(polls=10 ** 9))
+                self.restore(collection)
 
         self.assertIn("did not finish in time", str(raised.exception))
 
@@ -423,9 +427,10 @@ class ExportTests(FunctionCollectionTestCase):
             self.assertTrue(any(n.endswith(".yaml") for n in zf.namelist()))
 
     def test_full_backup_fails_when_the_collection_cannot_be_read(self):
+        collections = {"pipe": FakeFunctionCollections(get_error="boom")}
+
         with self.assertRaises(function_collection.FunctionCollectionError) as raised:
-            self.export("export_pipeline_full_backup", {"pipe": FakeFunctionCollections(get_error="boom")},
-                        pipeline_id="pipe")
+            self.export("export_pipeline_full_backup", collections, pipeline_id="pipe")
 
         self.assertIn("Could not read the function collection of pipeline pipe", str(raised.exception))
 
@@ -539,7 +544,7 @@ class ImportOrderTests(FunctionCollectionTestCase):
 
         def run_create_entities_(**kwargs):
             self.events.append(("RUN", kwargs["pipeline_id"]))
-            self.assertIs(kwargs["restore_function_collection"], False)
+            self.assertIs(kwargs["options"].restore_function_collection, False)
             return {"success": True}
 
         self.fetch = routed_fetch(self.collections, events=self.events)
@@ -675,7 +680,7 @@ class DuplicatePipelineTests(FunctionCollectionTestCase):
 
         def run_create(**kwargs):
             fetch.events.append(("RUN", kwargs["pipeline_id"]))
-            self.assertIs(kwargs["restore_function_collection"], False)
+            self.assertIs(kwargs["options"].restore_function_collection, False)
             return {"success": True, "result": {"errors": []}}
 
         with mock.patch.object(corehub, "fetch_core_hub", side_effect=fetch), \
@@ -905,8 +910,10 @@ src:
     def test_a_refusal_raises_when_errors_are_not_skipped(self):
         from entity_mapping import EntityMappingError
 
+        collection = FakeFunctionCollections.exporting("trimAll")
+
         with self.assertRaises(EntityMappingError) as raised:
-            run(CUSTOM_FN_COLUMNS, FakeFunctionCollections.exporting("trimAll"), skip_errors=False)
+            run(CUSTOM_FN_COLUMNS, collection, skip_errors=False)
 
         self.assertIn("function collection", str(raised.exception))
 
@@ -1025,7 +1032,7 @@ class RoundTripTests(FunctionCollectionTestCase):
 class NotFoundAndErrorsTests(FunctionCollectionTestCase):
     def test_http_status_is_read_through_the_chained_errors(self):
         self.assertEqual(function_collection.http_status(_refusal("/p", "x", 404, method="GET")), 404)
-        self.assertEqual(function_collection.http_status(RuntimeError("no response")), None)
+        self.assertIsNone(function_collection.http_status(RuntimeError("no response")))
 
     def test_a_404_is_no_collection_and_other_errors_are_not(self):
         fake = FakeFunctionCollections()
@@ -1033,6 +1040,7 @@ class NotFoundAndErrorsTests(FunctionCollectionTestCase):
         self.assertIsNone(function_collection.fetch_function_collection("tok", "pipe", fetch=fetch))
 
         broken = routed_fetch({"pipe": FakeFunctionCollections(get_error="boom")})
+
         with self.assertRaises(function_collection.FunctionCollectionError):
             function_collection.fetch_function_collection("tok", "pipe", fetch=broken)
 

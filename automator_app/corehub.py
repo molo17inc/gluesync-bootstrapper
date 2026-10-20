@@ -350,6 +350,21 @@ def _create_entities_outcome(result_payload: Dict[str, Any], logs: list) -> Dict
     return payload
 
 
+@dataclass
+class EntityRunOptions:
+    """The settings of :func:`run_create_entities` a caller may leave at their default.
+
+    ``restore_function_collection``: publish and install the function collection that comes with the YAML before
+    anything else (False when the caller has done it, or has none to restore).
+    """
+
+    skip_errors: bool = True
+    chunk_size: int = 50
+    log_callback: Optional[Callable[[str], None]] = None
+    chronos_token: Optional[str] = None
+    restore_function_collection: bool = True
+
+
 def run_create_entities(
     *,
     token: str,
@@ -360,21 +375,15 @@ def run_create_entities(
     source_type: str,
     target_type: str,
     yaml_file: str,
-    skip_errors: bool,
-    chunk_size: int,
     enable_scheduling: bool,
     create_tables: bool,
     use_ssl: Optional[bool],
     skip_verify: Optional[bool],
-    log_callback: Optional[Callable[[str], None]] = None,
-    chronos_token: Optional[str] = None,
-    restore_function_collection: bool = True,
+    options: Optional[EntityRunOptions] = None,
 ) -> Dict[str, Any]:
-    """Invoke create_all_entities.main and capture output.
-
-    ``restore_function_collection``: publish and install the function collection that comes with the YAML before
-    anything else (False when the caller has done it, or has none to restore).
-    """
+    """Invoke create_all_entities.main and capture output."""
+    options = options or EntityRunOptions()
+    log_callback = options.log_callback
 
     set_scheduling_enabled(enable_scheduling)
     configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
@@ -423,10 +432,10 @@ def run_create_entities(
                 target_type,
                 yaml_file,
                 token,
-                skip_errors,
-                chunk_size,
-                chronos_token=chronos_token,
-                restore_function_collection=restore_function_collection,
+                options.skip_errors,
+                options.chunk_size,
+                chronos_token=options.chronos_token,
+                restore_function_collection=options.restore_function_collection,
             )
     except Exception as exc:  # pylint: disable=broad-except
         logger.exception("create_all_entities execution failed")
@@ -1981,7 +1990,7 @@ def _export_pipeline_into_backup(
             root_prefix=f"pipeline_{pipeline_id}/",
         )
     except function_collection.FunctionCollectionError as exc:
-        logger.error("Function collection of pipeline %s is NOT in the backup: %s", pipeline_id, exc)
+        logger.exception("Function collection of pipeline %s is NOT in the backup: %s", pipeline_id, exc)
         backup.function_collection_errors.append(f"{pipeline_name} ({pipeline_id}): {exc}")
 
     # Discover mapping functions (UDFs) referenced by this pipeline so we can
@@ -4187,14 +4196,11 @@ def duplicate_pipeline(
                             source_type=source_type_hint,
                             target_type=target_type_hint,
                             yaml_file=snapshot_path,
-                            skip_errors=True,
-                            chunk_size=50,
                             enable_scheduling=False,
                             create_tables=False,
                             use_ssl=use_ssl,
                             skip_verify=skip_verify,
-                            chronos_token=chronos_token,
-                            restore_function_collection=False,
+                            options=EntityRunOptions(chronos_token=chronos_token, restore_function_collection=False),
                         )
                         if not result.get("success"):
                             entity_clone_status = "failed"

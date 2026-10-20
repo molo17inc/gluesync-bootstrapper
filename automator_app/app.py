@@ -2160,15 +2160,14 @@ def _create_schema_pair_entities(job: _ArchiveImport, entities: _PipelineEntitie
             source_type=entities.source_type,
             target_type=entities.target_type,
             yaml_file=str(entities.yaml_path),
-            skip_errors=True,
-            chunk_size=50,
             enable_scheduling=entities.enable_scheduling,
             create_tables=entities.create_tables,
             use_ssl=state.use_ssl,
             skip_verify=state.skip_verify,
-            log_callback=None,
-            chronos_token=state.chronos_token,
-            restore_function_collection=False,  # published once for the pipeline, before its first schema pair
+            options=corehub.EntityRunOptions(
+                chronos_token=state.chronos_token,
+                restore_function_collection=False,  # published once for the pipeline, before its first schema pair
+            ),
         )
         if not result_run.get("success"):
             success = False
@@ -2814,14 +2813,16 @@ def _run_create_entities(request: RunRequest, settings: _RunSettings, source_sch
         source_type=settings.source_type,
         target_type=settings.target_type,
         yaml_file=settings.yaml_file,
-        skip_errors=request.skip_errors,
-        chunk_size=request.chunk_size,
         enable_scheduling=settings.enable_scheduling,
         create_tables=settings.create_tables,
         use_ssl=settings.use_ssl,
         skip_verify=settings.skip_verify,
-        log_callback=settings.log_callback,
-        chronos_token=state.chronos_token,
+        options=corehub.EntityRunOptions(
+            skip_errors=request.skip_errors,
+            chunk_size=request.chunk_size,
+            log_callback=settings.log_callback,
+            chronos_token=state.chronos_token,
+        ),
     )
 
 

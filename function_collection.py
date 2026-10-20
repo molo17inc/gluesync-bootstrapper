@@ -214,6 +214,26 @@ def extract_function_collection_members(zip_file, root: Path) -> int:
     return written
 
 
+def _collection_dir_under(root: Path, pipeline_id: Optional[str]) -> Optional[Path]:
+    """The ``function-collection`` folder of a backup extracted under one root (see :func:`find_function_collection_dir`)."""
+    if pipeline_id:
+        safe_id = "".join(c for c in str(pipeline_id) if c.isalnum() or c in ("_", "-"))
+        of_pipeline = root / f"pipeline_{safe_id}" / FUNCTION_COLLECTION_FOLDER
+        if of_pipeline.is_dir():
+            return of_pipeline
+    if (root / FUNCTION_COLLECTION_FOLDER).is_dir():
+        return root / FUNCTION_COLLECTION_FOLDER
+    if pipeline_id:
+        return None
+    nested = [p for p in sorted(root.glob(f"pipeline_*/{FUNCTION_COLLECTION_FOLDER}")) if p.is_dir()]
+    if len(nested) > 1:
+        logger.warning(
+            "The backup holds the function collections of several pipelines and the YAML does not say which one "
+            "it belongs to; none is restored"
+        )
+    return nested[0] if len(nested) == 1 else None
+
+
 def find_function_collection_dir(roots: Iterable[Any], pipeline_id: Optional[str] = None) -> Optional[Path]:
     """The ``function-collection`` folder of a backup extracted under one of ``roots``, None when there is none.
 
@@ -223,21 +243,9 @@ def find_function_collection_dir(roots: Iterable[Any], pipeline_id: Optional[str
     for root in roots:
         if not root or not Path(root).is_dir():
             continue
-        root = Path(root)
-        if pipeline_id:
-            safe_id = "".join(c for c in str(pipeline_id) if c.isalnum() or c in ("_", "-"))
-            if (root / f"pipeline_{safe_id}" / FUNCTION_COLLECTION_FOLDER).is_dir():
-                return root / f"pipeline_{safe_id}" / FUNCTION_COLLECTION_FOLDER
-        if (root / FUNCTION_COLLECTION_FOLDER).is_dir():
-            return root / FUNCTION_COLLECTION_FOLDER
-        nested = [p for p in sorted(root.glob(f"pipeline_*/{FUNCTION_COLLECTION_FOLDER}")) if p.is_dir()]
-        if len(nested) == 1 and not pipeline_id:
-            return nested[0]
-        if len(nested) > 1 and not pipeline_id:
-            logger.warning(
-                "The backup holds the function collections of several pipelines and the YAML does not say which one "
-                "it belongs to; none is restored"
-            )
+        found = _collection_dir_under(Path(root), pipeline_id)
+        if found is not None:
+            return found
     return None
 
 
