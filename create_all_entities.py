@@ -4817,8 +4817,8 @@ def main(pipeline_id, source_schema, target_schema, source_type, target_type, ya
         if restore_function_collection:
             _restore_function_collection(token, pipeline_id, yaml_file, yaml_config)
 
-        # Get pipeline configuration
-        pipeline_config = get_pipeline_config(token, pipeline_id)
+        # Read the pipeline configuration: fails early on a pipeline that does not exist
+        get_pipeline_config(token, pipeline_id)
 
         # Get agents information
         source_agent, target_agent, source_agent_id, target_agent_id = _pipeline_agents(
