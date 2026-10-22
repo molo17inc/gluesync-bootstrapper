@@ -140,8 +140,9 @@ $env:CORE_HUB_URL = "http://127.0.0.1:$Port"
 $env:HUB_ADMIN_PASSWORD = 'Test123!'
 $env:DEFAULT_PASSWORD = 'Test123!'
 
-$hub = Start-FakeHub
+$exitCode = 0
 try {
+  $hub = Start-FakeHub
   $first = Invoke-Exe @('hub-first-login')
   Assert-That ($first.ExitCode -eq 0) 'hub-first-login completes the first access on a fresh hub' $first
   Assert-That ($first.Output -match 'first access completed: 200') 'hub-first-login reports the password change' $first
@@ -160,8 +161,11 @@ try {
   Assert-That (Test-Path 'C:\opt\config\auth_token.json') 'the bootstrapper saved its token under C:\opt\config (the /opt/config of the Linux image)' $boot
   Write-Host "bootstrapper exit code against the fake hub: $($boot.ExitCode) (non-zero is expected: the fake hub cannot create a pipeline)"
 }
-finally {
-  Stop-Job $hub -ErrorAction SilentlyContinue
-  Remove-Job $hub -Force -ErrorAction SilentlyContinue
+catch {
+  Write-Host $_
+  $exitCode = 1
 }
-Write-Host 'in-container tests passed'
+# The fake hub thread sits in a blocking AcceptTcpClient: Stop-Job and Remove-Job would wait for it, so leave the
+# process directly (the container is removed with it)
+if ($exitCode -eq 0) { Write-Host 'in-container tests passed' }
+[System.Environment]::Exit($exitCode)
