@@ -1,0 +1,10 @@
+# Runtime dependencies of the bootstrapper command line (main.py and the modules it imports), used to build
+# gluesync-bootstrapper.exe for the Windows container image (Dockerfile.windows).
+# requirements.txt also carries the Automator UI and MCP server (fastapi, uvicorn, mcp, cairosvg, PyQt6), which the
+# bootstrapper never imports; integration-tests/test_bootstrapper_windows_image.py fails when an import here is missing.
+requests
+python-logstash-async==2.7.2
+faker
+PyYAML
+colorama
+pydantic

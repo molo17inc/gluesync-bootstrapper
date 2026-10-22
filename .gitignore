@@ -51,3 +51,6 @@ automator_app/static/styles.*.css
 
 # Run result of main.py (BOOTSTRAPPER_RESULT_FILE default)
 bootstrapper-result.json
+
+# Version stamped into the Windows image build (CI writes it before docker build)
+/VERSION

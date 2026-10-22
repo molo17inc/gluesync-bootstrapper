@@ -735,6 +735,83 @@ Available environment variables:
 
 **Note**: Source and target schema information is now automatically read from the `table-list-template.yaml` file in the `schemas` section, eliminating the need for `CREATE_ENTITIES_FROM_SCHEMA` and `TARGET_SCHEMA` environment variables.
 
+### Windows container image
+
+The demo-kits that run on the Windows runners use a Windows container image of the bootstrapper to do what the Linux image does in the Linux kits: complete the first access of a fresh Core Hub (`hub-first-login`) and create the pipeline. It is `Dockerfile.windows`: `gluesync-bootstrapper.exe` (PyInstaller one-file, built on Server Core with Python 3.13) copied into a Nano Server `pwsh` image, so there is no Python in the container.
+
+```
+nexus.hq.molo17.com/molo17-local/gluesync-bootstrapper:<version>-win-nanoserver-ltsc2022     (also ltsc2019)
+nexus.hq.molo17.com/molo17-local/gluesync-bootstrapper:<branch-slug>-win-nanoserver-ltsc2022 (branch and merge request builds)
+```
+
+`<version>` is derived like the Linux image's: the part of the `tag-*` / `beta-*` tag that starts at the first `N.N.N` (`tag-v2.8.13` gives `2.8.13`). A GA tag (`tag-vX.Y.Z`) also moves `latest-win-nanoserver-<ltsc>`; alpha and beta tags do not. Release tags are copied to Docker Hub (`molo17/gluesync-bootstrapper`) too, as the Linux image is. A branch or merge request pipeline that changes the image's inputs (`*.py`, `utils/`, `agents.json`, `Dockerfile.windows`, the spec, the requirements, the smoke scripts, `.gitlab-ci.yml`) builds and pushes the branch tag on its own, so a Windows kit can use the image before the merge; `bootstrapper_windows_smoke_*` then pulls the pushed tag and runs `scripts/windows-image-smoke.ps1` on the Windows runner.
+
+**Entrypoints** (`ENTRYPOINT ["C:\opt\python\gluesync-bootstrapper.exe"]`, so `command:` takes the arguments):
+
+| Linux image | Windows image |
+|---|---|
+| `CMD python main.py` (the bootstrapper) | no argument, or `run`, `--pipeline-name NAME` |
+| `entrypoint: ["python", "-c"]` with the inline first-login script | `command: ["hub-first-login"]`, or `entrypoint: ["C:\\opt\\python\\gluesync-bootstrapper.exe", "hub-first-login"]` |
+| `python3 create_all_entities.py ...` (started by `main.py` once per schema) | the exe starts itself as `create-entities ...`, nothing to configure |
+| - | `self-test` (loads every bundled module, no Core Hub), `--version`, `--help` |
+
+`hub-first-login` is the Linux script: `POST /authentication/login` as admin/admin until Core Hub answers, `POST /authentication/reset-password` to `HUB_ADMIN_PASSWORD` when it asks for the change (`DEFAULT_PASSWORD` is used when `HUB_ADMIN_PASSWORD` is not set), `admin password already set` when the new password already logs in. It waits `HUB_LOGIN_ATTEMPTS` (90) times `HUB_LOGIN_INTERVAL` (2 seconds), or `--attempts` / `--interval`. Exit codes: `0` done, `1` Core Hub answered something unexpected, `2` Core Hub never answered (`ERROR: Core Hub not reachable at <url> after N attempt(s)`, no traceback).
+
+**Environment**: the same variables with the same defaults as the Linux image (`CORE_HUB_URL`, `FILE_CONF_PATH`, `TABLE_LIST_YAML`, `SOURCE_TYPE`, `TARGET_TYPE`, `DEFAULT_PASSWORD`, `ADMIN_PASSWORD`, `CREATE_TABLE_IF_NOT_EXISTS`, `ENTITY_START_TIMEOUT`, `START_SYNC`, `SSL_ENABLED`, `SSL_SKIP_VERIFY`, `LOG_LEVEL`, `LOG_DIR`, `UDF_PATH`, `TEST_NAME`, `JOB_ID`, `VERSION`, `BOOTSTRAPPER_RESULT_FILE`, ...), plus `HUB_ADMIN_PASSWORD`, `HUB_LOGIN_ATTEMPTS` and `HUB_LOGIN_INTERVAL` for `hub-first-login`.
+
+**Paths**: the Linux path behind a drive letter. `/opt/config` is `C:\opt\config` (the code still says `/opt/config`; Python on Windows resolves it to `C:\opt\config`).
+
+| Linux image | Windows image | Used for |
+|---|---|---|
+| `/opt/python` | `C:\opt\python` | the exe; `bootstrapper-result.json` (`docker cp` it out like on Linux) |
+| `/opt/config` | `C:\opt\config` | `auth_token.json`, `admin_credentials.json`; default `FILE_CONF_PATH` and `TABLE_LIST_YAML` folder |
+| `/opt/custom-folder`, any folder a kit mounts | any folder, e.g. `C:\opt\custom-folder` | `config.json`, the table list |
+| `/logs` | `C:\logs` | `LOG_DIR` |
+| `/opt/udfs` | `C:\opt\udfs` | `UDF_PATH` |
+
+Differences to keep in mind when porting a Linux kit:
+
+- **Mount folders, not files.** A Windows container cannot bind-mount a single file (the Linux kit's `./config.json:/opt/custom-folder/config.json`). Mount the folder that holds the file; do not mount over a folder that has content in the image (`C:\opt\config` is empty on purpose, `C:\opt\python` is not a mount target).
+- The base is Nano Server: no `python`, no `cmd`; `pwsh` is there (`--entrypoint pwsh`) for a health check script. `platform: linux/amd64` goes away, and `ltsc2022` images run on `ltsc2022` hosts (process isolation), `ltsc2019` on `ltsc2019`.
+- `USE_SDK=true` is not supported (the SDK submodule is not in the image) and the logs are not forwarded to Logstash: that handler is only enabled when `/.dockerenv` exists, which a Windows container has not. The container's stdout is the log.
+- `--help` lists the exe's commands; `main.py` itself only parses `--pipeline-name`.
+
+Example (the two services of a kit, on a Windows host):
+
+```yaml
+services:
+  hub-first-login:
+    image: nexus.hq.molo17.com/molo17-local/gluesync-bootstrapper:${GSBOOTSTRAPPERVERSION}-win-nanoserver-ltsc2022
+    environment:
+      - CORE_HUB_URL=http://gluesync-core-hub:1717
+      - HUB_ADMIN_PASSWORD=Test123!
+    command: ["hub-first-login"]
+    depends_on:
+      gluesync-core-hub:
+        condition: service_started
+
+  gluesync-bootstrapper:
+    image: nexus.hq.molo17.com/molo17-local/gluesync-bootstrapper:${GSBOOTSTRAPPERVERSION}-win-nanoserver-ltsc2022
+    environment:
+      - TEST_NAME=my-kit
+      - FILE_CONF_PATH=C:\opt\custom-folder\config.json
+      - TABLE_LIST_YAML=C:\opt\tables\tables-list.yaml
+      - CORE_HUB_URL=http://gluesync-core-hub:1717
+      - DEFAULT_PASSWORD=Test123!
+      - TARGET_TYPE=SQL
+      - CREATE_TABLE_IF_NOT_EXISTS=false
+      - JOB_ID=${JOB_ID}
+    volumes:
+      - { type: bind, source: ./config, target: 'C:\opt\custom-folder' }   # config.json
+      - { type: bind, source: ./kit-auth, target: 'C:\opt\config' }          # auth_token.json, admin_credentials.json
+      - { type: bind, source: ./tables, target: 'C:\opt\tables' }            # tables-list.yaml
+    depends_on:
+      hub-first-login:
+        condition: service_completed_successfully
+```
+
+To build it by hand on a Windows host: `docker build -f Dockerfile.windows --build-arg WINDOWS_TAG=ltsc2022 --build-arg VERSION=dev -t gluesync-bootstrapper:win .` (the base images come from Nexus). The `pwsh` base is `7.6.2` for now; a separate MR moves the pwsh base images to `7.6.7`, bump it in `Dockerfile.windows` when that lands. `requirements-bootstrapper.txt` is the dependency list of the exe (the Automator and MCP packages of `requirements.txt` are not needed); `integration-tests/test_bootstrapper_windows_image.py` fails when `main.py` imports something it does not list.
+
 ### Export round trip (`automator_roundtrip.py`)
 
 `automator_roundtrip.py` checks that a live pipeline survives an Automator export and restore:
@@ -1439,6 +1516,8 @@ Triggered by tags matching `tag-*` (e.g., `tag-1.0.0`, `tag-v2.1.3`)
 git tag tag-1.0.0
 git push origin tag-1.0.0
 ```
+
+The same tags also build the Windows container image (`<version>-win-nanoserver-ltsc2022` and `ltsc2019`, see "Windows container image") on the Windows runners and push it to Nexus.
 
 #### Required GitLab CI/CD Variables
 

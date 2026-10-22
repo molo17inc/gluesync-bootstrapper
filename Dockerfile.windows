@@ -1,0 +1,94 @@
+# escape=`
+# This program is part of Gluesync.
+#
+# Gluesync Bootstrapper is dual-licensed under the GNU General Public License (GPL) Version 3 and the
+# MOLO17 Commercial License. See the LICENSE file or contact MOLO17 at info@molo17.com.
+#
+# Copyright (C) 2025 MOLO17. All rights reserved.
+
+# Windows container image of the Gluesync bootstrapper, for the demo-kits that run on the Windows runners.
+#
+# It does what the Linux image (Dockerfile) does for the kits, with one PyInstaller exe instead of Python:
+#   gluesync-bootstrapper.exe                  creates the pipeline (Linux: `python main.py`)
+#   gluesync-bootstrapper.exe hub-first-login  admin/admin -> HUB_ADMIN_PASSWORD (Linux: the inline `python -c` script)
+#   gluesync-bootstrapper.exe self-test | --help | --version
+# The paths are the Linux ones behind a drive letter: /opt/config -> C:\opt\config, /logs -> C:\logs.
+# See "Windows container image" in README.md.
+#
+#   docker build -f Dockerfile.windows --build-arg WINDOWS_TAG=ltsc2022 --build-arg VERSION=2.8.14 -t gluesync-bootstrapper .
+
+ARG WINDOWS_TAG=ltsc2022
+
+# ------------------
+# Stage 1: build the exe (Server Core, Python)
+# ------------------
+FROM nexus.hq.molo17.com/molo17-local/python:3.13.13-win-servercore-${WINDOWS_TAG} AS builder
+
+SHELL ["cmd", "/S", "/C"]
+
+WORKDIR C:\build
+
+# Dependencies first: this layer is reused while only the sources change
+COPY requirements-bootstrapper.txt .
+RUN python -m pip install --upgrade pip && `
+    python -m pip install --no-cache-dir -r requirements-bootstrapper.txt pyinstaller
+
+ENV PYTHONDONTWRITEBYTECODE=1 `
+    PYTHONUNBUFFERED=1 `
+    PIP_DISABLE_PIP_VERSION_CHECK=1 `
+    PYTHONUTF8=1
+
+COPY . .
+
+# CI writes VERSION (the version of the tag, or of the branch build) before docker build
+RUN if not exist VERSION (echo 0.0.0-dev>VERSION)
+
+RUN pyinstaller --noconfirm --clean gluesync-bootstrapper-windows.spec `
+    --distpath C:\build\out --workpath C:\build\work
+
+# The exe must load every bundled module on the build stage too, so a missing dependency stops the build
+RUN C:\build\out\gluesync-bootstrapper.exe self-test
+
+# ------------------
+# Stage 2: runtime (Nano Server, only the exe)
+# ------------------
+# pwsh 7.6.2 for now: a separate MR moves the pwsh base images to 7.6.7, bump this tag when it lands
+FROM nexus.hq.molo17.com/molo17-local/pwsh:7.6.2-win-nanoserver-${WINDOWS_TAG}
+
+# Same as the Chronos image: the account that can write to bind-mounted folders
+USER ContainerAdministrator
+
+ARG VERSION=latest
+
+# C:\logs and C:\opt\udfs exist like /logs and /opt/udfs on Linux. C:\opt\config is not created: the kits mount their
+# config, token and table-list folders there (a Windows container can only bind-mount folders, not single files),
+# and main.py creates it when nothing is mounted.
+WORKDIR C:\logs
+WORKDIR C:\opt\udfs
+WORKDIR C:\opt\python
+
+# Defaults of the Linux image (Dockerfile ARG/ENV), with the paths behind C:\
+# CORE_HUB_URL, SOURCE_TYPE, TARGET_TYPE, DEFAULT_PASSWORD, ADMIN_PASSWORD, HUB_ADMIN_PASSWORD, START_SYNC and
+# SSL_ENABLED are set by the kit (SOURCE_TYPE and TARGET_TYPE may come from the table-list YAML).
+ENV FILE_CONF_PATH=C:\opt\config\config.json `
+    TABLE_LIST_YAML=C:\opt\config\TABLE_LIST.yaml `
+    CORE_HUB_URL=http://localhost:1717 `
+    CHRONOS_URL=http://gluesync-chronos:8000 `
+    ENTITY_START_TIMEOUT=1 `
+    LOG_DIR=C:\logs `
+    UDF_PATH=C:\opt\udfs `
+    USE_SDK=False `
+    GLUESYNC_MODULE_TAG=gluesync-bootstrapper `
+    SSL_ENABLED=False `
+    SSL_SKIP_VERIFY=True `
+    ENABLE_SCHEDULING=true `
+    CREATE_TABLE_IF_NOT_EXISTS=true `
+    LOG_LEVEL=INFO `
+    TEST_NAME=DRY_RUN `
+    JOB_ID=not_set `
+    BOOTSTRAPPER_RESULT_FILE=C:\opt\python\bootstrapper-result.json `
+    VERSION=${VERSION}
+
+COPY --from=builder C:\build\out\gluesync-bootstrapper.exe C:\opt\python\gluesync-bootstrapper.exe
+
+ENTRYPOINT ["C:\\opt\\python\\gluesync-bootstrapper.exe"]

@@ -716,7 +716,7 @@ if use_sdk:
 
     if not os.path.exists(license_file_path):
         logger.error(f"License file not found at {license_file_path}. Cannot proceed with SDK initialization.")
-        exit(1)
+        sys.exit(1)  # the builtin exit() does not exist in a PyInstaller exe (the Windows image)
 
     try:
         from gluesync_sdk import GluesyncSDK
@@ -1322,10 +1322,13 @@ def _run_entity_creation(schema_label, source_schema, target_schema, pipeline_id
     next schema and fails the whole run once every schema was tried.
     """
     entity_creation_script = 'create_all_entities.py'
+    if getattr(sys, 'frozen', False):
+        # The Windows image has no Python: its exe runs create_all_entities.py itself (bootstrapper_exe.py)
+        entity_creation_runner = [sys.executable, 'create-entities']
+    else:
+        entity_creation_runner = ['python3', entity_creation_script]
     try:
-        cmd = [
-            'python3',
-            entity_creation_script,
+        cmd = entity_creation_runner + [
             '--pipeline', pipeline_id,
             '--source-schema', source_schema,
             '--source-type', effective_source_type,
