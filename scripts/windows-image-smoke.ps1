@@ -20,6 +20,7 @@ function Invoke-Docker {
     # one command-line string: Windows PowerShell 5.1 and PowerShell 7 quote an argument array differently
     $commandLine = ($DockerArgs | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }) -join ' '
     $process = Start-Process -FilePath 'docker' -ArgumentList $commandLine -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru -NoNewWindow
+    $null = $process.Handle  # Windows PowerShell 5.1 loses ExitCode without a cached handle
     if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
       $process.Kill()
       throw "docker $($DockerArgs -join ' ') did not finish within $TimeoutSeconds seconds"

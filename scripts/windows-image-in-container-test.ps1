@@ -104,6 +104,7 @@ function Invoke-Exe {
   $startArgs = @{ FilePath = $Exe; RedirectStandardOutput = $stdout; RedirectStandardError = $stderr; PassThru = $true; NoNewWindow = $true }
   if ($ExeArgs -and $ExeArgs.Count -gt 0) { $startArgs.ArgumentList = $ExeArgs }
   $process = Start-Process @startArgs
+  $null = $process.Handle
   if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
     $process.Kill()
     throw "$Exe $($ExeArgs -join ' ') did not finish within $TimeoutSeconds seconds"
