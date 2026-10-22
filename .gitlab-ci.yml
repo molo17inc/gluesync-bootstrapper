@@ -289,7 +289,7 @@ automator_smoke_windows:
       # keep the shared runner's disk: the pushed image and its tags are in Nexus
       $ErrorActionPreference = 'Continue'
       Get-Content "bootstrapper-windows-image.env" -ErrorAction SilentlyContinue | ForEach-Object {
-        if ($_ -like 'IMAGE_REF=*') { docker image rm ($_ -replace '^IMAGE_REF=', '') *> $null }
+        if ($_ -like 'IMAGE_REF=*') { cmd /c ("docker image rm " + ($_ -replace '^IMAGE_REF=', '') + " >nul 2>nul") }
       }
   artifacts:
     reports:
@@ -316,13 +316,15 @@ automator_smoke_windows:
       if (-not $env:IMAGE_REF) { throw 'IMAGE_REF is missing: the image job did not pass its dotenv artifact' }
       $env:NEXUS_REPO_PASSWORD | docker login -u gluesync --password-stdin nexus.hq.molo17.com
       if ($LASTEXITCODE -ne 0) { throw 'Docker login to Nexus failed' }
-      # run what Nexus serves, not the copy the build left on this runner
-      docker image rm $env:IMAGE_REF *> $null
+      # run what Nexus serves, not the copy the build left on this runner (Windows PowerShell 5.1 turns the
+      # "No such image" stderr line of docker into a terminating error, hence cmd)
+      cmd /c "docker image rm $env:IMAGE_REF >nul 2>nul"
+      $global:LASTEXITCODE = 0
       docker pull $env:IMAGE_REF
       if ($LASTEXITCODE -ne 0) { throw "Docker pull $($env:IMAGE_REF) failed" }
     - .\scripts\windows-image-smoke.ps1 -Image $env:IMAGE_REF -ExpectedVersion $env:IMAGE_VERSION
   after_script:
-    - docker image rm $env:IMAGE_REF *> $null
+    - cmd /c "docker image rm $env:IMAGE_REF >nul 2>nul"
   rules:
     - if: $CI_COMMIT_TAG =~ /^(tag|beta)-/
       interruptible: false
