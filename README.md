@@ -846,6 +846,10 @@ python ai_settings.py compare before.json after.json
 
 The passphrase is read from `AI_SETTINGS_PASSPHRASE` (or the variable `--passphrase-env` names), never from the command line. The token comes from `--token`, `AI_SETTINGS_TOKEN`, or a login as `admin` with `DEFAULT_PASSWORD`; it must be a sign-in token, not a personal API token, to export secrets. Exporting secrets also needs the signed-in user's current password, read from `AI_SETTINGS_CURRENT_PASSWORD` (or the variable `--password-env` names); when the script signs in as `admin` itself, `DEFAULT_PASSWORD` is used. In the Automator, the Backup tab exports the AI settings, asking for your Core Hub password when secrets are included, and the Import tab restores them (Check runs a dry run). The full Core Hub backup adds them as `ai-settings.json`.
 
+#### Not included in the full backup
+
+Core Hub's backup settings (Settings → Backup: the `/backup` routes and the `BACKUP_CONFIGURATION` key) and its recovery key are intentionally neither exported nor imported by the full export, Import All or the Automator. The recovery key is a secret held by a person, and the stored public key would be useless, or worse misleading, on a restored installation. Restore Core Hub's own backups with its offline command (`--restore-backup`, `--reset-connect`), then enable backups again in Settings → Backup.
+
 ### Transactions Auditing
 
 The bootstrapper supports configuring the **Transactions Auditing** feature via YAML. This feature allows you to track every transaction synchronized by Gluesync into a dedicated `GLUESYNC.TRANSACTIONS_AUDIT` table on a target agent of your choice.
