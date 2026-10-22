@@ -22,6 +22,7 @@ stages:
   - validate
   - fetch-agents
   - build
+  - image-smoke
   - build-sonar
   - deploy
 
@@ -254,6 +255,119 @@ automator_smoke_windows:
           Stop-Process -Id $process.Id -Force
         }
       }
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Windows container image of the bootstrapper (Dockerfile.windows): lets the Windows demo-kits run hub-first-login and
+# the pipeline creation inside Windows containers, as the Linux image does in the Linux kits. Built and pushed on our
+# Windows runners to Nexus only (nexus.hq.molo17.com/molo17-local/gluesync-bootstrapper), see "Windows container image"
+# in README.md.
+#   tag-* / beta-* tags   <version>-win-nanoserver-<ltsc>  (+ latest-win-nanoserver-<ltsc> for a GA tag, Docker Hub too)
+#   branch / MR pipeline  <branch-slug>-win-nanoserver-<ltsc>, when something the image is made of changed
+# ---------------------------------------------------------------------------------------------------------------------
+.windows_image_paths: &windows_image_paths
+  - Dockerfile.windows
+  - gluesync-bootstrapper-windows.spec
+  - requirements-bootstrapper.txt
+  - agents.json
+  - "*.py"
+  - "utils/**/*"
+  - scripts/windows-image-*.ps1
+  - .gitlab-ci.yml
+
+.bootstrapper_windows_image:
+  stage: build
+  needs:
+    - job: fetch_agents
+      artifacts: true
+      optional: true
+  timeout: 1h30m
+  interruptible: true
+  script:
+    - .\scripts\windows-image-publish.ps1 -WindowsTag $env:WINDOWS_TAG
+  after_script:
+    - |
+      # keep the shared runner's disk: the pushed image and its tags are in Nexus
+      $ErrorActionPreference = 'Continue'
+      Get-Content "bootstrapper-windows-image.env" -ErrorAction SilentlyContinue | ForEach-Object {
+        if ($_ -like 'IMAGE_REF=*') { cmd /c ("docker image rm " + ($_ -replace '^IMAGE_REF=', '') + " >nul 2>nul") }
+      }
+  artifacts:
+    reports:
+      dotenv: bootstrapper-windows-image.env
+    expire_in: 1 week
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^(tag|beta)-/
+      interruptible: false
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes: *windows_image_paths
+    # a branch pipeline while the branch has an open merge request would repeat the merge request pipeline
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+      when: never
+    - if: $CI_COMMIT_BRANCH && $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
+      changes: *windows_image_paths
+
+.bootstrapper_windows_smoke:
+  stage: image-smoke
+  timeout: 30m
+  interruptible: true
+  script:
+    - |
+      $ErrorActionPreference = 'Stop'
+      if (-not $env:IMAGE_REF) { throw 'IMAGE_REF is missing: the image job did not pass its dotenv artifact' }
+      $env:NEXUS_REPO_PASSWORD | docker login -u gluesync --password-stdin nexus.hq.molo17.com
+      if ($LASTEXITCODE -ne 0) { throw 'Docker login to Nexus failed' }
+      # run what Nexus serves, not the copy the build left on this runner (Windows PowerShell 5.1 turns the
+      # "No such image" stderr line of docker into a terminating error, hence cmd)
+      cmd /c "docker image rm $env:IMAGE_REF >nul 2>nul"
+      $global:LASTEXITCODE = 0
+      docker pull $env:IMAGE_REF
+      if ($LASTEXITCODE -ne 0) { throw "Docker pull $($env:IMAGE_REF) failed" }
+    - .\scripts\windows-image-smoke.ps1 -Image $env:IMAGE_REF -ExpectedVersion $env:IMAGE_VERSION
+  after_script:
+    - cmd /c "docker image rm $env:IMAGE_REF >nul 2>nul"
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^(tag|beta)-/
+      interruptible: false
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes: *windows_image_paths
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+      when: never
+    - if: $CI_COMMIT_BRANCH && $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
+      changes: *windows_image_paths
+
+bootstrapper_windows_image_ltsc2022:
+  extends: .bootstrapper_windows_image
+  tags:
+    - hq-windows-shell-2022
+  variables:
+    WINDOWS_TAG: ltsc2022
+
+bootstrapper_windows_smoke_ltsc2022:
+  extends: .bootstrapper_windows_smoke
+  tags:
+    - hq-windows-shell-2022
+  needs:
+    - job: bootstrapper_windows_image_ltsc2022
+      artifacts: true
+
+# Windows Server 2019 images only run on the 2019 runner. Not blocking: a 2019 base image problem must not stop the
+# ltsc2022 image that the kits use.
+bootstrapper_windows_image_ltsc2019:
+  extends: .bootstrapper_windows_image
+  tags:
+    - hq-windows-shell-2019
+  variables:
+    WINDOWS_TAG: ltsc2019
+  allow_failure: true
+
+bootstrapper_windows_smoke_ltsc2019:
+  extends: .bootstrapper_windows_smoke
+  tags:
+    - hq-windows-shell-2019
+  needs:
+    - job: bootstrapper_windows_image_ltsc2019
+      artifacts: true
+  allow_failure: true
 
 fetch_agents:
   stage: fetch-agents
@@ -1007,6 +1121,9 @@ update_budibase_version:
     - job: automator_publish
       optional: true
     - job: deploy
+      optional: true
+    # the new version is announced once the Windows image of it passed its smoke test (tag-* and beta-* tags only)
+    - job: bootstrapper_windows_smoke_ltsc2022
       optional: true
   script:
     - apk add --no-cache bash curl jq
