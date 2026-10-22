@@ -13,7 +13,7 @@ $here = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvoca
 
 function Invoke-Docker {
   # docker's own exit code and both streams, without PowerShell turning stderr into a terminating error
-  param([string[]]$DockerArgs, [int]$TimeoutSeconds = 600)
+  param([string[]]$DockerArgs, [int]$TimeoutSeconds = 300, [string]$ContainerName = '')
   $stdout = [System.IO.Path]::GetTempFileName()
   $stderr = [System.IO.Path]::GetTempFileName()
   try {
@@ -23,6 +23,10 @@ function Invoke-Docker {
     $null = $process.Handle  # Windows PowerShell 5.1 loses ExitCode without a cached handle
     if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
       $process.Kill()
+      if ($ContainerName) { cmd /c "docker rm -f $ContainerName >nul 2>nul"; $global:LASTEXITCODE = 0 }
+      Write-Host '---- output until the timeout ----'
+      Write-Host (Get-Content -Raw -ErrorAction SilentlyContinue $stdout)
+      Write-Host (Get-Content -Raw -ErrorAction SilentlyContinue $stderr)
       throw "docker $($DockerArgs -join ' ') did not finish within $TimeoutSeconds seconds"
     }
     $process.WaitForExit()
@@ -74,7 +78,8 @@ Assert-That ($override.ExitCode -eq 2) '--entrypoint C:\opt\python\gluesync-boot
 
 # A fake Core Hub inside the container: the real first-login exchange and the bootstrapper command
 $scriptsDir = (Resolve-Path -LiteralPath $here).Path
-$inside = Invoke-Docker @('run', '--rm', '--entrypoint', 'pwsh', '-v', "${scriptsDir}:C:\smoke", $Image, '-NoProfile', '-File', 'C:\smoke\windows-image-in-container-test.ps1')
+$containerName = "bootstrapper-smoke-$([guid]::NewGuid().ToString('N').Substring(0, 8))"
+$inside = Invoke-Docker @('run', '--rm', '--name', $containerName, '--entrypoint', 'pwsh', '-v', "${scriptsDir}:C:\smoke", $Image, '-NoProfile', '-File', 'C:\smoke\windows-image-in-container-test.ps1') -ContainerName $containerName
 Write-Host $inside.Output
 Assert-That ($inside.ExitCode -eq 0) 'the in-container tests (fake Core Hub) pass' $inside
 

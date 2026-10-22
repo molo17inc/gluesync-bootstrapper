@@ -79,7 +79,13 @@ $hubScript = {
   }
 }
 
+function Write-Step {
+  param([string]$Message)
+  Write-Host ("[{0:HH:mm:ss}] {1}" -f (Get-Date), $Message)
+}
+
 function Start-FakeHub {
+  Write-Step "starting the fake Core Hub on 127.0.0.1:$Port"
   $starter = if (Get-Command Start-ThreadJob -ErrorAction SilentlyContinue) { 'Start-ThreadJob' } else { 'Start-Job' }
   $job = & $starter -ScriptBlock $hubScript -ArgumentList $Port
   $deadline = (Get-Date).AddSeconds(30)
@@ -89,6 +95,7 @@ function Start-FakeHub {
       $probe = New-Object System.Net.Sockets.TcpClient
       $probe.Connect('127.0.0.1', $Port)
       $probe.Close()
+      Write-Step 'the fake Core Hub listens'
       return $job
     } catch {
       Start-Sleep -Milliseconds 300
@@ -103,6 +110,7 @@ function Invoke-Exe {
   $stderr = Join-Path ([System.IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString('N') + '.err')
   $startArgs = @{ FilePath = $Exe; RedirectStandardOutput = $stdout; RedirectStandardError = $stderr; PassThru = $true; NoNewWindow = $true }
   if ($ExeArgs -and $ExeArgs.Count -gt 0) { $startArgs.ArgumentList = $ExeArgs }
+  Write-Step "running: $Exe $($ExeArgs -join ' ')"
   $process = Start-Process @startArgs
   $null = $process.Handle
   if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
@@ -110,6 +118,7 @@ function Invoke-Exe {
     throw "$Exe $($ExeArgs -join ' ') did not finish within $TimeoutSeconds seconds"
   }
   $process.WaitForExit()
+  Write-Step "finished with exit code $($process.ExitCode)"
   $result = [pscustomobject]@{
     ExitCode = $process.ExitCode
     Output   = ((Get-Content -Raw -ErrorAction SilentlyContinue $stdout) + (Get-Content -Raw -ErrorAction SilentlyContinue $stderr))
