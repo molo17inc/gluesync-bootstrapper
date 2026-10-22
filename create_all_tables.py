@@ -79,6 +79,10 @@ class GenerateTableStatementRequest(BaseModel):
 
 class GenerateCreateTargetTableStatementRequest(BaseModel):
     columns: List[Column]
+    # The source table the target table is created from (the path of the request names the target one). With it
+    # CoreHub gives an array column that arrives without its element type the one of the source column.
+    sourceSchema: Optional[str] = None
+    sourceTable: Optional[str] = None
 
 class CreateTableRequest(BaseModel):
     statement: str
@@ -172,12 +176,17 @@ def generate_create_table_statement(pipeline_id: str, schema_name: str, table_na
     try:
         # URL-encode the table name to handle special characters
         encoded_table_name = urllib.parse.quote(table_name, safe='')
-        logger.info(f"table data: {table_data.model_dump()}")
+        body = table_data.model_dump()
+        # The source table is optional: left out (not null) when the bootstrapper does not know it
+        for source_field in ("sourceSchema", "sourceTable"):
+            if body.get(source_field) is None:
+                body.pop(source_field, None)
+        logger.info(f"table data: {body}")
         response = fetch_core_hub(
             f"/pipelines/{pipeline_id}/config/entities/schemas/{schema_name}/tables/{encoded_table_name}/statements/create-table",
             method="PUT",
             token=token,
-            body=table_data.model_dump()
+            body=body
         )
         return response
     except requests.exceptions.RequestException as e:
@@ -411,7 +420,8 @@ def _create_table(ctx: _TableCreationContext, table_name: str) -> None:
 
     # check if the table exists on the target
     handle_table_creation(ctx.pipeline_id, target_table_name, ctx.yaml_target_schema, source_discovered_keys, ctx.token,
-                          columns, custom_config, ctx.source_node_info, ctx.target_node_info)
+                          columns, custom_config, ctx.source_node_info, ctx.target_node_info,
+                          source_schema=ctx.source_schema, source_table=table_name)
 
 
 def _schema_tables_context(yaml_config: dict, source_schema: str, target_schema: str) -> dict:
@@ -745,7 +755,9 @@ def _mapped_column_dtos(column_entries, target_table_name: str, columns, key_loo
 
 
 def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_schema: str, keys: list, token: str,
-                          columns: list, custom_config, source_node_info, target_node_info):
+                          columns: list, custom_config, source_node_info, target_node_info,
+                          source_schema: Optional[str] = None, source_table: Optional[str] = None):
+    """Create the target table when it does not exist; ``source_schema``/``source_table`` name the source table."""
     custom_config = custom_config or {}
 
     if table_exists(pipeline_id=pipeline_id, schema_name=yaml_target_schema, table_name=target_table_name,
@@ -776,7 +788,8 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
         if column_dtos is None:
             return
 
-    table_data = GenerateCreateTargetTableStatementRequest(columns=column_dtos)
+    table_data = GenerateCreateTargetTableStatementRequest(columns=column_dtos, sourceSchema=source_schema,
+                                                           sourceTable=source_table)
     statement = generate_create_table_statement(pipeline_id=pipeline_id, schema_name=yaml_target_schema,
                                                 table_name=target_table_name, token=token,
                                                 table_data=table_data)
