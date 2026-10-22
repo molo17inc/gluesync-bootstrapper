@@ -30,7 +30,8 @@ from utils.log import get_logger, create_log_file, log_success, log_failure, loc
 from utils.core_hub_client import CoreHubClient
 from commons import get_node_info, get_table_columns, fetch_core_hub, get_pipeline_config, get_pipeline_agents, \
     get_agent_tables, map_data_type, load_yaml_config, create_group, \
-    process_filter_clauses
+    process_filter_clauses, canonicalize_target_type, is_length_type
+from entity_mapping import ColumnNames, EntityMappingError, find_by_name, is_column_mappings, yaml_relations
 from pydantic import BaseModel, Field
 from typing import Optional
 from typing import List
@@ -52,6 +53,18 @@ CREATE_TABLE_IF_NOT_EXISTS = os.getenv('CREATE_TABLE_IF_NOT_EXISTS', 'true').low
 
 # Initialize the CoreHub client
 core_hub_client = CoreHubClient(CORE_HUB_URL)
+
+
+def set_create_table_if_not_exists(enabled: bool) -> None:
+    """Toggle automatic table creation at runtime, for the table existence check and the creation itself."""
+
+    global CREATE_TABLE_IF_NOT_EXISTS
+    CREATE_TABLE_IF_NOT_EXISTS = bool(enabled)
+
+
+class TargetTableCreationError(Exception):
+    """The target table of a table could not be created, so an entity saved for it would write to no table."""
+
 
 class Column(BaseModel):
     id: int
@@ -484,6 +497,7 @@ def create_tables(token, pipeline_id, source_schema, target_schema, tables, sour
         **_schema_tables_context(yaml_config, source_schema, target_schema),
     )
 
+    failures = []
     for table in tables:
         table_name = _table_name_of(table)
 
@@ -495,7 +509,14 @@ def create_tables(token, pipeline_id, source_schema, target_schema, tables, sour
             logger.info(f"Skipping table: {table_name}")
             continue
 
-        _create_table(ctx, table_name)
+        try:
+            _create_table(ctx, table_name)
+        except TargetTableCreationError as error:
+            logger.error(f"Table {table_name} not created: {error}")
+            failures.append(f"{table_name}: {error}")
+
+    if failures:
+        raise TargetTableCreationError(f"{len(failures)} table(s) not created: {'; '.join(failures)}")
 
 
 def _to_int(value, default=0):
@@ -515,22 +536,9 @@ def _to_bool(value, default=True):
     return bool(value)
 
 
-_LENGTH_TYPES = frozenset({
-    'varchar2',
-    'varchar',
-    'char',
-    'nchar',
-    'nvarchar2',
-    'raw',
-    'binary',
-    'varbinary',
-})
-
-
 def _normalize_data_length(col_type: str, data_length: int) -> int:
-    base_type = str(col_type or '').split('(')[0].strip().lower()
     length_value = _to_int(data_length, 0)
-    if base_type in _LENGTH_TYPES:
+    if is_length_type(col_type):
         return length_value if length_value > 0 else 1024
     return length_value
 
@@ -578,34 +586,39 @@ def _target_only_column_spec(target_col):
     )
 
 
+def _target_only_column_dto(idx: int, target_col, key_lookup: _KeyLookup, source_node_info, target_node_info) -> Column:
+    """The target column of a targetOnlyColumns entry, at position ``idx``."""
+    col_name, col_type, col_data_length, col_numeric_precision, col_numeric_scale, col_is_nullable = \
+        _target_only_column_spec(target_col)
+
+    # Map the column type to target node type
+    mapped_type = map_data_type(
+        col_type,
+        source_node_info,
+        target_node_info,
+    )
+    col_data_length = _normalize_data_length(mapped_type, col_data_length)
+
+    return Column(
+        name=col_name,
+        dataType=format_column_type(mapped_type, col_data_length, col_numeric_precision, col_numeric_scale),
+        id=idx,  # Use sequential IDs for target-only columns
+        tableId=0,
+        position=idx,
+        isPK=key_lookup.is_primary_key(col_name),
+        isNullable=col_is_nullable,
+        charMaxLength=col_data_length,
+        numPrec=col_numeric_precision,
+        numScale=col_numeric_scale
+    )
+
+
 def _target_only_column_dtos(target_only_columns, key_lookup: _KeyLookup, source_node_info, target_node_info) -> list:
     """The target columns of a targetOnlyColumns definition."""
-    column_dtos = []
-    for idx, target_col in enumerate(target_only_columns, 1):
-        col_name, col_type, col_data_length, col_numeric_precision, col_numeric_scale, col_is_nullable = \
-            _target_only_column_spec(target_col)
-
-        # Map the column type to target node type
-        mapped_type = map_data_type(
-            col_type,
-            source_node_info,
-            target_node_info,
-        )
-        col_data_length = _normalize_data_length(mapped_type, col_data_length)
-
-        column_dtos.append(Column(
-            name=col_name,
-            dataType=format_column_type(mapped_type, col_data_length, col_numeric_precision, col_numeric_scale),
-            id=idx,  # Use sequential IDs for target-only columns
-            tableId=0,
-            position=idx,
-            isPK=key_lookup.is_primary_key(col_name),
-            isNullable=col_is_nullable,
-            charMaxLength=col_data_length,
-            numPrec=col_numeric_precision,
-            numScale=col_numeric_scale
-        ))
-    return column_dtos
+    return [
+        _target_only_column_dto(idx, target_col, key_lookup, source_node_info, target_node_info)
+        for idx, target_col in enumerate(target_only_columns, 1)
+    ]
 
 
 def _split_column_entries(column_entries):
@@ -721,18 +734,192 @@ def _source_column_dtos(columns, key_lookup: _KeyLookup, source_node_info, targe
     return column_dtos
 
 
-def _mapped_column_dtos(column_entries, target_table_name: str, columns, key_lookup: _KeyLookup, source_node_info,
-                        target_node_info) -> Optional[list]:
-    """The target columns from the YAML column metadata, else from the source columns.
+def _first_set(*values):
+    """The first of ``values`` that is not None, None when all are."""
+    return next((value for value in values if value is not None), None)
 
-    ``None`` when the YAML columns are source→target mappings, which cannot describe a table to create.
+
+def _row_position(row: dict) -> int:
+    """The position an exported row gives its target column: ``targetPosition``, else ``ordinalPosition``, 0 for none."""
+    for key in ('targetPosition', 'ordinalPosition'):
+        value = row.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 1:
+            return value
+    return 0
+
+
+def _exported_row(relation: dict) -> dict:
+    """The exported mapping row of a relation; empty for a shorthand pair ``{SRC: tgt}``, whose keys are column names."""
+    row = relation.get('row') or {}
+    return row if 'source' in row or not relation['sources'] else {}
+
+
+def _exported_target_type(row: dict, source_col, source_node_info, target_node_info) -> str:
+    """The target type of an exported row.
+
+    The ``targetDataType`` it declares, verbatim; else its ``type`` when the target advertises it (an older export wrote
+    the source type there); else the type the discovered source column maps to; else the one its ``type`` maps to.
     """
-    metadata_columns, simple_mappings = _split_column_entries(column_entries)
+    if row.get('targetDataType'):
+        return row['targetDataType']
+    advertised = canonicalize_target_type(row.get('type'), target_node_info)
+    if advertised:
+        return advertised
+    for source_type in ((source_col or {}).get('dataType'), row.get('type')):
+        if source_type:
+            return map_data_type(source_type, source_node_info, target_node_info)
+    return 'varchar'
 
-    if simple_mappings:
-        logger.info(
-            f"Skipping table creation for {target_table_name}: column mappings use source→target format, which is not supported for CREATE_TABLE_IF_NOT_EXISTS.")
-        return None
+
+def _exported_nullable(row: dict, source_col) -> bool:
+    """Whether the target column of an exported row is nullable: ``targetIsNullable``, else the source column's
+    nullability (a column no source feeds is nullable)."""
+    if isinstance(row.get('targetIsNullable'), bool):
+        return row['targetIsNullable']
+    source_nullable = (source_col or {}).get('isNullable')
+    return _to_bool(_first_set(row.get('isNullable'), source_nullable), default=source_col is None)
+
+
+def _exported_column_dto(target_name: str, relation: dict, source_col, key_lookup: _KeyLookup, source_node_info,
+                         target_node_info) -> Column:
+    """The target column ``target_name`` a relation of exported mapping rows writes, fed by ``source_col`` (or by none)."""
+    row = _exported_row(relation)
+    source = source_col or {}
+    data_type = _exported_target_type(row, source_col, source_node_info, target_node_info)
+    data_length = _normalize_data_length(data_type, _first_set(
+        row.get('targetDataLength'), row.get('dataLength'), source.get('charMaxLength')))
+    numeric_precision = _to_int(_first_set(
+        row.get('targetNumericPrecision'), row.get('numericPrecision'), source.get('numPrec')))
+    numeric_scale = _to_int(_first_set(
+        row.get('targetNumericScale'), row.get('numericScale'), source.get('numScale')))
+    is_pk = _to_bool(row.get('isPK'), default=False) or key_lookup.is_primary_key(target_name) \
+        or any(key_lookup.is_primary_key(source_name) for source_name in relation['sources'])
+    return Column(
+        name=target_name,
+        dataType=format_column_type(data_type, data_length, numeric_precision, numeric_scale),
+        id=0,
+        tableId=0,
+        position=_row_position(row),
+        isPK=is_pk,
+        isNullable=_exported_nullable(row, source_col),
+        charMaxLength=data_length,
+        numPrec=numeric_precision,
+        numScale=numeric_scale
+    )
+
+
+class _TableColumns:
+    """The columns of a table to create: each target name once, the first row naming it wins."""
+
+    def __init__(self, relations):
+        by_lower = {}
+        for relation in relations:
+            for name in relation['targets']:
+                by_lower.setdefault(name.lower(), set()).add(name)
+        # Names that differ by case only are different columns, as on the entity side
+        self._names = ColumnNames(name for names in by_lower.values() if len(names) > 1 for name in names)
+        self._seen = set()
+        self.columns = []
+
+    def __contains__(self, name) -> bool:
+        return self._names.key(name) in self._seen
+
+    def add(self, column: Column) -> None:
+        if column.name not in self:
+            self._seen.add(self._names.key(column.name))
+            self.columns.append(column)
+
+
+def _in_table_order(columns: list) -> list:
+    """The columns by position, those that state none last in the order given, numbered 1..n as ``id`` and ``position``."""
+    ordered = sorted(enumerate(columns), key=lambda pair: (pair[1].position < 1, pair[1].position or pair[0]))
+    for number, (_, column) in enumerate(ordered, 1):
+        column.id = column.position = number
+    return [column for _, column in ordered]
+
+
+def _fed_relation_columns(table: _TableColumns, relations, source_columns, key_lookup, source_node_info,
+                          target_node_info) -> bool:
+    """Add the columns the relations write from a source column the source has; whether it added any."""
+    fed = False
+    for relation in relations:
+        if not relation['sources']:
+            continue
+        # The entity builds no column for a source discovery does not return
+        source_col = next((col for col in (find_by_name(source_columns, name) for name in relation['sources']) if col),
+                          None)
+        if source_col is None:
+            continue
+        for target_name in relation['targets']:
+            table.add(_exported_column_dto(target_name, relation, source_col, key_lookup, source_node_info,
+                                           target_node_info))
+            fed = True
+    return fed
+
+
+def _add_omitted_key_columns(table: _TableColumns, relations, custom_config, source_columns, key_lookup,
+                             source_node_info, target_node_info) -> None:
+    """Add, by its own name, each column of the YAML ``keys`` that no row names: the entity maps it by name."""
+    source_key = ColumnNames(col['name'] for col in source_columns if col.get('name')).key
+    named = {source_key(name) for relation in relations for name in relation['sources']}
+    for key_def in custom_config.get('keys') or []:
+        key_col = find_by_name(source_columns, _parse_key_def(key_def)[0])
+        if key_col is not None and source_key(key_col['name']) not in named:
+            relation = {'sources': [key_col['name']], 'targets': [key_col['name']]}
+            table.add(_exported_column_dto(key_col['name'], relation, key_col, key_lookup, source_node_info,
+                                           target_node_info))
+
+
+def _exported_column_dtos(relations, custom_config: dict, columns, key_lookup: _KeyLookup, source_node_info,
+                          target_node_info) -> list:
+    """The target columns of exported mapping rows: the columns the entity is built with.
+
+    Each row gives the column(s) it writes, from the discovered source column it names (``target: []`` writes none, a
+    list ``source`` is one column, a row without ``source`` is a column a field function writes); a mapping that writes
+    no column falls back to every discovered source column, as the entity does. Then come the columns of the YAML
+    ``keys`` no row names and the ``targetOnlyColumns`` no row writes. Empty when no source column feeds any.
+    """
+    source_columns = (columns or {}).get('columns') or []
+    table = _TableColumns(relations)
+    if not _fed_relation_columns(table, relations, source_columns, key_lookup, source_node_info, target_node_info):
+        for column in _source_column_dtos(columns or {'columns': []}, key_lookup, source_node_info, target_node_info):
+            table.add(column)
+        if not table.columns:
+            return []
+    _add_omitted_key_columns(table, relations, custom_config, source_columns, key_lookup, source_node_info,
+                             target_node_info)
+    for relation in relations:
+        if not relation['sources']:
+            for target_name in relation['targets']:
+                table.add(_exported_column_dto(target_name, relation, None, key_lookup, source_node_info,
+                                               target_node_info))
+    for target_col in custom_config.get('targetOnlyColumns') or []:
+        if _target_only_column_spec(target_col)[0] not in table:
+            table.add(_target_only_column_dto(0, target_col, key_lookup, source_node_info, target_node_info))
+    return _in_table_order(table.columns)
+
+
+def _mapped_column_dtos(column_entries, target_table_name: str, columns, key_lookup: _KeyLookup, source_node_info,
+                        target_node_info, custom_config=None) -> list:
+    """The target columns from the YAML column rows (exported mapping rows, else column metadata), else from the
+    source columns.
+
+    Raises :class:`TargetTableCreationError` for rows no table can be made of.
+    """
+    if is_column_mappings(column_entries):
+        try:
+            relations = yaml_relations(column_entries, label=target_table_name)
+        except EntityMappingError as error:
+            raise TargetTableCreationError(
+                f"the column rows of {target_table_name} describe no table: {error}") from error
+        return _exported_column_dtos(relations or [], custom_config or {}, columns, key_lookup, source_node_info,
+                                     target_node_info)
+
+    metadata_columns, other_entries = _split_column_entries(column_entries)
+    if other_entries:
+        raise TargetTableCreationError(
+            f"the column entries of {target_table_name} mix column metadata with rows that are not, which cannot "
+            f"describe a table to create: {other_entries}")
 
     column_dtos = []
     if metadata_columns:
@@ -744,17 +931,38 @@ def _mapped_column_dtos(column_entries, target_table_name: str, columns, key_loo
     return column_dtos
 
 
+def _mark_target_keys(column_dtos: list, custom_config: dict, target_table_name: str) -> None:
+    """Make the columns the YAML ``targetKeys`` name primary keys too: the entity keys are the target of its source
+    keys plus ``targetKeys``, and on a table that has a primary key they must be exactly that key.
+
+    Names are compared case-insensitively, as the key rules do; a name that is no column of the table is refused.
+    """
+    for key_name in custom_config.get('targetKeys') or []:
+        keyed = [column for column in column_dtos if column.name.lower() == str(key_name).lower()]
+        if not keyed:
+            raise TargetTableCreationError(
+                f"targetKeys of {target_table_name} names {key_name}, which is no column of the table to create "
+                f"({', '.join(column.name for column in column_dtos)})")
+        for column in keyed:
+            column.isPK = True
+
+
 def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_schema: str, keys: list, token: str,
-                          columns: list, custom_config, source_node_info, target_node_info):
+                          columns: list, custom_config, source_node_info, target_node_info) -> bool:
+    """Create the target table when it does not exist and CREATE_TABLE_IF_NOT_EXISTS is on.
+
+    Returns whether it created the table. Raises :class:`TargetTableCreationError` when the table has to be created
+    and cannot be.
+    """
     custom_config = custom_config or {}
 
     if table_exists(pipeline_id=pipeline_id, schema_name=yaml_target_schema, table_name=target_table_name,
                     token=token):
         logger.info(f"table: {target_table_name} already exists")
-        return
+        return False
     if not CREATE_TABLE_IF_NOT_EXISTS:
         logger.info(f"table: {target_table_name} does not exists, skipping creation as CREATE_TABLE_IF_NOT_EXISTS is false")
-        return
+        return False
 
     logger.info(f"table: {target_table_name} does not exists, creating it")
     # Create ColumnDto objects
@@ -772,17 +980,25 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
         column_dtos = _target_only_column_dtos(target_only_columns, key_lookup, source_node_info, target_node_info)
     else:
         column_dtos = _mapped_column_dtos(column_entries, target_table_name, columns, key_lookup, source_node_info,
-                                          target_node_info)
-        if column_dtos is None:
-            return
+                                          target_node_info, custom_config)
+
+    if not column_dtos:
+        raise TargetTableCreationError(
+            f"no column to create table {yaml_target_schema}.{target_table_name} with: no source column feeds it")
+    _mark_target_keys(column_dtos, custom_config, target_table_name)
 
     table_data = GenerateCreateTargetTableStatementRequest(columns=column_dtos)
-    statement = generate_create_table_statement(pipeline_id=pipeline_id, schema_name=yaml_target_schema,
-                                                table_name=target_table_name, token=token,
-                                                table_data=table_data)
-    logger.info(f"create table statement: {statement}")
-    create_target_table(pipeline_id=pipeline_id, create_table_request=CreateTableRequest(statement=statement),
-                        token=token)
+    try:
+        statement = generate_create_table_statement(pipeline_id=pipeline_id, schema_name=yaml_target_schema,
+                                                    table_name=target_table_name, token=token,
+                                                    table_data=table_data)
+        logger.info(f"create table statement: {statement}")
+        create_target_table(pipeline_id=pipeline_id, create_table_request=CreateTableRequest(statement=statement),
+                            token=token)
+    except (requests.exceptions.RequestException, RuntimeError) as error:
+        raise TargetTableCreationError(
+            f"creating table {yaml_target_schema}.{target_table_name} failed: {error}") from error
+    return True
 
 
 def main(pipeline_id, source_schema, target_schema, source_type, target_type, yaml_file, token, skip_errors=True):

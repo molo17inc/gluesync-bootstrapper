@@ -30,13 +30,14 @@ from typing import Any
 from commons import get_node_info, get_table_columns, fetch_core_hub, get_pipeline_config, get_pipeline_agents, \
     get_agent_tables, create_entity_schedules, map_data_type, create_pipeline_schedules, create_group_schedules, load_yaml_config, \
     process_filter_clauses, create_group, assign_entities_to_group, get_table_id, extract_target_column_types, \
-    corehub_takes_grouped_matrix
-from create_all_tables import handle_table_creation
+    corehub_takes_grouped_matrix, canonicalize_target_type
+from create_all_tables import TargetTableCreationError, handle_table_creation, \
+    set_create_table_if_not_exists as _set_tables_flag
 from create_user_defined_functions import handle_udf_function_definition
 from field_function_utils import build_field_functions_for_entity_type, normalize_expression_for_corehub, \
     produced_target_names
 from entity_mapping import ColumnNames, EntityMappingError, build_entries, derive_keys, drop_forbidden_key_links, \
-    encode_entries, find_by_name, group_relations, grouped_only_forms, read_entry, yaml_relations
+    encode_entries, find_by_name, group_relations, grouped_only_forms, is_column_mappings, read_entry, yaml_relations
 import create_user_defined_functions as udf_module
 import function_collection
 from utils.log import get_logger, create_log_file, log_success, log_failure, lockfile_failure, lockfile_complete, exit_on_fail
@@ -46,7 +47,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Metadata-only fields used in the export format {source: ..., target: ..., type: ..., ...}
 # These are never column names in the explicit export format.
-_EXPORT_METADATA_FIELDS = {"source", "target", "type", "dataLength", "numericPrecision", "numericScale", "isNullable", "id", "ordinalPosition", "targetPosition", "targetIsNullable", "targetDataType", "charSet", "expression"}
+_EXPORT_METADATA_FIELDS = {"source", "target", "type", "dataLength", "numericPrecision", "numericScale", "isNullable", "id", "ordinalPosition", "targetPosition", "targetIsNullable", "targetDataType", "targetDataLength", "targetNumericPrecision", "targetNumericScale", "charSet", "expression"}
 
 # Tells "the YAML declared charSet: null" apart from "the YAML said nothing about charSet".
 # The first must clear the character set discovered on the column, the second must leave it
@@ -188,41 +189,7 @@ def _is_target_known_type(data_type, target_node_info):
     target-compatible value, even when that value happens to be identical to
     the source dataType (e.g. PostgreSQL ``numeric`` -> Vertica ``numeric``).
     """
-    return _canonicalize_target_type(data_type, target_node_info) is not None
-
-
-def _canonicalize_target_type(data_type, target_node_info):
-    """Return the canonical target-matrix casing for ``data_type`` or None.
-
-    Looks up ``data_type`` (case-insensitively) in the target's
-    ``dataTypesMatrix`` ``defaultType``/``supportedTypes`` lists and returns
-    the value with the matrix's original casing. Returns None when no match
-    is found. ``defaultType`` matches take precedence over ``supportedTypes``.
-    """
-    if not data_type or not target_node_info:
-        return None
-    matrix = target_node_info.get('dataTypesMatrix') or []
-    needle = str(data_type).strip().lower()
-    if not needle:
-        return None
-    supported_match = None
-    for entry in matrix:
-        if not isinstance(entry, dict):
-            continue
-        default_type = entry.get('defaultType')
-        if default_type and str(default_type).strip().lower() == needle:
-            return str(default_type)
-        if supported_match is None:
-            supported_match = _supported_type_match(entry, needle)
-    return supported_match
-
-
-def _supported_type_match(matrix_entry, needle):
-    """The first of the ``supportedTypes`` of a ``dataTypesMatrix`` entry spelt ``needle`` case-insensitively."""
-    for st in matrix_entry.get('supportedTypes') or []:
-        if st and str(st).strip().lower() == needle:
-            return str(st)
-    return None
+    return canonicalize_target_type(data_type, target_node_info) is not None
 
 
 def _is_in_keys(col_name, custom_config, names=None):
@@ -252,28 +219,6 @@ def _enrich_column(col_dict, source_col):
         if field in source_col and source_col[field] is not None:
             col_dict[field] = source_col[field]
     return col_dict
-
-def _is_column_mappings(columns_list):
-    """
-    Return True if the columns list contains column mappings (not column definitions).
-
-    Detects both:
-    - Export format:  [{source: "col", target: "COL", type: ..., ...}]
-    - User format:    [{col_name: "target_name"}, ...]  e.g. [{id: "ID"}]
-
-    Column *definitions* (not mappings) have a 'name' key.
-    """
-    if not columns_list:
-        return False
-    first = columns_list[0]
-    if not isinstance(first, dict):
-        return False
-    # Export format: has explicit 'source' key
-    if "source" in first:
-        return True
-    # User format: no 'name' key (column definitions always have 'name')
-    return "name" not in first
-
 
 def _is_column_whitelist(columns_list):
     """
@@ -783,7 +728,7 @@ def _assemble_source_keys(columns, custom_config, relations, columns_def, table_
         return keys
     logger.info(f"Processing keys for table {table_name}. Requested keys: {custom_config['keys']}")
     logger.info(f"Has columns section: {bool(custom_config.get('columns'))}")
-    if _is_column_mappings(custom_config.get('columns', [])):
+    if is_column_mappings(custom_config.get('columns', [])):
         # Use column mappings for keys
         keys = _source_keys_from_mappings(columns, custom_config, relations, columns_def, table_name, source_schema,
                                           names)
@@ -820,7 +765,7 @@ def _assemble_source_columns(columns, custom_config, table_name, source_schema, 
     # Detect legacy backup YAML where all column types are null.
     _discovery_type_by_source = _legacy_discovery_types(columns, custom_config, table_name)
 
-    has_column_mappings = _is_column_mappings(custom_config.get('columns', []))
+    has_column_mappings = is_column_mappings(custom_config.get('columns', []))
     is_column_whitelist = _is_column_whitelist(custom_config.get('columns', []))
 
     if has_column_mappings:
@@ -838,7 +783,7 @@ def _assemble_source_columns(columns, custom_config, table_name, source_schema, 
         columns_def = _source_columns_from_discovery(columns, custom_config, table_name, names)
 
     # GSSD-1355 regression guard: target-only Field Function entries make
-    # _is_column_mappings() true but give no source column. Without
+    # is_column_mappings() true but give no source column. Without
     # a discovery fallback, columns_def (and therefore CoreHub tablesKeys via
     # isPK) stay empty → "Missing entity primary keys" on plain SQL tables.
     if has_column_mappings and not columns_def:
@@ -897,6 +842,7 @@ class _TablePair:
     source_table_id: Any
     target_table_id: Any
     is_unlocked_schema: bool = False
+    created_table: bool = False  # this run created the target table: its positions are the table's
 
     @cached_property
     def source_names(self):
@@ -1024,7 +970,7 @@ class _TargetBuild:
         names = self.pair.source_names
         for row in self.pair.custom_config.get('columns') or []:
             if isinstance(row, dict) and isinstance(row.get('source'), str) and names.key(row['source']) == col.get("name"):
-                return _canonicalize_target_type(row.get('type'), self.ctx.target_node_info)
+                return canonicalize_target_type(row.get('type'), self.ctx.target_node_info)
         return None
 
     def target_names(self):
@@ -1307,7 +1253,7 @@ def _append_mapped_target_column(tb, col, source_col_id, discovered_target_col, 
     yaml_row = _yaml_mapping_row(tb, col["name"], target_name)
     # The type an exported row gives the target column, when the target advertises it, is the one the entity had:
     # a target reports its own spelling of a type (Cassandra reads varchar back as text).
-    exported_type = _canonicalize_target_type(yaml_row.get('type'), tb.ctx.target_node_info)
+    exported_type = canonicalize_target_type(yaml_row.get('type'), tb.ctx.target_node_info)
     # User-declared targetDataType override takes highest priority
     resolved_target_type = tb.override_for(col["name"]) or exported_type or resolved_target_type
     # Fallback for legacy null-type backups: if we still have no
@@ -1379,12 +1325,12 @@ def _whitelist_target_type(tb, col, yaml_col, discovered_target_col):
         return _override
     target_node_info = tb.ctx.target_node_info
     _mapped = tb.map_type(_source_dt)
-    _canonical = _canonicalize_target_type(_mapped, target_node_info) if _mapped else None
+    _canonical = canonicalize_target_type(_mapped, target_node_info) if _mapped else None
     if _canonical:
         # Prefer YAML `type:` when it is also a known target type
         # (gives the user authoritative control over target casing/variant).
         _yaml_type = yaml_col.get('type')
-        _yaml_canonical = _canonicalize_target_type(_yaml_type, target_node_info) if _yaml_type else None
+        _yaml_canonical = canonicalize_target_type(_yaml_type, target_node_info) if _yaml_type else None
         return _yaml_canonical or _canonical
     if yaml_col.get('type'):
         return yaml_col.get('type')
@@ -1457,7 +1403,7 @@ def _target_columns_from_discovery(tb, apply_override, coerce_target_pk):
 def _build_target_columns(tb, relations, grouped):
     """The target columns fed by a source column, from the YAML ``columns:`` shape."""
     yaml_columns = tb.pair.custom_config.get('columns', [])
-    has_column_mappings_target = _is_column_mappings(yaml_columns)
+    has_column_mappings_target = is_column_mappings(yaml_columns)
     if has_column_mappings_target:
         _target_columns_from_mappings(tb, relations, grouped)
     elif _is_column_whitelist(yaml_columns):
@@ -1474,12 +1420,30 @@ def _build_target_columns(tb, relations, grouped):
         _target_columns_from_discovery(tb, apply_override=False, coerce_target_pk=True)
 
 
+def _produced_position(row, discovered_target_col):
+    """The position of the target column of a ``{target, expression}`` row.
+
+    In order: the ``targetPosition`` the export wrote on the row, the position of the discovered target column (the
+    table the import has just created, for an older export that wrote none), the exported ``targetPosition`` of 0
+    (the entity had none), else 0.
+    """
+    exported = row.get("targetPosition")
+    if _is_position(exported):
+        return exported
+    discovered = (discovered_target_col or {}).get("position")
+    if _is_position(discovered):
+        return discovered
+    return exported if _is_position(exported, least=0) else 0
+
+
 def _produced_column(row, discovered_target_col, target_name, target_col_id):
-    """The target column ``target_col_id`` of a ``{target, expression}`` row (null:1), fed by no source column."""
+    """The target column ``target_col_id`` of a ``{target, expression}`` row (null:1), fed by no source column, at the
+    place :func:`_produced_position` gives it."""
+    position = _produced_position(row, discovered_target_col)
     if not discovered_target_col:
         return {
             "id": target_col_id,
-            "position": 0,
+            "position": position,
             "name": target_name,
             "alias": target_name,
             "dataType": row.get("targetDataType") or row.get("type"),
@@ -1489,7 +1453,7 @@ def _produced_column(row, discovered_target_col, target_name, target_col_id):
         }
     produced_col = {
         "id": target_col_id,
-        "position": 0,
+        "position": position,
         "name": discovered_target_col.get("name"),
         "alias": discovered_target_col.get("name"),
         "dataType": discovered_target_col.get("dataType") or row.get("targetDataType") or row.get("type"),
@@ -1908,7 +1872,7 @@ def _target_keys_without_rules(tb, columns_def, relations):
     custom_config = tb.pair.custom_config
     if not (custom_config and 'keys' in custom_config and custom_config['keys'] is not None):
         return _target_keys_from_pk(tb)
-    if _is_column_mappings(custom_config.get('columns', [])):
+    if is_column_mappings(custom_config.get('columns', [])):
         return _target_keys_from_mappings(tb, columns_def, relations)
     return _target_keys_from_names(tb)
 
@@ -2062,7 +2026,19 @@ def _assemble_target_side(ctx, pair, columns_def, has_filter, discovery_type_by_
 
     _attach_field_functions(tb, target_entity_type, name_relations, grouped)
 
+    if pair.created_table:
+        _take_created_table_positions(tb)
+
     return tb.columns_def, target_keys
+
+
+def _take_created_table_positions(tb):
+    """Give every target column the position its column has in the table this run created, which is the truth: the
+    table numbers its columns 1..n whatever the exported ``targetPosition`` of the rows says."""
+    for target_col in tb.columns_def:
+        discovered_target_col = tb.target_col(target_col.get("name", ""))
+        if discovered_target_col and _is_position(discovered_target_col.get("position")):
+            target_col["position"] = discovered_target_col["position"]
 
 
 def _fill_missing_target_types(tb, columns_def):
@@ -2117,10 +2093,11 @@ DEFAULT_MAX_LOGICAL_PARTITIONS = int(os.getenv('MAX_LOGICAL_PARTITIONS', '10'))
 
 
 def set_create_table_if_not_exists(enabled: bool) -> None:
-    """Allow callers to toggle automatic table creation at runtime."""
+    """Allow callers to toggle automatic table creation at runtime, here and in create_all_tables."""
 
     global CREATE_TABLE_IF_NOT_EXISTS
     CREATE_TABLE_IF_NOT_EXISTS = bool(enabled)
+    _set_tables_flag(enabled)
 
 
 # Target categories for which the bootstrapper must NOT attempt to issue a
@@ -3074,28 +3051,41 @@ def _custom_config_of(custom_tables, table_name):
     return custom_config, yaml_table_key
 
 
-def _create_target_table(run, pair, keys):
-    """Create the target table of a discovered table when CREATE_TABLE_IF_NOT_EXISTS is on (RDBMS targets only)."""
+def _create_target_table(run, pair, keys, label=None) -> bool:
+    """Create the target table of a discovered table when CREATE_TABLE_IF_NOT_EXISTS is on (RDBMS targets only).
+
+    Returns whether the entity may go on. A table that cannot be created is refused (``label``, else the source table
+    name, names it), unless the target reports columns for it: then it exists whatever the existence check said.
+    """
     if not CREATE_TABLE_IF_NOT_EXISTS:
-        return
+        return True
     ctx = run.ctx
     # Only create tables for RDBMS targets; skip for NoSQL, Object Store,
     # and any other non-RDBMS category. target_type is normalized upstream.
     if is_no_create_table_target(run.target_type):
         logger.info(f"Skipping table creation for {pair.target_table_name} - target is {run.target_type}")
-        return
+        return True
     logger.info(f"CREATE_TABLE_IF_NOT_EXISTS is enabled - creating table {pair.target_table_name}")
-    handle_table_creation(
-        ctx.pipeline_id,
-        pair.target_table_name,
-        ctx.yaml_target_schema,
-        keys,
-        ctx.token,
-        pair.columns,
-        pair.custom_config,
-        ctx.source_node_info,
-        ctx.target_node_info,
-    )
+    try:
+        pair.created_table = handle_table_creation(
+            ctx.pipeline_id,
+            pair.target_table_name,
+            ctx.yaml_target_schema,
+            keys,
+            ctx.token,
+            pair.columns,
+            pair.custom_config,
+            ctx.source_node_info,
+            ctx.target_node_info,
+        ) is True
+    except TargetTableCreationError as error:
+        if (_discover_target_columns(ctx, pair.target_table_name) or {}).get('columns'):
+            logger.warning(f"Creating table {pair.target_table_name} failed ({error}), but the target reports its "
+                           f"columns: using the table that is there")
+            return True
+        run.refuse_table(label or pair.table_name, error)
+        return False
+    return True
 
 
 def _discovered_source_table_id(run, table, table_name):
@@ -3205,7 +3195,8 @@ def _add_discovered_table_entity(run, table, pair, props, document_key):
     if not keys:
         logger.warning(f"Warning: No keys specified for {table_name}. Table will have no keys.")
 
-    _create_target_table(run, pair, keys)
+    if not _create_target_table(run, pair, keys):
+        return
 
     # Generate table IDs for use in entities (prefer discovered IDs)
     pair.source_table_id = _discovered_source_table_id(run, table, table_name)
@@ -3352,6 +3343,9 @@ def _add_duplicate_table_entity(run, pair, props, document_key, yaml_table_key):
     if not keys:
         logger.warning(f"No keys specified for duplicate table {yaml_table_key}")
 
+    if not _create_target_table(run, pair, keys, label=yaml_table_key):
+        return
+
     # Generate table IDs
     pair.source_table_id = _resolve_table_id(run.source_schema, table_name, run.source_tables_lookup, _SOURCE_ROLE)
     pair.target_table_id = _resolve_table_id(ctx.yaml_target_schema, pair.target_table_name,
@@ -3372,7 +3366,8 @@ def _add_duplicate_table_entity(run, pair, props, document_key, yaml_table_key):
 
     try:
         side_pair = _TablePair(yaml_table_key, pair.target_table_name, pair.columns, custom_config,
-                               pair.source_table_id, pair.target_table_id, pair.is_unlocked_schema)
+                               pair.source_table_id, pair.target_table_id, pair.is_unlocked_schema,
+                               pair.created_table)
         target_columns_def, _target_keys = _assemble_target_side(
             ctx, side_pair, columns_def, has_column_mappings or is_column_whitelist, _discovery_type_by_source,
             target_entity_type, relations=relations, grouped=run.grouped,
@@ -3728,7 +3723,7 @@ def _legacy_chain_pair_columns(cb, table_key, table_data, columns, overrides, co
 
     # Check if this table has column mappings or whitelist
     table_yaml_columns = table_data.get('columns', []) if table_data else []
-    table_has_mappings = _is_column_mappings(table_yaml_columns)
+    table_has_mappings = is_column_mappings(table_yaml_columns)
     table_has_whitelist = _is_column_whitelist(table_yaml_columns)
 
     try:
@@ -4854,8 +4849,11 @@ def main(pipeline_id, source_schema, target_schema, source_type, target_type, ya
         logger.warning("Skipping error due to skip_errors=True")
         return {"successful": 0, "failed": 0, "total": 0, "errors": [str(e)]}
 
-    # Log successful completion
-    log_success(logger, f"Entity creation completed successfully for pipeline {pipeline_id}")
+    if result.get('failed'):
+        log_failure(logger, f"Entity creation completed with {result['failed']} of {result['total']} entities "
+                            f"failed for pipeline {pipeline_id}")
+    else:
+        log_success(logger, f"Entity creation completed successfully for pipeline {pipeline_id}")
     lockfile_complete()
     return result
 

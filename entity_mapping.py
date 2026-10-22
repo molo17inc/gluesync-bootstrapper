@@ -365,6 +365,28 @@ def _is_mapping(rows: Sequence[Any]) -> bool:
     return isinstance(first, Mapping) and ("source" in first or "name" not in first)
 
 
+def is_column_mappings(columns_list):
+    """
+    Return True if the columns list contains column mappings (not column definitions).
+
+    Detects both:
+    - Export format:  [{source: "col", target: "COL", type: ..., ...}]
+    - User format:    [{col_name: "target_name"}, ...]  e.g. [{id: "ID"}]
+
+    Column *definitions* (not mappings) have a 'name' key.
+    """
+    if not columns_list:
+        return False
+    first = columns_list[0]
+    if not isinstance(first, dict):
+        return False
+    # Export format: has explicit 'source' key
+    if "source" in first:
+        return True
+    # User format: no 'name' key (column definitions always have 'name')
+    return "name" not in first
+
+
 def _names_of(value: Any) -> List[str]:
     return [str(v) for v in value] if isinstance(value, list) else [str(value)]
 
@@ -817,13 +839,17 @@ def yaml_rows(relations: Mapping[str, List[Any]], source_order: Sequence[str], r
     column (either may be None). Each source column gives, at its place: a 1:1 or 1:N row per target;
     for the first source of an N:1 relation one row with the list of its sources (the per-source
     metadata left out); ``target: []`` when it feeds nothing (1:null). Then one ``{target, type}`` row
-    per target no source feeds, where the export attaches the field function that produces it.
+    per target no source feeds (with the length, precision and scale ``row_of`` gives it), where the export attaches
+    the field function that produces it.
     """
     by_source = {source: relation for relation in relations["relations"] for source in relation["sources"]}
     rows = [row for source in source_order for row in _source_rows(source, by_source.get(source), row_of)]
     for target in relations["unlinked_targets"]:
-        target_type = row_of(None, target).get("type")
-        rows.append({"target": target, "type": target_type} if target_type is not None else {"target": target})
+        produced = row_of(None, target)
+        target_type = produced.get("type")
+        dimensions = {key: value for key, value in produced.items() if key not in ("source", "target", "type")}
+        rows.append({"target": target, "type": target_type, **dimensions} if target_type is not None
+                    else {"target": target, **dimensions})
     return rows
 
 

@@ -108,8 +108,9 @@ class GroupedExportTests(unittest.TestCase):
         ])
         rows = {str(row.get("target")): row for row in cfg["columns"]}
         self.assertEqual(rows["full_name"]["expression"], {"type": "CustomFn", "functionName": "concat"})
-        self.assertEqual(rows["ingest_ts"], {"target": "ingest_ts", "type": "timestamp", "expression": {"type": "LocalTs"}})
-        self.assertEqual(rows["row_hash"], {"target": "row_hash", "type": "varchar"})
+        self.assertEqual(rows["ingest_ts"], {"target": "ingest_ts", "type": "timestamp", "targetPosition": 5,
+                                          "expression": {"type": "LocalTs"}})
+        self.assertEqual(rows["row_hash"], {"target": "row_hash", "type": "varchar", "targetPosition": 6})
         self.assertEqual(rows["id"]["type"], "int")
         self.assertTrue(rows["id"]["isPK"])
         self.assertNotIn("targetKeys", cfg)

@@ -30,7 +30,7 @@ from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
 
 import yaml
 
-from commons import fetch_core_hub, get_table_columns
+from commons import fetch_core_hub, get_table_columns, is_length_type, is_temporal_type
 from field_function_utils import apply_field_functions_to_column_mappings, normalize_expression_for_yaml
 from entity_mapping import read_entry, relations_of, yaml_rows
 from utils.chronos_client import ChronosClient
@@ -55,6 +55,43 @@ def _column_attr(col: Dict[str, Any], new_key: str, legacy_key: str, default: An
     if val is None:
         val = col.get(legacy_key)
     return default if val is None else val
+
+
+def _stated_column_attr(col: Dict[str, Any], new_key: str, legacy_key: str) -> Any:
+    """Like :func:`_column_attr`, but None when the column states the attribute under neither name."""
+    val = col.get(new_key)
+    return col.get(legacy_key) if val is None else val
+
+
+# The length, precision and scale a column states, by the row key of the source side and the names of the column.
+_COLUMN_DIMENSIONS = (
+    ("dataLength", "charMaxLength", "dataLength"),
+    ("numericPrecision", "numPrec", "numericPrecision"),
+    ("numericScale", "numScale", "numericScale"),
+)
+
+
+def _dimensions_of_type(tcol: Dict[str, Any]) -> Tuple[Tuple[str, str, str], ...]:
+    """The dimensions that mean something for the type of the target column: the length for a length type, the
+    precision and scale for a type that is neither that nor a temporal one. A target reports others for every column
+    (an Oracle NUMBER has a byte length of 22, a TIMESTAMP(6) a length of 11 and a scale of 6)."""
+    data_type = _column_data_type(tcol)
+    if is_length_type(data_type):
+        return _COLUMN_DIMENSIONS[:1]
+    if is_temporal_type(data_type):
+        return ()
+    return _COLUMN_DIMENSIONS[1:]
+
+
+def _target_dimensions(row: Dict[str, Any], tcol: Dict[str, Any]) -> Dict[str, Any]:
+    """The ``target...`` keys for the dimensions of its type the target column states and the source side of ``row``
+    does not."""
+    differing = {}
+    for row_key, new_key, legacy_key in _dimensions_of_type(tcol):
+        stated = _stated_column_attr(tcol, new_key, legacy_key)
+        if stated is not None and stated != row[row_key]:
+            differing["target" + row_key[0].upper() + row_key[1:]] = stated
+    return differing
 
 
 def _keys_from_columns(columns: List[Dict[str, Any]]) -> List[str]:
@@ -423,6 +460,14 @@ def _mapping_row(scol: Optional[Dict[str, Any]], tcol: Optional[Dict[str, Any]],
     row: Dict[str, Any] = {"source": source_name, "target": tcol.get("name", source_name) if tcol else source_name}
     row["type"] = (_column_data_type(tcol) if tcol else None) or (_column_data_type(scol) if scol else None)
     if scol is None:
+        # A column no source feeds: the length, precision and scale its table has, which a table to create needs,
+        # and its position, as for a column a source feeds
+        if tcol:
+            row.update({key: value for key, new_key, legacy_key in _dimensions_of_type(tcol)
+                        if (value := _column_attr(tcol, new_key, legacy_key, 0))})
+            target_position = _target_position(tcol)
+            if target_position is not None:
+                row["targetPosition"] = target_position
         return row
     if row["type"] is None:
         logger.warning(
@@ -455,6 +500,10 @@ def _mapping_row(scol: Optional[Dict[str, Any]], tcol: Optional[Dict[str, Any]],
     target_nullable = (tcol or {}).get("isNullable")
     if isinstance(target_nullable, bool):
         row["targetIsNullable"] = target_nullable
+    # The length, precision and scale of the target column, when they are not the ones of its source column: they
+    # are those of the column a restore creates in a table that does not exist yet.
+    if tcol:
+        row.update(_target_dimensions(row, tcol))
     return row
 
 
