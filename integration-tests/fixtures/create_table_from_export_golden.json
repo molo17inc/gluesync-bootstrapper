@@ -1,0 +1,413 @@
+{
+ "entities": [
+  {
+   "agentEntities": [
+    {
+     "agentId": "source-agent",
+     "columns": [
+      {
+       "charMaxLength": 0,
+       "dataType": "DECIMAL",
+       "id": 101,
+       "isIdentity": false,
+       "isNullable": false,
+       "isPK": false,
+       "name": "ORD_SEQ",
+       "numPrec": 9,
+       "numScale": 0,
+       "position": 1,
+       "tableId": 500
+      },
+      {
+       "charMaxLength": 0,
+       "dataType": "DECIMAL",
+       "id": 102,
+       "isIdentity": false,
+       "isNullable": false,
+       "isPK": true,
+       "name": "ORD_NO",
+       "numPrec": 10,
+       "numScale": 0,
+       "position": 2,
+       "tableId": 500
+      },
+      {
+       "charMaxLength": 0,
+       "dataType": "DECIMAL",
+       "id": 103,
+       "isIdentity": false,
+       "isNullable": false,
+       "isPK": false,
+       "name": "CUST_TAX",
+       "numPrec": 9,
+       "numScale": 0,
+       "position": 5,
+       "tableId": 500
+      },
+      {
+       "charMaxLength": 1,
+       "charSet": "37",
+       "dataType": "CHAR",
+       "id": 104,
+       "isIdentity": false,
+       "isNullable": false,
+       "isPK": false,
+       "name": "STATUS",
+       "numPrec": 0,
+       "numScale": 0,
+       "position": 17,
+       "tableId": 500
+      },
+      {
+       "charMaxLength": 0,
+       "dataType": "DECIMAL",
+       "id": 105,
+       "isIdentity": false,
+       "isNullable": false,
+       "isPK": false,
+       "name": "PLACED_ON",
+       "numPrec": 8,
+       "numScale": 0,
+       "position": 18,
+       "tableId": 500
+      },
+      {
+       "charMaxLength": 10,
+       "charSet": "37",
+       "dataType": "CHAR",
+       "id": 106,
+       "isIdentity": false,
+       "isNullable": false,
+       "isPK": false,
+       "name": "CREATED_BY",
+       "numPrec": 0,
+       "numScale": 0,
+       "position": 19,
+       "tableId": 500
+      }
+     ],
+     "customProperties": {},
+     "entityObject": {
+      "collection": "ORDERS",
+      "id": "500",
+      "scope": "SALES"
+     },
+     "entityType": {
+      "type": "Source"
+     },
+     "table": {
+      "id": "500",
+      "name": "ORDERS",
+      "schema": "SALES"
+     },
+     "tablesProperties": {
+      "SALES.ORDERS": {}
+     },
+     "type": "SingleTable"
+    },
+    {
+     "agentId": "target-agent",
+     "columns": [
+      {
+       "charMaxLength": 0,
+       "dataType": "NUMBER",
+       "id": 102,
+       "isIdentity": false,
+       "isNullable": false,
+       "isPK": true,
+       "name": "ORDER_NUMBER",
+       "numPrec": 10,
+       "numScale": 0,
+       "position": 1,
+       "tableId": 1249964763
+      },
+      {
+       "charMaxLength": 0,
+       "dataType": "VARCHAR2",
+       "id": 103,
+       "isIdentity": false,
+       "isNullable": true,
+       "isPK": false,
+       "name": "TAX_ID",
+       "numPrec": 9,
+       "numScale": 0,
+       "position": 2,
+       "tableId": 1249964763
+      },
+      {
+       "charMaxLength": 1,
+       "dataType": "VARCHAR2",
+       "id": 104,
+       "isIdentity": false,
+       "isNullable": true,
+       "isPK": false,
+       "name": "STATUS_CODE",
+       "numPrec": 0,
+       "numScale": 0,
+       "position": 13,
+       "tableId": 1249964763
+      },
+      {
+       "charMaxLength": 0,
+       "dataType": "TIMESTAMP",
+       "id": 105,
+       "isIdentity": false,
+       "isNullable": true,
+       "isPK": false,
+       "name": "RECEIVED_DATE",
+       "numPrec": 8,
+       "numScale": 0,
+       "position": 15,
+       "tableId": 1249964763
+      },
+      {
+       "charMaxLength": 10,
+       "dataType": "VARCHAR2",
+       "id": 106,
+       "isIdentity": false,
+       "isNullable": true,
+       "isPK": false,
+       "name": "CREATED_BY",
+       "numPrec": 0,
+       "numScale": 0,
+       "position": 16,
+       "tableId": 1249964763
+      },
+      {
+       "dataType": "VARCHAR2",
+       "id": 107,
+       "isIdentity": false,
+       "isNullable": true,
+       "isPK": false,
+       "name": "CHANGED_FLAG",
+       "position": 0,
+       "tableId": 1249964763
+      },
+      {
+       "dataType": "TIMESTAMP",
+       "id": 108,
+       "isIdentity": false,
+       "isNullable": true,
+       "isPK": false,
+       "name": "LAST_MODIFIED_DATE",
+       "position": 0,
+       "tableId": 1249964763
+      }
+     ],
+     "customProperties": {},
+     "entityObject": {
+      "collection": "ORDER_RESULT",
+      "id": "1249964763",
+      "scope": "TGT"
+     },
+     "entityType": {
+      "allowedOperations": [
+       "INSERT",
+       "DELETE",
+       "UPDATE",
+       "TRUNCATE"
+      ],
+      "columnsMappingMatrix": [
+       {
+        "sourceColumnIds": [
+         102
+        ],
+        "sourceTableObjectId": 500,
+        "targetColumnIds": [
+         102
+        ],
+        "targetTableObjectId": 1249964763
+       },
+       {
+        "sourceColumnIds": [
+         103
+        ],
+        "sourceTableObjectId": 500,
+        "targetColumnIds": [
+         103
+        ],
+        "targetTableObjectId": 1249964763
+       },
+       {
+        "sourceColumnIds": [
+         104
+        ],
+        "sourceTableObjectId": 500,
+        "targetColumnIds": [
+         104
+        ],
+        "targetTableObjectId": 1249964763
+       },
+       {
+        "sourceColumnIds": [
+         105
+        ],
+        "sourceTableObjectId": 500,
+        "targetColumnIds": [
+         105
+        ],
+        "targetTableObjectId": 1249964763
+       },
+       {
+        "sourceColumnIds": [
+         106
+        ],
+        "sourceTableObjectId": 500,
+        "targetColumnIds": [
+         106
+        ],
+        "targetTableObjectId": 1249964763
+       },
+       {
+        "sourceColumnIds": [
+         101
+        ],
+        "sourceTableObjectId": 500,
+        "targetColumnIds": [],
+        "targetTableObjectId": 1249964763
+       },
+       {
+        "sourceColumnIds": [],
+        "sourceTableObjectId": 500,
+        "targetColumnIds": [
+         107
+        ],
+        "targetTableObjectId": 1249964763
+       },
+       {
+        "sourceColumnIds": [],
+        "sourceTableObjectId": 500,
+        "targetColumnIds": [
+         108
+        ],
+        "targetTableObjectId": 1249964763
+       }
+      ],
+      "fieldFunctions": [
+       {
+        "columnId": 103,
+        "expression": {
+         "type": "Dec2Str"
+        },
+        "tableOrObjectId": 1249964763
+       },
+       {
+        "columnId": 105,
+        "expression": {
+         "arguments": [
+          {
+           "name": "PLACED_ON",
+           "type": "SourceColumnArg"
+          }
+         ],
+         "functionName": "convertDate",
+         "type": "CustomFn"
+        },
+        "tableOrObjectId": 1249964763
+       },
+       {
+        "columnId": 107,
+        "expression": {
+         "staticValue": "Y",
+         "type": "StaticStr"
+        },
+        "tableOrObjectId": 1249964763
+       },
+       {
+        "columnId": 108,
+        "expression": {
+         "type": "LocalTs"
+        },
+        "tableOrObjectId": 1249964763
+       }
+      ],
+      "snapshotWritingConcurrency": 1,
+      "tablesWithUnlockedDataTypes": [],
+      "tablesWithUnlockedSchema": [],
+      "type": "Target",
+      "useBulkOperationsDuringCDC": false,
+      "useBulkOperationsWhileSnapshot": false
+     },
+     "table": {
+      "id": "1249964763",
+      "name": "ORDER_RESULT",
+      "schema": "TGT"
+     },
+     "tablesProperties": {
+      "TGT.ORDER_RESULT": {}
+     },
+     "type": "SingleTable"
+    }
+   ],
+   "entityName": "SALES.ORDERS"
+  }
+ ],
+ "statements": {
+  "discovery": {
+   "ITEM_RESULT": [
+    [
+     "ITEM_ID",
+     "NUMBER",
+     0,
+     12,
+     0,
+     true,
+     false
+    ],
+    [
+     "DESCR",
+     "VARCHAR2",
+     30,
+     0,
+     0,
+     false,
+     true
+    ]
+   ]
+  },
+  "metadata": {
+   "ITEM_RESULT": [
+    [
+     "ID",
+     "NUMBER",
+     0,
+     12,
+     0,
+     false,
+     false
+    ],
+    [
+     "DESCRIPTION",
+     "VARCHAR2",
+     30,
+     0,
+     0,
+     false,
+     true
+    ]
+   ]
+  },
+  "whitelist": {
+   "ITEM_RESULT": [
+    [
+     "ID",
+     "VARCHAR2",
+     1024,
+     0,
+     0,
+     false,
+     true
+    ],
+    [
+     "DESCRIPTION",
+     "VARCHAR2",
+     1024,
+     0,
+     0,
+     false,
+     true
+    ]
+   ]
+  }
+ }
+}

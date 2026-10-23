@@ -201,7 +201,7 @@ class UdfTargetOnlyRestoreTests(unittest.TestCase):
 class TableCreationTests(unittest.TestCase):
     """The target table of a restore is not made of the target-only columns alone."""
 
-    def _created_columns(self, custom_config):
+    def _created_columns(self, custom_config, source_columns=()):
         import create_all_tables
 
         captured = {}
@@ -214,15 +214,25 @@ class TableCreationTests(unittest.TestCase):
                 mock.patch.object(create_all_tables, "CREATE_TABLE_IF_NOT_EXISTS", True), \
                 mock.patch.object(create_all_tables, "generate_create_table_statement", side_effect=statement), \
                 mock.patch.object(create_all_tables, "create_target_table"):
-            create_all_tables.handle_table_creation("p", "T", "tgt", [], "token", {"columns": []}, custom_config, {}, {})
+            create_all_tables.handle_table_creation("p", "T", "tgt", [], "token",
+                                                    {"columns": list(source_columns)}, custom_config, {}, {})
         return captured.get("columns")
 
     def test_target_only_columns_alone_describe_a_table_without_rows(self):
         self.assertEqual(self._created_columns({"targetOnlyColumns": ["EPOCH_FIELD"]}), ["EPOCH_FIELD"])
 
     def test_a_table_the_rows_write_is_not_created_from_the_target_only_columns(self):
+        import create_all_tables
+
         rows = [{"source": "ID", "target": "ID", "type": "int"}]
-        self.assertIsNone(self._created_columns({"columns": rows, "targetOnlyColumns": ["EPOCH_FIELD"]}))
+        with self.assertRaises(create_all_tables.TargetTableCreationError):
+            self._created_columns({"columns": rows, "targetOnlyColumns": ["EPOCH_FIELD"]})
+
+    def test_the_target_only_columns_come_after_the_columns_the_rows_write(self):
+        rows = [{"source": "ID", "target": "ID", "type": "int"}]
+        source = [{"id": 1, "name": "ID", "dataType": "int", "position": 1}]
+        self.assertEqual(self._created_columns({"columns": rows, "targetOnlyColumns": ["EPOCH_FIELD"]}, source),
+                         ["ID", "EPOCH_FIELD"])
 
 
 if __name__ == "__main__":

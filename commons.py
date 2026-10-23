@@ -758,6 +758,69 @@ def _compatibility_group_default_type(source_gluesync_type, target_node_info, ta
     return None
 
 
+# The native types whose length is the size of the column (a VARCHAR2(10)), as opposed to the byte length or the
+# precision other types report.
+LENGTH_TYPES = frozenset({
+    'varchar2',
+    'varchar',
+    'char',
+    'nchar',
+    'nvarchar2',
+    'raw',
+    'binary',
+    'varbinary',
+})
+
+
+def _base_type(data_type) -> str:
+    """The lower-cased native type without its arguments: ``VARCHAR2(10)`` is ``varchar2``."""
+    return str(data_type or '').split('(')[0].strip().lower()
+
+
+def is_length_type(data_type) -> bool:
+    """Whether the native type ``data_type`` is sized by a length (see :data:`LENGTH_TYPES`)."""
+    return _base_type(data_type) in LENGTH_TYPES
+
+
+def is_temporal_type(data_type) -> bool:
+    """Whether the native type ``data_type`` is a date, time, timestamp, datetime or interval type."""
+    return _base_type(data_type).startswith(('date', 'time', 'interval'))
+
+
+def canonicalize_target_type(data_type, target_node_info):
+    """Return the canonical target-matrix casing for ``data_type`` or None.
+
+    Looks up ``data_type`` (case-insensitively) in the target's
+    ``dataTypesMatrix`` ``defaultType``/``supportedTypes`` lists and returns
+    the value with the matrix's original casing. Returns None when no match
+    is found. ``defaultType`` matches take precedence over ``supportedTypes``.
+    """
+    if not data_type or not target_node_info:
+        return None
+    matrix = target_node_info.get('dataTypesMatrix') or []
+    needle = str(data_type).strip().lower()
+    if not needle:
+        return None
+    supported_match = None
+    for entry in matrix:
+        if not isinstance(entry, dict):
+            continue
+        default_type = entry.get('defaultType')
+        if default_type and str(default_type).strip().lower() == needle:
+            return str(default_type)
+        if supported_match is None:
+            supported_match = _supported_type_match(entry, needle)
+    return supported_match
+
+
+def _supported_type_match(matrix_entry, needle):
+    """The first of the ``supportedTypes`` of a ``dataTypesMatrix`` entry spelt ``needle`` case-insensitively."""
+    for st in matrix_entry.get('supportedTypes') or []:
+        if st and str(st).strip().lower() == needle:
+            return str(st)
+    return None
+
+
 def map_data_type(source_type, source_node_info, target_node_info,
                   target_table_column_types=None):
     """Map a source native type to the corresponding target native type.

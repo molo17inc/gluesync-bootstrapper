@@ -161,11 +161,13 @@ class TargetPositionTests(unittest.TestCase):
         self.assertTrue(all("targetPosition" not in c for c in cfg["columns"]))
 
     def test_target_position_comes_after_the_keys_a_row_has_always_had(self):
+        # the kit's key column is a PostgreSQL integer (numPrec 32) onto a MySQL INT (10): a target dimension that
+        # differs from the source one is the last key of the row
         row = _drivers_table_cfg(_drivers_entity())["columns"][0]
         self.assertEqual(
             list(row),
             ["source", "target", "type", "dataLength", "numericPrecision", "numericScale", "isNullable", "isPK",
-             "id", "ordinalPosition", "charSet", "targetPosition", "targetIsNullable"],
+             "id", "ordinalPosition", "charSet", "targetPosition", "targetIsNullable", "targetNumericPrecision"],
         )
 
     def test_a_column_that_feeds_nothing_has_no_target_position(self):
