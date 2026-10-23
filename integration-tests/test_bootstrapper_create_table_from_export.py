@@ -457,6 +457,7 @@ class RefusedTableTests(unittest.TestCase):
         import create_all_tables
 
         hub = CreatingHub(fail_statement={"ORDER_RESULT"})
+        yaml_config = yaml.safe_load(self._yaml())
         with contextlib.ExitStack() as stack:
             stack.enter_context(patched(hub))
             stack.enter_context(mock.patch.object(create_all_entities, "CREATE_TABLE_IF_NOT_EXISTS", True))
@@ -467,7 +468,7 @@ class RefusedTableTests(unittest.TestCase):
                     token="token", pipeline_id="pipeline", source_schema=SOURCE_SCHEMA,
                     target_schema=TARGET_SCHEMA, tables=SOURCE_LIST, source_agent_id=fake_corehub.SOURCE_AGENT,
                     target_agent_id=fake_corehub.TARGET_AGENT, source_type="SQL", target_type="SQL",
-                    yaml_config=yaml.safe_load(self._yaml()), skip_errors=False)
+                    yaml_config=yaml_config, skip_errors=False)
 
 
 class RowShapesTests(unittest.TestCase):

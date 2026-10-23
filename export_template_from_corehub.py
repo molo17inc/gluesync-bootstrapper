@@ -454,28 +454,20 @@ def _target_position(tcol: Optional[Dict[str, Any]]) -> Optional[int]:
     return None
 
 
-def _mapping_row(scol: Optional[Dict[str, Any]], tcol: Optional[Dict[str, Any]], ordinal: Optional[int]) -> Dict[str, Any]:
-    """The YAML row of source column ``scol`` onto target column ``tcol``, with the metadata of both."""
-    source_name = scol.get("name") if scol else None
-    row: Dict[str, Any] = {"source": source_name, "target": tcol.get("name", source_name) if tcol else source_name}
-    row["type"] = (_column_data_type(tcol) if tcol else None) or (_column_data_type(scol) if scol else None)
-    if scol is None:
-        # A column no source feeds: the length, precision and scale its table has, which a table to create needs,
-        # and its position, as for a column a source feeds
-        if tcol:
-            row.update({key: value for key, new_key, legacy_key in _dimensions_of_type(tcol)
-                        if (value := _column_attr(tcol, new_key, legacy_key, 0))})
-            target_position = _target_position(tcol)
-            if target_position is not None:
-                row["targetPosition"] = target_position
-        return row
-    if row["type"] is None:
-        logger.warning(
-            f"Column '{source_name}' has no data type in stored entity data (legacy entity with unserialised "
-            f"DataTypeInterface). The type field will be null in the export; use a recent version of Gluesync "
-            f"or re-create the entity to populate the type."
-        )
-    row.update({
+def _unfed_column_fields(tcol: Dict[str, Any]) -> Dict[str, Any]:
+    """The fields of a column no source feeds: the length, precision and scale its table has, which a table to create
+    needs, and its position, as for a column a source feeds."""
+    fields = {key: value for key, new_key, legacy_key in _dimensions_of_type(tcol)
+              if (value := _column_attr(tcol, new_key, legacy_key, 0))}
+    target_position = _target_position(tcol)
+    if target_position is not None:
+        fields["targetPosition"] = target_position
+    return fields
+
+
+def _source_column_fields(scol: Dict[str, Any], ordinal: Optional[int]) -> Dict[str, Any]:
+    """The metadata of the source column ``scol`` a mapping row carries."""
+    return {
         "dataLength": _column_attr(scol, "charMaxLength", "dataLength", 0),
         "numericPrecision": _column_attr(scol, "numPrec", "numericPrecision", 0),
         "numericScale": _column_attr(scol, "numScale", "numericScale", 0),
@@ -489,21 +481,46 @@ def _mapping_row(scol: Optional[Dict[str, Any]], tcol: Optional[Dict[str, Any]],
         # so leaving it out would silently restore a column the source's way
         # instead of the way it was backed up.
         "charSet": scol.get("charSet"),
-    })
+    }
+
+
+def _target_column_fields(row: Dict[str, Any], tcol: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """The fields of the target column ``tcol`` a mapping row carries next to those of its source column."""
+    fields: Dict[str, Any] = {}
     # The position of the target column, which is not the one of its source column when the entity was created from
     # a whitelist or the target keeps its own order: on import it is the position the restored column gets.
     target_position = _target_position(tcol)
     if target_position is not None:
-        row["targetPosition"] = target_position
+        fields["targetPosition"] = target_position
     # The nullability of the target column, which a target that keeps none (DynamoDB reports every column not
     # nullable) does not give back: on import it is the nullability the restored column gets.
     target_nullable = (tcol or {}).get("isNullable")
     if isinstance(target_nullable, bool):
-        row["targetIsNullable"] = target_nullable
+        fields["targetIsNullable"] = target_nullable
     # The length, precision and scale of the target column, when they are not the ones of its source column: they
     # are those of the column a restore creates in a table that does not exist yet.
     if tcol:
-        row.update(_target_dimensions(row, tcol))
+        fields.update(_target_dimensions(row, tcol))
+    return fields
+
+
+def _mapping_row(scol: Optional[Dict[str, Any]], tcol: Optional[Dict[str, Any]], ordinal: Optional[int]) -> Dict[str, Any]:
+    """The YAML row of source column ``scol`` onto target column ``tcol``, with the metadata of both."""
+    source_name = scol.get("name") if scol else None
+    row: Dict[str, Any] = {"source": source_name, "target": tcol.get("name", source_name) if tcol else source_name}
+    row["type"] = (_column_data_type(tcol) if tcol else None) or (_column_data_type(scol) if scol else None)
+    if scol is None:
+        if tcol:
+            row.update(_unfed_column_fields(tcol))
+        return row
+    if row["type"] is None:
+        logger.warning(
+            f"Column '{source_name}' has no data type in stored entity data (legacy entity with unserialised "
+            f"DataTypeInterface). The type field will be null in the export; use a recent version of Gluesync "
+            f"or re-create the entity to populate the type."
+        )
+    row.update(_source_column_fields(scol, ordinal))
+    row.update(_target_column_fields(row, tcol))
     return row
 
 

@@ -870,6 +870,23 @@ def _add_omitted_key_columns(table: _TableColumns, relations, custom_config, sou
                                            target_node_info))
 
 
+def _add_function_columns(table: _TableColumns, relations, key_lookup, source_node_info, target_node_info) -> None:
+    """Add the columns of the rows without ``source``: the ones a field function writes."""
+    for relation in relations:
+        if not relation['sources']:
+            for target_name in relation['targets']:
+                table.add(_exported_column_dto(target_name, relation, None, key_lookup, source_node_info,
+                                               target_node_info))
+
+
+def _add_unwritten_target_only_columns(table: _TableColumns, custom_config, key_lookup, source_node_info,
+                                       target_node_info) -> None:
+    """Add the ``targetOnlyColumns`` that no row writes."""
+    for target_col in custom_config.get('targetOnlyColumns') or []:
+        if _target_only_column_spec(target_col)[0] not in table:
+            table.add(_target_only_column_dto(0, target_col, key_lookup, source_node_info, target_node_info))
+
+
 def _exported_column_dtos(relations, custom_config: dict, columns, key_lookup: _KeyLookup, source_node_info,
                           target_node_info) -> list:
     """The target columns of exported mapping rows: the columns the entity is built with.
@@ -888,14 +905,8 @@ def _exported_column_dtos(relations, custom_config: dict, columns, key_lookup: _
             return []
     _add_omitted_key_columns(table, relations, custom_config, source_columns, key_lookup, source_node_info,
                              target_node_info)
-    for relation in relations:
-        if not relation['sources']:
-            for target_name in relation['targets']:
-                table.add(_exported_column_dto(target_name, relation, None, key_lookup, source_node_info,
-                                               target_node_info))
-    for target_col in custom_config.get('targetOnlyColumns') or []:
-        if _target_only_column_spec(target_col)[0] not in table:
-            table.add(_target_only_column_dto(0, target_col, key_lookup, source_node_info, target_node_info))
+    _add_function_columns(table, relations, key_lookup, source_node_info, target_node_info)
+    _add_unwritten_target_only_columns(table, custom_config, key_lookup, source_node_info, target_node_info)
     return _in_table_order(table.columns)
 
 
