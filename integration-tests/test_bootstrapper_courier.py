@@ -342,7 +342,7 @@ class EmbeddedAgentCategoryTests(unittest.TestCase):
         self.assertEqual(catalog.get("kafka"), "EVENT STREAMING")
         self.assertEqual(corehub._normalize_agent_category(catalog.get("api-agent-shadow")), "NoSQL")
 
-    def test_agents_json_catalog_lists_the_http_target_as_target_only_object_store(self):
+    def test_agents_json_catalog_lists_the_http_agent_as_source_and_target_object_store(self):
         import json
 
         with (PROJECT_ROOT / "agents.json").open(encoding="utf-8") as fh:
@@ -350,7 +350,7 @@ class EmbeddedAgentCategoryTests(unittest.TestCase):
         entry = next(e for e in entries if e.get("internalName") == "api-agent-shadow")
         self.assertEqual(entry["type"], "Object Store")
         self.assertTrue(entry["isTarget"])
-        self.assertFalse(entry["isSource"])
+        self.assertTrue(entry["isSource"])
 
     def test_object_store_targets_skip_create_table(self):
         import create_all_entities
@@ -457,7 +457,7 @@ class CreateEntitiesForCourierTargetTests(unittest.TestCase):
                 target_agent_tag="api-agent-shadow",
             )
 
-        self.assertEqual(result, {"successful": 1, "failed": 0, "total": 1})
+        self.assertEqual(result, {"successful": 1, "failed": 0, "total": 1, "errors": []})
         entity = captured_puts[0]["entities"][0]
         source_entity, target_entity = entity["agentEntities"]
 

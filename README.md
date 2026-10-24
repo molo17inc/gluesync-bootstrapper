@@ -745,6 +745,118 @@ public:
 
 The primary key of the endpoint, as discovered by the pipeline, is the first required PATH binding; without one a synthetic `_row` column is exposed.
 
+### HTTP Source agent (Courier inbound)
+
+The same agent (`agentTag: "api-agent-shadow"`) also runs as a **source**: the **HTTP Source**. It serves Courier *inbound* write endpoints on its own listener (`inboundPort`, 8090 by default, inside the CoreHub container). Every `POST`, `PUT` or `DELETE` request is bound into one pipeline row, queued on disk and answered `202 Accepted`; the pipeline then delivers it to the target. CoreHub exposes the endpoints to the pipeline as schema = inbound collection, table = endpoint, column = binding, so the usual YAML table configuration applies with the collection as source schema.
+
+An inbound *pipeline endpoint* names the pipeline and the HTTP Source agent that serve it, so it can only exist once the agent has been added to the pipeline: the bootstrapper creates it right after that, from the `courier` block of the SOURCE agent entry. It can also create the **Personal API Tokens** clients call the endpoints with.
+
+#### Configuration example
+
+```json
+{
+  "agentType": "SOURCE",
+  "agentTag": "api-agent-shadow",
+  "hostCredentials": { "connectionName": "HTTP Source" },
+  "customHostCredentials": { "inboundPort": 8090 },
+  "courier": {
+    "collections": [
+      {
+        "name": "shop",
+        "basePath": "shop",
+        "allowlist": true,
+        "endpoints": [
+          {
+            "name": "orders",
+            "httpVerb": "POST",
+            "path": "/orders/{id}",
+            "operationBinding": "op",
+            "bindings": [
+              { "name": "id", "location": "PATH", "type": "NUMBER" },
+              { "name": "op", "location": "QUERY", "required": false, "defaultValue": "Insert" },
+              { "name": "status", "location": "BODY", "required": false },
+              { "name": "amount", "location": "BODY", "type": "NUMBER", "required": false },
+              { "name": "customer.city", "location": "BODY", "required": false }
+            ]
+          },
+          {
+            "name": "events",
+            "path": "/events",
+            "bodyType": "FORM_URLENCODED",
+            "bindings": [
+              { "name": "kind", "location": "BODY" },
+              { "name": "X-Source", "location": "HEADER", "required": false }
+            ]
+          }
+        ]
+      }
+    ],
+    "tokens": [
+      { "name": "shop-client", "expiresInDays": 30, "outputFile": "/opt/secrets/http-source-token.json" }
+    ]
+  }
+}
+```
+
+With the table configuration (source schema = collection, source table = endpoint, source column = binding):
+
+```yaml
+shop:
+  target: public
+  tables:
+    whitelist:
+      - orders
+      - events
+    custom:
+      orders:
+        keys:
+          - id
+        columns:
+          - id: id
+          - status: status
+          - amount: amount
+          - customer.city: city   # nested body field
+          # `op` only chooses the operation: leave it unmapped
+      events:
+        keys:
+          - _seq                  # no key binding: the request sequence is the key
+        columns:
+          - _seq: seq
+          - kind: kind
+          - X-Source: source
+```
+
+Clients then call `http://<corehub-host>:8090/api-inbound/shop/orders/42?op=Update` with `Authorization: Bearer <token>`.
+
+#### What the bootstrapper does
+
+1. After adding the agent to the pipeline and before configuring it, it creates the **tokens** of `courier.tokens` (`POST /api-tokens`, permission `gluesync.endpoint_inbound`, scoped to this pipeline and this agent). Active tokens with the same name are revoked first, so each run rotates them. The plaintext is written **only** to `outputFile` (JSON `{"token", "tokenId", "name", "pipelineId", "agentId"}`, owner-only permissions), never to the log: CoreHub shows it only once.
+2. It creates or updates the **collections** (`/api-agent/inbound/collections`) and their **pipeline endpoints** (`/api-agent/inbound/endpoints`), matched by name, with `pipelineId` and `agentId` set to this pipeline and this HTTP Source. A collection with `"allowlist": true` admits only the tokens listed in its `allowedTokenIds` plus the tokens of this run that name it; with the allowlist on and no token, every request is refused.
+3. It fills `customHostCredentials.inboundCollection` with the collection name when exactly one collection is configured and the property is not set.
+4. Source entities are created as `NoSqlEntity` (the agent is object-store-like, see `EMBEDDED_AGENT_CATEGORIES`); `SOURCE_TYPE=NoSQL` remains the recommended explicit setting in kits.
+
+The `courier` block is validated first with the rules CoreHub applies to pipeline endpoints, so a wrong configuration fails before anything is sent.
+
+#### Courier inbound block reference
+
+- `collections[]`:
+  - `name` (required): the collection name, used as the source **schema** of the pipeline.
+  - `basePath` (defaults to the name): first URL segment, `/api-inbound/<basePath>/...`; letters, digits, `.`, `_`, `~`, `-` separated by `/`, unique across collections.
+  - `allowlist` (defaults to `false`), `allowedTokenIds` (token ids admitted on top of the tokens of this run), `description`, `tags`.
+  - `endpoints[]`:
+    - `name` (required): the endpoint name, used as the source **table** of the pipeline.
+    - `httpVerb` (alias `method`, defaults to `POST`): `POST`, `PUT` or `DELETE`. `PATCH` is refused: a row carries every binding and replaces the target row.
+    - `operation` (defaults from the verb): `CREATE` (POST), `UPDATE` (PUT), `DELETE` (DELETE).
+    - `path` (alias `pathTemplate`, defaults to `/`): each `{placeholder}` is a whole segment and has a required PATH binding with the same name.
+    - `bodyType` (defaults to `JSON` for POST/PUT, `NONE` otherwise): `JSON`, `FORM_URLENCODED` (alias `FORM`) or `NONE`.
+    - `bindings[]`: `{"name", "location": "PATH"|"QUERY"|"HEADER"|"BODY" (defaults to BODY), "type": "STRING"|"NUMBER"|"BOOLEAN" (defaults to STRING), "required" (defaults to true), "defaultValue", "description"}`. Every binding becomes a source column. A dotted BODY name (`customer.city`) reads a nested field; an object or array arrives as raw JSON text. Names are unique ignoring case, `_seq` is reserved, `Authorization`, `Proxy-Authorization` and `Cookie` cannot be bound, BODY bindings need POST or PUT.
+    - `keyBindings`: the bindings forming the row key (each required). Defaults to the required PATH bindings; without any, the synthetic `_seq` column (the request sequence) is the key, so every request is a new row. `UPDATE`, `DELETE` and an operation binding need a real key.
+    - `operationBinding`: a STRING binding whose value (`Insert`, `Update`, `Delete`, any case) overrides the operation of the endpoint.
+- `tokens[]`: `{"name" (required), "outputFile" (required), "expiresInDays", "collections" (defaults to every collection of the block)}`.
+- `force` (defaults to `false`): CoreHub refuses (409) to change an endpoint that entities of another pipeline read; `true` changes it anyway, and those entities break.
+
+The entity of an endpoint that only deletes (a `DELETE` endpoint binding just its key) must map only the key columns: the relational targets refuse a row that does not cover every target column of the entity. An endpoint that writes all three operations through an operation binding does not have the problem.
+
 ## Getting Started
 
 1. Clone the repository:

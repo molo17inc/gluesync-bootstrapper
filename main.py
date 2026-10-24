@@ -47,7 +47,8 @@ from commons import extract_schemas_from_yaml, extract_all_schemas_from_yaml, ex
     embedded_agent_categories, agent_types_by_tag, sql_or_nosql
 from commons import admin_credentials_path, admin_password_problem, load_admin_password, login_password_candidates, save_admin_credentials
 from utils.redact import redact
-from courier_support import is_courier_agent, courier_block, provision_courier, apply_courier_defaults, CourierConfigError
+from courier_support import courier_block, CourierConfigError
+from courier_inbound_support import provision_courier_agent
 
 def _connect_requested(argv):
     """True for the kit command: python main.py --connect-import PATH --connect-setup."""
@@ -955,31 +956,19 @@ if True:
                 # Log the error using the enhanced logging framework
                 log_failure(logger, f"Failed to start sync for entity {entityName}")
 
-def _prepare_courier_agent(token: str, agent: dict, custom_host_credentials: dict) -> dict:
-    """Courier provisioning for an HTTP Target agent; returns its (possibly defaulted) customHostCredentials.
+def _prepare_courier_agent(token: str, pipeline_id: str, agent: dict, custom_host_credentials: dict) -> dict:
+    """Courier provisioning of an HTTP Source / HTTP Target agent; returns its (possibly defaulted) customHostCredentials.
 
-    HTTP Target (Courier outbound): the definitions it discovers (collection = schema,
-    endpoint = table, binding = column) must exist before the agent is configured, otherwise
-    discovery is empty and no entity can be created. Create or update them from the
-    `courier` block of the agent configuration, then default the outbound collection.
-    Any other agent is returned unchanged.
+    The definitions the agent discovers must exist before it is configured (see
+    courier_inbound_support.provision_courier_agent). Any other agent is returned unchanged.
     """
-    if not is_courier_agent(agent):
-        return custom_host_credentials
-    if not agent.get('courier'):
-        logger.warning(
-            "HTTP Target agent %s has no 'courier' block: its Courier collections and endpoints "
-            "must already exist in CoreHub", agent['agentId']
-        )
-        return custom_host_credentials
     try:
-        collection_names = provision_courier(token, agent['courier'], fetch=fetch_core_hub, logger=logger)
+        prepared = provision_courier_agent(token, pipeline_id, agent, fetch=fetch_core_hub, logger=logger)
     except CourierConfigError as courier_error:
         log_failure(logger, str(courier_error))
         lockfile_failure()
         raise
-    apply_courier_defaults(agent, collection_names, logger=logger)
-    return agent['customHostCredentials']
+    return custom_host_credentials if prepared is None else prepared
 
 
 def _parse_args():
@@ -1240,7 +1229,7 @@ def _provision_agent(token, pipeline_id, conf_agent):
         'customHostCredentials': conf_agent.get('customHostCredentials', {}),
         'specificConfiguration': conf_agent.get('specificConfiguration', {}),
         'entities': conf_agent.get('entities', []),
-        # HTTP Target only: Courier collections/endpoints to create before the agent is configured.
+        # HTTP Source / HTTP Target only: Courier definitions to create before the agent is configured.
         'courier': courier_block(conf_agent),
     }
 
@@ -1266,7 +1255,7 @@ def _upload_agent_credentials(token, pipeline_id, agent):
     certificate_path = host_credentials.pop('certificatePath', None)
     certificate_type = host_credentials.pop('certificateType', None)
 
-    custom_host_credentials = _prepare_courier_agent(token, agent, custom_host_credentials)
+    custom_host_credentials = _prepare_courier_agent(token, pipeline_id, agent, custom_host_credentials)
 
     # Upload certificate first (if present)
     if certificate_path and certificate_type:

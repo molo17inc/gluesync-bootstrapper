@@ -149,7 +149,8 @@ _ORACLE_AGENT_TAGS: Optional[set[str]] = None
 # Agents that ship inside CoreHub and may be missing from agents.json (which CI regenerates from the
 # backoffice catalog). Their category is what agents.json would carry in `type`, so the SQL/NoSQL
 # inference of the bootstrapper, the export and the Automator does not fall back to "SQL" for them.
-# The HTTP Target (Courier outbound) is an object-store-like target: no CREATE TABLE, NoSqlEntity.
+# The HTTP agent is object-store-like on both sides: as HTTP Target (Courier outbound) no CREATE TABLE
+# and NoSqlEntity targets, as HTTP Source (Courier inbound) NoSqlEntity sources.
 EMBEDDED_AGENT_CATEGORIES: dict[str, str] = {
     "api-agent-shadow": "Object Store",
 }
