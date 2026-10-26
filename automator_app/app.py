@@ -415,6 +415,8 @@ class ApiMessage(BaseModel):
     message: Optional[str] = None
     logs: Optional[list[str]] = None
     planUsed: Optional[Dict[str, Any]] = None
+    # Things to do after a successful call, never failures (a restored connection that needs a sign-in)
+    warnings: Optional[list[str]] = None
 
 
 class AiSettingsExportRequest(BaseModel):
@@ -1663,6 +1665,8 @@ class _ArchiveImport:
     agent_passwords: Dict[str, Dict[str, str]] = field(default_factory=dict, repr=False)
     # Where a plan's passwordRef "env:NAME" is read (the CLI: os.environ).
     plan_env: Any = field(default=None, repr=False)
+    # Things to do after a successful import, never failures (a restored connection that needs a sign-in)
+    warnings: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -2867,6 +2871,7 @@ def _import_archive_pipeline(job: _ArchiveImport, name: str, stem_no_ext: str, y
     job.created_pipelines.append(result)
     job.credentials_pending.extend(result.get("credentialsPending") or [])
     _outcome(job, new_pipeline_id, new_pipeline_name)["credentialsPending"] = bool(result.get("credentialsPending"))
+    _merge_warnings(job, result.get("warnings"))
 
     # Upload certificates for agents if specified
     _upload_pipeline_certificates(job, name, agents_for_pipeline, new_pipeline_id)
@@ -3257,7 +3262,17 @@ def _report_lines(job: _ArchiveImport) -> list[str]:
         lines.extend(job.offline_report)
         lines.append(CREDENTIALS_PENDING_HELP)
     lines.extend(nexts)
+    lines.extend(job.warnings)
     return lines
+
+
+def _merge_warnings(job: _ArchiveImport, warnings: Optional[list[str]]) -> None:
+    """Add the warnings of a restored pipeline to the job, each text once (see ``commons.SIGN_IN_RULES``)."""
+    job.warnings.extend(w for w in warnings or [] if w not in job.warnings)
+
+
+def _warnings_field(job: _ArchiveImport) -> Optional[list[str]]:
+    return job.warnings or None
 
 
 def _bare_outcome(pipeline: dict) -> Dict[str, Any]:
@@ -3496,6 +3511,7 @@ def _import_archive(contents: bytes, agent_overrides_text: Optional[str] = None,
         message="\n".join(report),
         logs=logs if logs else None,
         planUsed=None if plan is None or plan.empty else plan.to_dict(),
+        warnings=_warnings_field(job),
     )
 
 

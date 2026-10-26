@@ -48,6 +48,7 @@ from commons import (
     extract_all_schemas_from_yaml,
     extract_schema_types_from_yaml,
     catalog_type_for_agent_tag,
+    sign_in_required_warnings,
 )
 from create_all_entities import (
     CREATE_TABLE_IF_NOT_EXISTS,
@@ -4181,6 +4182,15 @@ def _create_config_only_pipeline(token, pipeline_name):
     return pipeline_id
 
 
+def _sign_in_warnings(agents_cfg: List[Any], pipeline_name: str) -> List[str]:
+    """The connections of a restored pipeline a user must sign in to, logged. A warning, never a failure: the
+    agents are restored, their connections just have no sign-in yet."""
+    warnings = sign_in_required_warnings(agents_cfg)
+    for warning in warnings:
+        logger.warning("%s (pipeline %s)", warning, pipeline_name)
+    return warnings
+
+
 def import_pipeline_config_only(
     *,
     token: str,
@@ -4222,6 +4232,9 @@ def import_pipeline_config_only(
     - Attaches matching unassigned agents by (agentType, agentTag).
     - Applies host credentials and specificConfiguration for each agent.
     - Does NOT create entities or start any syncs.
+
+    Returns the pipeline id and name, and ``warnings``: the connections of the pipeline that need a user to sign in
+    (see ``commons.SIGN_IN_RULES``). A warning never fails the import.
     """
 
     configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
@@ -4258,7 +4271,11 @@ def import_pipeline_config_only(
         raise _partial_import_error(token, pipeline_id, pipeline_name, bound_agents, exc, cleanup_on_failure) from exc
 
     logger.info("Imported config-only pipeline %s (%s)", pipeline_name, pipeline_id)
-    result = {"pipelineId": pipeline_id, "pipelineName": pipeline_name}
+    result = {
+        "pipelineId": pipeline_id,
+        "pipelineName": pipeline_name,
+        "warnings": _sign_in_warnings(agents_cfg, pipeline_name),
+    }
     if credentials_pending:
         result["credentialsPending"] = credentials_pending
     return result
