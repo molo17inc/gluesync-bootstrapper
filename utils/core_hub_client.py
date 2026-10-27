@@ -20,12 +20,82 @@
 
 import requests
 import os
+import time
 from urllib.parse import urlparse, urlunparse
 import urllib3
 import logging
 from utils.redact import redact
 
 logger = logging.getLogger(__name__)
+
+try:  # the dry-run guard of the backup import options (absent when this module is used on its own)
+    from import_options import guard_write as _guard_write
+except ImportError:  # pragma: no cover
+    def _guard_write(*_args):
+        return None
+
+# Timeouts of every CoreHub request, (connect, read) seconds: before, a request could wait forever on a CoreHub
+# or database that stopped answering. Long enough for a slow discovery or a function collection build.
+DEFAULT_CONNECT_TIMEOUT = 10.0
+DEFAULT_READ_TIMEOUT = 300.0
+# GET requests only (idempotent) are retried, on a connection error, a timeout or a 502/503/504; POST, PUT and
+# DELETE are never retried, since CoreHub may have applied a request whose answer was lost.
+DEFAULT_GET_RETRIES = 2
+# A credentials PUT makes CoreHub open a pool on the agent's database: against an unreachable host it answered
+# after ~76 s (Core Hub 2.3.1). Its read timeout is never below CORE_HUB_CREDENTIALS_TIMEOUT.
+DEFAULT_CREDENTIALS_TIMEOUT = 120.0
+DEFAULT_RETRY_BACKOFF = 1.0
+_RETRYABLE_STATUSES = frozenset({502, 503, 504})
+
+
+def _float_env(name, default):
+    try:
+        return float(os.getenv(name, default))
+    except (TypeError, ValueError):
+        logger.warning(f"Ignoring invalid {name}={os.getenv(name)!r}; using {default}")
+        return float(default)
+
+
+def request_timeout():
+    """The ``(connect, read)`` timeout of a CoreHub request: ``CORE_HUB_CONNECT_TIMEOUT`` / ``CORE_HUB_TIMEOUT``."""
+    return (_float_env('CORE_HUB_CONNECT_TIMEOUT', DEFAULT_CONNECT_TIMEOUT),
+            _float_env('CORE_HUB_TIMEOUT', DEFAULT_READ_TIMEOUT))
+
+
+def credentials_request_timeout():
+    """The ``(connect, read)`` timeout of a credentials PUT: read is at least ``CORE_HUB_CREDENTIALS_TIMEOUT``."""
+    connect, read = request_timeout()
+    return connect, max(read, _float_env('CORE_HUB_CREDENTIALS_TIMEOUT', DEFAULT_CREDENTIALS_TIMEOUT))
+
+
+def get_retries():
+    """How many times a failed GET is sent again (``CORE_HUB_GET_RETRIES``) and the first backoff in seconds."""
+    return (max(0, int(_float_env('CORE_HUB_GET_RETRIES', DEFAULT_GET_RETRIES))),
+            max(0.0, _float_env('CORE_HUB_RETRY_BACKOFF', DEFAULT_RETRY_BACKOFF)))
+
+
+def retry_get(send, describe, sleep=time.sleep):
+    """``send()`` (a GET), sent again with exponential backoff on a transient failure; the last outcome.
+
+    A response is retried on 502/503/504, an exception on a connection error or a timeout; anything else
+    (a 4xx, a 500) is returned or raised at once.
+    """
+    retries, backoff = get_retries()
+    for attempt in range(retries + 1):
+        last = attempt == retries
+        try:
+            response = send()
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as error:
+            if last:
+                raise
+            logger.warning(f"{describe} failed ({error}); retry {attempt + 1}/{retries}")
+        else:
+            if getattr(response, 'status_code', None) not in _RETRYABLE_STATUSES or last:
+                return response
+            logger.warning(f"{describe} answered {response.status_code}; retry {attempt + 1}/{retries}")
+        sleep(backoff * (2 ** attempt))
+    raise AssertionError("unreachable")  # pragma: no cover
+
 
 # Disable insecure request warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -98,6 +168,7 @@ class CoreHubClient:
         self.session = requests.Session()
 
     def request(self, path, method='GET', token=None, body=None, params=None, headers=None, expected_error_statuses=None):
+        _guard_write(method, path)
         url = f"{self.base_url}{path}"
         headers = self._prepare_headers(token, headers)
 
@@ -141,26 +212,32 @@ class CoreHubClient:
 
     def _send(self, method, url, headers, body, verify, params):
         """Send the request with the session method matching ``method``."""
+        timeout = request_timeout()
         if method.upper() == 'GET':
-            return self.session.get(url, headers=headers, verify=verify, params=params)
+            return retry_get(lambda: self.session.get(url, headers=headers, verify=verify, params=params,
+                                                      timeout=timeout),
+                             f"GET {url}")
         if method.upper() in ('POST', 'PUT'):
             return self._send_with_body(method.upper(), url, headers, body, verify, params)
         if method.upper() == 'DELETE':
-            return self.session.delete(url, headers=headers, verify=verify, params=params)
+            return self.session.delete(url, headers=headers, verify=verify, params=params, timeout=timeout)
         raise ValueError(f"Unsupported HTTP method: {method}")
 
     def _send_with_body(self, verb, url, headers, body, verify, params):
         """Send a POST or PUT: raw bytes as they are, anything else as JSON."""
         send = self.session.post if verb == 'POST' else self.session.put
+        timeout = (credentials_request_timeout() if verb == 'PUT' and url.split('?')[0].endswith('/config/credentials')
+                   else request_timeout())
         if isinstance(body, (bytes, bytearray)):
             # For binary data, don't set Content-Type - send raw bytes
             if verb == 'PUT':
                 logger.debug(f"Sending binary PUT: {len(body)} bytes, headers: {redact(headers)}")
-            response = send(url, headers=headers, data=body, verify=verify, params=params)
+            response = send(url, headers=headers, data=body, verify=verify, params=params,
+                            timeout=timeout)
             if verb == 'PUT':
                 logger.debug(f"Binary PUT response status: {response.status_code}")
             return response
         # For JSON data, set Content-Type if not already set
         if 'Content-Type' not in headers:
             headers['Content-Type'] = 'application/json'
-        return send(url, headers=headers, json=body, verify=verify, params=params)
+        return send(url, headers=headers, json=body, verify=verify, params=params, timeout=timeout)
