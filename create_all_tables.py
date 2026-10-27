@@ -994,22 +994,30 @@ def _fan_in_peer_columns(peers, target_table_name, key_lookup, source_node_info,
     (it writes none)."""
     peer_columns = {}
     for index, cfg in enumerate(peers):
-        if not is_column_mappings(cfg.get('columns') or []):
-            continue
-        for entry in cfg.get('columns') or []:
-            target = _fan_in_row_target(entry)
-            if target is None:
-                continue
-            relation = {'sources': [], 'targets': [target], 'row': entry}
-            try:
-                dto = _exported_column_dto(target, relation, None, key_lookup, source_node_info, target_node_info)
-            except Exception as error:  # pylint: disable=broad-except
-                logger.debug(f"fan-in: column {target} of a feeder of {target_table_name} skipped: {error}")
-                continue
+        for target, dto in _fan_in_peer_dtos(cfg, target_table_name, key_lookup, source_node_info,
+                                             target_node_info):
             peer_columns.setdefault(target.casefold(), []).append(dto)
             if present is not None:
                 present.setdefault(target.casefold(), set()).add(index)
     return peer_columns
+
+
+def _fan_in_peer_dtos(cfg, target_table_name, key_lookup, source_node_info, target_node_info):
+    """``(target name, column DTO)`` for each column one feeder writes; none without column mappings."""
+    columns = cfg.get('columns') or []
+    if not is_column_mappings(columns):
+        return
+    for entry in columns:
+        target = _fan_in_row_target(entry)
+        if target is None:
+            continue
+        relation = {'sources': [], 'targets': [target], 'row': entry}
+        try:
+            dto = _exported_column_dto(target, relation, None, key_lookup, source_node_info, target_node_info)
+        except Exception as error:  # pylint: disable=broad-except
+            logger.debug(f"fan-in: column {target} of a feeder of {target_table_name} skipped: {error}")
+            continue
+        yield target, dto
 
 
 def _report_fan_in_conflict(conflict: str) -> None:

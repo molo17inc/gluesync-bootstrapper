@@ -111,7 +111,9 @@ _APPROXIMATE = {"real": 24, "float": 53, "double": 53, "double precision": 53}
 def _widest_params(norm):
     def widest(values):
         values = [v for v in values if v is not None]
-        return -1 if -1 in values else (max(values) if values else None)
+        if -1 in values:
+            return -1
+        return max(values) if values else None
     return (norm[0][0], widest([n[1] for n in norm]), widest([n[2] for n in norm]), max(n[3] for n in norm))
 
 

@@ -94,7 +94,7 @@ def check_password_vars(agents: List[Any], overrides: Dict[str, Dict[str, Any]],
             by_var.setdefault(var, []).append(_agent_label(agent))
     clashes = {var: labels for var, labels in by_var.items() if len(labels) > 1}
     if clashes:
-        var, labels = sorted(clashes.items())[0]
+        var, labels = min(clashes.items())
         raise AgentOverrideError(f"${var} would give the same password to {', '.join(labels)}; give each agent "
                                  "its own variable with 'passwordEnv' (keyed by agentId)")
 

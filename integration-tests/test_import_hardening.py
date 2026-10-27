@@ -30,13 +30,15 @@ class _Upload:
 
 class UploadCapTests(unittest.TestCase):
     def test_oversized_upload_is_413(self):
+        coro = app._read_capped_upload(_Upload(b"x" * (3 * 1024 * 1024)), 1024 * 1024)
         with self.assertRaises(HTTPException) as ctx:
-            asyncio.run(app._read_capped_upload(_Upload(b"x" * (3 * 1024 * 1024)), 1024 * 1024))
+            asyncio.run(coro)
         self.assertEqual(ctx.exception.status_code, 413)
 
     def test_empty_upload_is_400_and_small_one_read(self):
+        coro = app._read_capped_upload(_Upload(b""), 1024)
         with self.assertRaises(HTTPException) as ctx:
-            asyncio.run(app._read_capped_upload(_Upload(b""), 1024))
+            asyncio.run(coro)
         self.assertEqual(ctx.exception.status_code, 400)
         self.assertEqual(asyncio.run(app._read_capped_upload(_Upload(b"abc"), 1024)), b"abc")
 
@@ -120,8 +122,9 @@ class EmptySelectionTests(unittest.TestCase):
         p = import_plan.PipelinePlan(old_id="p1", include=[])
         self.assertEqual(import_plan.selected_ids(YAML, p), [])
         job = mock.Mock(resume_pipeline_id=None)
+        dumped = __import__("yaml").safe_dump(YAML)
         with self.assertRaisesRegex(import_plan.PlanError, "no table selected"):
-            app._check_pipeline_plan(job, "p1", p, "n", __import__("yaml").safe_dump(YAML))
+            app._check_pipeline_plan(job, "p1", p, "n", dumped)
 
 
 class PasswordVarTests(unittest.TestCase):

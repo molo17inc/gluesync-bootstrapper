@@ -33,11 +33,11 @@ class _Ambiguous(Exception):
 
 
 def _unquote(ident):
-    if ident[:1] == '[':
+    if ident.startswith('['):
         return ident[1:-1].replace(']]', ']')
-    if ident[:1] == '"':
+    if ident.startswith('"'):
         return ident[1:-1].replace('""', '"')
-    if ident[:1] == '`':
+    if ident.startswith('`'):
         return ident[1:-1]
     return ident
 
