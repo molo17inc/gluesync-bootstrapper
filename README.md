@@ -850,6 +850,31 @@ The passphrase is read from `AI_SETTINGS_PASSPHRASE` (or the variable `--passphr
 
 Core Hub's backup settings (Settings → Backup: the `/backup` routes and the `BACKUP_CONFIGURATION` key) and its recovery key are intentionally neither exported nor imported by the full export, Import All or the Automator. The recovery key is a secret held by a person, and the stored public key would be useless, or worse misleading, on a restored installation. Restore Core Hub's own backups with its offline command (`--restore-backup`, `--reset-connect`), then enable backups again in Settings → Backup.
 
+### Custom backup import (Automator and `import_backup --plan`)
+
+Import All still imports everything in a backup ZIP. To import only part of it, or to change it on the way in, use **Customize…** next to Import All in the Automator:
+
+1. **Analyze**: pick the backup ZIP and click *Customize…*. The Automator lists each pipeline with its entities, agents and parts. Core Hub is not touched.
+2. **Customize**: per pipeline you can untick it, rename it, resume into an existing pipeline (`resumeInto`), choose what happens to entities and pipeline names that already exist, untick or rename entities (target schema, target table, entity name), change agent host, port, database, username and password, and skip parts (UDFs, function collection, schedules, groups, table creation). You can also skip the global parts (notifications, users, access policies).
+3. **Preview**: shows what would be created, renamed, resumed or refused. It only reads from Core Hub (`GET`) and changes nothing.
+4. **Import selected**: available after a clean preview, and disabled again by any later edit. *Download plan JSON* saves your choices.
+
+Choices apply to that run only. An empty plan (`{}`) behaves exactly like Import All. The Automator runs one import at a time; a second import gets HTTP 409. While analysis waits for Import selected, the backup is stored owner-only (mode 0600) and is deleted after the import or after an hour.
+
+The same plan works from the command line through one shared module (`import_plan.py`, which documents the full schema):
+
+```bash
+# write the default (empty-choice) plan of a backup, offline
+python -m automator_app.import_backup backup.zip --write-plan plan.json
+# edit plan.json, then check it without writing anything, then import
+python -m automator_app.import_backup backup.zip --plan plan.json --dry-run
+python -m automator_app.import_backup backup.zip --plan plan.json
+```
+
+A plan never holds a password, and a plan with a password key is refused. In the Automator, new agent passwords travel separately with the request and are never stored. From the CLI, set `"passwordRef": "env:NAME"` in the agent's entry and export `NAME`. Passwords, including those read from `passwordRef` variables, `GS_IMPORT_AGENT_PASSWORD_*` and `passwordEnv`, are redacted from logs and are never written to the work directory or returned in responses.
+
+Entities are named `SOURCESCHEMA.TABLE`, using the backup's own names. A name without `@@n` also matches its `@@n` variants. Unknown pipelines, tables or agents, a plan that selects nothing, and name clashes with `onExistingPipeline: "fail"` are all refused before anything is written.
+
 ### Transactions Auditing
 
 The bootstrapper supports configuring the **Transactions Auditing** feature via YAML. This feature allows you to track every transaction synchronized by Gluesync into a dedicated `GLUESYNC.TRANSACTIONS_AUDIT` table on a target agent of your choice.
@@ -1088,16 +1113,120 @@ Accepted values for `source-type` and `target-type`:
 - `NoSQL` (for NoSQL databases, Kafka, AWSS3, etc.)
 
 Available environment variables:
-- `CREATE_TABLE_IF_NOT_EXISTS`: Create table if not exists (default: `false`). It applies to SQL targets only. A backup exported by the Automator creates its target tables too: the table is made of the target columns its `columns:` rows write (see the notes on exported rows below), and a table whose creation fails is refused: its entity is not created and the run fails. A table the target reports columns for is used as it is, whatever the failed creation said.
+- `CREATE_TABLE_IF_NOT_EXISTS`: Create table if not exists (default: `true`). It applies to SQL targets only. A backup exported by the Automator creates its target tables too: the table is made of the target columns its `columns:` rows write (see the notes on exported rows below), and a table whose creation fails is refused: its entity is not created and the run fails. A table the target reports columns for is used as it is, whatever the failed creation said.
 - `CORE_HUB_URL`: URL of the CoreHub service (default: `https://localhost:1717`)
 - `DEFAULT_PASSWORD`: Password for authentication (default: `admin`)
 - `TARGET_TYPE`: Target agent type (default: `NoSQL`)
 - `ENTITY_START_TIMEOUT`: Entity start timeout (default: `4`)
 - `ENABLE_SCHEDULING`: Enable scheduling (default: `true`)
-- `USE_SDK`: Use SDK (default: `true`)
+- `USE_SDK`: Use SDK (default: `false`)
 - `SSL_ENABLED`: Enable SSL (default: `false`)
 - `SSL_SKIP_VERIFY`: Skip SSL verification (default: `false`)
 - `CHRONOS_URL`: URL of the Chronos service (default: `http://gluesync-chronos:8000`)
+
+## Importing a backup into a new Gluesync (remap, dry run, safety options)
+
+All of these are off by default: without them `create_all_entities.py` behaves as before (Core Hub < 2.3 included).
+
+| Flag | Env variable | What it does |
+|---|---|---|
+| `--remap FILE` | `GS_IMPORT_REMAP` | remap.yaml (below) with schema/table/entity/group/agent renames |
+| `--schema-map SRC=DST`, `--target-schema-map`, `--table-map [SCHEMA.]SRC=DST`, `--target-table-map`, `--group-map`, `--agent-map`, `--entity-prefix`, `--entity-suffix` | | same renames on the command line (repeatable, win over the file) |
+| `--dry-run` | `GS_IMPORT_DRY_RUN` | reads Core Hub, validates, prints the plan, writes nothing (any POST/PUT/DELETE is blocked). Exit code 1 if something would fail |
+| `--no-validate` | `GS_IMPORT_NO_VALIDATE` | skip the pre-flight check of the YAML against the discovered tables |
+| `--strict-validate` | `GS_IMPORT_STRICT_VALIDATE` | stop before writing when validation finds issues (default: warn and go on) |
+| `--allow-offline-entities` | `GS_IMPORT_ALLOW_OFFLINE` | source DB unreachable: build entities from the YAML columns. **REFUSED by Core Hub 2.3.1 when the agents are unreachable** (400 "a modified entity is saved only when its keys can be checked", VERIFIED): bring the agent DBs up (or point the agents at a reachable DB, see agent overrides below) |
+| `--no-discovery` | `GS_IMPORT_NO_DISCOVERY` | never call discovery, always use the YAML. Same Core Hub 2.3.1 refusal when the agents are unreachable |
+| `--allow-missing-tables` | `GS_IMPORT_ALLOW_MISSING_TABLES` | a YAML table missing on the source (or an unreachable source) still gets its entity, built from the YAML; columns without a type are skipped with a warning; source tables are never created; the target table is created under `CREATE_TABLE_IF_NOT_EXISTS` or reported as pending. With unreachable agents Core Hub 2.3.1 refuses the entity (400, VERIFIED). **UNVERIFIED: whether Core Hub accepts/starts such an entity has not been tested on a live hub** |
+| `--on-existing skip\|fail\|update` | `GS_IMPORT_ON_EXISTING` | entity already in the pipeline. `update` (resend with the same entityId) is UNVERIFIED on a live hub |
+| `--corehub-version X.Y.Z` | `COREHUB_VERSION` | version to assume when `GET /version` is unreadable |
+| | `CORE_HUB_GET_RETRIES` (default 2), `CORE_HUB_RETRY_BACKOFF` (s), `CORE_HUB_TIMEOUT`, `CORE_HUB_CONNECT_TIMEOUT` | GET retries (connection errors / 5xx only) and request timeouts |
+
+The process now exits with code 1 when any entity fails.
+
+remap.yaml:
+
+```yaml
+schemas: {OLD_SRC: NEW_SRC}          # source schema (YAML top-level key)
+targetSchemas: {OLD_TGT: NEW_TGT}    # also rewrites per-table targetSchema
+tables: {OLD_SRC.T1: T1_NEW}         # source table
+targetTables: {OLD_SRC.T1: t1_new}   # target table (custom.name)
+groups: {g1: g2}
+agents: {old-agent-id: new-agent-id}
+entityPrefix: new_
+entitySuffix: ""
+```
+
+Other behaviour:
+- Per-table target schema: an exported table carries `targetSchema` when it differs from its schema's `target`; the import creates those entities with that schema. The snapshot command is not rewritten per table (a warning says so).
+- Target schema inference: a table with no explicit `targetSchema` whose snapshot commands all name one other schema (e.g. `SELECT ... FROM TGT02.X`) is created in that schema; each one is listed in the summary warnings. Disable with `--no-infer-target-schema` or `GS_IMPORT_INFER_TARGET_SCHEMA=false`. An explicit `targetSchema` always wins.
+- Fan-in (several source tables into one target table): a table the import creates gets the union of the feeders' columns (peer-only columns nullable) with the widest safe type (char lengths, numeric precision/scale, integer width). Types no type safely holds (e.g. datetime vs varchar) keep this feeder's type and are warned. An existing table is never ALTERed: missing columns are reported.
+- Keys (R12.1): YAML keys that contain the source primary key plus more columns are a warning and are kept; `--strict-validate` refuses them.
+- `--use-ssl` defaults to the `--base-url` scheme (https = on); `--no-use-ssl` forces it off. `--resume-from-pipeline` needs `--resume-pipeline-id` (or `GS_IMPORT_RESUME_PIPELINE_ID`).
+- `entityName` is matched by the source table (and the current schema first), deterministically. `orderIndex` of exported columns is informative only.
+- UDFs: with `UDF_PATH` only that folder is searched; otherwise the workspace, and two matching files are an error. A missing UDF fails loudly.
+- Automator archive import: `GS_IMPORT_ON_EXISTING_PIPELINE=suffix` (default, adds a suffix) or `fail`; a pipeline left half-created is reported with its id and agents; `GS_IMPORT_CLEANUP_ON_FAILURE=true` deletes it (DELETE route UNVERIFIED on a live hub). Zip members escaping the extraction folder are refused.
+- Unreachable agent database during an Automator archive import: Core Hub validates the DB connection when credentials are set and answers 500 ("Failed to initialize pool ... Connection refused", after ~76 s) when the host is unreachable (VERIFIED on Core Hub 2.3.1). By default the import stops there, as before. With `GS_IMPORT_CONTINUE_ON_CREDENTIALS_FAILURE=true` a credentials PUT failing on a connection error or a 5xx is logged, the agent is listed as **credentials pending** (pipeline id, agent id, type, tag), the other agents are still bound and the specific configuration is still sent (a refusal of it is recorded, not fatal). Entities are then built from the backup YAML without discovery when the SOURCE agent is pending; target tables are created only when the TARGET agent's credentials were accepted. The pipeline is left in draft (not marked configuration completed) and the import summary tells you to re-enter the credentials in Core Hub. A 4xx still stops the import. **Core Hub 2.3.1 refuses them** (specific configuration refused until the agent DB is initialized, entities refused with 400 "a modified entity is saved only when its keys can be checked"; VERIFIED): on 2.3.1 this option only leaves a draft pipeline to resume later (below). The credentials PUT has its own read timeout, never below `CORE_HUB_CREDENTIALS_TIMEOUT` (default 120 s).
+- DBMoto converter: template schemas match exactly unless `TEMPLATE_SUBSTRING_MATCH=true`; a second schema never overwrites a written file; `DBMOTO_REMAP` applies a remap.yaml. A converted YAML is deployed manually with `create_all_entities.py --yaml-file ...`.
+
+
+### Backup import from the command line, agent connection overrides, resume
+
+`python -m automator_app.import_backup` runs the Automator's **Import All** on a backup ZIP (Export All or a full pipeline backup) without the UI. The Core Hub password is read from an environment variable only (`--password-env`, default `GS_COREHUB_PASSWORD`). Works with Core Hub < 2.3 too: it only uses the routes the import already used.
+
+| Flag | Env variable | What it does |
+|---|---|---|
+| `--base-url URL` | `GS_COREHUB_URL` | Core Hub (default `https://localhost:1717`) |
+| `--username U` | `GS_COREHUB_USERNAME` | default `admin` |
+| `--password-env VAR` | `GS_COREHUB_PASSWORD` | variable holding the Core Hub password |
+| `--use-ssl`, `--skip-verify` | | HTTPS, and no certificate check (self-signed) |
+| `--no-create-tables`, `--no-scheduling` | | as the Automator preferences |
+| `--agent-overrides FILE` | `GS_IMPORT_AGENT_OVERRIDES_FILE`, `GS_IMPORT_AGENT_OVERRIDES` (inline JSON) | change the agents' connection before it is sent |
+| `--resume-pipeline-id ID` | `GS_IMPORT_RESUME_PIPELINE_ID` | resume an existing pipeline |
+| `--resume-from-pipeline OLD_ID` | `GS_IMPORT_RESUME_FROM_PIPELINE` | backup pipeline to resume from, when the ZIP has several |
+| `--on-existing skip\|update\|fail` | `GS_IMPORT_ON_EXISTING` | entities that already exist (a resume defaults to `skip`) |
+
+Exit code: `0` every pipeline fully imported, `2` partial (a pipeline was created/resumed but some entities failed or were not created), `1` nothing imported or the request was refused. The entity script (`create_all_entities.py`) keeps its exit codes from before: `0` even when single entities fail (they are listed in its result and log), `1` only when the run itself stops (no result, validation failed, an existing-entity listing under `onExistingEntity`/resume could not be read, or a `--dry-run` found failures); `import_backup` derives `0`/`1`/`2` from the report, not from that exit code. The env variables also apply to the Automator UI's Import All (the route also accepts the form fields `agent_overrides` and `resume_pipeline_id`).
+
+**Agent connection overrides.** A JSON object keyed by agent tag (case-insensitive) or agent id (the id wins); fields `host`, `port`, `database` (or `databaseName`), `username`, `passwordEnv`. Passwords are never written in the JSON (refused): they come from `GS_IMPORT_AGENT_PASSWORD_<TAG>` (tag upper-cased, other characters `_`, e.g. `GS_IMPORT_AGENT_PASSWORD_MSSQL_CT`) or the variable named by `passwordEnv`; the log says only which variable was used. An unknown tag/id stops the import (400) before anything is sent, listing the backup's agents. Fields not listed keep the backup value (the agent's connection name is not changed).
+
+```json
+{"mssql-ct": {"host": "host.docker.internal", "port": 1433, "database": "demo", "username": "sa"}}
+```
+
+**Resume.** When an import left a pipeline in place (e.g. credentials refused, now fixed in Core Hub), `--resume-pipeline-id` restores the backup into that pipeline: no pipeline, agent, certificate or credentials is created or sent, users/notifications/access are not restored; the agents' specific configuration is sent again (`PUT /pipelines/{id}/agents/{agentId}/config/specific`, agents matched by type, then tag), the function collection is restored (a refusal is a note, it may already be installed), then entities (existing ones skipped) and UDFs.
+
+**Agents not reachable.** When an agent's credentials are refused (credentials pending), no entity of that pipeline is sent: Core Hub refuses each one while the agents are unreachable. They are counted as not attempted (not failed) and `GS_IMPORT_ATTEMPT_ENTITIES_WHEN_PENDING=true` sends them anyway (previous behavior).
+
+**Import report.** The Automator result and the CLI print a short report, each fact once, e.g.:
+
+```
+PARTIAL: Synth1MSSQL (e61466b6) - 0 of 58 entities created (58 not attempted: agents not reachable).
+Source ibm-iseries: can't connect to database (Connection refused) - specific configuration not saved.
+Target mssql-ct: can't connect to 10.17.3.164:1433 (timed out) - specific configuration not saved, target tables not created.
+Next: fix connections (overrides file or Core Hub UI), then resume with GS_IMPORT_RESUME_PIPELINE_ID=e61466b6 - or delete the pipeline.
+```
+
+The agent reason comes from Core Hub's `exceptionMessage`; the full requests and responses are in the debug log. The entity total counts each table once (whitelist and `custom` together, less the blacklist).
+
+**K9 and unknown target keys.** K9 (no extra `targetKeys` next to the keys inherited from the source primary key) is enforced locally only when discovery confirms the target table has no primary key. When the target key cannot be read (no discovery, credentials pending, table missing) it is a warning and Core Hub decides; `--strict-validate` restores the refusal. With a physical target primary key, `targetKeys` must name exactly its columns (R12.2). Keys are never dropped.
+
+**Condensed errors.** The same entity error on many tables is reported once with a count, e.g. `K9: targetKeys names COL0004 ... x9 tables (SCH01.TAB001, SCH02.TAB001, SCH03.TAB001, ...)`.
+
+**Summary.** The import reports `Pipelines fully imported: N; partially imported: M.` with, per pipeline, entities created / failed / skipped; a pipeline whose entities were not created is reported as PARTIAL, never as imported, and the UI shows the import as failed.
+
+```bash
+cd /path/to/gluesync-bootstrapper && source .venv/bin/activate
+export GS_COREHUB_PASSWORD='...'                 # Core Hub admin password
+export GS_IMPORT_AGENT_PASSWORD_MSSQL_CT='...'   # password of the mssql-ct agent's DB
+python -m automator_app.import_backup backup.zip --base-url https://localhost:1717 --username admin \
+    --use-ssl --skip-verify --agent-overrides overrides.json
+echo "exit $?"
+# then, for a pipeline reported PARTIAL (its id is in the summary):
+python -m automator_app.import_backup backup.zip --base-url https://localhost:1717 --username admin \
+    --use-ssl --skip-verify --agent-overrides overrides.json \
+    --resume-pipeline-id <PIPELINE_ID> --resume-from-pipeline <BACKUP_PIPELINE_ID>
+```
 
 ## Requirements
 
