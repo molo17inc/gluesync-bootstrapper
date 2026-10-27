@@ -131,7 +131,8 @@ class RunCreateEntitiesInferenceTests(unittest.TestCase):
 
         def fake_create_entities_main(pipeline_id, source_schema, target_schema,
                                       source_type, target_type, yaml_file,
-                                      token, skip_errors, chunk_size):
+                                      token, skip_errors, chunk_size, **_kwargs):
+            # **_kwargs: main() also takes chronos_token / restore_function_collection (and import_opts).
             # Capture the values the downstream call actually received.
             # Read CREATE_TABLE_IF_NOT_EXISTS from create_all_entities (the
             # module that owns the flag) - corehub's binding is a stale
