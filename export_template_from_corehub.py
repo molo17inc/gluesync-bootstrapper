@@ -1108,6 +1108,12 @@ def _process_single_entity(
     # Table name (target name / collection)
     table_cfg["name"] = target_table_name
     table_cfg["entityName"] = entity_name
+    # The schema entry's target comes from the first table met: a table targeting another schema says so,
+    # otherwise the import would create it in the schema of that first table (Synth1: TGT02 vs TGT01).
+    if target_schema and target_schema != schema_cfg.get("target"):
+        table_cfg["targetSchema"] = target_schema
+        logger.info(f"{source_schema}.{source_table_name} targets schema {target_schema}, not the schema "
+                    f"default {schema_cfg.get('target')}: exported with targetSchema")
 
     # If the YAML key is different from the actual source table name (duplicate table case),
     # store the real source table name so import can find it in the database
@@ -1393,6 +1399,13 @@ def _process_multitable_entity(
     target_tables = target_ae.get("tables", []) or []
     target_schema = (target_tables[0].get("schema") or source_schema) if target_tables else source_schema
     schema_cfg = _schema_cfg_for(schemas, source_schema, target_schema)
+    target_schemas_of_chain = sorted({str(t.get("schema")) for t in target_tables if t.get("schema")})
+    if any(s_ != schema_cfg.get("target") for s_ in target_schemas_of_chain):
+        # Known limitation: per-table target schemas inside one MultiTable chain are not exported (one entity,
+        # one pass); the warning below tells the user to check them.
+        logger.warning(f"MultiTable entity {entity_name} targets schema(s) {', '.join(target_schemas_of_chain)} "
+                       f"while {source_schema} is exported with target {schema_cfg.get('target')}: check its "
+                       f"target schema after import")
 
     column_groups = _group_multitable_entries(source_ae.get("columns"))
     key_groups = _group_multitable_entries(source_ae.get("keys"))

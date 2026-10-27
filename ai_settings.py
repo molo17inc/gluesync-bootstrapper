@@ -92,6 +92,13 @@ def _corehub_message(exc: BaseException) -> str:
     return str(exc)
 
 
+def _is_html_page(answer: Any) -> bool:
+    """Whether a Core Hub answer is an HTML page (the UI) rather than the JSON of an API route."""
+    text = answer.decode("utf-8", "replace") if isinstance(answer, bytes) else str(answer)
+    head = text.lstrip()[:200].lower()
+    return head.startswith(("<!doctype html", "<html"))
+
+
 def _call(path: str, token: str, body: Dict[str, Any]) -> Dict[str, Any]:
     try:
         result = fetch_core_hub(path, method="POST", token=token, body=body)
@@ -102,6 +109,9 @@ def _call(path: str, token: str, body: Dict[str, Any]) -> Dict[str, Any]:
         if status is not None and 400 <= status < 500:
             raise AiSettingsError(_corehub_message(exc)) from exc
         raise
+    if isinstance(result, (str, bytes)) and _is_html_page(result):
+        # A Core Hub before 2.3.0.1 has no such route: its web server answers with the UI page (200 text/html)
+        raise AiSettingsUnsupported(UNSUPPORTED_MESSAGE)
     if not isinstance(result, dict):
         raise AiSettingsError(f"Unexpected answer from Core Hub: {str(result)[:200]}")
     return result

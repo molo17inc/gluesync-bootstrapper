@@ -23,6 +23,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import copy
+import operator
 import functools
 import io
 import json
@@ -32,27 +35,34 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
+import time
 import uuid
 import zipfile
 from dataclasses import dataclass, field, replace as dataclass_replace
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Any, Callable, Dict, Optional
+from typing import Annotated, Any, Callable, Dict, Optional, cast
 import hashlib
 import re
 
 import requests
 import yaml
 import create_user_defined_functions
+import import_options
+import agent_overrides
+import import_plan
 import function_collection
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from commons import extract_all_schemas_from_yaml, extract_schema_types_from_yaml
+import commons
+from commons import extract_all_schemas_from_yaml, extract_schema_types_from_yaml, load_yaml_config
 from . import corehub
 import ai_settings
 from .corehub import PipelineInMaintenanceError
@@ -60,6 +70,47 @@ from .state import state
 from .version import get_version
 
 logger = logging.getLogger(__name__)
+
+
+def _install_log_redaction() -> None:
+    """Hide passwords from every log record of the process (``password=...`` / ``"password": ...`` and the exact
+    agent passwords of the imports in progress), tracebacks included. Installed once."""
+    previous = logging.getLogRecordFactory()
+    if getattr(previous, "_gs_redacting", False):
+        return
+
+    def factory(*args, **kwargs):
+        record = previous(*args, **kwargs)
+        try:
+            message = record.getMessage()
+        except Exception:  # pylint: disable=broad-except
+            return record
+        redacted = import_plan.SECRETS.redact(message)
+        if redacted != message:
+            record.msg, record.args = redacted, None
+        if record.exc_info and not record.exc_text:
+            record.exc_text = import_plan.SECRETS.redact(logging.Formatter().formatException(record.exc_info))
+        return record
+
+    factory._gs_redacting = True  # type: ignore[attr-defined]
+    logging.setLogRecordFactory(factory)
+
+
+_install_log_redaction()
+
+# One backup import (or import preview) at a time: a second one is answered 409.
+_IMPORT_LOCK = threading.Lock()
+IMPORT_BUSY = "Another backup import or preview is running; try again when it has finished."
+
+
+@contextlib.contextmanager
+def _exclusive_import():
+    if not _IMPORT_LOCK.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail=IMPORT_BUSY)
+    try:
+        yield
+    finally:
+        _IMPORT_LOCK.release()
 
 LOGIN_REQUIRED = "Log in to a Core Hub first"
 AUTH_REQUIRED = "Authentication required"
@@ -119,7 +170,10 @@ def get_workspace_root() -> Path:
         xdg = os.environ.get("XDG_DATA_HOME")
         base = (Path(xdg) if xdg else Path.home() / ".local" / "share") \
             / "gluesync" / "automator" / "work"
-    base.mkdir(parents=True, exist_ok=True)
+    base.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # Owner-only: it holds uploaded backups and their UDF sources (mkdir's mode is not applied to an existing dir).
+    with contextlib.suppress(OSError):
+        os.chmod(base, 0o700)
     return base
 
 
@@ -130,7 +184,9 @@ def new_session_dir(kind: str) -> Path:
     source files together, so UDF lookups never have to span sibling folders.
     """
     session_dir = get_workspace_root() / f"{kind}_{uuid.uuid4().hex[:8]}"
-    session_dir.mkdir(parents=True, exist_ok=True)
+    session_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with contextlib.suppress(OSError):
+        os.chmod(session_dir, 0o700)
     return session_dir
 
 
@@ -353,6 +409,7 @@ class ApiMessage(BaseModel):
     success: bool = True
     message: Optional[str] = None
     logs: Optional[list[str]] = None
+    planUsed: Optional[Dict[str, Any]] = None
 
 
 class AiSettingsExportRequest(BaseModel):
@@ -486,33 +543,29 @@ def _load_config_from_bytes(contents: bytes, filename: str) -> Any:
         return yaml.safe_load(text)
 
 
+_MASKED_PASSWORD = re.compile(r"^\*{3,}$")
+
+
+def _is_masked(value: Any) -> bool:
+    """A password masked by an export: asterisks only (Core Hub writes ``*******``; a hand edit may use more or fewer)."""
+    return isinstance(value, str) and bool(_MASKED_PASSWORD.match(value.strip()))
+
+
 def _has_masked_password(value: Any) -> bool:
-    """Recursively detect any password set to the masked sentinel value.
-
-    We specifically look for hostCredentials.password == "*******" or any
-    generic "password" field with that literal value.
-    """
-
-    sentinel = "*******"
-
+    """Recursively detect any password set to a masked sentinel value (asterisks only, see ``_is_masked``):
+    a ``password`` field anywhere, hostCredentials / customHostCredentials included."""
     if isinstance(value, dict):
-        # Direct password key
-        if str(value.get("password")) == sentinel:
+        if _is_masked(value.get("password")):
             return True
-
-        # Look inside hostCredentials / customHostCredentials
-        for key in ("hostCredentials", "customHostCredentials"):
-            sub = value.get(key)
-            if isinstance(sub, dict) and str(sub.get("password")) == sentinel:
-                return True
-
-        # Recurse into all values
         return any(_has_masked_password(v) for v in value.values())
-
     if isinstance(value, (list, tuple, set)):
         return any(_has_masked_password(v) for v in value)
-
     return False
+
+
+NO_PIPELINES_IMPORTED = "No pipelines were imported from the archive."
+MASKED_PASSWORDS = ("Config contains masked passwords (*******). "
+                    "Please replace them with real passwords before importing.")
 
 
 _NOT_LOGGED_IN_RESPONSE: Dict[str, Any] = {"description": LOGIN_REQUIRED}
@@ -571,6 +624,7 @@ _SESSION_RESPONSES: Dict[Any, Dict[str, Any]] = {
 _ARCHIVE_IMPORT_RESPONSES: Dict[Any, Dict[str, Any]] = {
     400: {"description": "The archive is empty, is not a ZIP, or has no usable agents-config.yaml"},
     401: _NOT_LOGGED_IN_RESPONSE,
+    413: {"description": "The archive is larger than GS_IMPORT_MAX_UPLOAD_MB (analyze)"},
     500: _FAILURE_RESPONSE,
 }
 _RUN_RESPONSES: Dict[Any, Dict[str, Any]] = {
@@ -626,9 +680,24 @@ def _is_udf_source(member: str) -> bool:
     )
 
 
+def _zip_destination_under(root: Path, member: str) -> Path:
+    """root / member, refusing a ZIP member path that escapes root (zip slip)."""
+    normalized = member.replace("\\", "/")
+    parts = normalized.split("/")
+    if normalized.startswith("/") or ".." in parts or (parts and ":" in parts[0]):
+        raise ValueError(f"Unsafe path in the backup ZIP, refusing to extract it: {member!r}")
+    dest = (root / normalized).resolve()
+    if not dest.is_relative_to(root.resolve()):
+        raise ValueError(f"Unsafe path in the backup ZIP, refusing to extract it: {member!r}")
+    return dest
+
+
 def _extract_udf_source(zf: zipfile.ZipFile, member: str, root: Path) -> None:
-    """Extract one UDF source file under root, keeping its path inside the ZIP."""
-    dest = root / member
+    """Extract one UDF source file under root, keeping its path inside the ZIP.
+
+    Raises ValueError for a member that would land outside root (absolute path, ``..``, drive letter).
+    """
+    dest = _zip_destination_under(root, member)
     dest.parent.mkdir(parents=True, exist_ok=True)
     _copy_zip_member(zf, member, dest)
 
@@ -1538,6 +1607,26 @@ class _ArchiveImport:
     udf_root: Optional[Path]
     errors: list[str] = field(default_factory=list)
     created_pipelines: list[dict] = field(default_factory=list)
+    # GS_IMPORT_CONTINUE_ON_CREDENTIALS_FAILURE: agents whose credentials CoreHub refused (DB unreachable).
+    continue_on_credentials_failure: bool = False
+    credentials_pending: list[dict] = field(default_factory=list)
+    # What the entity runs of a pipeline with credentials pending saved without discovery / Core Hub refused.
+    offline_report: list[str] = field(default_factory=list)
+    # GS_IMPORT_RESUME_PIPELINE_ID / resume_pipeline_id: an existing pipeline whose specific configuration,
+    # entities and UDFs are restored again from the backup (no pipeline, agent or credentials is created).
+    resume_pipeline_id: Optional[str] = None
+    # Original pipeline id of the backup YAML to resume from, when the archive holds more than one.
+    resume_source_pipeline_id: Optional[str] = None
+    # Informational lines of the import (agent overrides applied, ...): never a password.
+    notes: list[str] = field(default_factory=list)
+    # Per pipeline id: what its entity runs created / failed / skipped, and whether anything went wrong.
+    outcomes: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    # The custom import plan of this run (empty: Import All) and the agent passwords of this request only
+    # ({backup pipeline id: {agentTag|agentId: password}}), never written anywhere.
+    plan: import_plan.ImportPlan = field(default_factory=import_plan.ImportPlan)
+    agent_passwords: Dict[str, Dict[str, str]] = field(default_factory=dict, repr=False)
+    # Where a plan's passwordRef "env:NAME" is read (the CLI: os.environ).
+    plan_env: Any = field(default=None, repr=False)
 
 
 @dataclass
@@ -1552,6 +1641,12 @@ class _PipelineEntities:
     target_type: str
     enable_scheduling: Any
     create_tables: Any
+    pending_agent_types: frozenset = frozenset()
+    # --on-existing used when the environment sets none (resume: "skip", so a rerun never duplicates).
+    default_on_existing: Optional[str] = None
+    # Plan: compile the UDFs after each schema pair; the per-run options (onExistingEntity, validate, remap).
+    compile_udfs: bool = True
+    plan_choices: Optional[Dict[str, Any]] = None
 
 
 def _member_stem(name: str) -> str:
@@ -1594,6 +1689,50 @@ def _default_pipeline_name(old_pipeline_id: Optional[str]) -> str:
     return f"Imported pipeline {old_pipeline_id}" if old_pipeline_id else "Imported pipeline"
 
 
+def _agents_config_mapping(name: str, text: str) -> Dict[str, Any]:
+    """The parsed agents-config ``name``; 400 when it is no YAML mapping."""
+    try:
+        parsed = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise HTTPException(status_code=400, detail=f"Failed to parse {name}: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise HTTPException(status_code=400, detail=f"{name} is not a YAML mapping")
+    return parsed
+
+
+def _unseen_agents(candidates: list, seen: set) -> list:
+    """The agents whose agentId (or id) is not in ``seen`` yet, adding theirs; agents without one are all kept."""
+    kept = []
+    for agent in candidates:
+        agent_id = agent.get("agentId") or agent.get("id") if isinstance(agent, dict) else None
+        if agent_id in seen:
+            continue
+        if agent_id is not None:
+            seen.add(agent_id)
+        kept.append(agent)
+    return kept
+
+
+def _merge_agents_configs(names: list[str], texts: list[str]) -> str:
+    """One agents-config.yaml of the several a ZIP of single-pipeline exports holds (pipeline_<id>/agents-config.yaml
+    each): their agents (once per agentId) and their pipelines mappings, so that each pipeline is bound to the agents
+    of its own export, not to those of the first one. 400 when one of them is not a YAML mapping."""
+    agents: list = []
+    pipelines: list = []
+    seen: set = set()
+    merged: Dict[str, Any] = {}
+    for name, text in zip(names, texts):
+        parsed = _agents_config_mapping(name, text)
+        for key, value in parsed.items():
+            if key not in ("agents", "pipelines"):
+                merged.setdefault(key, value)
+        agents.extend(_unseen_agents(parsed.get("agents") or [], seen))
+        pipelines.extend(item for item in parsed.get("pipelines") or [] if isinstance(item, dict))
+    merged["agents"] = agents
+    merged["pipelines"] = pipelines
+    return yaml.safe_dump(merged, sort_keys=False, allow_unicode=True)
+
+
 def _read_agents_config_text(contents: bytes, operation: str, logs: Optional[list[str]] = None) -> str:
     """Text of the agents-config.yaml of a backup ZIP; 400 when there is none or the ZIP is invalid."""
     try:
@@ -1602,19 +1741,23 @@ def _read_agents_config_text(contents: bytes, operation: str, logs: Optional[lis
             if logs is not None:
                 logs.append(f"Archive contains {len(names)} entries.")
 
-            agents_name = next(
-                (name for name in names if name.lower().endswith(("agents-config.yaml", "agents-config.yml"))),
-                None,
-            )
-            if not agents_name:
+            duplicates = sorted({name for name in names if names.count(name) > 1})
+            if duplicates:
+                # zipfile reads the last of same-named entries only: refuse rather than import one copy (or two)
+                raise HTTPException(status_code=400, detail="Invalid ZIP archive: duplicate entries "
+                                    + ", ".join(duplicates[:5]))
+            agents_names = [name for name in names if not _is_macos_metadata(name)
+                            and name.lower().endswith(("agents-config.yaml", "agents-config.yml"))]
+            if not agents_names:
                 raise HTTPException(
                     status_code=400,
                     detail="Archive does not contain agents-config.yaml",
                 )
 
             if logs is not None:
-                logs.append(f"Found agents config: {agents_name}")
-            return zf.read(agents_name).decode("utf-8")
+                logs.extend(f"Found agents config: {agents_name}" for agents_name in agents_names)
+            texts = [zf.read(agents_name).decode("utf-8") for agents_name in agents_names]
+            return texts[0] if len(texts) == 1 else _merge_agents_configs(agents_names, texts)
     except HTTPException:
         raise
     except Exception as exc:  # pylint: disable=broad-except
@@ -1622,22 +1765,19 @@ def _read_agents_config_text(contents: bytes, operation: str, logs: Optional[lis
         raise HTTPException(status_code=400, detail=f"Invalid ZIP archive: {exc}") from exc
 
 
-def _parse_agents_config(agents_text: str, operation: str) -> tuple[Any, list]:
-    """Parsed agents-config.yaml and its agents list; 400 when it cannot be imported."""
+def _parse_agents_config(agents_text: str, operation: str, allow_masked: bool = False) -> tuple[Any, list]:
+    """Parsed agents-config.yaml and its agents list; 400 when it cannot be imported.
+
+    ``allow_masked``: masked passwords are no refusal here (analysis, a resume that sends no credentials, or a
+    custom import whose plan / passwords may give them: checked per pipeline before its credentials are sent)."""
     try:
         agents_config = yaml.safe_load(agents_text)
     except Exception as exc:  # pylint: disable=broad-except
         logger.exception("Failed to parse agents-config.yaml during %s", operation)
         raise HTTPException(status_code=400, detail=f"Failed to parse agents-config.yaml: {exc}") from exc
 
-    if _has_masked_password(agents_config):
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Config contains masked passwords (*******). "
-                "Please replace them with real passwords before importing."
-            ),
-        )
+    if not allow_masked and _has_masked_password(agents_config):
+        raise HTTPException(status_code=400, detail=MASKED_PASSWORDS)
 
     agents_list = agents_config.get("agents")
     if not isinstance(agents_list, list) or not agents_list:
@@ -1777,23 +1917,29 @@ def _restore_from_archive(
         logger.warning(failure_message, exc)
 
 
-def _restore_archive_globals(contents: bytes, errors: list[str]) -> None:
-    """Restore the global notifications, users and OIDC configuration of a backup ZIP."""
+def _restore_archive_globals(contents: bytes, errors: list[str],
+                             plan: Optional[import_plan.ImportPlan] = None) -> None:
+    """Restore the global notifications, users and OIDC configuration of a backup ZIP (each unless the plan's
+    ``globals`` turns it off)."""
+    plan = plan or import_plan.ImportPlan()
     # Restore global notification settings (SMTP) if present in the backup.
-    _restore_from_archive(
-        lambda: _find_notification_config(contents),
-        lambda notification_cfg: corehub.import_global_notifications(
-            token=state.token,
-            base_url=state.base_url,
-            use_ssl=state.use_ssl,
-            skip_verify=state.skip_verify,
-            notification_cfg=notification_cfg,
-        ),
-        "global notifications",
-        "Restored global notification settings during import-all",
-        "Failed to restore global notifications during import-all: %s",
-        errors,
-    )
+    if plan.global_enabled("notifications"):
+        _restore_from_archive(
+            lambda: _find_notification_config(contents),
+            lambda notification_cfg: corehub.import_global_notifications(
+                token=state.token,
+                base_url=state.base_url,
+                use_ssl=state.use_ssl,
+                skip_verify=state.skip_verify,
+                notification_cfg=notification_cfg,
+            ),
+            "global notifications",
+            "Restored global notification settings during import-all",
+            "Failed to restore global notifications during import-all: %s",
+            errors,
+        )
+    if not plan.global_enabled("users"):
+        return
     # Restore users config (full CoreHub backup) if present.
     _restore_from_archive(
         lambda: _find_config_by_stem(contents, "users"),
@@ -1826,7 +1972,8 @@ def _restore_archive_globals(contents: bytes, errors: list[str]) -> None:
     )
 
 
-def _restore_archive_access(contents: bytes, errors: list[str]) -> None:
+def _restore_archive_access(contents: bytes, errors: list[str],
+                            plan: Optional[import_plan.ImportPlan] = None) -> None:
     """Restore the user groups and the data-access policies of a full backup ZIP.
 
     Runs once the pipelines are imported, so that the policies find the connections the import recreated.
@@ -1843,25 +1990,37 @@ def _restore_archive_access(contents: bytes, errors: list[str]) -> None:
         ("data-access policies", "data-access-policies",
          lambda data: corehub.import_data_access_policies(**connection, policies_data=data)),
     )
+    plan = plan or import_plan.ImportPlan()
+    enabled = {"user-groups": plan.global_enabled("users"),
+               "data-access-policies": plan.global_enabled("accessPolicies")}
     for label, stem, restore in sections:
-        try:
-            data = _find_config_by_stem(contents, stem)
-        except Exception as exc:  # pylint: disable=broad-except
-            errors.append(f"{label}: {exc}")
-            continue
-        if data is None:
-            continue
+        if enabled[stem]:
+            _restore_access_section(contents, errors, label, stem, restore)
+
+
+def _restore_access_section(contents: bytes, errors: list[str], label: str, stem: str, restore: Any) -> None:
+    """Restore one access section (user groups or data-access policies) of a backup ZIP, if it has one."""
+    try:
+        data = _find_config_by_stem(contents, stem)
+    except Exception as exc:  # pylint: disable=broad-except
+        errors.append(f"{label}: {exc}")
+        return
+    if data is not None:
         result = corehub.restore_safely(f"{stem}.yaml", functools.partial(restore, data))
-        if result.get("status") == "failed":
-            errors.append(f"{label}: {result.get('error')}")
-            continue
-        errors.extend(
-            f"{label}: {message}"
-            for key in ("errors", "warnings", "skipped_policies")
-            for message in result.get(key) or []
-        )
-        if result.get("status") == "restored":
-            logger.info("Restored %s during import-all: %s", label, result.get("summary"))
+        _record_restore_result(errors, label, result)
+
+
+def _record_restore_result(errors: list[str], label: str, result: Dict[str, Any]) -> None:
+    if result.get("status") == "failed":
+        errors.append(f"{label}: {result.get('error')}")
+        return
+    errors.extend(
+        f"{label}: {message}"
+        for key in ("errors", "warnings", "skipped_policies")
+        for message in result.get(key) or []
+    )
+    if result.get("status") == "restored":
+        logger.info("Restored %s during import-all: %s", label, result.get("summary"))
 
 
 def _agent_matches(candidate: Any, a_type: Any, a_tag: Any, a_id: Any) -> bool:
@@ -2071,7 +2230,13 @@ def _upload_archive_certificate(job: _ArchiveImport, name: str, agent_cfg: dict,
         )
 
         # Now send credentials AFTER certificate upload
-        _send_agent_credentials(agent_cfg, agent_id, new_pipeline_id)
+        try:
+            _send_agent_credentials(agent_cfg, agent_id, new_pipeline_id)
+        except Exception as error:  # pylint: disable=broad-except
+            if not (job.continue_on_credentials_failure and corehub.credentials_failure_is_recoverable(error)):
+                raise
+            corehub.record_credentials_pending(job.credentials_pending, new_pipeline_id, agent_id,
+                                               agent_cfg.get("agentType"), agent_cfg.get("agentTag"), error)
 
 
 def _upload_pipeline_certificates(job: _ArchiveImport, name: str, agents_for_pipeline: list, new_pipeline_id: Any) -> None:
@@ -2150,7 +2315,10 @@ def _create_schema_pair_entities(job: _ArchiveImport, entities: _PipelineEntitie
     """Create the entities of one schema pair of an imported pipeline; False when anything failed."""
     success = True
     name = entities.name
+    commons.take_schedule_failures()  # only what this run fails to restore counts
     try:
+        run_options = _entity_import_options(entities.pending_agent_types, entities.default_on_existing,
+                                             entities.plan_choices)
         result_run = corehub.run_create_entities(
             token=state.token,
             base_url=state.base_url,
@@ -2167,22 +2335,29 @@ def _create_schema_pair_entities(job: _ArchiveImport, entities: _PipelineEntitie
             options=corehub.EntityRunOptions(
                 chronos_token=state.chronos_token,
                 restore_function_collection=False,  # published once for the pipeline, before its first schema pair
+                import_options=run_options,
             ),
         )
+        _record_offline_outcome(job, entities, src_schema, tgt_schema, result_run)
+        _record_entity_counts(job, entities.pipeline_id, result_run, run_options)
+        _record_schedule_failures(job, entities, src_schema, tgt_schema)
         if not result_run.get("success"):
             success = False
-            if result_run.get("error"):
-                job.errors.append(
-                    f"{name}: entity creation error for {src_schema}->{tgt_schema}: {result_run['error']}"
-                )
+            run_errors = (result_run.get("result") or {}).get("errors") if isinstance(result_run.get("result"), dict) \
+                else None
+            error_text = "; ".join(_condense_errors(run_errors)) if run_errors else result_run.get("error")
+            if error_text:
+                job.errors.append(f"{name}: entity creation error for {src_schema}->{tgt_schema}: {error_text}")
 
         # After entities are created for this schema pair, automatically
         # compile and register any UDFs referenced in the YAML using the
         # exported source files from the backup.
-        if job.udf_root is not None and not _compile_imported_udfs(job, entities, src_schema, tgt_schema):
+        if job.udf_root is not None and entities.compile_udfs and \
+                not _compile_imported_udfs(job, entities, src_schema, tgt_schema):
             success = False
     except Exception as exc:  # pylint: disable=broad-except
         success = False
+        _outcome(job, entities.pipeline_id)["runErrors"] += 1
         logger.exception(
             "Failed to create entities for pipeline %s (%s) from %s", entities.pipeline_name, entities.pipeline_id, name
         )
@@ -2190,6 +2365,113 @@ def _create_schema_pair_entities(job: _ArchiveImport, entities: _PipelineEntitie
             f"{name}: exception during entity creation for {src_schema}->{tgt_schema}: {exc}"
         )
     return success
+
+
+def _pending_agent_types(job: _ArchiveImport, pipeline_id: Any) -> frozenset:
+    """``{"SOURCE", "TARGET"}`` subset whose credentials CoreHub refused for this pipeline."""
+    return frozenset(p.get("agentType") for p in job.credentials_pending
+                     if str(p.get("pipelineId")) == str(pipeline_id) and p.get("agentType"))
+
+
+def _with_plan_choices(options: Any, plan_choices: Dict[str, Any]) -> Any:
+    """``options`` with the choices of a custom import plan applied over them."""
+    if plan_choices.get("on_existing"):
+        options.on_existing = plan_choices["on_existing"]
+    if plan_choices.get("validate") is not None:
+        options.validate = plan_choices["validate"]
+    if plan_choices.get("strict_validate") is not None:
+        options.strict_validate = plan_choices["strict_validate"]
+    if plan_choices.get("remap"):
+        options.remap = options.remap.merged(plan_choices["remap"])
+    return options
+
+
+def _entity_import_options(pending_agent_types: frozenset, default_on_existing: Optional[str] = None,
+                           plan_choices: Optional[Dict[str, Any]] = None):
+    """The import options of an entity run: from the environment, and, when the SOURCE agent's credentials are
+    pending, no discovery at all (entities built from the backup YAML: Core Hub 2.3.1 refuses them with 400 "a
+    modified entity is saved only when its keys can be checked" while the agents are unreachable).
+
+    ``default_on_existing`` (resume): the --on-existing behaviour when GS_IMPORT_ON_EXISTING sets none.
+    ``plan_choices`` (a custom import plan, this run only): onExistingEntity / validate / strictValidate / remap,
+    over the environment."""
+    options = import_options.from_env_if_requested()
+    if plan_choices:
+        options = _with_plan_choices(options or import_options.ImportOptions.from_env(), plan_choices)
+    if default_on_existing and not (options and options.on_existing):
+        options = options or import_options.ImportOptions.from_env()
+        options.on_existing = default_on_existing
+    if "SOURCE" not in pending_agent_types:
+        return options
+    options = options or import_options.ImportOptions.from_env()
+    options.no_discovery = True
+    options.allow_offline_entities = True
+    return options
+
+
+def _outcome(job: _ArchiveImport, pipeline_id: Any, pipeline_name: Any = None, resumed: bool = False) -> Dict[str, Any]:
+    """The outcome record of one imported (or resumed) pipeline, created on first use."""
+    key = str(pipeline_id)
+    if key not in job.outcomes:
+        job.outcomes[key] = {"pipelineId": key, "pipelineName": pipeline_name, "resumed": resumed, "created": 0,
+                             "failed": 0, "skipped": 0, "runErrors": 0, "errors": 0, "entitiesRun": False}
+    elif pipeline_name and not job.outcomes[key].get("pipelineName"):
+        job.outcomes[key]["pipelineName"] = pipeline_name
+    return job.outcomes[key]
+
+
+def _record_entity_counts(job: _ArchiveImport, pipeline_id: Any, result_run: dict, run_options: Any) -> None:
+    """Add what one entity run created / failed / skipped (already existing) to its pipeline's outcome."""
+    outcome = _outcome(job, pipeline_id)
+    outcome["entitiesRun"] = True
+    counts = result_run.get("result") if isinstance(result_run.get("result"), dict) else None
+    if counts is None or "successful" not in counts:
+        # The run itself failed (exception, refused before counting): nothing is known to be created.
+        if not result_run.get("success"):
+            outcome["runErrors"] += 1
+        return
+    outcome["created"] += int(counts.get("successful") or 0)
+    outcome["failed"] += int(counts.get("failed") or 0)
+    report = getattr(run_options, "report", None)
+    skipped = len(getattr(report, "skipped_existing", None) or [])
+    outcome["skipped"] += skipped
+    if counts.get("errors") and not counts.get("successful") and not counts.get("failed") and not skipped:
+        outcome["runErrors"] += 1
+
+
+def _record_schedule_failures(job: _ArchiveImport, entities: _PipelineEntities, src_schema: Any,
+                              tgt_schema: Any) -> None:
+    """Schedules of the backup this entity run could not restore: the pipeline is PARTIAL, not FULL. Nothing is
+    recorded when the backup has no schedules or scheduling is off (preferences / plan), e.g. on a Core Hub
+    without the scheduler: there is nothing lost to report then."""
+    failures = commons.take_schedule_failures()
+    if not failures:
+        return
+    _outcome(job, entities.pipeline_id)["schedulesNotRestored"] = \
+        _outcome(job, entities.pipeline_id).get("schedulesNotRestored", 0) + len(failures)
+    job.errors.append(f"{entities.name}: schedules not restored for {src_schema}->{tgt_schema}: "
+                      f"{'; '.join(failures)}. The entities are in place: recreate these schedules in Core Hub")
+
+
+def _outcome_is_full(outcome: Dict[str, Any]) -> bool:
+    """A pipeline is fully imported when its entities ran, none failed, and nothing else went wrong."""
+    return (outcome.get("entitiesRun") and not outcome.get("failed") and not outcome.get("runErrors")
+            and not outcome.get("errors") and not outcome.get("credentialsPending")
+            and not outcome.get("schedulesNotRestored"))
+
+
+def _record_offline_outcome(job: _ArchiveImport, entities: _PipelineEntities, src_schema: Any, tgt_schema: Any,
+                            result_run: dict) -> None:
+    """For a pipeline with credentials pending: what was saved without discovery and what Core Hub refused."""
+    if not entities.pending_agent_types:
+        return
+    label = f"{entities.name} {src_schema}->{tgt_schema}"
+    payload = result_run.get("result") if isinstance(result_run.get("result"), dict) else result_run
+    report = payload.get("report") if isinstance(payload, dict) else None
+    offline = list(getattr(report, "offline_entities", None) or [])
+    if offline:
+        job.offline_report.append(f"{label}: {len(offline)} entities saved without discovery: {', '.join(offline)}")
+    # What Core Hub refused is already in job.errors, with its message (entity creation error ...).
 
 
 def _mark_configuration_completed(new_pipeline_id: Any, new_pipeline_name: Any) -> None:
@@ -2206,7 +2488,116 @@ def _mark_configuration_completed(new_pipeline_id: Any, new_pipeline_name: Any) 
         logger.warning("Failed to mark pipeline %s as configuration completed: %s", new_pipeline_id, exc)
 
 
-def _create_imported_entities(job: _ArchiveImport, name: str, yaml_path: Path, new_pipeline_id: Any, new_pipeline_name: Any) -> None:
+def _attempt_entities_when_pending() -> bool:
+    """GS_IMPORT_ATTEMPT_ENTITIES_WHEN_PENDING=true: still send each entity while an agent's credentials are pending
+    (the behaviour before; Core Hub 2.3.1 refuses them all while the agents are unreachable)."""
+    return os.getenv("GS_IMPORT_ATTEMPT_ENTITIES_WHEN_PENDING", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _yaml_table_count(yaml_path: Path, schema_pairs: list) -> Optional[int]:
+    """How many entities (tables) the schema pairs of a pipeline YAML hold; None when it cannot be told.
+
+    A schema's ``tables`` is ``{whitelist: [names], blacklist: [names], custom: {name: settings}}``: its tables
+    are the whitelisted and custom names (a custom table is usually whitelisted too), less the blacklisted ones.
+    A schema with neither whitelist nor custom takes every discovered table: unknown without discovery."""
+    try:
+        config = load_yaml_config(str(yaml_path)) or {}
+    except Exception:  # pylint: disable=broad-except
+        return None
+    schemas = config.get("schemas") if isinstance(config.get("schemas"), dict) else config
+    total = 0
+    for src_schema, _tgt in schema_pairs:
+        count = _schema_table_count(schemas, src_schema)
+        if count is None:
+            return None
+        total += count
+    return total
+
+
+def _schema_table_count(schemas: Any, src_schema: str) -> Optional[int]:
+    """How many tables schema ``src_schema`` of a YAML holds (see :func:`_yaml_table_count`); None when unknown."""
+    schema = schemas.get(src_schema) if isinstance(schemas, dict) else None
+    tables = schema.get("tables") if isinstance(schema, dict) else None
+    if isinstance(tables, list):
+        return len(tables)
+    if not isinstance(tables, dict):
+        return None
+    names = {str(name) for name in map(_whitelist_name, tables.get("whitelist") or []) if name}
+    names.update(str(n) for n in (tables.get("custom") or {}))
+    if not names:
+        return None
+    names.difference_update(str(n) for n in tables.get("blacklist") or [] if not isinstance(n, dict))
+    return len(names)
+
+
+def _whitelist_name(item: Any) -> Any:
+    return item.get("name") or item.get("sourceName") if isinstance(item, dict) else item
+
+
+def _record_entities_not_attempted(job: _ArchiveImport, name: str, yaml_path: Path, schema_pairs: list,
+                                   pipeline_id: Any, pending: frozenset) -> None:
+    """Credentials pending: no entity is sent (Core Hub refuses each while the agents are unreachable).
+
+    Counted in the outcome only; the report states it once, on the pipeline's line (see ``_report_lines``)."""
+    count = _yaml_table_count(yaml_path, schema_pairs)
+    outcome = _outcome(job, pipeline_id)
+    outcome["notAttempted"] = outcome.get("notAttempted", 0) + (count or 0)
+    outcome["notAttemptedUnknown"] = count is None
+    logger.info("%s: agents not reachable (%s credentials pending): %s entities not attempted", name,
+                ", ".join(sorted(pending)), count if count is not None else "the")
+
+
+_LABELLED = re.compile(r"^(?P<label>[^:\s][^:]{0,200}?): (?P<reason>.+)$", re.S)
+
+
+def _condense_errors(errors: list, max_labels: int = 3) -> list:
+    """Group the ``"<table>: <reason>"`` errors of an entity run by reason: one line per reason with its count
+    (``reason x9 tables (A, B, C, ...)``), in first-seen order; identical lines are counted too."""
+    groups: Dict[str, list] = {}
+    for error in errors or []:
+        label, reason = _label_and_reason(str(error))
+        groups.setdefault(reason, []).append(label)
+    return [_condensed_line(reason, labels, max_labels) for reason, labels in groups.items()]
+
+
+def _label_and_reason(text: str) -> tuple:
+    """The table label and reason of a ``"<table>: <reason>"`` error (label None when it has none)."""
+    match = _LABELLED.match(text)
+    if not match:
+        return None, text
+    label, reason = match.group("label"), match.group("reason")
+    if label:
+        # the reason repeats its table (" of SRC.T"); drop it so the same rule on many tables groups.
+        reason = reason.replace(f" of {label}", "")
+    return label, reason
+
+
+def _condensed_line(reason: str, labels: list, max_labels: int) -> str:
+    named = [l for l in dict.fromkeys(labels) if l]
+    if len(labels) == 1:
+        return f"{named[0]}: {reason}" if named else reason
+    if not named:
+        return f"{reason} x{len(labels)}"
+    shown = ", ".join(named[:max_labels]) + (", ..." if len(named) > max_labels else "")
+    return f"{reason} x{len(labels)} tables ({shown})"
+
+
+def _plan_choices(job: _ArchiveImport, pipeline_plan: Optional[import_plan.PipelinePlan]) -> Optional[Dict[str, Any]]:
+    """The entity-run options a plan sets for one pipeline; None when it sets none (Import All)."""
+    if pipeline_plan is None or job.plan.empty:
+        return None
+    choices = {
+        "on_existing": job.plan.on_existing_entity(pipeline_plan),
+        "validate": job.plan.defaults.get("validate"),
+        "strict_validate": job.plan.defaults.get("strictValidate"),
+        "remap": pipeline_plan.remap if pipeline_plan.remap else None,
+    }
+    return choices if any(v is not None for v in choices.values()) else None
+
+
+def _create_imported_entities(job: _ArchiveImport, name: str, yaml_path: Path, new_pipeline_id: Any, new_pipeline_name: Any,
+                              default_on_existing: Optional[str] = None,
+                              pipeline_plan: Optional[import_plan.PipelinePlan] = None) -> None:
     """Recreate the entities (and UDFs) of one imported pipeline from its YAML."""
     # Determine schemas and optional type hints from YAML
     schema_pairs = extract_all_schemas_from_yaml(str(yaml_path))
@@ -2214,9 +2605,42 @@ def _create_imported_entities(job: _ArchiveImport, name: str, yaml_path: Path, n
         job.errors.append(f"{name}: no schemas found in YAML; skipping entity creation")
         return
 
+    prefs = _entity_preferences(job, pipeline_plan)
+    pending = _pending_agent_types(job, new_pipeline_id)
+    entities = _pipeline_entities(job, name, yaml_path, new_pipeline_id, new_pipeline_name, prefs, pending,
+                                  default_on_existing, pipeline_plan)
+    if "TARGET" in pending and prefs["createTables"]:
+        _mark_tables_not_created(job, new_pipeline_id)
+    total = _yaml_table_count(yaml_path, schema_pairs)
+    if total is not None:
+        _outcome(job, new_pipeline_id, new_pipeline_name)["total"] = total
+
+    overall_success = True
+    if pending and not _attempt_entities_when_pending():
+        _record_entities_not_attempted(job, name, yaml_path, schema_pairs, new_pipeline_id, pending)
+        overall_success = False
+        schema_pairs = []
+    for src_schema, tgt_schema in schema_pairs:
+        if not _create_schema_pair_entities(job, entities, src_schema, tgt_schema):
+            overall_success = False
+    _finish_imported_pipeline(name, new_pipeline_id, new_pipeline_name, pending, overall_success)
+
+
+def _entity_preferences(job: _ArchiveImport, pipeline_plan: Optional[import_plan.PipelinePlan]) -> Dict[str, Any]:
+    """The scheduling / table-creation preferences, narrowed by the plan's parts for this pipeline."""
+    prefs = dict(state.preferences())
+    if pipeline_plan is not None:
+        prefs["enableScheduling"] = prefs["enableScheduling"] and job.plan.part(pipeline_plan, "schedules")
+        prefs["createTables"] = prefs["createTables"] and job.plan.part(pipeline_plan, "createTables")
+    return prefs
+
+
+def _pipeline_entities(job: _ArchiveImport, name: str, yaml_path: Path, new_pipeline_id: Any,
+                       new_pipeline_name: Any, prefs: Dict[str, Any], pending: Any,
+                       default_on_existing: Optional[str],
+                       pipeline_plan: Optional[import_plan.PipelinePlan]) -> _PipelineEntities:
     src_type_hint, tgt_type_hint = extract_schema_types_from_yaml(str(yaml_path))
-    prefs = state.preferences()
-    entities = _PipelineEntities(
+    return _PipelineEntities(
         name=name,
         yaml_path=yaml_path,
         pipeline_id=new_pipeline_id,
@@ -2224,15 +2648,29 @@ def _create_imported_entities(job: _ArchiveImport, name: str, yaml_path: Path, n
         source_type=src_type_hint or "SQL",
         target_type=tgt_type_hint or "SQL",
         enable_scheduling=prefs["enableScheduling"],
-        create_tables=prefs["createTables"],
+        create_tables=prefs["createTables"] and "TARGET" not in pending,
+        pending_agent_types=pending,
+        default_on_existing=default_on_existing,
+        compile_udfs=pipeline_plan is None or job.plan.part(pipeline_plan, "udfs"),
+        plan_choices=_plan_choices(job, pipeline_plan),
     )
 
-    overall_success = True
-    for src_schema, tgt_schema in schema_pairs:
-        if not _create_schema_pair_entities(job, entities, src_schema, tgt_schema):
-            overall_success = False
 
-    if not overall_success:
+def _mark_tables_not_created(job: _ArchiveImport, new_pipeline_id: Any) -> None:
+    for p in job.credentials_pending:
+        if p.get("pipelineId") == str(new_pipeline_id) and p.get("agentType") == "TARGET":
+            p["tablesNotCreated"] = True
+
+
+def _finish_imported_pipeline(name: str, new_pipeline_id: Any, new_pipeline_name: Any, pending: Any,
+                              overall_success: bool) -> None:
+    """Mark the imported pipeline configured, unless credentials are pending or its entities had errors."""
+    if pending:
+        # Not marked complete: the pipeline cannot run before its credentials are entered again, and Core Hub's
+        # draft state is what tells the user it still needs configuring.
+        logger.warning("Import-all: pipeline %s (%s) left in draft: credentials pending for %s",
+                       new_pipeline_name, new_pipeline_id, ", ".join(sorted(pending)))
+    elif not overall_success:
         logger.warning(
             "Import-all: entity creation had errors for pipeline %s (%s) from %s",
             new_pipeline_name,
@@ -2262,18 +2700,99 @@ def _restore_imported_function_collection(job: _ArchiveImport, name: str, old_pi
     return True
 
 
+def _pipeline_plan(job: _ArchiveImport, old_pipeline_id: Any) -> Optional[import_plan.PipelinePlan]:
+    """The plan of one backup pipeline; None for Import All (an empty plan)."""
+    if job.plan.empty and str(old_pipeline_id) not in job.agent_passwords:
+        return None
+    return job.plan.pipeline(old_pipeline_id)
+
+
+def _planned_agents(job: _ArchiveImport, name: str, agents_for_pipeline: list,
+                    pipeline_plan: Optional[import_plan.PipelinePlan]) -> list:
+    """The agents of one pipeline with the plan's connection edits and passwords (a copy: the backup's agents
+    stay as they are for the other pipelines). PlanError / AgentOverrideError on an unknown agent."""
+    passwords = job.agent_passwords.get(pipeline_plan.old_id, {}) if pipeline_plan is not None else {}
+    if pipeline_plan is None or not (pipeline_plan.agents or passwords):
+        return agents_for_pipeline
+    overrides, env = import_plan.agent_overrides_for(pipeline_plan, passwords, job.plan_env)
+    agents = copy.deepcopy(agents_for_pipeline)
+    for line in agent_overrides.apply(agents, overrides, env=env):
+        job.notes.append(f"{name}: {line}")
+    return agents
+
+
+def _planned_yaml_text(job: _ArchiveImport, name: str, yaml_text: str,
+                       pipeline_plan: Optional[import_plan.PipelinePlan]) -> str:
+    """The pipeline YAML with the plan's selection, overrides and skipped parts; unchanged without a plan."""
+    if pipeline_plan is None:
+        return yaml_text
+    config = yaml.safe_load(yaml_text)
+    planned, notes = import_plan.apply_to_yaml(config, job.plan, pipeline_plan)
+    job.notes.extend(f"{name}: {line}" for line in notes)
+    if planned is config:
+        return yaml_text
+    return yaml.safe_dump(planned, sort_keys=False, allow_unicode=True)
+
+
+def _restore_planned_function_collection(job: _ArchiveImport, name: str, old_pipeline_id: Any, new_pipeline_id: Any,
+                                         pipeline_plan: Optional[import_plan.PipelinePlan]) -> bool:
+    """The function collection restore, unless the plan leaves it out (then only a note)."""
+    if pipeline_plan is not None and not job.plan.part(pipeline_plan, "functionCollection"):
+        if job.udf_root is not None and function_collection.find_function_collection_dir(
+                [job.udf_root], old_pipeline_id) is not None:
+            job.notes.append(f"{name}: function collection not restored (plan: functionCollection off); entities "
+                             "calling its functions are refused unless it is already installed on the pipeline")
+        return True
+    return _restore_imported_function_collection(job, name, old_pipeline_id, new_pipeline_id)
+
+
+def _import_base_name(meta: Any, embedded_name: Optional[str], old_pipeline_id: Any, pipeline_plan: Any) -> Any:
+    """The name of the recreated pipeline: the plan's, else the backup metadata's, the YAML's or a default."""
+    base_name = meta.get("pipelineName") if isinstance(meta, dict) else None
+    base_name = base_name or embedded_name or _default_pipeline_name(old_pipeline_id)
+    if pipeline_plan is not None and pipeline_plan.name:
+        base_name = pipeline_plan.name
+    return base_name
+
+
+def _reject_masked_agents(job: _ArchiveImport, name: str, agents_for_pipeline: list) -> bool:
+    """Record an error and return True when an agent of the pipeline still has a masked password."""
+    masked = [str(a.get("agentTag") or a.get("agentId") or "?") for a in agents_for_pipeline
+              if isinstance(a, dict) and _has_masked_password(a)]
+    if not masked:
+        return False
+    job.errors.append(f"{name}: not imported: the password of agent(s) {', '.join(masked)} is masked (*******) "
+                      "in the backup; give it (Customize step, agent_passwords, passwordRef or "
+                      "GS_IMPORT_AGENT_PASSWORD_<TAG>) - no pipeline was created")
+    return True
+
+
+def _pipeline_import_options(job: _ArchiveImport, pipeline_plan: Any) -> tuple:
+    """(on_existing_name, cleanup_on_failure) for one pipeline: the plan's values, else the environment's."""
+    on_existing_name = (job.plan.on_existing_pipeline(pipeline_plan) if pipeline_plan is not None else None) or \
+        os.getenv("GS_IMPORT_ON_EXISTING_PIPELINE", "suffix").strip().lower() or "suffix"
+    cleanup = job.plan.defaults.get("cleanupOnFailure")
+    if cleanup is None:
+        cleanup = os.getenv("GS_IMPORT_CLEANUP_ON_FAILURE", "").strip().lower() in ("1", "true", "yes")
+    return on_existing_name, cleanup
+
+
 def _import_archive_pipeline(job: _ArchiveImport, name: str, stem_no_ext: str, yaml_text: str) -> None:
     """Recreate one pipeline of a backup ZIP: pipeline, agents, certificates, entities and UDFs."""
     # Resolve original pipeline identity.
     old_pipeline_id, embedded_name = _resolve_pipeline_identity(yaml_text, stem_no_ext)
+    pipeline_plan = _pipeline_plan(job, old_pipeline_id)
 
     meta = job.meta_by_old_id.get(str(old_pipeline_id)) if old_pipeline_id is not None else None
-    base_name = meta.get("pipelineName") if isinstance(meta, dict) else None
-    base_name = base_name or embedded_name or _default_pipeline_name(old_pipeline_id)
+    base_name = _import_base_name(meta, embedded_name, old_pipeline_id, pipeline_plan)
 
     agents_for_pipeline = _agents_for_pipeline(job, name, meta)
     if agents_for_pipeline is None:
         return
+    agents_for_pipeline = _planned_agents(job, name, agents_for_pipeline, pipeline_plan)
+    if _reject_masked_agents(job, name, agents_for_pipeline):
+        return
+    on_existing_name, cleanup = _pipeline_import_options(job, pipeline_plan)
 
     # Create pipeline + bind agents
     try:
@@ -2284,7 +2803,15 @@ def _import_archive_pipeline(job: _ArchiveImport, name: str, stem_no_ext: str, y
             use_ssl=state.use_ssl,
             skip_verify=state.skip_verify,
             config=cfg,
+            on_existing_name=on_existing_name,
+            cleanup_on_failure=cleanup,
+            continue_on_credentials_failure=job.continue_on_credentials_failure,
         )
+    except corehub.PartialPipelineImportError as exc:
+        # Short reason and resume hint only; the full CoreHub answer and traceback stay at debug level.
+        logger.debug("Failed to import config for %s", name, exc_info=True)
+        job.errors.append(f"{name}: failed to create pipeline and bind agents: {exc}")
+        return
     except Exception as exc:  # pylint: disable=broad-except
         logger.exception("Failed to import config for %s", name)
         job.errors.append(f"{name}: failed to create pipeline and bind agents: {exc}")
@@ -2293,25 +2820,215 @@ def _import_archive_pipeline(job: _ArchiveImport, name: str, stem_no_ext: str, y
     new_pipeline_id = result.get("pipelineId")
     new_pipeline_name = result.get("pipelineName")
     job.created_pipelines.append(result)
+    job.credentials_pending.extend(result.get("credentialsPending") or [])
+    _outcome(job, new_pipeline_id, new_pipeline_name)["credentialsPending"] = bool(result.get("credentialsPending"))
 
     # Upload certificates for agents if specified
     _upload_pipeline_certificates(job, name, agents_for_pipeline, new_pipeline_id)
 
-    yaml_path = _materialize_import_yaml(job, name, yaml_text)
+    yaml_path = _materialize_import_yaml(job, name, _planned_yaml_text(job, name, yaml_text, pipeline_plan))
     if yaml_path is None:
         return
 
     # The function collection goes in before any UDF is compiled and any entity is saved: the UDFs may call its
     # classes and the entities bind its functions. A refused collection stops the restore of this pipeline.
-    if not _restore_imported_function_collection(job, name, old_pipeline_id, new_pipeline_id):
+    if not _restore_planned_function_collection(job, name, old_pipeline_id, new_pipeline_id, pipeline_plan):
         return
 
-    _create_imported_entities(job, name, yaml_path, new_pipeline_id, new_pipeline_name)
+    if pipeline_plan is None:
+        _create_imported_entities(job, name, yaml_path, new_pipeline_id, new_pipeline_name)
+    else:
+        _create_imported_entities(job, name, yaml_path, new_pipeline_id, new_pipeline_name,
+                                  pipeline_plan=pipeline_plan)
 
 
-def _import_archive_pipelines(job: _ArchiveImport) -> None:
-    """Second pass: process each per-pipeline YAML and recreate pipeline + entities."""
-    with zipfile.ZipFile(io.BytesIO(job.contents)) as zf:
+def _existing_pipeline_agent(existing_agents: list, backup_agent: dict) -> Optional[dict]:
+    """The agent of an existing pipeline that stands for one backup agent: same agentType (and tag when two)."""
+    a_type = str(backup_agent.get("agentType") or "").upper()
+    same_type = [a for a in existing_agents if str(a.get("agentType") or "").upper() == a_type]
+    if len(same_type) <= 1:
+        return same_type[0] if same_type else None
+    tag = backup_agent.get("agentTag")
+    return next((a for a in same_type if tag and a.get("agentTag") == tag), None)
+
+
+_BOUND_AGENT_ID = re.compile(r"\(id=([^)]+)\)$")
+
+
+def _unbind_resume_agents(pipeline_id: str, bound: list) -> list:
+    """Unassign the agents a failed resume bind attached (e.g. bound, then credentials refused): left bound
+    without credentials, the next resume would take them as already bound and never send their credentials."""
+    unbound = []
+    for entry in bound:
+        match = _BOUND_AGENT_ID.search(str(entry))
+        if not match:
+            continue
+        try:
+            corehub.fetch_core_hub(f"/pipelines/{pipeline_id}/agents/{match.group(1)}", method="DELETE",
+                                   token=state.token)
+            unbound.append(entry)
+        except Exception:  # pylint: disable=broad-except
+            logger.exception("Resume: could not unassign agent %s from pipeline %s", match.group(1), pipeline_id)
+    return unbound
+
+
+def _bind_missing_resume_agents(job: _ArchiveImport, name: str, agents_for_pipeline: list, existing_agents: list,
+                                pipeline_id: str, pipeline_plan: Optional[import_plan.PipelinePlan]) -> bool:
+    """A resumed pipeline may be half-created (e.g. only the SOURCE agent bound before a failure): bind the
+    backup agents it lacks, with their credentials (plan / overrides / passwords applied), certificate and
+    specific configuration, the same way a fresh import does. Agents already bound are left as they are.
+    False (and an error) when a missing agent cannot be bound: the entities would all fail without it."""
+    missing = [a for a in agents_for_pipeline
+               if isinstance(a, dict) and _existing_pipeline_agent(existing_agents, a) is None]
+    if not missing:
+        return True
+    missing_refs = {id(a) for a in missing}
+    planned = _planned_agents(job, name, agents_for_pipeline, pipeline_plan)
+    to_bind = [p for p, a in zip(planned, agents_for_pipeline) if id(a) in missing_refs]
+    if _reject_masked_agents(job, name, to_bind):
+        return False
+    bound: list = []
+    pending: list = []
+    try:
+        for conf_agent in to_bind:
+            corehub._bind_config_agent(  # pylint: disable=protected-access
+                state.token, pipeline_id, conf_agent, bound, pending, job.continue_on_credentials_failure)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Failed to bind missing agents of resumed pipeline %s", pipeline_id)
+        unbound = _unbind_resume_agents(pipeline_id, bound)
+        job.errors.append(f"{name}: resume: failed to bind the missing agent(s) to pipeline {pipeline_id} "
+                          f"(bound then unassigned again: {', '.join(unbound) or 'none'}): {exc}")
+        return False
+    job.credentials_pending.extend(pending)
+    if pending:
+        _outcome(job, pipeline_id, None)["credentialsPending"] = True
+    _upload_pipeline_certificates(job, name, to_bind, pipeline_id)
+    job.notes.append(f"{name}: resume: bound the missing agent(s) {', '.join(bound)} to pipeline {pipeline_id}")
+    # Their specific configuration was sent by _bind_config_agent: do not send it twice.
+    existing_agents.extend({"agentId": c.get("_agent_id"), "agentType": c.get("agentType"),
+                            "agentTag": c.get("agentTag"), "_justBound": True} for c in to_bind)
+    return True
+
+
+def _resume_specific_configuration(job: _ArchiveImport, name: str, agents_for_pipeline: list, existing_agents: list,
+                                   pipeline_id: str) -> None:
+    """Send the backup's specificConfiguration of each agent again (the route the import already uses)."""
+    for backup_agent in agents_for_pipeline:
+        specific_conf = backup_agent.get("specificConfiguration") or {}
+        if not specific_conf:
+            continue
+        label = f"{backup_agent.get('agentType')} agent {backup_agent.get('agentTag')}"
+        existing = _existing_pipeline_agent(existing_agents, backup_agent)
+        if (existing or {}).get("_justBound"):
+            continue
+        agent_id = (existing or {}).get("agentId") or (existing or {}).get("id")
+        if not agent_id:
+            job.errors.append(f"{name}: pipeline {pipeline_id} has no agent matching the backup's {label}; "
+                              "its specific configuration was not sent")
+            continue
+        try:
+            corehub.fetch_core_hub(
+                f"/pipelines/{pipeline_id}/agents/{agent_id}/config/specific",
+                method="PUT",
+                token=state.token,
+                body={"configuration": specific_conf},
+            )
+            job.notes.append(f"{name}: specific configuration of {label} (id {agent_id}) sent again")
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Resume: specific configuration of agent %s on pipeline %s refused", agent_id, pipeline_id)
+            job.errors.append(f"{name}: specific configuration of {label} (id {agent_id}) refused: {exc}")
+
+
+def _resume_pipeline_config(job: _ArchiveImport, name: str, pipeline_id: str) -> Optional[Dict[str, Any]]:
+    """The config of the pipeline to resume; None (after recording the error) when it cannot be read."""
+    try:
+        config = corehub.fetch_core_hub(f"/pipelines/{pipeline_id}/config", token=state.token)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Resume: cannot read pipeline %s", pipeline_id)
+        job.errors.append(f"{name}: cannot read pipeline {pipeline_id} to resume it: {exc}")
+        return None
+    if not isinstance(config, dict):
+        job.errors.append(f"{name}: unexpected answer reading pipeline {pipeline_id} to resume it")
+        return None
+    return config
+
+
+def _resumed_pipeline_name(config: Dict[str, Any], meta: Optional[Dict[str, Any]], pipeline_id: str) -> str:
+    return (config.get("pipelineName") or (config.get("pipeline") or {}).get("name")
+            or (meta or {}).get("pipelineName") or f"Pipeline {pipeline_id}")
+
+
+def _resume_function_collection(job: _ArchiveImport, name: str, old_pipeline_id: Any, pipeline_id: str,
+                                pipeline_plan: Optional[import_plan.PipelinePlan]) -> None:
+    """The collection may already be installed by the first import: a refusal here is reported, not fatal."""
+    errors_before = len(job.errors)
+    if not _restore_planned_function_collection(job, name, old_pipeline_id, pipeline_id, pipeline_plan):
+        refused = job.errors[errors_before:]
+        del job.errors[errors_before:]
+        job.notes.extend(f"{line} (resume: continuing, the collection may already be installed)" for line in refused)
+
+
+def _resume_archive_pipeline(job: _ArchiveImport, name: str, stem_no_ext: str, yaml_text: str,
+                             pipeline_id: Optional[str] = None) -> None:
+    """Resume an existing pipeline (e.g. a draft left when its credentials were refused, since fixed in Core Hub):
+    no pipeline, agent, certificate or credentials is created or sent; only the specific configuration, the
+    function collection, the entities (existing ones skipped unless GS_IMPORT_ON_EXISTING says otherwise) and
+    the UDFs of the backup are restored."""
+    old_pipeline_id, _embedded_name = _resolve_pipeline_identity(yaml_text, stem_no_ext)
+    pipeline_plan = _pipeline_plan(job, old_pipeline_id)
+    meta = job.meta_by_old_id.get(str(old_pipeline_id)) if old_pipeline_id is not None else None
+    agents_for_pipeline = _agents_for_pipeline(job, name, meta)
+    if agents_for_pipeline is None:
+        return
+
+    pipeline_id = str(pipeline_id or job.resume_pipeline_id)
+    config = _resume_pipeline_config(job, name, pipeline_id)
+    if config is None:
+        return
+    existing_agents = [a for a in (config.get("agents") or []) if isinstance(a, dict)]
+    pipeline_name = _resumed_pipeline_name(config, meta, pipeline_id)
+    job.created_pipelines.append({"pipelineId": pipeline_id, "pipelineName": pipeline_name, "resumed": True})
+    _outcome(job, pipeline_id, pipeline_name, resumed=True)
+    job.notes.append(f"{name}: resuming existing pipeline {pipeline_name!r} (id {pipeline_id}) "
+                     f"from backup pipeline {old_pipeline_id}: pipeline and its bound agents (with their credentials) "
+                     f"left as they are; backup agents it lacks are bound")
+
+    if not _bind_missing_resume_agents(job, name, agents_for_pipeline, existing_agents, pipeline_id, pipeline_plan):
+        return
+    _resume_specific_configuration(job, name, agents_for_pipeline, existing_agents, pipeline_id)
+
+    yaml_path = _materialize_import_yaml(job, name, _planned_yaml_text(job, name, yaml_text, pipeline_plan))
+    if yaml_path is None:
+        return
+    _resume_function_collection(job, name, old_pipeline_id, pipeline_id, pipeline_plan)
+    if pipeline_plan is None:
+        _create_imported_entities(job, name, yaml_path, pipeline_id, pipeline_name, default_on_existing="skip")
+    else:
+        _create_imported_entities(job, name, yaml_path, pipeline_id, pipeline_name, default_on_existing="skip",
+                                  pipeline_plan=pipeline_plan)
+
+
+def _resume_candidates(job: _ArchiveImport, members: list[tuple[str, str, str]]) -> list[tuple[str, str, str]]:
+    """The pipeline YAML(s) of the archive a resume restores: the only one, or the one of resume_source_pipeline_id."""
+    if job.resume_source_pipeline_id:
+        wanted = str(job.resume_source_pipeline_id)
+        members = [m for m in members if str(_resolve_pipeline_identity(m[2], m[1])[0]) == wanted]
+        if not members:
+            job.errors.append(f"resume: the archive has no pipeline YAML of backup pipeline {wanted}")
+    elif len(members) > 1:
+        ids = ", ".join(str(_resolve_pipeline_identity(m[2], m[1])[0]) for m in members)
+        job.errors.append(f"resume: the archive holds {len(members)} pipelines ({ids}); set "
+                          "GS_IMPORT_RESUME_FROM_PIPELINE (or --resume-from-pipeline) to the one to resume from")
+        return []
+    elif not members:
+        job.errors.append("resume: the archive holds no pipeline YAML")
+    return members
+
+
+def _archive_pipeline_members(contents: bytes, errors: Optional[list[str]] = None) -> list[tuple[str, str, str]]:
+    """``(member name, stem, YAML text)`` of each per-pipeline YAML of a backup ZIP."""
+    members: list[tuple[str, str, str]] = []
+    with zipfile.ZipFile(io.BytesIO(contents)) as zf:
         for name in zf.namelist():
             stem_no_ext = _pipeline_yaml_stem(name)
             if stem_no_ext is None:
@@ -2321,23 +3038,83 @@ def _import_archive_pipelines(job: _ArchiveImport) -> None:
                 yaml_text = zf.read(name).decode("utf-8")
             except Exception as exc:  # pylint: disable=broad-except
                 logger.exception("Failed to read YAML %s from archive", name)
-                job.errors.append(f"{name}: failed to read from archive: {exc}")
+                if errors is not None:
+                    errors.append(f"{name}: failed to read from archive: {exc}")
                 continue
+            members.append((name, stem_no_ext, yaml_text))
+    return members
 
+
+def _import_archive_pipelines(job: _ArchiveImport) -> None:
+    """Second pass: process each per-pipeline YAML and recreate pipeline + entities (or resume one pipeline)."""
+    members = _archive_pipeline_members(job.contents, job.errors)
+
+    if job.resume_pipeline_id:
+        members = _resume_candidates(job, members)
+    for name, stem_no_ext, yaml_text in members:
+        errors_before, created_before = len(job.errors), len(job.created_pipelines)
+        pipeline_plan = _pipeline_plan(job, _resolve_pipeline_identity(yaml_text, stem_no_ext)[0])
+        if pipeline_plan is not None and not pipeline_plan.import_:
+            job.notes.append(f"{name}: not imported (plan: import off)")
+            continue
+        if job.resume_pipeline_id:
+            _resume_archive_pipeline(job, name, stem_no_ext, yaml_text)
+        elif pipeline_plan is not None and pipeline_plan.resume_into:
+            _resume_archive_pipeline(job, name, stem_no_ext, yaml_text, pipeline_id=pipeline_plan.resume_into)
+        else:
             _import_archive_pipeline(job, name, stem_no_ext, yaml_text)
+        if len(job.created_pipelines) > created_before:
+            created = job.created_pipelines[-1]
+            outcome = _outcome(job, created.get("pipelineId"), created.get("pipelineName"))
+            outcome["errors"] += len(job.errors) - errors_before
 
 
-def _import_summary(created_pipelines: list[dict], errors: list[str]) -> str:
-    """Human-friendly summary message of an Export All import."""
-    if created_pipelines:
+def _outcome_line(outcome: Dict[str, Any]) -> str:
+    parts = [f"{outcome['created']} entities created", f"{outcome['failed']} failed"]
+    if outcome.get("skipped"):
+        parts.append(f"{outcome['skipped']} skipped (already existing)")
+    if outcome.get("runErrors"):
+        parts.append(f"{outcome['runErrors']} schema run(s) refused")
+    if outcome.get("notAttempted"):
+        parts.append(f"{outcome['notAttempted']} not attempted (agents not reachable)")
+    elif not outcome.get("entitiesRun"):
+        parts.append("entity creation not reached")
+    if outcome.get("schedulesNotRestored"):
+        parts.append(f"{outcome['schedulesNotRestored']} schedule(s) not restored")
+    if outcome.get("credentialsPending"):
+        parts.append("credentials pending")
+    label = f"{outcome.get('pipelineName') or '(unnamed)'} ({outcome.get('pipelineId') or '?'})"
+    return f"{label}{' [resumed]' if outcome.get('resumed') else ''}: {', '.join(parts)}"
+
+
+def _outcomes_summary(created_pipelines: list[dict], outcomes: Dict[str, Dict[str, Any]]) -> str:
+    listed = [outcomes.get(str(p.get("pipelineId"))) or _bare_outcome(p) for p in created_pipelines]
+    full = [o for o in listed if _outcome_is_full(o)]
+    partial = [o for o in listed if not _outcome_is_full(o)]
+    base_msg = f"Pipelines fully imported: {len(full)}; partially imported: {len(partial)}."
+    if full:
+        base_msg += " Fully imported: " + "; ".join(_outcome_line(o) for o in full) + "."
+    if partial:
+        base_msg += " PARTIAL: " + "; ".join(_outcome_line(o) for o in partial) + "."
+    return base_msg
+
+
+def _import_summary(created_pipelines: list[dict], errors: list[str],
+                    outcomes: Optional[Dict[str, Dict[str, Any]]] = None) -> str:
+    """Human-friendly summary message of an Export All import.
+
+    With ``outcomes`` the pipelines are reported as fully or partially imported, with their entity counts:
+    a pipeline whose entities were not created is never reported as imported."""
+    if not created_pipelines:
+        base_msg = NO_PIPELINES_IMPORTED
+    elif outcomes is None:
         summary_parts = [
             f"{p.get('pipelineName') or '(unnamed)'} ({p.get('pipelineId') or '?'})"
             for p in created_pipelines
         ]
-        summary = "; ".join(summary_parts)
-        base_msg = f"Imported {len(created_pipelines)} pipeline(s): {summary}."
+        base_msg = f"Imported {len(created_pipelines)} pipeline(s): {'; '.join(summary_parts)}."
     else:
-        base_msg = "No pipelines were imported from the archive."
+        base_msg = _outcomes_summary(created_pipelines, outcomes)
 
     if errors:
         error_msg = " Some items encountered errors: " + "; ".join(errors)
@@ -2345,13 +3122,271 @@ def _import_summary(created_pipelines: list[dict], errors: list[str]) -> str:
     return base_msg
 
 
-def _import_archive(contents: bytes) -> ApiMessage:
-    """Recreate the pipelines, agents, entities, UDFs and global configs of an Export All ZIP."""
+def _pipeline_report_line(outcome: Dict[str, Any]) -> str:
+    """``PARTIAL: Synth1MSSQL (e61466b6) - 0 of 58 entities created (58 not attempted: agents not reachable).``"""
+    created, total = outcome.get("created", 0), _report_total(outcome)
+    head = "Imported" if _outcome_is_full(outcome) else "PARTIAL"
+    label = f"{outcome.get('pipelineName') or '(unnamed)'} ({outcome.get('pipelineId') or '?'})"
+    if outcome.get("resumed"):
+        label += " [resumed]"
+    counts = f"{created} of {total} entities created" if total is not None else f"{created} entities created"
+    details = _report_details(outcome, head)
+    return f"{head}: {label} - {counts}" + (f" ({'; '.join(details)})" if details else "") + "."
+
+
+def _report_total(outcome: Dict[str, Any]) -> Any:
+    """The entity total of a pipeline outcome; when unknown but entities ran, the sum of the counts (or None)."""
+    total = outcome.get("total")
+    if total is None and outcome.get("entitiesRun"):
+        counted = (outcome.get("created", 0) + outcome.get("failed", 0) + outcome.get("skipped", 0)
+                   + outcome.get("notAttempted", 0))
+        total = counted or None
+    return total
+
+
+def _report_details(outcome: Dict[str, Any], head: str) -> list[str]:
+    details = []
+    if outcome.get("failed"):
+        details.append(f"{outcome['failed']} failed")
+    if outcome.get("skipped"):
+        details.append(f"{outcome['skipped']} already existing")
+    if outcome.get("runErrors"):
+        details.append(f"{outcome['runErrors']} schema run(s) refused")
+    if outcome.get("notAttempted") or outcome.get("notAttemptedUnknown"):
+        n = outcome.get("notAttempted") if not outcome.get("notAttemptedUnknown") else "all"
+        details.append(f"{n} not attempted: agents not reachable")
+    elif not outcome.get("entitiesRun") and head == "PARTIAL":
+        details.append("entity creation not reached")
+    return details
+
+
+CREDENTIALS_PENDING_HELP = (
+    "Credentials pending: Core Hub did not save the agent credentials (it refuses them while it cannot connect "
+    "with them), so the pipeline stays in draft and its entities were not created. Re-enter the credentials in the "
+    "Core Hub UI, or put them in an agent overrides file (GS_IMPORT_AGENT_OVERRIDES_FILE / --agent-overrides), "
+    "then resume.")
+
+
+def _agent_report_line(pending: Dict[str, Any]) -> str:
+    """``Target mssql-ct: can't connect to 10.17.3.164:1433 (timed out).`` with what it held back."""
+    kind = (pending.get("agentType") or "agent").capitalize()
+    reason = pending.get("reason") or corehub.short_connection_reason(pending.get("error") or "")
+    held = ["specific configuration not saved"] if pending.get("specificConfigurationError") else []
+    if pending.get("tablesNotCreated"):
+        held.append("target tables not created")
+    return f"{kind} {pending.get('agentTag') or pending.get('agentId')}: {reason}" + \
+        (f" - {', '.join(held)}" if held else "") + "."
+
+
+def _next_step_line(pid: str, pending: list) -> str:
+    fix = "fix connections (overrides file or Core Hub UI)" if pending else "fix the errors above"
+    return f"Next: {fix}, then resume with GS_IMPORT_RESUME_PIPELINE_ID={pid} - or delete the pipeline."
+
+
+def _report_lines(job: _ArchiveImport) -> list[str]:
+    """The short report of an Export All import (Automator result and CLI): each fact once.
+
+    One line per pipeline, one per agent whose credentials Core Hub refused, the other errors grouped with
+    counts, and what to do next. Full Core Hub requests and responses are in the debug log only."""
+    lines = [] if job.created_pipelines else [NO_PIPELINES_IMPORTED]
+    pending_by_pipeline: Dict[str, list] = {}
+    for p in job.credentials_pending:
+        pending_by_pipeline.setdefault(str(p.get("pipelineId")), []).append(p)
+    nexts = []
+    for pipeline in job.created_pipelines:
+        pid = str(pipeline.get("pipelineId"))
+        outcome = job.outcomes.get(pid) or _bare_outcome(pipeline)
+        lines.append(_pipeline_report_line(outcome))
+        pending = pending_by_pipeline.pop(pid, [])
+        lines.extend(_agent_report_line(p) for p in pending)
+        if not _outcome_is_full(outcome):
+            nexts.append(_next_step_line(pid, pending))
+    for rest in pending_by_pipeline.values():
+        lines.extend(_agent_report_line(p) for p in rest)
+    lines.extend(_condense_errors(job.errors))
+    if job.credentials_pending:
+        lines.extend(job.offline_report)
+        lines.append(CREDENTIALS_PENDING_HELP)
+    lines.extend(nexts)
+    return lines
+
+
+def _bare_outcome(pipeline: dict) -> Dict[str, Any]:
+    return {"pipelineId": pipeline.get("pipelineId"), "pipelineName": pipeline.get("pipelineName"),
+            "resumed": bool(pipeline.get("resumed")), "created": 0, "failed": 0, "skipped": 0, "runErrors": 0,
+            "errors": 0, "entitiesRun": False}
+
+
+def import_status(job: _ArchiveImport) -> str:
+    """``"full"`` (every pipeline fully imported), ``"partial"`` (some pipeline created/resumed but not fully
+    restored) or ``"failed"`` (no pipeline imported)."""
+    if not job.created_pipelines:
+        return "failed"
+    for p in job.created_pipelines:
+        if not _outcome_is_full(job.outcomes.get(str(p.get("pipelineId"))) or _bare_outcome(p)):
+            return "partial"
+    return "full"
+
+
+def _apply_agent_overrides(job: _ArchiveImport, agents_list: list, agent_overrides_text: Optional[str]) -> None:
+    """Point the backup's agents at the overridden host/port/database/username/password; 400 on a bad mapping."""
+    try:
+        overrides = agent_overrides.load(agent_overrides_text)
+        job.notes.extend(agent_overrides.apply(agents_list, overrides))
+    except agent_overrides.AgentOverrideError as exc:
+        raise HTTPException(status_code=400, detail=f"Agent overrides: {exc}") from None
+
+
+def _check_plan(job: _ArchiveImport, members: list[tuple[str, str, str]]) -> None:
+    """Refuse (PlanError) a plan naming a pipeline, table or agent the archive does not have, before any write."""
+    plan = job.plan
+    by_id = {str(_resolve_pipeline_identity(text, stem)[0]): (name, text) for name, stem, text in members}
+    for old_id in [*plan.pipelines, *job.agent_passwords]:
+        if old_id not in by_id:
+            raise import_plan.PlanError(f"pipelines.{old_id}: no pipeline {old_id!r} in the backup"
+                                        f"{import_options.suggest(old_id, list(by_id))}")
+    if by_id and not any(plan.pipeline(old_id).import_ for old_id in by_id):
+        raise import_plan.PlanError("the plan selects no pipeline: nothing would be imported")
+    for old_id, pipeline_plan in plan.pipelines.items():
+        if pipeline_plan.import_:
+            _check_pipeline_plan(job, old_id, pipeline_plan, *by_id[old_id])
+    for old_id in job.agent_passwords:
+        if old_id not in plan.pipelines:
+            _check_plan_agents(job, old_id, by_id[old_id][0], plan.pipeline(old_id))
+
+
+def _check_pipeline_plan(job: _ArchiveImport, old_id: str, pipeline_plan: Any, name: str, text: str) -> None:
+    if pipeline_plan.resume_into and job.resume_pipeline_id:
+        raise import_plan.PlanError(f"pipelines.{old_id}.resumeInto: not with resume_pipeline_id / "
+                                    "GS_IMPORT_RESUME_PIPELINE_ID (pick one)")
+    config = yaml.safe_load(text)
+    import_plan.check_names(config, pipeline_plan)
+    # Checked whatever the plan uses (include, exclude or both): the preview refuses the same case.
+    if not import_plan.selected_ids(config, pipeline_plan):
+        raise import_plan.PlanError(f"pipelines.{old_id}: no table selected; set \"import\": false to leave "
+                                    "the pipeline out")
+    import_plan.check_target_collisions(config, pipeline_plan, old_id)
+    _check_plan_agents(job, old_id, name, pipeline_plan)
+    if pipeline_plan.resume_into:
+        _check_resume_target(old_id, str(pipeline_plan.resume_into))
+
+
+def _check_resume_target(old_id: str, pipeline_id: str) -> None:
+    """Refuse a ``resumeInto`` Core Hub cannot read, before the import writes anything (globals included).
+    Reads the same ``/pipelines/{id}/config`` the resume reads (GET only, every Core Hub version)."""
+    try:
+        config = corehub.fetch_core_hub(f"/pipelines/{pipeline_id}/config", token=state.token)
+    except Exception as exc:  # pylint: disable=broad-except
+        raise import_plan.PlanError(f"pipelines.{old_id}.resumeInto: cannot read pipeline {pipeline_id!r} on "
+                                    f"Core Hub: {exc}") from None
+    if not isinstance(config, dict):
+        raise import_plan.PlanError(f"pipelines.{old_id}.resumeInto: unexpected answer reading pipeline "
+                                    f"{pipeline_id!r} on Core Hub")
+
+
+def _check_plan_agents(job: _ArchiveImport, old_id: str, name: str, pipeline_plan: Any) -> None:
+    scratch = _scratch_job(job)
+    agents = _agents_for_pipeline(scratch, name, job.meta_by_old_id.get(old_id))
+    if agents is not None:
+        _planned_agents(scratch, name, agents, pipeline_plan)
+
+
+def _scratch_job(job: _ArchiveImport) -> _ArchiveImport:
+    """A copy of ``job`` with its own errors and notes, to dry-run the agent selection of a plan check."""
+    return cast(_ArchiveImport, dataclass_replace(job, errors=[], notes=[]))
+
+
+def _run_archive_import(contents: bytes, agent_overrides_text: Optional[str] = None,
+                        resume_pipeline_id: Optional[str] = None,
+                        resume_source_pipeline_id: Optional[str] = None,
+                        plan: Optional[import_plan.ImportPlan] = None,
+                        agent_passwords: Optional[Dict[str, Dict[str, str]]] = None,
+                        plan_env: Any = None) -> _ArchiveImport:
+    """Run an Export All ZIP import and return its job (the Automator route and the CLI share it).
+
+    ``plan`` (a custom import, this run only; None or empty: Import All), ``agent_passwords`` ({backup pipeline
+    id: {agentTag|agentId: password}}, kept in memory) and ``plan_env`` (where passwordRef "env:NAME" is read).
+    One import at a time: 409 while another runs."""
+    with _exclusive_import():
+        return _run_archive_import_locked(contents, agent_overrides_text, resume_pipeline_id,
+                                          resume_source_pipeline_id, plan, agent_passwords, plan_env)
+
+
+def _env_secret_values(plan: Optional[import_plan.ImportPlan], plan_env: Any,
+                       agent_overrides_text: Optional[str] = None) -> list[str]:
+    """The agent passwords an import may read from the environment, to hide them from the logs: the plan's
+    passwordRef "env:NAME" values, every GS_IMPORT_AGENT_PASSWORD_* and the variables named under passwordEnv."""
+    env = os.environ if plan_env is None else plan_env
+    names = _plan_password_env_names(plan) | _override_password_env_names(agent_overrides_text)
+    values = [str(value)
+              for source in {id(env): env, id(os.environ): os.environ}.values()
+              for name, value in source.items()
+              if name in names or str(name).startswith(agent_overrides.PASSWORD_ENV_PREFIX)]
+    return [v for v in values if v]
+
+
+def _plan_password_env_names(plan: Optional[import_plan.ImportPlan]) -> set[str]:
+    """The NAME of every passwordRef "env:NAME" of the plan."""
+    refs = (str((entry or {}).get("passwordRef") or "")
+            for pipeline_plan in (plan.pipelines.values() if plan else ())
+            for entry in (pipeline_plan.agents or {}).values())
+    return {ref[4:] for ref in refs if ref.startswith("env:")}
+
+
+def _override_password_env_names(agent_overrides_text: Optional[str]) -> set[str]:
+    """The variables the agent overrides name under passwordEnv (none when they do not load)."""
+    names: set[str] = set()
+    try:
+        for entry in agent_overrides.load(agent_overrides_text).values():
+            if entry.get("passwordEnv"):
+                names.add(str(entry["passwordEnv"]))
+    except Exception:  # pylint: disable=broad-except  # reported where the overrides are applied
+        pass
+    return names
+
+
+def _run_archive_import_locked(contents: bytes, agent_overrides_text: Optional[str],
+                               resume_pipeline_id: Optional[str], resume_source_pipeline_id: Optional[str],
+                               plan: Optional[import_plan.ImportPlan],
+                               agent_passwords: Optional[Dict[str, Dict[str, str]]],
+                               plan_env: Any) -> _ArchiveImport:
+    plan = plan or import_plan.ImportPlan()
+    agent_passwords = {str(k): dict(v) for k, v in (agent_passwords or {}).items()}
+    owner = object()
+    import_plan.SECRETS.add(owner, list(import_plan.secret_values(agent_passwords))
+                            + _env_secret_values(plan, plan_env, agent_overrides_text))
+    try:
+        return _run_archive_import_body(contents, agent_overrides_text, resume_pipeline_id,
+                                        resume_source_pipeline_id, plan, agent_passwords, plan_env)
+    finally:
+        import_plan.SECRETS.discard(owner)
+
+
+def _arg_or_env(value: Optional[str], env_name: str) -> Optional[str]:
+    """``value``, else the environment variable ``env_name``, stripped; None when blank."""
+    return (value or os.getenv(env_name) or "").strip() or None
+
+
+def _check_plan_or_400(job: _ArchiveImport, contents: bytes) -> None:
+    try:
+        _check_plan(job, _archive_pipeline_members(contents))
+    except (import_plan.PlanError, agent_overrides.AgentOverrideError) as exc:
+        raise HTTPException(status_code=400, detail=f"Import plan: {exc}") from exc
+
+
+def _run_archive_import_body(contents: bytes, agent_overrides_text: Optional[str],
+                             resume_pipeline_id: Optional[str], resume_source_pipeline_id: Optional[str],
+                             plan: import_plan.ImportPlan, agent_passwords: Dict[str, Dict[str, str]],
+                             plan_env: Any) -> _ArchiveImport:
+    resume_pipeline_id = _arg_or_env(resume_pipeline_id, "GS_IMPORT_RESUME_PIPELINE_ID")
+    resume_source_pipeline_id = _arg_or_env(resume_source_pipeline_id, "GS_IMPORT_RESUME_FROM_PIPELINE")
     udf_root = _extract_import_udf_sources(contents)
 
     # First pass: find and parse agents-config.yaml for shared agents + metadata
     agents_text = _read_agents_config_text(contents, "import-all")
-    agents_config, agents_list = _parse_agents_config(agents_text, "import-all")
+    # Masked passwords: a resume sends no credentials; a custom import may give them (checked per pipeline).
+    custom = bool(resume_pipeline_id or not plan.empty or agent_passwords)
+    agents_config, agents_list = _parse_agents_config(agents_text, "import-all", allow_masked=True)
 
     # Build lookup for original pipeline metadata, if present
     job = _ArchiveImport(
@@ -2359,9 +3394,26 @@ def _import_archive(contents: bytes) -> ApiMessage:
         agents_list=agents_list,
         meta_by_old_id=_pipeline_meta_by_old_id(agents_config),
         udf_root=udf_root,
+        continue_on_credentials_failure=corehub.continue_on_credentials_failure_requested(),
+        resume_pipeline_id=resume_pipeline_id,
+        resume_source_pipeline_id=resume_source_pipeline_id,
+        plan=plan,
+        agent_passwords=agent_passwords,
+        plan_env=os.environ if plan_env is None else plan_env,
     )
+    # Before any credentials are sent (and before the globals, so a bad mapping changes nothing).
+    _apply_agent_overrides(job, agents_list, agent_overrides_text)
+    if not custom and _has_masked_password(agents_list):
+        # Import All: every password must be in the backup (or in GS_IMPORT_AGENT_OVERRIDES / _PASSWORD_<TAG>)
+        raise HTTPException(status_code=400, detail=MASKED_PASSWORDS)
+    if not plan.empty or agent_passwords:
+        _check_plan_or_400(job, contents)
+    for line in job.notes:
+        logger.info(line)
 
-    _restore_archive_globals(contents, job.errors)
+    if not resume_pipeline_id:
+        # A resume touches one existing pipeline only: users, OIDC, notifications and access are left alone.
+        _restore_archive_globals(contents, job.errors, plan)
 
     try:
         _import_archive_pipelines(job)
@@ -2371,27 +3423,104 @@ def _import_archive(contents: bytes) -> ApiMessage:
         logger.exception("Unexpected error during import-all processing")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    _restore_archive_access(contents, job.errors)
+    if not resume_pipeline_id:
+        _restore_archive_access(contents, job.errors, plan)
+    return job
 
-    errors = job.errors
-    return ApiMessage(message=_import_summary(job.created_pipelines, errors), logs=errors if errors else None)
+
+def _import_archive(contents: bytes, agent_overrides_text: Optional[str] = None,
+                    resume_pipeline_id: Optional[str] = None,
+                    plan: Optional[import_plan.ImportPlan] = None,
+                    agent_passwords: Optional[Dict[str, Dict[str, str]]] = None) -> ApiMessage:
+    """Recreate the pipelines, agents, entities, UDFs and global configs of an Export All ZIP.
+
+    ``success`` is False when a pipeline is only partially imported (entities failed or not created), or when
+    nothing was imported and something went wrong."""
+    job = _run_archive_import(contents, agent_overrides_text, resume_pipeline_id, plan=plan,
+                              agent_passwords=agent_passwords)
+    status = import_status(job)
+    report = _report_lines(job)
+    logger.debug("Import report, full details: %s", "; ".join(job.errors + _credentials_pending_lines(job)))
+    logs = job.notes + (report if job.errors or job.credentials_pending else [])
+    return ApiMessage(
+        success=status == "full" or (status == "failed" and not job.errors and not job.credentials_pending),
+        message="\n".join(report),
+        logs=logs if logs else None,
+        planUsed=None if plan is None or plan.empty else plan.to_dict(),
+    )
+
+
+def _credentials_pending_lines(job: _ArchiveImport) -> list[str]:
+    """The final report of the agents whose credentials must be entered again, and their entities."""
+    lines = []
+    for pending in job.credentials_pending:
+        lines.append(
+            f"CREDENTIALS PENDING: pipeline {pending['pipelineId']}, {pending['agentType']} agent "
+            f"{pending.get('agentTag')} (id {pending['agentId']}): Core Hub refused the credentials "
+            f"({pending['error']}). Re-enter them in Core Hub; the pipeline is left in draft.")
+        if pending.get("specificConfigurationError"):
+            lines.append(f"  specific configuration of agent {pending['agentId']} not saved either: "
+                         f"{pending['specificConfigurationError']}")
+    if job.credentials_pending:
+        lines.extend(job.offline_report)
+        if _attempt_entities_when_pending():
+            lines.append("Core Hub 2.3.1 refuses entities while the agents are unreachable (400 \"a modified entity "
+                         "is saved only when its keys can be checked\"); older hubs are UNVERIFIED.")
+    return lines
 
 
 async def import_all(
-    file: UploadFile = File(...)
+    file: Optional[UploadFile] = File(None),
+    agent_overrides: Optional[str] = Form(None),
+    resume_pipeline_id: Optional[str] = Form(None),
+    plan: Optional[str] = Form(None),
+    upload_id: Optional[str] = Form(None, alias="uploadId"),
+    agent_passwords: Optional[str] = Form(None),
 ) -> ApiMessage:
     """Validate a full backup ZIP (pipelines + agents-config).
 
     The ZIP is expected to come from the Export All feature and contain
     at least an agents-config.yaml file. Agents are provisioned via CoreHub API.
+
+    ``agent_overrides`` (optional form field, JSON; also GS_IMPORT_AGENT_OVERRIDES[_FILE]) points agents at
+    another host/port/database/username; ``resume_pipeline_id`` (also GS_IMPORT_RESUME_PIPELINE_ID) restores
+    the specific configuration, entities and UDFs into that existing pipeline instead of creating one.
+
+    Customizable import: ``plan`` (the plan JSON, this run only; see import_plan.py), ``uploadId`` (a backup
+    analysed by /api/import/analyze, instead of ``file``; deleted after the import) and ``agent_passwords``
+    (JSON ``{backup pipeline id: {agentTag or agentId: password}}``, kept in memory only). Without them it is
+    the Import All of before. One import at a time (409).
     """
 
     _require_session()
 
-    contents = await _read_nonempty_upload(file)
+    loaded_plan = _load_plan_or_400(plan) if plan is not None else None
+    passwords = _passwords_or_400(agent_passwords)
+    if upload_id:
+        contents = load_import_upload(upload_id)
+    elif file is not None:
+        contents = await _read_nonempty_upload(file)
+    else:
+        raise HTTPException(status_code=400, detail="Upload a backup ZIP (file) or give the uploadId of an analysis.")
 
     prune_workspace_sessions()
-    return _import_archive(contents)
+    try:
+        # in a worker thread: the event loop keeps serving (a concurrent import gets its 409 at once)
+        result = await run_in_threadpool(functools.partial(
+            _import_archive, contents, agent_overrides_text=agent_overrides,
+            resume_pipeline_id=resume_pipeline_id, plan=loaded_plan, agent_passwords=passwords))
+    except HTTPException as exc:
+        # busy (409) or a plan refused before any write (400): the analysed backup stays for another try
+        if upload_id and exc.status_code not in (400, 409):
+            delete_import_upload(upload_id)
+        raise
+    except Exception:
+        if upload_id:
+            delete_import_upload(upload_id)
+        raise
+    if upload_id:
+        delete_import_upload(upload_id)
+    return result
 
 
 def _check_agent_definitions(agents_list: list, logs: list[str], errors: list[str]) -> None:
@@ -2640,9 +3769,473 @@ async def import_oidc(file: UploadFile = File(...)) -> ApiMessage:
     return ApiMessage(message="OIDC import completed. " + "; ".join(summary_parts))
 
 
+# -- customizable import: stored uploads, analysis, preview ---------------------------------------------------
+
+IMPORT_SESSION_TTL_SECONDS = 3600
+_UPLOAD_ID = re.compile(r"^[0-9a-f]{32}$")
+
+
+def _import_sessions_root() -> Path:
+    root = get_workspace_root() / "import-sessions"
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with contextlib.suppress(OSError):
+        os.chmod(root, 0o700)
+    return root
+
+
+def prune_import_sessions(ttl_seconds: int = IMPORT_SESSION_TTL_SECONDS) -> None:
+    """Delete the stored uploads older than the TTL (best effort)."""
+    try:
+        cutoff = time.time() - ttl_seconds
+        for child in _import_sessions_root().iterdir():
+            with contextlib.suppress(OSError):
+                if child.stat().st_mtime < cutoff:
+                    shutil.rmtree(child, ignore_errors=True)
+    except Exception:  # pylint: disable=broad-except
+        logger.debug("Could not prune the stored import uploads", exc_info=True)
+
+
+IMPORT_PRUNE_INTERVAL_SECONDS = 300
+_import_pruner_lock = threading.Lock()
+_import_pruner_started = False
+
+
+def _start_import_pruner() -> None:
+    """Delete expired uploads every few minutes, not only when the next analysis or import comes (an upload
+    analysed and abandoned would otherwise stay on disk until then). One daemon thread per process."""
+    global _import_pruner_started  # pylint: disable=global-statement
+    with _import_pruner_lock:
+        if _import_pruner_started:
+            return
+        _import_pruner_started = True
+
+    def loop():
+        while True:
+            time.sleep(IMPORT_PRUNE_INTERVAL_SECONDS)
+            prune_import_sessions()
+
+    threading.Thread(target=loop, name="import-upload-pruner", daemon=True).start()
+
+
+def import_upload_max_bytes() -> int:
+    """The largest backup ZIP /api/import/analyze accepts: GS_IMPORT_MAX_UPLOAD_MB (default 512 MB)."""
+    try:
+        megabytes = float(os.environ.get("GS_IMPORT_MAX_UPLOAD_MB", "512"))
+    except ValueError:
+        megabytes = 512.0
+    return int(max(megabytes, 1) * 1024 * 1024)
+
+
+async def _read_capped_upload(file: UploadFile, max_bytes: int) -> bytes:
+    """The uploaded file, read in chunks; 413 as soon as it exceeds ``max_bytes``, 400 when empty."""
+    chunks, size = [], 0
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        size += len(chunk)
+        if size > max_bytes:
+            raise HTTPException(status_code=413, detail=f"The backup is larger than {max_bytes // (1024 * 1024)} MB "
+                                                        f"(GS_IMPORT_MAX_UPLOAD_MB).")
+        chunks.append(chunk)
+    if not size:
+        raise HTTPException(status_code=400, detail=UPLOADED_FILE_EMPTY)
+    return b"".join(chunks)
+
+
+def store_import_upload(contents: bytes) -> str:
+    """Keep an analysed backup ZIP for its preview and import: owner-only (0700 dir, 0600 file), one hour."""
+    prune_import_sessions()
+    _start_import_pruner()
+    upload_id = uuid.uuid4().hex
+    session = _import_sessions_root() / upload_id
+    session.mkdir(mode=0o700)
+    os.chmod(session, 0o700)
+    path = session / "archive.zip"
+    fd = os.open(path, functools.reduce(operator.or_, (os.O_WRONLY, os.O_CREAT, os.O_EXCL)), 0o600)
+    with os.fdopen(fd, "wb") as handle:
+        handle.write(contents)
+    os.chmod(path, 0o600)
+    return upload_id
+
+
+def load_import_upload(upload_id: Optional[str]) -> bytes:
+    """The stored ZIP of an analysis; 404 when unknown or expired."""
+    prune_import_sessions()
+    if not upload_id or not _UPLOAD_ID.match(str(upload_id)):
+        raise HTTPException(status_code=400, detail="Invalid uploadId.")
+    path = _import_sessions_root() / upload_id / "archive.zip"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="The analysed backup has expired; analyse it again.")
+    return path.read_bytes()
+
+
+def delete_import_upload(upload_id: Optional[str]) -> None:
+    if upload_id and _UPLOAD_ID.match(str(upload_id)):
+        shutil.rmtree(_import_sessions_root() / upload_id, ignore_errors=True)
+
+
+def _agent_summary(agent: Any, password: str) -> Dict[str, Any]:
+    creds = agent.get("hostCredentials") if isinstance(agent.get("hostCredentials"), dict) else {}
+    return {
+        "agentType": agent.get("agentType"),
+        "agentTag": agent.get("agentTag"),
+        "agentId": agent.get("agentId") or agent.get("id"),
+        "host": creds.get("host"),
+        "port": creds.get("port"),
+        "database": creds.get("databaseName"),
+        "username": creds.get("username"),
+        "password": password,
+    }
+
+
+def _agent_ref(agent: Any) -> tuple:
+    return (str(agent.get("agentTag") or ""), str(agent.get("agentId") or agent.get("id") or ""))
+
+
+def _apply_preview_overrides(agents_list: list, errors: list[str]) -> set:
+    """Apply the agent overrides an import would apply (GS_IMPORT_AGENT_OVERRIDES[_FILE], --agent-overrides and
+    GS_IMPORT_AGENT_PASSWORD_<TAG>) to the parsed agents, so a dry run reports what the import would really send.
+    Returns the refs of the agents whose password the overrides gave; no password leaves this function."""
+    before = {_agent_ref(a): (a.get("hostCredentials") or {}).get("password")
+              for a in agents_list if isinstance(a, dict)}
+    try:
+        agent_overrides.apply(agents_list, agent_overrides.load())
+    except agent_overrides.AgentOverrideError as exc:
+        errors.append(f"Agent overrides: {exc}")
+        return set()
+    return {_agent_ref(a) for a in agents_list if isinstance(a, dict)
+            and (a.get("hostCredentials") or {}).get("password") != before.get(_agent_ref(a))
+            and not _is_masked((a.get("hostCredentials") or {}).get("password"))}
+
+
+def _backup_password_state(agent: Any, overridden: Optional[set] = None) -> str:
+    if overridden and isinstance(agent, dict) and _agent_ref(agent) in overridden:
+        return "from agent overrides"
+    creds = agent.get("hostCredentials") if isinstance(agent, dict) else None
+    if isinstance(creds, dict) and _is_masked(creds.get("password")):
+        return "missing (masked in the backup)"
+    return "from backup" if isinstance(creds, dict) and creds.get("password") else "missing"
+
+
+def _has_udf(cfg: Any) -> bool:
+    """Whether a custom table's settings give its target a UDF."""
+    target = ((cfg.get("customProperties") or {}).get("target") if isinstance(cfg, dict) else None)
+    return bool(isinstance(target, dict) and target.get("udf"))
+
+
+def _yaml_parts(config: Any) -> Dict[str, int]:
+    """How many UDFs, group schedules and groups a backup pipeline YAML carries (what the plan can skip)."""
+    udfs = schedules = 0
+    for entry in import_plan._schemas_root(config).values():  # pylint: disable=protected-access
+        tables = entry.get("tables") if isinstance(entry.get("tables"), dict) else {}
+        custom = tables.get("custom") if isinstance(tables.get("custom"), dict) else {}
+        udfs += sum(1 for cfg in custom.values() if _has_udf(cfg))
+        schedules += len(entry.get("group_schedules") or [])
+    groups = config.get("groups") if isinstance(config, dict) else None
+    return {"udfs": udfs, "schedules": schedules, "groups": len(groups) if isinstance(groups, (list, dict)) else 0}
+
+
+def _analyze_archive(contents: bytes, apply_overrides: bool = False) -> Dict[str, Any]:
+    """What a backup holds, for the Customize step: pipelines, tables, agents (no password) and the draft plan.
+    ``apply_overrides`` (the dry run): report the passwords the agent overrides would give as given."""
+    agents_text = _read_agents_config_text(contents, "analyze")
+    agents_config, agents_list = _parse_agents_config(agents_text, "analyze", allow_masked=True)
+    override_errors: list[str] = []
+    overridden = _apply_preview_overrides(agents_list, override_errors) if apply_overrides else set()
+    job = _ArchiveImport(contents=contents, agents_list=agents_list,
+                         meta_by_old_id=_pipeline_meta_by_old_id(agents_config), udf_root=None,
+                         continue_on_credentials_failure=False)
+    index, errors = [], []
+    for name, stem, text in _archive_pipeline_members(contents, errors):
+        old_id, embedded_name = _resolve_pipeline_identity(text, stem)
+        meta = job.meta_by_old_id.get(old_id)
+        try:
+            config = yaml.safe_load(text)
+        except yaml.YAMLError as exc:
+            errors.append(f"{name}: invalid YAML: {exc}")
+            continue
+        agents = _agents_for_pipeline(job, name, meta) or []
+        index.append({
+            "oldId": str(old_id),
+            "name": (meta.get("pipelineName") if isinstance(meta, dict) else None) or embedded_name
+            or _default_pipeline_name(old_id),
+            "member": name,
+            "entities": import_plan.entity_ids(config),
+            "agents": [_agent_summary(a, _backup_password_state(a, overridden)) for a in agents if isinstance(a, dict)],
+            "parts": _yaml_parts(config),
+        })
+    present = {stem: _find_config_by_stem(contents, stem) is not None
+               for stem in ("users", "oidc", "user-groups", "data-access-policies")}
+    globals_present = {"notifications": _find_notification_config(contents) is not None,
+                       "users": present["users"] or present["oidc"] or present["user-groups"],
+                       "accessPolicies": present["data-access-policies"]}
+    errors.extend(job.errors)
+    errors.extend(override_errors)
+    return {"pipelines": index, "globals": globals_present, "errors": errors, "plan": import_plan.draft(index)}
+
+
+def _existing_pipelines() -> list:
+    existing = corehub.fetch_core_hub("/pipelines", token=state.token)
+    return [p for p in existing if isinstance(p, dict)] if isinstance(existing, list) else []
+
+
+def _existing_sources(pipeline_id: str, errors: list[str]) -> set:
+    """The source ``(schema, table)`` (casefolded) of the entities of an existing pipeline (GET)."""
+    import create_all_entities  # pylint: disable=import-outside-toplevel
+    try:
+        listing = corehub.fetch_core_hub(f"/pipelines/{pipeline_id}/entities", token=state.token)
+    except Exception as exc:  # pylint: disable=broad-except
+        errors.append(f"pipeline {pipeline_id}: could not list its entities ({exc})")
+        return set()
+    sources = set()
+    for item in listing if isinstance(listing, list) else []:
+        source = create_all_entities._source_table_of(  # pylint: disable=protected-access
+            create_all_entities._listing_entity(item))  # pylint: disable=protected-access
+        if source:
+            sources.add(tuple(str(p).casefold() for p in source))
+    return sources
+
+
+def _planned_targets(planned: Any, entities: list) -> list:
+    """Source and target (schema, table, entity name) of each planned table, as the YAML now says."""
+    root = import_plan._schemas_root(planned)  # pylint: disable=protected-access
+    out = []
+    for entity in entities:
+        entry = root.get(entity["schema"]) or {}
+        tables = entry.get("tables") if isinstance(entry.get("tables"), dict) else {}
+        cfg = (tables.get("custom") or {}).get(entity["key"]) if isinstance(tables.get("custom"), dict) else None
+        cfg = cfg if isinstance(cfg, dict) else {}
+        out.append({"id": entity["id"], "source": f'{entity["schema"]}.{entity["table"]}',
+                    "targetSchema": cfg.get("targetSchema") or entry.get("targetSchema") or entity["schema"],
+                    "targetTable": cfg.get("name") or entity["table"],
+                    "entityName": cfg.get("entityName")})
+    return out
+
+
+def _preview_pipeline(job: _ArchiveImport, analysed: Dict[str, Any], text: str, existing_by_name: Dict[str, str],
+                      reserved: set, errors: list[str]) -> Dict[str, Any]:
+    plan = job.plan
+    old_id = analysed["oldId"]
+    pipeline_plan = plan.pipeline(old_id)
+    out: Dict[str, Any] = {"oldId": old_id, "backupName": analysed["name"], "import": pipeline_plan.import_}
+    if not pipeline_plan.import_:
+        return out
+    config = yaml.safe_load(text)
+    try:
+        import_plan.check_names(config, pipeline_plan)
+        planned, notes = import_plan.apply_to_yaml(copy.deepcopy(config), plan, pipeline_plan)
+        import_plan.check_target_collisions(config, pipeline_plan, old_id)
+    except import_plan.PlanError as exc:
+        out["error"] = str(exc)
+        errors.append(str(exc))
+        return out
+    entities = import_plan.entity_ids(planned)
+    out["notes"] = notes
+    out["entities"] = _planned_targets(planned, entities)
+    out["entityCount"] = len(entities)
+    if not entities:
+        errors.append(f"pipelines.{old_id}: no table selected; set \"import\": false to leave the pipeline out")
+    out["parts"] = {part: plan.part(pipeline_plan, part) for part in import_plan.PARTS}
+    target_id = pipeline_plan.resume_into or job.resume_pipeline_id
+    name = pipeline_plan.name or analysed["name"]
+    if target_id:
+        target_id = _preview_resume_action(job, old_id, target_id, out, errors)
+    else:
+        name = _preview_create_action(plan, pipeline_plan, old_id, name, existing_by_name, reserved, out, errors)
+    out["finalName"] = name
+    if target_id:
+        existing = _existing_sources(target_id, errors)
+        clashes = [e["id"] for e in entities if (e["schema"].casefold(), e["table"].casefold()) in existing]
+        out["existingEntities"] = len(existing)
+        out["conflicts"] = clashes
+        out["onExistingEntity"] = plan.on_existing_entity(pipeline_plan) or os.getenv("GS_IMPORT_ON_EXISTING") \
+            or "default"
+    passwords = job.agent_passwords.get(old_id, {})
+    _check_agent_refs(analysed, pipeline_plan, passwords, old_id, errors)
+    out["agents"] = [_preview_agent(job, agent, pipeline_plan, passwords, old_id, errors)
+                     for agent in analysed["agents"]]
+    return out
+
+
+def _preview_resume_action(job: _ArchiveImport, old_id: str, target_id: Any, out: Dict[str, Any],
+                           errors: list[str]) -> str:
+    out["action"] = f"resume into existing pipeline {target_id}"
+    target_id = str(target_id)
+    existing_ids = getattr(job, "existing_ids", None)
+    if existing_ids is not None and target_id not in existing_ids:
+        errors.append(f"pipelines.{old_id}: resumeInto {target_id!r}: no such pipeline on Core Hub")
+    return target_id
+
+
+def _preview_create_action(plan: import_plan.ImportPlan, pipeline_plan: Any, old_id: str, name: str,
+                           existing_by_name: Dict[str, str], reserved: set, out: Dict[str, Any],
+                           errors: list[str]) -> str:
+    """Record what creating the pipeline would do; returns its final name."""
+    if name not in existing_by_name and name not in reserved:
+        out["action"] = f"create {name!r}"
+        reserved.add(name)
+        return name
+    on_existing = plan.on_existing_pipeline(pipeline_plan) or \
+        os.getenv("GS_IMPORT_ON_EXISTING_PIPELINE", "suffix").strip().lower() or "suffix"
+    if on_existing == "fail":
+        out["action"] = f"fail: a pipeline named {name!r} exists (onExistingPipeline=fail)"
+        errors.append(f"pipelines.{old_id}: {out['action']}")
+        return name
+    final = _unique_pipeline_name(name, reserved)
+    out["action"] = f"create {final!r} ({name!r} exists)"
+    reserved.add(final)
+    return final
+
+
+def _check_agent_refs(analysed: Dict[str, Any], pipeline_plan: Any, passwords: Dict[str, str], old_id: str,
+                      errors: list[str]) -> None:
+    known_refs = {str(r).casefold() for a in analysed["agents"] for r in (a.get("agentTag"), a.get("agentId")) if r}
+    for ref in [*pipeline_plan.agents, *passwords]:
+        if str(ref).casefold() not in known_refs:
+            errors.append(f"pipelines.{old_id}: no agent {ref!r} in the backup (agentTag or agentId)")
+
+
+def _agent_password_state(job: _ArchiveImport, agent: Dict[str, Any], entry: Dict[str, Any], refs: set,
+                          passwords: Dict[str, str]) -> str:
+    if any(passwords.get(r) for r in refs):
+        return "override"
+    if entry.get("passwordRef"):
+        var = str(entry["passwordRef"]).split(":", 1)[-1]
+        return "override" if (job.plan_env or {}).get(var) else f"missing (${var} not set)"
+    return agent["password"]
+
+
+def _preview_agent(job: _ArchiveImport, agent: Dict[str, Any], pipeline_plan: Any, passwords: Dict[str, str],
+                   old_id: str, errors: list[str]) -> Dict[str, Any]:
+    refs = {str(agent.get("agentTag") or ""), str(agent.get("agentId") or "")} - {""}
+    folded_refs = {r.casefold() for r in refs}
+    entry = next((v for k, v in pipeline_plan.agents.items() if k in refs or k.casefold() in folded_refs), {})
+    state_ = _agent_password_state(job, agent, entry, refs, passwords)
+    summary = dict(agent, password=state_)
+    summary.update({field_: entry[field_] for field_ in ("host", "port", "database", "username") if field_ in entry})
+    if state_.startswith("missing"):
+        errors.append(f"pipelines.{old_id}: agent {agent.get('agentTag')}: password {state_}")
+    return summary
+
+
+def _pipeline_id_of(pipeline: Dict[str, Any]) -> str:
+    return str(pipeline.get("id") or pipeline.get("pipelineId"))
+
+
+def _pipeline_ids_by_name(existing: list) -> Dict[str, str]:
+    return {str(p.get("name")): _pipeline_id_of(p) for p in existing if p.get("name")}
+
+
+def _unknown_pipeline_errors(plan: import_plan.ImportPlan, job: _ArchiveImport, known: set) -> list[str]:
+    """One error per pipeline the plan or the passwords name that the backup does not have."""
+    return [f"pipelines.{old_id}: no pipeline {old_id!r} in the backup{import_options.suggest(old_id, sorted(known))}"
+            for old_id in [*plan.pipelines, *job.agent_passwords] if old_id not in known]
+
+
+def _existing_pipelines_or_error(errors: list[str]) -> tuple:
+    """The existing pipelines and whether fetching them failed (the failure goes to ``errors``)."""
+    try:
+        return _existing_pipelines(), False
+    except Exception as exc:  # pylint: disable=broad-except
+        errors.append(f"Failed to fetch existing pipelines: {exc}")
+        return [], True
+
+
+def _preview_import(contents: bytes, plan: import_plan.ImportPlan,
+                    agent_passwords: Optional[Dict[str, Dict[str, str]]] = None,
+                    plan_env: Any = None, resume_pipeline_id: Optional[str] = None) -> Dict[str, Any]:
+    """What an import with this plan would do. Read-only: Core Hub is only read (GET /pipelines and
+    GET /pipelines/{id}/entities); nothing is created or changed. No password in the result."""
+    analysis = _analyze_archive(contents, apply_overrides=True)
+    errors = list(analysis["errors"])
+    job = _ArchiveImport(contents=contents, agents_list=[], meta_by_old_id={}, udf_root=None,
+                         continue_on_credentials_failure=False, resume_pipeline_id=resume_pipeline_id,
+                         plan=plan, agent_passwords=agent_passwords or {},
+                         plan_env=os.environ if plan_env is None else plan_env)
+    known = {p["oldId"] for p in analysis["pipelines"]}
+    errors.extend(_unknown_pipeline_errors(plan, job, known))
+    existing, fetch_failed = _existing_pipelines_or_error(errors)
+    existing_by_name = _pipeline_ids_by_name(existing)
+    reserved = set(existing_by_name)
+    job.existing_ids = None if fetch_failed else {_pipeline_id_of(p) for p in existing}
+    texts = {str(_resolve_pipeline_identity(text, stem)[0]): text
+             for _n, stem, text in _archive_pipeline_members(contents)}
+    pipelines = [_preview_pipeline(job, item, texts[item["oldId"]], existing_by_name, reserved, errors)
+                 for item in analysis["pipelines"]]
+    selected = [p for p in pipelines if p.get("import")]
+    if not selected:
+        errors.append("The plan selects no pipeline: nothing would be imported.")
+    return {
+        "ok": not errors,
+        "errors": errors,
+        "globals": {g: plan.global_enabled(g) and analysis["globals"].get(g, False) for g in import_plan.GLOBALS},
+        "pipelines": pipelines,
+        "totals": {"pipelines": len(selected), "entities": sum(p.get("entityCount", 0) for p in selected)},
+        "plan": plan.to_dict(),
+    }
+
+
+def _load_plan_or_400(text: Any) -> import_plan.ImportPlan:
+    try:
+        return import_plan.load(text)
+    except import_plan.PlanError as exc:
+        raise HTTPException(status_code=400, detail=f"Import plan: {exc}") from exc
+
+
+def _passwords_or_400(text: Optional[str]) -> Dict[str, Dict[str, str]]:
+    try:
+        return import_plan.parse_agent_passwords(text)
+    except import_plan.PlanError as exc:
+        raise HTTPException(status_code=400, detail=f"agent_passwords: {exc}") from exc
+
+
+class ImportPreviewRequest(BaseModel):
+    """The passwords travel in the body only, they are never stored."""
+
+    uploadId: str
+    plan: Optional[Dict[str, Any]] = None
+    agent_passwords: Optional[Dict[str, Dict[str, str]]] = None
+
+    def __repr__(self) -> str:  # never show the passwords
+        return f"ImportPreviewRequest(uploadId={self.uploadId!r})"
+
+
+async def import_analyze(file: UploadFile = File(...)) -> Dict[str, Any]:
+    """Analyse an Export All ZIP for a customizable import: keeps it (owner-only, one hour) under an uploadId
+    and returns its pipelines, tables, agents (no password) and the draft plan. Nothing is sent to Core Hub."""
+    _require_session()
+    contents = await _read_capped_upload(file, import_upload_max_bytes())
+    analysis = await run_in_threadpool(_analyze_archive, contents)
+    analysis["uploadId"] = store_import_upload(contents)
+    return analysis
+
+
+async def import_preview(request: ImportPreviewRequest) -> Dict[str, Any]:
+    """Preview (read-only) what importing the analysed backup with this plan would do."""
+    _require_session()
+    plan = _load_plan_or_400(request.plan)
+    passwords = {str(k): dict(v) for k, v in (request.agent_passwords or {}).items()}
+    contents = load_import_upload(request.uploadId)
+    return await run_in_threadpool(_locked_preview, contents, plan, passwords)
+
+
+def _locked_preview(contents: bytes, plan: import_plan.ImportPlan,
+                    passwords: Dict[str, Dict[str, str]]) -> Dict[str, Any]:
+    owner = object()
+    import_plan.SECRETS.add(owner, list(import_plan.secret_values(passwords)) + _env_secret_values(plan, None))
+    try:
+        with _exclusive_import():
+            return _preview_import(contents, plan, passwords)
+    finally:
+        import_plan.SECRETS.discard(owner)
+
+
 def _register_import_routes(app: FastAPI) -> None:
     """The Export All import and validation routes and the backup restore routes."""
     app.add_api_route("/api/import/all", import_all, methods=["POST"], responses=_ARCHIVE_IMPORT_RESPONSES)
+    app.add_api_route("/api/import/analyze", import_analyze, methods=["POST"], responses=_ARCHIVE_IMPORT_RESPONSES)
+    app.add_api_route("/api/import/preview", import_preview, methods=["POST"], responses=_ARCHIVE_IMPORT_RESPONSES)
     app.add_api_route("/api/import/validate-all", validate_all, methods=["POST"], responses=_ARCHIVE_IMPORT_RESPONSES)
     app.add_api_route("/api/import/full-backup", import_full_backup, methods=["POST"], responses=_FILE_IMPORT_RESPONSES)
     app.add_api_route("/api/import/users", import_users, methods=["POST"], responses=_FILE_IMPORT_RESPONSES)
@@ -2822,6 +4415,7 @@ def _run_create_entities(request: RunRequest, settings: _RunSettings, source_sch
             chunk_size=request.chunk_size,
             log_callback=settings.log_callback,
             chronos_token=state.chronos_token,
+            import_options=import_options.from_env_if_requested(),
         ),
     )
 

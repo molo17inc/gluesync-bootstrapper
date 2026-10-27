@@ -1,0 +1,60 @@
+# Sanitized: passwords, usernames and hosts are placeholders.
+agents:
+- agentType: SOURCE
+  agentTag: ibm-iseries
+  hostCredentials:
+    connectionName: conn1
+    protocol: JDBC
+    host: db1.example.invalid
+    port: 0
+    databaseName: ''
+    username: <USERNAME>
+    password: <PASSWORD>
+    disableAuth: false
+    enableTls: false
+    trustServerCertificate: false
+    useUploadedTrustStore: false
+    useUploadedKeyStore: false
+    useUploadedCertificate: false
+    additionalHosts: []
+    minConnectionsCount: 5
+    maxConnectionsCount: 25
+  customHostCredentials: {}
+  specificConfiguration:
+    trimTextColumns: true
+    technicalFields:
+    - _TRANSACTION_OPERATION
+  agentId: a9e00001
+- agentType: TARGET
+  agentTag: mssql-ct
+  hostCredentials:
+    connectionName: conn2
+    protocol: JDBC
+    host: db2.example.invalid
+    port: 0
+    databaseName: demo
+    username: <USERNAME>
+    password: <PASSWORD>
+    disableAuth: false
+    enableTls: false
+    trustServerCertificate: true
+    useUploadedTrustStore: false
+    useUploadedKeyStore: false
+    useUploadedCertificate: false
+    additionalHosts: []
+    minConnectionsCount: 5
+    maxConnectionsCount: 25
+  customHostCredentials: {}
+  specificConfiguration:
+    disableTruncateOnSnapshot: true
+  agentId: a9e00002
+pipelines:
+- pipelineId: 5e1f0001
+  pipelineName: Synth1MSSQL
+  agents:
+  - agentType: SOURCE
+    agentTag: ibm-iseries
+    agentId: a9e00001
+  - agentType: TARGET
+    agentTag: mssql-ct
+    agentId: a9e00002

@@ -32,7 +32,7 @@ from commons import get_node_info, get_table_columns, fetch_core_hub, get_pipeli
     get_agent_tables, map_data_type, load_yaml_config, create_group, \
     process_filter_clauses, canonicalize_target_type, is_length_type
 from entity_mapping import ColumnNames, EntityMappingError, find_by_name, is_column_mappings, yaml_relations
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 from typing import Optional
 from typing import List
 
@@ -82,6 +82,9 @@ class Column(BaseModel):
     datetimePrec: Optional[int] = None
     isPK: bool = False
     isIdentity: bool = False
+    # Not sent: whether the YAML/discovery declared the length MAX (-1), which _normalize_data_length turns into
+    # 1024; a fan-in merge reads it so VARCHAR(10) + VARCHAR(MAX) stays MAX.
+    _declared_max: bool = PrivateAttr(default=False)
     isNullable: bool = False
     columnDefault: Optional[str] = Field(default=None, alias="default")
     udtCategory: Optional[str] = None
@@ -536,6 +539,19 @@ def _to_bool(value, default=True):
     return bool(value)
 
 
+def _is_max_length(data_length) -> bool:
+    """Whether a declared length means MAX: -1 (Core Hub discovery, exports) or 'max'."""
+    if isinstance(data_length, str) and data_length.strip().lower() == "max":
+        return True
+    return _to_int(data_length, 0) == -1
+
+
+def _mark_max(raw_length, column):
+    """``column``, remembering whether its declared length was MAX."""
+    column._declared_max = _is_max_length(raw_length)  # pylint: disable=protected-access
+    return column
+
+
 def _normalize_data_length(col_type: str, data_length: int) -> int:
     length_value = _to_int(data_length, 0)
     if is_length_type(col_type):
@@ -597,9 +613,10 @@ def _target_only_column_dto(idx: int, target_col, key_lookup: _KeyLookup, source
         source_node_info,
         target_node_info,
     )
+    raw_length = col_data_length
     col_data_length = _normalize_data_length(mapped_type, col_data_length)
 
-    return Column(
+    return _mark_max(raw_length, Column(
         name=col_name,
         dataType=format_column_type(mapped_type, col_data_length, col_numeric_precision, col_numeric_scale),
         id=idx,  # Use sequential IDs for target-only columns
@@ -610,7 +627,7 @@ def _target_only_column_dto(idx: int, target_col, key_lookup: _KeyLookup, source
         charMaxLength=col_data_length,
         numPrec=col_numeric_precision,
         numScale=col_numeric_scale
-    )
+    ))
 
 
 def _target_only_column_dtos(target_only_columns, key_lookup: _KeyLookup, source_node_info, target_node_info) -> list:
@@ -665,6 +682,7 @@ def _metadata_column_dto(idx: int, col_meta: dict, key_lookup: _KeyLookup, sourc
             source_node_info,
             target_node_info,
         )
+    raw_length = col_data_length
     col_data_length = _normalize_data_length(mapped_type, col_data_length)
     resolved_target_type = mapped_type
 
@@ -673,7 +691,7 @@ def _metadata_column_dto(idx: int, col_meta: dict, key_lookup: _KeyLookup, sourc
     # not a PK (for example CUSTOMERS_NO_PKEY in demo-kits), still
     # mark it as PK if the table-list-template declares it in keys.
     col_is_pk = key_lookup.is_primary_key(col_name) or bool(col_meta.get('isPK', col_meta.get('is_primary_key')))
-    return Column(
+    return _mark_max(raw_length, Column(
         name=col_name,
         dataType=format_column_type(resolved_target_type, col_data_length, col_numeric_precision, col_numeric_scale),
         id=column_id,
@@ -685,7 +703,7 @@ def _metadata_column_dto(idx: int, col_meta: dict, key_lookup: _KeyLookup, sourc
         charMaxLength=col_data_length,
         numPrec=col_numeric_precision,
         numScale=col_numeric_scale
-    )
+    ))
 
 
 def _metadata_column_dtos(metadata_columns, target_table_name: str, key_lookup: _KeyLookup, source_node_info,
@@ -714,11 +732,12 @@ def _source_column_dtos(columns, key_lookup: _KeyLookup, source_node_info, targe
             source_node_info,
             target_node_info,
         )
+        raw_length = col.get("charMaxLength", 0)
         col_data_length = _normalize_data_length(mapped_type, col.get("charMaxLength", 0))
         # YAML-defined keys override source metadata so templates can
         # create target PKs for source tables that do not expose one.
         col_is_pk = key_lookup.is_primary_key(col["name"]) or bool(col.get("isPK"))
-        column_dtos.append(Column(
+        column_dtos.append(_mark_max(raw_length, Column(
             name=col["name"],
             dataType=format_column_type(mapped_type, col_data_length,
                                    col.get("numPrec", 0), col.get("numScale", 0)),
@@ -730,7 +749,7 @@ def _source_column_dtos(columns, key_lookup: _KeyLookup, source_node_info, targe
             charMaxLength=col_data_length,
             numPrec=col.get("numPrec", 0),
             numScale=col.get("numScale", 0)
-        ))
+        )))
     return column_dtos
 
 
@@ -786,15 +805,15 @@ def _exported_column_dto(target_name: str, relation: dict, source_col, key_looku
     row = _exported_row(relation)
     source = source_col or {}
     data_type = _exported_target_type(row, source_col, source_node_info, target_node_info)
-    data_length = _normalize_data_length(data_type, _first_set(
-        row.get('targetDataLength'), row.get('dataLength'), source.get('charMaxLength')))
+    raw_length = _first_set(row.get('targetDataLength'), row.get('dataLength'), source.get('charMaxLength'))
+    data_length = _normalize_data_length(data_type, raw_length)
     numeric_precision = _to_int(_first_set(
         row.get('targetNumericPrecision'), row.get('numericPrecision'), source.get('numPrec')))
     numeric_scale = _to_int(_first_set(
         row.get('targetNumericScale'), row.get('numericScale'), source.get('numScale')))
     is_pk = _to_bool(row.get('isPK'), default=False) or key_lookup.is_primary_key(target_name) \
         or any(key_lookup.is_primary_key(source_name) for source_name in relation['sources'])
-    return Column(
+    return _mark_max(raw_length, Column(
         name=target_name,
         dataType=format_column_type(data_type, data_length, numeric_precision, numeric_scale),
         id=0,
@@ -805,7 +824,7 @@ def _exported_column_dto(target_name: str, relation: dict, source_col, key_looku
         charMaxLength=data_length,
         numPrec=numeric_precision,
         numScale=numeric_scale
-    )
+    ))
 
 
 class _TableColumns:
@@ -958,8 +977,131 @@ def _mark_target_keys(column_dtos: list, custom_config: dict, target_table_name:
             column.isPK = True
 
 
+def _fan_in_row_target(entry):
+    """The target column name a fan-in feeder row writes, or None."""
+    if not isinstance(entry, dict):
+        return None
+    target = entry.get('target')
+    if not (isinstance(target, str) and target):
+        target = entry.get('source')
+    return target if isinstance(target, str) and target else None
+
+
+def _fan_in_peer_columns(peers, target_table_name, key_lookup, source_node_info, target_node_info,
+                         present=None) -> dict:
+    """The column DTOs every other feeder writes, by case-folded target name. ``present`` (a dict) receives
+    ``{column casefolded: {index of each peer writing it}}``; a peer without column mappings counts as unknown
+    (it writes none)."""
+    peer_columns = {}
+    for index, cfg in enumerate(peers):
+        if not is_column_mappings(cfg.get('columns') or []):
+            continue
+        for entry in cfg.get('columns') or []:
+            target = _fan_in_row_target(entry)
+            if target is None:
+                continue
+            relation = {'sources': [], 'targets': [target], 'row': entry}
+            try:
+                dto = _exported_column_dto(target, relation, None, key_lookup, source_node_info, target_node_info)
+            except Exception as error:  # pylint: disable=broad-except
+                logger.debug(f"fan-in: column {target} of a feeder of {target_table_name} skipped: {error}")
+                continue
+            peer_columns.setdefault(target.casefold(), []).append(dto)
+            if present is not None:
+                present.setdefault(target.casefold(), set()).add(index)
+    return peer_columns
+
+
+def _report_fan_in_conflict(conflict: str) -> None:
+    logger.warning(conflict)
+    try:
+        import import_options  # pylint: disable=import-outside-toplevel
+        import_options.current().report.warnings.append(conflict)
+    except Exception:  # pylint: disable=broad-except
+        pass
+
+
+def _merge_fan_in_column(own, others, target_table_name: str, feeder_count: int) -> None:
+    """Widen ``own`` to the type that safely holds every feeder's, or log the conflict."""
+    import fan_in  # pylint: disable=import-outside-toplevel
+    # MAX (-1) as declared, not the 1024 _normalize_data_length made of it: VARCHAR(10) + VARCHAR(MAX) is MAX.
+    specs = [(c.dataType, -1 if getattr(c, '_declared_max', False) else c.charMaxLength, c.numPrec, c.numScale)
+             for c in [own] + others]
+    merged, reason = fan_in.merge_types(specs)
+    if merged is None:
+        _report_fan_in_conflict(
+            f"fan-in {target_table_name}: column {own.name} has types no type safely holds ({reason}): "
+            f"created as {fan_in.describe(fan_in._norm(specs[0]))}, the type of this feeder; set "
+            f"targetDataType on the rows to choose one")
+        return
+    before = fan_in.describe(fan_in._norm(specs[0]))
+    own.dataType = merged[0]
+    if merged[1] == -1:
+        # Kept as -1, the value Core Hub discovery itself reports for a MAX column.
+        own.charMaxLength = -1
+        own._declared_max = True  # pylint: disable=protected-access
+    elif merged[1] is not None:
+        own.charMaxLength = _normalize_data_length(own.dataType, merged[1])
+    if merged[2] is not None:
+        own.numPrec, own.numScale = merged[2], merged[3]
+    after = fan_in.describe(fan_in._norm((own.dataType, own.charMaxLength, own.numPrec, own.numScale)))
+    if after != before:
+        logger.info(f"fan-in {target_table_name}: column {own.name} widened from {before} to {after} for all "
+                    f"{feeder_count} feeders")
+
+
+def _merge_fan_in_nullability(column_dtos, peer_columns, present, peer_count, target_table_name) -> None:
+    """A column of this feeder is nullable when any other feeder lacks it or declares it nullable (its rows would
+    otherwise fail on NOT NULL). Key columns stay NOT NULL; a key another feeder lacks is logged."""
+    relaxed = []
+    for column in column_dtos:
+        folded = column.name.casefold()
+        missing = len(present.get(folded, ())) < peer_count
+        nullable_elsewhere = any(other.isNullable for other in peer_columns.get(folded, []))
+        if not (missing or nullable_elsewhere) or column.isNullable:
+            continue
+        if column.isPK:
+            if missing:
+                _report_fan_in_conflict(f"fan-in {target_table_name}: key column {column.name} is not written by "
+                                        f"every feeder; their rows will fail")
+            continue
+        column.isNullable = True
+        relaxed.append(column.name)
+    if relaxed:
+        logger.info(f"fan-in {target_table_name}: column(s) made nullable as another feeder lacks them or has them "
+                    f"nullable: {', '.join(relaxed)}")
+
+
+def _apply_fan_in(column_dtos: list, custom_config: dict, fan_in_peers, target_table_name: str, key_lookup,
+                  source_node_info, target_node_info) -> list:
+    """The columns of a table several YAML tables feed: the union of every feeder's columns, each with the widest
+    type that safely holds all feeders' (see :func:`fan_in.merge_types`). A column only other feeders write is added
+    nullable; a column whose types conflict keeps this feeder's type, and is logged."""
+    peers = [cfg for cfg in fan_in_peers or [] if isinstance(cfg, dict) and cfg is not custom_config and cfg != custom_config]
+    if not peers:
+        return column_dtos
+    by_name = {column.name.casefold(): column for column in column_dtos}
+    present = {}
+    peer_columns = _fan_in_peer_columns(peers, target_table_name, key_lookup, source_node_info, target_node_info,
+                                        present)
+    _merge_fan_in_nullability(column_dtos, peer_columns, present, len(peers), target_table_name)
+    added = []
+    for folded, others in peer_columns.items():
+        own = by_name.get(folded)
+        if own is None:
+            own = others[0].model_copy() if hasattr(others[0], 'model_copy') else others[0].copy()
+            own.isPK, own.isNullable, own.position = False, True, 0
+            column_dtos.append(own)
+            by_name[folded] = own
+            added.append(own.name)
+        _merge_fan_in_column(own, others, target_table_name, len(peers) + 1)
+    if added:
+        logger.info(f"fan-in {target_table_name}: added nullable column(s) other feeders write: {', '.join(added)}")
+    return _in_table_order(column_dtos) if added else column_dtos
+
+
 def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_schema: str, keys: list, token: str,
-                          columns: list, custom_config, source_node_info, target_node_info) -> bool:
+                          columns: list, custom_config, source_node_info, target_node_info, fan_in_peers=None) -> bool:
     """Create the target table when it does not exist and CREATE_TABLE_IF_NOT_EXISTS is on.
 
     Returns whether it created the table. Raises :class:`TargetTableCreationError` when the table has to be created
@@ -996,6 +1138,8 @@ def handle_table_creation(pipeline_id: str, target_table_name: str, yaml_target_
     if not column_dtos:
         raise TargetTableCreationError(
             f"no column to create table {yaml_target_schema}.{target_table_name} with: no source column feeds it")
+    column_dtos = _apply_fan_in(column_dtos, custom_config, fan_in_peers, target_table_name, key_lookup,
+                                source_node_info, target_node_info)
     _mark_target_keys(column_dtos, custom_config, target_table_name)
 
     table_data = GenerateCreateTargetTableStatementRequest(columns=column_dtos)

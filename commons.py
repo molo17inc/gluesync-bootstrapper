@@ -75,6 +75,23 @@ def configure_core_hub(base_url: str, *, use_ssl: Optional[bool] = None, skip_ve
     return client
 
 
+# Schedules of the backup that could not be restored (scheduler not reachable, schedule refused). Filled by the
+# create_*_schedules helpers, read and cleared by the import (take_schedule_failures) so that a lost schedule
+# makes the import PARTIAL instead of FULL. Nothing is recorded when there are no schedules or scheduling is off.
+SCHEDULE_FAILURES: list = []
+
+
+def record_schedule_failure(message: str) -> None:
+    SCHEDULE_FAILURES.append(message)
+
+
+def take_schedule_failures() -> list:
+    """The schedule failures recorded since the last call (and clear them)."""
+    failures = list(SCHEDULE_FAILURES)
+    SCHEDULE_FAILURES.clear()
+    return failures
+
+
 def set_scheduling_enabled(enabled: bool):
     """Toggle scheduling feature at runtime."""
     global ENABLE_SCHEDULING
@@ -390,11 +407,41 @@ def corehub_version(token, fetch=None):
         try:
             version = fetch("/version", token=token)
         except Exception as e:  # pylint: disable=broad-except
-            logger.warning(f"Could not read the CoreHub version ({e}); assuming a current CoreHub (Gluesync 2.3+)")
             version = None
+            error = e
+        else:
+            error = None
+        version = _version_or_override(version, error)
         logger.info(f"CoreHub version: {version!r}")
         _COREHUB_VERSION_BY_URL[key] = version
     return _COREHUB_VERSION_BY_URL[key]
+
+
+def corehub_version_override():
+    """The version to assume when ``GET /version`` is unreadable: ``--corehub-version``, else ``COREHUB_VERSION``."""
+    try:
+        from import_options import current
+        explicit = current().corehub_version
+    except ImportError:  # pragma: no cover
+        explicit = None
+    return explicit or os.getenv('COREHUB_VERSION') or None
+
+
+def _version_or_override(version, error):
+    """``version`` when readable, else the override, else None (taken as Gluesync 2.3+), with a clear warning."""
+    from utils.udf_signature import parse_corehub_version
+
+    if version is not None and parse_corehub_version(version) is not None:
+        return version
+    reason = f"failed: {error}" if error is not None else f"answered {version!r}"
+    override = corehub_version_override()
+    if override:
+        logger.warning(f"GET /version {reason}; using the configured CoreHub version {override!r} "
+                       f"(--corehub-version / COREHUB_VERSION)")
+        return override
+    logger.warning(f"GET /version {reason}; ASSUMING A GLUESYNC 2.3+ CORE HUB (grouped column mapping matrix, "
+                   f"2.3 key rules). If the Core Hub is older, pass --corehub-version X.Y.Z or set COREHUB_VERSION.")
+    return version if error is None else None
 
 
 def corehub_takes_grouped_matrix(token, fetch=None):
@@ -451,6 +498,8 @@ def create_entity_schedules(token, pipeline_id, entity_id, entity_name, schedule
     # Wait for Chronos to be available before attempting to create schedules
     if not chronos_client.wait_for_chronos():
         logger.error(f"Chronos is not available. Skipping schedule creation for entity {entity_name}")
+        record_schedule_failure(f"{len(schedules_config)} schedule(s) of entity {entity_name} "
+                                "(scheduler not reachable)")
         return
 
     for schedule_config in schedules_config:
@@ -493,6 +542,7 @@ def create_entity_schedules(token, pipeline_id, entity_id, entity_name, schedule
         except Exception as e:
             error_msg = f"Failed to create schedule for entity {entity_name}: {str(e)}"
             log_failure(logger, error_msg)
+            record_schedule_failure(f"schedule {schedule_config.get('name')!r} of entity {entity_name} (refused)")
             logger.error(traceback.format_exc())
             # Continue creating other schedules even if one fails
 
@@ -517,6 +567,7 @@ def create_group_schedules(token, pipeline_id, group_schedules, chronos_token=No
     # Wait for Chronos to be available before attempting to create schedules
     if not chronos_client.wait_for_chronos():
         logger.error(f"Chronos is not available. Skipping group schedule creation for pipeline {pipeline_id}")
+        record_schedule_failure(f"{len(group_schedules)} group schedule(s) (scheduler not reachable)")
         return
     
     # Handle case where group_schedules is a list of schedule configs for multiple groups
@@ -607,6 +658,7 @@ def _process_group_schedule(chronos_client, pipeline_id, group_ids, schedule_con
         group_info = f"groups {group_ids}" if group_ids else "unknown group"
         error_msg = f"Failed to create schedule for {group_info}: {str(e)}"
         log_failure(logger, error_msg)
+        record_schedule_failure(f"group schedule {schedule_config.get('name')!r} (refused)")
         logger.error(traceback.format_exc())
         # Continue creating other schedules even if one fails
 
@@ -623,6 +675,7 @@ def create_pipeline_schedules(token, pipeline_id, pipeline_schedules, chronos_to
     # Wait for Chronos to be available before attempting to create schedules
     if not chronos_client.wait_for_chronos():
         logger.error(f"Chronos is not available. Skipping pipeline schedule creation for pipeline {pipeline_id}")
+        record_schedule_failure(f"{len(pipeline_schedules)} pipeline schedule(s) (scheduler not reachable)")
         return
 
     for schedule_config in pipeline_schedules:
@@ -663,6 +716,7 @@ def create_pipeline_schedules(token, pipeline_id, pipeline_schedules, chronos_to
         except Exception as e:
             error_msg = f"Failed to create pipeline schedule: {str(e)}"
             log_failure(logger, error_msg)
+            record_schedule_failure(f"pipeline schedule {schedule_config.get('name')!r} (refused)")
             logger.error(traceback.format_exc())
             # Continue creating other schedules even if one fails
 
