@@ -27,10 +27,10 @@ from commons import configure_core_hub, fetch_core_hub
 
 
 def test_live_backup_export():
-    """Test live backup/export against CoreHub at 10.17.3.132."""
+    """Test live backup/export against CoreHub at 192.0.2.20."""
     
     # Live CoreHub configuration
-    base_url = "https://10.17.3.132:443"
+    base_url = "https://192.0.2.20:443"
     username = "admin"
     password = os.getenv("COREHUB_PASSWORD", "")
     
