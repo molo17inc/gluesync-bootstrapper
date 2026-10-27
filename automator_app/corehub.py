@@ -26,6 +26,7 @@ import io
 import json
 import logging
 import os
+import re
 import shutil
 import zipfile
 import tempfile
@@ -71,6 +72,8 @@ import time
 import yaml
 
 logger = logging.getLogger(__name__)
+
+PIPELINES_PATH = "/pipelines"
 
 # CoreHub REST paths used more than once.
 _SMTP_CONFIG_PATH = "/global-config/smtp"
@@ -363,6 +366,8 @@ class EntityRunOptions:
     log_callback: Optional[Callable[[str], None]] = None
     chronos_token: Optional[str] = None
     restore_function_collection: bool = True
+    # import_options.ImportOptions (remap, dry run, --on-existing, ...); None keeps the old behaviour.
+    import_options: Optional[Any] = None
 
 
 def run_create_entities(
@@ -436,6 +441,7 @@ def run_create_entities(
                 options.chunk_size,
                 chronos_token=options.chronos_token,
                 restore_function_collection=options.restore_function_collection,
+                **({"import_opts": options.import_options} if options.import_options is not None else {}),
             )
     except Exception as exc:  # pylint: disable=broad-except
         logger.exception("create_all_entities execution failed")
@@ -934,7 +940,7 @@ def list_pipelines(
 
     configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
 
-    response = fetch_core_hub("/pipelines", token=token)
+    response = fetch_core_hub(PIPELINES_PATH, token=token)
     pipelines: list[Dict[str, Any]] = []
 
     if isinstance(response, list):
@@ -3751,6 +3757,287 @@ def _fetch_agent_credentials(
     return fallback_host, fallback_custom
 
 
+class PartialPipelineImportError(RuntimeError):
+    """An import that failed after its pipeline was created: ``pipeline_id`` / ``agents`` say what is left."""
+
+    def __init__(self, message, pipeline_id, pipeline_name, agents, cleaned_up, detail=None):
+        super().__init__(message)
+        self.detail = detail
+        self.pipeline_id = pipeline_id
+        self.pipeline_name = pipeline_name
+        self.agents = agents
+        self.cleaned_up = cleaned_up
+
+
+def _short_import_failure_reason(error: BaseException) -> str:
+    """One short line for an import failure: the connection reason when CoreHub could not reach the agent's
+    database, else the ``exceptionMessage`` of the CoreHub answer (the full text goes to the debug log)."""
+    text = str(error)
+    if credentials_failure_is_recoverable(error):
+        return short_connection_reason(text)
+    reason = " ".join(_exception_message(text).split())
+    return reason if len(reason) <= 200 else reason[:197].rstrip() + "..."
+
+
+def _partial_import_error(token, pipeline_id, pipeline_name, agents, error, cleanup):
+    cleaned_up = False
+    if cleanup:
+        try:
+            fetch_core_hub(f"/pipelines/{pipeline_id}", method="DELETE", token=token)
+            cleaned_up = True
+        except Exception as cleanup_error:  # pylint: disable=broad-except
+            logger.exception("Cleanup of half-created pipeline %s failed: %s", pipeline_id, cleanup_error)
+    left = "deleted (cleanup on failure)" if cleaned_up else "LEFT IN PLACE: delete it or reuse it"
+    reason = _short_import_failure_reason(error)
+    message = (f"Import of pipeline {pipeline_name!r} failed after it was created: {reason}. Half-created "
+               f"pipeline id {pipeline_id} ({left}); agents bound: {', '.join(agents) or 'none'}")
+    if not cleaned_up:
+        message += (f". Next: fix the cause, then resume with GS_IMPORT_RESUME_PIPELINE_ID={pipeline_id} "
+                    "- or delete the pipeline")
+    logger.error(message)
+    logger.debug("Full CoreHub error for pipeline %s: %s", pipeline_id, error)
+    return PartialPipelineImportError(message, pipeline_id, pipeline_name, list(agents), cleaned_up, str(error))
+
+
+def continue_on_credentials_failure_requested() -> bool:
+    """``GS_IMPORT_CONTINUE_ON_CREDENTIALS_FAILURE``: go on with an import when CoreHub refuses an agent's credentials."""
+    return os.getenv("GS_IMPORT_CONTINUE_ON_CREDENTIALS_FAILURE", "").strip().lower() in ("1", "true", "yes", "y", "t")
+
+
+def credentials_failure_is_recoverable(error: BaseException) -> bool:
+    """True for a credentials PUT that failed on a connection problem or a 5xx (CoreHub could not reach the
+    agent's database: VERIFIED on Core Hub 2.3.1, 500 "Failed to initialize pool ... Connection refused");
+    False for a 4xx (wrong payload, auth), which still stops the import."""
+    seen = set()
+    while error is not None and id(error) not in seen:
+        seen.add(id(error))
+        if isinstance(error, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
+            return True
+        if isinstance(error, requests.exceptions.HTTPError):
+            status = getattr(getattr(error, "response", None), "status_code", None)
+            return status is not None and status >= 500
+        error = error.__cause__ or error.__context__
+    return False
+
+
+def record_credentials_pending(pending: list, pipeline_id: Any, agent_id: Any, agent_type: Any, agent_tag: Any,
+                               error: BaseException) -> None:
+    """Log and record an agent whose credentials CoreHub refused: they must be entered again in Core Hub."""
+    entry = {"pipelineId": str(pipeline_id), "agentId": str(agent_id), "agentType": str(agent_type or "").upper(),
+             "agentTag": agent_tag, "error": str(error), "reason": short_connection_reason(str(error))}
+    pending.append(entry)
+    logger.warning("Credentials of %s agent %s (id %s) on pipeline %s NOT saved: %s. Continuing "
+                   "(GS_IMPORT_CONTINUE_ON_CREDENTIALS_FAILURE); re-enter them in Core Hub.",
+                   entry["agentType"], agent_tag, agent_id, pipeline_id, entry["reason"])
+    logger.debug("Credentials of agent %s refused, full Core Hub error: %s", agent_id, error)
+
+
+_HOST_PORT = (re.compile(r"host\s+([\w.\-]+),?\s+port\s+(\d+)", re.I),
+              re.compile(r"\b((?:\d{1,3}\.){3}\d{1,3}|[a-z][\w\-]*(?:\.[\w\-]+)+):(\d{2,5})\b", re.I))
+_UNKNOWN_HOST = "unknown host"
+_CAUSES = (("timed out", "timed out"), ("connection refused", "Connection refused"),
+           ("unknownhost", _UNKNOWN_HOST), (_UNKNOWN_HOST, _UNKNOWN_HOST), ("no route to host", "no route to host"),
+           ("login failed", "login failed"), ("password", "wrong user or password"),
+           ("authentication", "authentication failed"), ("does not exist", "database does not exist"))
+_BOILERPLATE = re.compile(r"^(failed to initialize pool:\s*|.*?exception:\s*)", re.I)
+
+
+def _exception_message(error_text: str) -> str:
+    """The ``exceptionMessage`` of the Core Hub JSON response inside an error text, else the text itself."""
+    start = error_text.find("{")
+    while start != -1:
+        try:
+            body, _ = json.JSONDecoder().raw_decode(error_text[start:])
+            if isinstance(body, dict) and (body.get("exceptionMessage") or body.get("message")):
+                return str(body.get("exceptionMessage") or body.get("message"))
+        except ValueError:
+            pass
+        start = error_text.find("{", start + 1)
+    return error_text
+
+
+def short_connection_reason(error_text: str) -> str:
+    """A short human reason for a refused agent connection: "can't connect to HOST:PORT (timed out)".
+
+    Reads ``exceptionMessage`` of the Core Hub response, drops the pool boilerplate, keeps host:port when the
+    message names it; the full text stays in the debug log."""
+    message = _BOILERPLATE.sub("", _exception_message(error_text or "").strip(), count=1).strip()
+    lowered = message.lower()
+    where = "database"
+    for pattern in _HOST_PORT:
+        match = pattern.search(message)
+        if match:
+            where = f"{match.group(1)}:{match.group(2)}"
+            break
+    for needle, cause in _CAUSES:
+        if needle in lowered:
+            return f"can't connect to {where} ({cause})"
+    first = re.split(r"(?<=[.!?])\s", message, maxsplit=1)[0].strip() or "unknown error"
+    return f"can't connect to {where} ({first[:120].rstrip('.')})"
+
+
+def _put_agent_credentials_or_record(
+    token, pipeline_id, agent_id, agent_type, agent_tag, host_credentials, custom_host_credentials,
+    credentials_pending, continue_on_credentials_failure,
+):
+    """PUT the agent's credentials; a recoverable failure is recorded in ``credentials_pending`` when asked to."""
+    try:
+        fetch_core_hub(
+            f"/pipelines/{pipeline_id}/agents/{agent_id}/config/credentials",
+            method="PUT",
+            token=token,
+            body={
+                "hostCredentials": host_credentials,
+                "customHostCredentials": custom_host_credentials,
+            },
+        )
+    except Exception as error:  # pylint: disable=broad-except
+        if not (continue_on_credentials_failure and credentials_failure_is_recoverable(error)):
+            raise
+        record_credentials_pending(credentials_pending, pipeline_id, agent_id, agent_type, agent_tag,
+                                   error)
+
+
+def _put_agent_specific_config(token, pipeline_id, agent_id, specific_conf, credentials_pending):
+    """PUT the agent's specific configuration. Sent even when the credentials are pending: whether
+    CoreHub takes it without working credentials is not known, so a refusal is recorded, not fatal."""
+    try:
+        fetch_core_hub(
+            f"/pipelines/{pipeline_id}/agents/{agent_id}/config/specific",
+            method="PUT",
+            token=token,
+            body={"configuration": specific_conf},
+        )
+    except Exception as error:  # pylint: disable=broad-except
+        pending = [p for p in credentials_pending if p["agentId"] == str(agent_id)]
+        if not pending:
+            raise
+        pending[0]["specificConfigurationError"] = str(error)
+        logger.warning("Specific configuration of agent %s not saved (credentials pending)", agent_id)
+        logger.debug("Specific configuration of agent %s refused, full Core Hub error: %s",
+                     agent_id, error)
+
+
+def _bind_config_agent(
+    token, pipeline_id, conf_agent, bound_agents, credentials_pending, continue_on_credentials_failure,
+):
+    """Bind one configured agent to the pipeline and apply its settings (body of import_pipeline_config_only's loop)."""
+    agent_type = conf_agent.get("agentType") or ""
+    agent_tag = conf_agent.get("agentTag")
+    agent_user_tag = conf_agent.get("agentUserTag") or agent_tag
+    agent_internal_name = conf_agent.get("agentInternalName") or agent_tag
+    if not agent_type or not agent_tag:
+        raise RuntimeError("Each agent must declare 'agentType' and 'agentTag'")
+
+    agent_id = _add_agent_to_pipeline_via_corehub(
+        token=token,
+        pipeline_id=pipeline_id,
+        agent_type=str(agent_type).upper(),
+        agent_user_tag=str(agent_user_tag),
+        agent_internal_name=str(agent_internal_name),
+    )
+
+    # Attach agent to pipeline
+    fetch_core_hub(
+        f"/pipelines/{pipeline_id}/agents/{agent_id}",
+        method="PUT",
+        token=token,
+        params={"agentType": agent_type.upper()}  # agentType is a query parameter, not body
+    )
+    bound_agents.append(f"{agent_type.upper()} {agent_tag} (id={agent_id})")
+
+    # Extract certificate info before processing credentials
+    host_credentials = dict(conf_agent.get("hostCredentials") or {})
+    custom_host_credentials = conf_agent.get("customHostCredentials") or {}
+
+    # Extract certificate path and type (will be handled separately)
+    certificate_path = host_credentials.pop("certificatePath", None)
+    certificate_type = host_credentials.pop("certificateType", None)
+
+    # Store certificate info and credentials for later processing
+    # IMPORTANT: If certificate is present, credentials MUST be sent AFTER certificate upload
+    # Order: 1. Add agent, 2. Upload certificate, 3. Send credentials
+    if certificate_path and certificate_type:
+        logger.info(
+            f"Agent {agent_id} has certificate - deferring credential upload until after certificate"
+        )
+        conf_agent["_certificate_path"] = certificate_path
+        conf_agent["_certificate_type"] = certificate_type
+        conf_agent["_agent_id"] = agent_id
+        # Store credentials to send later (after certificate upload)
+        conf_agent["_host_credentials"] = host_credentials
+        conf_agent["_custom_host_credentials"] = custom_host_credentials
+    else:
+        # No certificate - send credentials immediately
+        _put_agent_credentials_or_record(
+            token, pipeline_id, agent_id, agent_type, agent_tag, host_credentials, custom_host_credentials,
+            credentials_pending, continue_on_credentials_failure,
+        )
+
+    # Apply specific configuration if present. Sent even when the credentials are pending: whether
+    # CoreHub takes it without working credentials is not known, so a refusal is recorded, not fatal.
+    specific_conf = conf_agent.get("specificConfiguration") or {}
+    if specific_conf:
+        _put_agent_specific_config(token, pipeline_id, agent_id, specific_conf, credentials_pending)
+
+
+def _existing_pipeline_names(token):
+    """Names of the pipelines already on Core Hub."""
+    existing = fetch_core_hub(PIPELINES_PATH, token=token)
+    existing_names = set()
+    if isinstance(existing, list):
+        for item in existing:
+            if isinstance(item, dict):
+                name = item.get("name")
+                if isinstance(name, str) and name:
+                    existing_names.add(name)
+
+    return existing_names
+
+
+def _choose_import_pipeline_name(base_name, existing_names, on_existing_name):
+    """``base_name``, or "<name> (restored[ N])" when taken; raises when ``on_existing_name`` is "fail"."""
+    pipeline_name = base_name
+    if on_existing_name not in ("suffix", "fail"):
+        raise ValueError(f"on_existing_name must be 'suffix' or 'fail', got {on_existing_name!r}")
+    if pipeline_name in existing_names and on_existing_name == "fail":
+        raise RuntimeError(f"A pipeline named {base_name!r} already exists: nothing created "
+                           f"(on-existing-pipeline=fail)")
+    if pipeline_name in existing_names:
+        # Apply '(restored)', '(restored 2)', ... suffixes until unique
+        idx = 1
+        while True:
+            suffix = " (restored)" if idx == 1 else f" (restored {idx})"
+            candidate = f"{base_name}{suffix}"
+            if candidate not in existing_names:
+                pipeline_name = candidate
+                break
+            idx += 1
+
+    return pipeline_name
+
+
+def _create_config_only_pipeline(token, pipeline_name):
+    """POST the new pipeline and return its id."""
+    pipeline_description = f"Pipeline {pipeline_name}"
+
+    # Create the pipeline
+    body = {
+        "name": pipeline_name,
+        "description": pipeline_description,
+        "configurationCompleted": False,
+    }
+    response = fetch_core_hub(PIPELINES_PATH, method="POST", token=token, body=body)
+    if not isinstance(response, dict):
+        raise RuntimeError(f"Unexpected response while creating pipeline: {response}")
+
+    raw_id = response.get("pipelineId") or response.get("id") or response.get("pipeline_id")
+    if not raw_id:
+        raise RuntimeError("Pipeline creation succeeded but no ID was returned")
+    pipeline_id = str(raw_id)
+    return pipeline_id
+
+
 def import_pipeline_config_only(
     *,
     token: str,
@@ -3758,8 +4045,22 @@ def import_pipeline_config_only(
     use_ssl: Optional[bool],
     skip_verify: Optional[bool],
     config: Dict[str, Any],
+    on_existing_name: str = "suffix",
+    cleanup_on_failure: bool = False,
+    continue_on_credentials_failure: bool = False,
 ) -> Dict[str, Any]:
     """Create a pipeline and bind agents from a single config object.
+
+    ``continue_on_credentials_failure`` (env GS_IMPORT_CONTINUE_ON_CREDENTIALS_FAILURE): a credentials PUT that
+    fails on a connection error or a 5xx no longer stops the import: the agent is listed under
+    ``credentialsPending`` of the result and the other agents are still bound. Default: as before.
+
+    ``on_existing_name``: when a pipeline already has the name, ``"suffix"`` (default, as before) creates
+    "<name> (restored)", "<name> (restored 2)", ...; ``"fail"`` raises before anything is created (env
+    GS_IMPORT_ON_EXISTING_PIPELINE). When a step fails after the pipeline was created, the error names the
+    half-created pipeline id and the agents bound so far (:class:`PartialPipelineImportError`);
+    ``cleanup_on_failure`` (env GS_IMPORT_CLEANUP_ON_FAILURE) then also DELETEs that pipeline (the
+    ``/pipelines/{id}`` route mcp_server already uses) - UNVERIFIED against a live Core Hub.
 
     The config is expected to look like example-config.json (or its YAML
     equivalent):
@@ -3793,117 +4094,31 @@ def import_pipeline_config_only(
     base_name = config.get("pipelineName") or "Imported pipeline"
 
     # Fetch existing pipelines to avoid name collisions
-    existing = fetch_core_hub("/pipelines", token=token)
-    existing_names = set()
-    if isinstance(existing, list):
-        for item in existing:
-            if isinstance(item, dict):
-                name = item.get("name")
-                if isinstance(name, str) and name:
-                    existing_names.add(name)
+    existing_names = _existing_pipeline_names(token)
+    pipeline_name = _choose_import_pipeline_name(base_name, existing_names, on_existing_name)
+    pipeline_id = _create_config_only_pipeline(token, pipeline_name)
 
-    pipeline_name = base_name
-    if pipeline_name in existing_names:
-        # Apply '(restored)', '(restored 2)', ... suffixes until unique
-        idx = 1
-        while True:
-            suffix = " (restored)" if idx == 1 else f" (restored {idx})"
-            candidate = f"{base_name}{suffix}"
-            if candidate not in existing_names:
-                pipeline_name = candidate
-                break
-            idx += 1
+    bound_agents: List[str] = []
+    credentials_pending: List[Dict[str, Any]] = []
+    try:
+        # Bind each configured agent to the pipeline and apply its settings
+        for conf_agent in agents_cfg:
+            if not isinstance(conf_agent, dict):
+                continue
 
-    pipeline_description = f"Pipeline {pipeline_name}"
-
-    # Create the pipeline
-    body = {
-        "name": pipeline_name,
-        "description": pipeline_description,
-        "configurationCompleted": False,
-    }
-    response = fetch_core_hub("/pipelines", method="POST", token=token, body=body)
-    if not isinstance(response, dict):
-        raise RuntimeError(f"Unexpected response while creating pipeline: {response}")
-
-    raw_id = response.get("pipelineId") or response.get("id") or response.get("pipeline_id")
-    if not raw_id:
-        raise RuntimeError("Pipeline creation succeeded but no ID was returned")
-    pipeline_id = str(raw_id)
-
-    # Bind each configured agent to the pipeline and apply its settings
-    for conf_agent in agents_cfg:
-        if not isinstance(conf_agent, dict):
-            continue
-
-        agent_type = conf_agent.get("agentType") or ""
-        agent_tag = conf_agent.get("agentTag")
-        agent_user_tag = conf_agent.get("agentUserTag") or agent_tag
-        agent_internal_name = conf_agent.get("agentInternalName") or agent_tag
-        if not agent_type or not agent_tag:
-            raise RuntimeError("Each agent must declare 'agentType' and 'agentTag'")
-
-        agent_id = _add_agent_to_pipeline_via_corehub(
-            token=token,
-            pipeline_id=pipeline_id,
-            agent_type=str(agent_type).upper(),
-            agent_user_tag=str(agent_user_tag),
-            agent_internal_name=str(agent_internal_name),
-        )
-
-        # Attach agent to pipeline
-        fetch_core_hub(
-            f"/pipelines/{pipeline_id}/agents/{agent_id}",
-            method="PUT",
-            token=token,
-            params={"agentType": agent_type.upper()}  # agentType is a query parameter, not body
-        )
-
-        # Extract certificate info before processing credentials
-        host_credentials = dict(conf_agent.get("hostCredentials") or {})
-        custom_host_credentials = conf_agent.get("customHostCredentials") or {}
-        
-        # Extract certificate path and type (will be handled separately)
-        certificate_path = host_credentials.pop("certificatePath", None)
-        certificate_type = host_credentials.pop("certificateType", None)
-        
-        # Store certificate info and credentials for later processing
-        # IMPORTANT: If certificate is present, credentials MUST be sent AFTER certificate upload
-        # Order: 1. Add agent, 2. Upload certificate, 3. Send credentials
-        if certificate_path and certificate_type:
-            logger.info(
-                f"Agent {agent_id} has certificate - deferring credential upload until after certificate"
-            )
-            conf_agent["_certificate_path"] = certificate_path
-            conf_agent["_certificate_type"] = certificate_type
-            conf_agent["_agent_id"] = agent_id
-            # Store credentials to send later (after certificate upload)
-            conf_agent["_host_credentials"] = host_credentials
-            conf_agent["_custom_host_credentials"] = custom_host_credentials
-        else:
-            # No certificate - send credentials immediately
-            fetch_core_hub(
-                f"/pipelines/{pipeline_id}/agents/{agent_id}/config/credentials",
-                method="PUT",
-                token=token,
-                body={
-                    "hostCredentials": host_credentials,
-                    "customHostCredentials": custom_host_credentials,
-                },
+            _bind_config_agent(
+                token, pipeline_id, conf_agent, bound_agents, credentials_pending,
+                continue_on_credentials_failure,
             )
 
-        # Apply specific configuration if present
-        specific_conf = conf_agent.get("specificConfiguration") or {}
-        if specific_conf:
-            fetch_core_hub(
-                f"/pipelines/{pipeline_id}/agents/{agent_id}/config/specific",
-                method="PUT",
-                token=token,
-                body={"configuration": specific_conf},
-            )
+    except Exception as exc:
+        raise _partial_import_error(token, pipeline_id, pipeline_name, bound_agents, exc, cleanup_on_failure) from exc
 
     logger.info("Imported config-only pipeline %s (%s)", pipeline_name, pipeline_id)
-    return {"pipelineId": pipeline_id, "pipelineName": pipeline_name}
+    result = {"pipelineId": pipeline_id, "pipelineName": pipeline_name}
+    if credentials_pending:
+        result["credentialsPending"] = credentials_pending
+    return result
 
 
 def duplicate_pipeline(
@@ -4485,7 +4700,7 @@ def _deploy_agents_via_conductor(
 
 def validate_token(token: str) -> bool:
     try:
-        response = fetch_core_hub("/pipelines", token=token)
+        response = fetch_core_hub(PIPELINES_PATH, token=token)
         return isinstance(response, list)
     except Exception:  # pylint: disable=broad-except
         logger.exception("Token validation failed")
