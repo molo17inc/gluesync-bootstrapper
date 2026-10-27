@@ -51,7 +51,22 @@ class SourceKeyTests(unittest.TestCase):
     def test_b1_yaml_keys_that_differ_from_the_primary_key_are_refused(self):
         relations = [rel(["ID"], ["id"]), rel(["CODE"], ["code"])]
         with self.assertRaisesRegex(EntityMappingError, r"R12\.1.*src\.T.*CODE.*ID"):
-            keys(relations, ph_s={"ID"}, yaml_keys=["ID", "CODE"])
+            keys(relations, ph_s={"ID"}, yaml_keys=["CODE"])
+
+    def test_r12_1_keys_containing_the_primary_key_are_a_warning(self):
+        relations = [rel(["ID"], ["id"]), rel(["CODE"], ["code"])]
+        warnings = []
+        source_keys, _ = derive_keys(
+            relations=relations, source_names=["ID", "CODE"], target_names=["id", "code"], physical_source={"ID"},
+            physical_target=set(), yaml_keys=["ID", "CODE"], yaml_target_keys=[], produced_targets=set(),
+            label="src.T", warnings=warnings)
+        self.assertEqual(sorted(source_keys), ["CODE", "ID"])
+        self.assertTrue(any("R12.1" in w and "Core Hub decides" in w for w in warnings), warnings)
+        with self.assertRaisesRegex(EntityMappingError, r"R12\.1"):
+            derive_keys(
+                relations=relations, source_names=["ID", "CODE"], target_names=["id", "code"],
+                physical_source={"ID"}, physical_target=set(), yaml_keys=["ID", "CODE"], yaml_target_keys=[],
+                produced_targets=set(), label="src.T", strict=True, warnings=[])
 
     def test_k2b_source_without_key_takes_the_sources_of_the_target_key(self):
         # Worked case 3 of R12: the source has no key, the target is keyed on order_id.

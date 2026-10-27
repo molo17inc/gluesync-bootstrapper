@@ -128,9 +128,30 @@ class ExportImportTests(unittest.TestCase):
         self.assertNotIsInstance(raised.exception, ai_settings.AiSettingsError)
 
     def test_an_answer_that_is_not_a_bundle_is_an_error(self):
-        with mock.patch.object(ai_settings, "fetch_core_hub", return_value="<html>"):
+        with mock.patch.object(ai_settings, "fetch_core_hub", return_value="not a bundle"):
             with self.assertRaises(ai_settings.AiSettingsError):
                 ai_settings.export_ai_settings("tok")
+
+    def test_the_ui_page_of_an_older_core_hub_is_reported_as_unsupported(self):
+        # Core Hub 2.2 has no AI settings route: its web server answers 200 with the UI page
+        page = '<!doctype html>\n<html lang="en"><head><title>Gluesync</title></head></html>'
+        bundle = _bundle()
+        for answer in (page, "\n  <HTML><body></body></HTML>", page.encode()):
+            with mock.patch.object(ai_settings, "fetch_core_hub", return_value=answer):
+                with self.assertRaises(ai_settings.AiSettingsUnsupported) as raised:
+                    ai_settings.import_ai_settings("tok", bundle)
+            self.assertIn("2.3.0.1", str(raised.exception))
+            self.assertNotIn("<", str(raised.exception))
+        with mock.patch.object(ai_settings, "fetch_core_hub", return_value=page):
+            with self.assertRaises(ai_settings.AiSettingsUnsupported):
+                ai_settings.export_ai_settings("tok")
+
+    def test_restore_skips_the_ui_page_of_an_older_core_hub(self):
+        from automator_app import corehub
+        page = "<!doctype html><html><head></head></html>"
+        with mock.patch.object(ai_settings, "fetch_core_hub", return_value=page):
+            result = corehub.restore_ai_settings(token="tok", bundle=_bundle())
+        self.assertEqual("skipped", result["status"])
 
     def test_import_sends_the_bundle_and_dry_run(self):
         result = {"dryRun": True, "sections": [], "warnings": []}
