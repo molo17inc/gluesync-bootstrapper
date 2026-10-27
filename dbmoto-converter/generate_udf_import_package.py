@@ -8,7 +8,7 @@
 #     containing only the entities that require a field-mapping-to-function,
 #     each wired to a dedicated Java UDF (unlockedSchema + customProperties.target.udf)
 #   - one generated Java UDF per entity, modeled on the master template
-#     ("FHCUSMST UDF.txt") but with the put() calls wired to the decoded
+#     ("SAMPLE UDF.txt") but with the put() calls wired to the decoded
 #     expressions discovered in DBMMFieldMappings
 #   - an agents-config.yaml skeleton (credentials must be filled in before import)
 #   - a ZIP archive laid out exactly like an Automator "Export all" backup so it
