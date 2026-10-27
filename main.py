@@ -289,7 +289,9 @@ CONFIG_BASE_DIR = Path(file_conf_path).expanduser().resolve().parent
 # Retrieve CoreHub URL from SDK if not specified
 core_hub_url = os.getenv('CORE_HUB_URL')
 
-# use_sdk variable is now defined earlier in the code
+# USE_SDK is read here, before its first use below (it used to be read only further down, so a run
+# without CORE_HUB_URL failed with NameError instead of discovering the Core Hub through the SDK).
+use_sdk = os.getenv('USE_SDK', 'False').lower() in ['true', '1', 't', 'y', 'yes']
 
 if not core_hub_url:
     if use_sdk:
@@ -706,8 +708,7 @@ def _complete_default_login(token, change_required):
     return token
 
 
-# Retrieve use_sdk from environment early to avoid unnecessary imports/checks
-use_sdk = os.getenv('USE_SDK', 'False').lower() in ['true', '1', 't', 'y', 'yes']
+# use_sdk is read near the top of the module (see CORE_HUB_URL discovery)
 
 # Only check license file and initialize SDK if USE_SDK is true
 if use_sdk:
@@ -1344,6 +1345,8 @@ def _run_entity_creation(schema_label, source_schema, target_schema, pipeline_id
         else:
             logger.warning(f"TABLE_LIST.yaml not found at {TABLE_LIST_YAML}. Proceeding without it.")
 
+        # The GS_IMPORT_* variables (GS_IMPORT_REMAP, GS_IMPORT_ON_EXISTING, GS_IMPORT_ALLOW_OFFLINE, ...) are
+        # inherited by the subprocess, whose cli() reads them (import_options.ImportOptions.from_env).
         subprocess.run(cmd, check=True)
         log_success(
             logger,
@@ -1447,6 +1450,11 @@ def _complete_pipeline(token, pipeline_id, pipeline_name):
 
 def main():
     args = _parse_args()
+    if os.getenv('GS_IMPORT_DRY_RUN', '').strip().lower() in ('1', 'true', 'yes', 'y', 't'):
+        # main.py creates a pipeline and its agents before any entity: there is no write-free run of it.
+        raise BootstrapperError(
+            "GS_IMPORT_DRY_RUN is not supported by main.py (it creates the pipeline first). Dry-run the entity "
+            "stage against an existing pipeline instead: python create_all_entities.py --pipeline <id> ... --dry-run")
     _log_startup_banner()
 
     schema_pairs, effective_source_type, effective_target_type = _extract_yaml_schema_hints()
