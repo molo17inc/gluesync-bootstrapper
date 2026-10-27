@@ -66,6 +66,16 @@ class UdfFunctionType(str, Enum):
     # javascript = 'javascript'
     # ruby = 'ruby'
 
+    @classmethod
+    def _missing_(cls, value):
+        """Accept any case ("java", "JAVA", "Java"): the canonical value ("Java") is what CoreHub receives."""
+        if isinstance(value, str):
+            wanted = value.strip().lower()
+            for member in cls:
+                if member.value.lower() == wanted:
+                    return member
+        return None
+
     def extension(self):
         if self == UdfFunctionType.java:
             return ".java"
@@ -178,34 +188,29 @@ def get_automator_workspace_root() -> Path:
 def find_udf_definition_in_path(udf_name: str, udf_type: UdfFunctionType) -> PosixPath:
     """Search for a UDF source file by name + type extension.
 
-    Search order:
-    1. ``UDF_PATH`` (the explicitly configured or fallback path).
-    2. The app-owned Automator workspace root and all its session
-       sub-directories — covers uploads/imports performed through the
-       Automator UI, whose YAML + UDF files share a single session folder
-       under %LOCALAPPDATA%\\Gluesync\\Automator\\work (or the platform
-       equivalent), instead of the volatile OS temp directory.
+    1. ``UDF_PATH`` (the session/pipeline folder) when set: only there.
+    2. Otherwise the app-owned Automator workspace root (all its session
+       sub-directories), refusing a name found in more than one of them.
     """
     filename = f"{udf_name}{udf_type.extension()}"
 
-    search_roots: list[Path] = []
+    # Only the folder of the current session/pipeline when one is set: searching the whole Automator workspace
+    # as well could compile a same-named UDF left over by another (older) import.
     if UDF_PATH:
-        search_roots.append(Path(UDF_PATH))
+        root = Path(UDF_PATH)
+        return next(iter(sorted(root.rglob(filename))), None) if root.is_dir() else None
 
-    # Always include the app-owned workspace root so UDFs extracted by the
-    # Automator UI are found even if UDF_PATH was not (or could not be) set.
+    # No session folder: the app-owned workspace (uploads through the Automator UI), but only an unambiguous match.
     workspace_root = get_automator_workspace_root()
-    if workspace_root.is_dir() and workspace_root not in search_roots:
-        search_roots.append(workspace_root)
+    if not workspace_root.is_dir():
+        return None
+    matches = sorted(workspace_root.rglob(filename))
+    if len(matches) > 1:
+        raise FileNotFoundError(
+            f"UDF '{udf_name}' ({filename}) found {len(matches)} times under {workspace_root} "
+            f"({', '.join(str(m.parent) for m in matches)}): set UDF_PATH to the folder of this import")
+    return matches[0] if matches else None
 
-    for root in search_roots:
-        if not root.is_dir():
-            continue
-        found = next(iter(root.rglob(filename)), None)
-        if found:
-            return found
-
-    return None
 
 def read_file(filepath):
     try:
@@ -355,10 +360,8 @@ def check_and_compile_udf_function(table_name: str, udf_definition: dict, pipeli
             raise
     else:
         expected_filename = f"{udf_name}{udf_type.extension()}"
-        search_dirs = [UDF_PATH] if UDF_PATH else []
         workspace_dir = str(get_automator_workspace_root())
-        if workspace_dir not in search_dirs:
-            search_dirs.append(workspace_dir)
+        search_dirs = [UDF_PATH] if UDF_PATH else [workspace_dir]
         search_dirs_str = ", ".join(search_dirs) if search_dirs else "(none configured)"
         error_msg = (
             f"Missing UDF file for '{udf_name}' (table: {table_name}, type: {udf_type}). "
