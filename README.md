@@ -1203,7 +1203,7 @@ Exit code: `0` every pipeline fully imported, `2` partial (a pipeline was create
 ```
 PARTIAL: Synth1MSSQL (e61466b6) - 0 of 58 entities created (58 not attempted: agents not reachable).
 Source ibm-iseries: can't connect to database (Connection refused) - specific configuration not saved.
-Target mssql-ct: can't connect to 10.17.3.164:1433 (timed out) - specific configuration not saved, target tables not created.
+Target mssql-ct: can't connect to 192.0.2.10:1433 (timed out) - specific configuration not saved, target tables not created.
 Next: fix connections (overrides file or Core Hub UI), then resume with GS_IMPORT_RESUME_PIPELINE_ID=e61466b6 - or delete the pipeline.
 ```
 

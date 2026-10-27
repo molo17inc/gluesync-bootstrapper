@@ -3168,7 +3168,7 @@ CREDENTIALS_PENDING_HELP = (
 
 
 def _agent_report_line(pending: Dict[str, Any]) -> str:
-    """``Target mssql-ct: can't connect to 10.17.3.164:1433 (timed out).`` with what it held back."""
+    """``Target mssql-ct: can't connect to 192.0.2.10:1433 (timed out).`` with what it held back."""
     kind = (pending.get("agentType") or "agent").capitalize()
     reason = pending.get("reason") or corehub.short_connection_reason(pending.get("error") or "")
     held = ["specific configuration not saved"] if pending.get("specificConfigurationError") else []

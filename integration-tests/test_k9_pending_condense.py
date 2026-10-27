@@ -85,7 +85,7 @@ class NotAttemptedTests(unittest.TestCase):
                'requester cannot establish the connection. (Connection refused)", "message": "Something went wrong"}')
         tgt = ('CoreHub request PUT /pipelines/e61466b6/agents/b1/config/credentials failed: 500 | Response: '
                '{"notificationId": 111, "exceptionMessage": "Failed to initialize pool: The TCP/IP connection to the '
-               'host 10.17.3.164, port 1433 has failed. Error: \\"Connect timed out. Verify the connection.\\"", '
+               'host 192.0.2.10, port 1433 has failed. Error: \\"Connect timed out. Verify the connection.\\"", '
                '"message": "x"}')
         for agent_id, kind, tag, err in (("a1", "SOURCE", "ibm-iseries", src), ("b1", "TARGET", "mssql-ct", tgt)):
             app.corehub.record_credentials_pending(job.credentials_pending, "e61466b6", agent_id, kind, tag,
@@ -102,7 +102,7 @@ class NotAttemptedTests(unittest.TestCase):
         self.assertEqual(app._report_lines(job), [
             "PARTIAL: Synth1MSSQL (e61466b6) - 0 of 58 entities created (58 not attempted: agents not reachable).",
             "Source ibm-iseries: can't connect to database (Connection refused) - specific configuration not saved.",
-            "Target mssql-ct: can't connect to 10.17.3.164:1433 (timed out) - specific configuration not saved, "
+            "Target mssql-ct: can't connect to 192.0.2.10:1433 (timed out) - specific configuration not saved, "
             "target tables not created.",
             app.CREDENTIALS_PENDING_HELP,
             "Next: fix connections (overrides file or Core Hub UI), then resume with "
