@@ -32,7 +32,7 @@ def single(*tables, **custom):
     return "\n".join(lines) + "\n"
 
 
-REFUSED_KEYS = ["name: customers", "keys: [ID, NAME]"]
+REFUSED_KEYS = ["name: customers", "keys: [NAME]"]
 NOPK_KEYS = ["keys: [CODE]"]
 
 

@@ -253,7 +253,7 @@ class RefusedBeforeTheRequestTests(unittest.TestCase):
 
     def test_yaml_keys_that_are_not_the_primary_key(self):
         yaml_text = table("""        name: customers
-        keys: [ID, NAME]
+        keys: [NAME]
         columns:
           - ID: id
           - NAME: name""", "CUSTOMERS")

@@ -353,7 +353,7 @@ class ChainRefusalsTests(unittest.TestCase):
         self.assertRegex(result["errors"][0], pattern)
 
     def test_yaml_keys_that_are_not_the_source_primary_key(self):
-        self.assert_refused("CUSTOMERS", "name: customers\nkeys: [ID, NAME]\ncolumns:\n  - ID: id\n  - NAME: name",
+        self.assert_refused("CUSTOMERS", "name: customers\nkeys: [NAME]\ncolumns:\n  - ID: id\n  - NAME: name",
                             r"R12\.1")
 
     def test_a_target_primary_key_nothing_feeds(self):
