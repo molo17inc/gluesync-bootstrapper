@@ -4190,9 +4190,7 @@ def _snapshot_commands_from_target_props(target_props):
     out = {}
     for key in ("preSnapshotCommand", "postSnapshotCommand"):
         value = (target_props or {}).get(key)
-        if isinstance(value, str) and value.strip():
-            out[key] = value
-        elif isinstance(value, dict) and value:
+        if (isinstance(value, str) and value.strip()) or (isinstance(value, dict) and value):
             out[key] = value
     return out
 
