@@ -97,8 +97,9 @@ class TestPyInstallerCompatibility(unittest.TestCase):
     def _find_python_files(self) -> List[Path]:
         """Find all Python files in the project (excluding tests and build dirs)."""
         exclude_dirs = {
-            '__pycache__', 'build', 'dist', '.git', '.venv', 'venv',
-            'gluesync-client-sdk', 'dbmoto-converter'
+            '__pycache__', 'build', 'dist', '.git', '.venv', '.venv-e2e', 'venv',
+            'site-packages', 'gluesync-client-sdk', 'dbmoto-converter',
+            'parity-overlay', 'parity-main-tests', 'parity-harness',
         }
         
         python_files = []

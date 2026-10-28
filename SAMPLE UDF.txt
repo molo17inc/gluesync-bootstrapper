@@ -1,0 +1,61 @@
+import java.util.Map;
+import kotlin.Pair;
+import com.molo17.gluesync.commons.model.api.MappingFunctionOperation;
+import org.slf4j.Logger;
+import java.lang.String;
+import java.awt.datatransfer.UnsupportedFlavorException;
+import java.math.BigDecimal;
+import java.time.LocalTime;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+
+/* 
+ * That's a Gluesync UDF
+ * Gluesync UDFs are custom functions that are used to perform custom operations on the data being processed by Gluesync.
+ * 
+ * The function is invoked by Gluesync whatever the operation is (INSERT, UPDATE, DELETE), as well as while performing the Snapshot task.
+ * The function is invoked with the following parameters:
+ * - newValues: the new values of the row
+ * - oldValues: the old values of the row (for UPDATE and DELETE operations)
+ * - operation: the operation performed on the row (INSERT, UPDATE, DELETE), operation is an enum that can be Insert, Update, Delete
+ * - isSnapshot: true when the row comes from the Snapshot task, false when it comes from CDC
+ * 
+ * The function should return a Pair of the following values:
+ * - the operation performed on the row (INSERT, UPDATE, DELETE): this is the operation that will be performed on the target table, it can be different from the operation performed on the source table
+ * - the new values of the row: this is the new values of the row that will be inserted or updated on the target table
+ *
+ * You can also hook into the logger object to log messages, such as .debug(), .info(), or .error(). 
+ */
+
+public class UDF_00000000000000000000000000000001 {
+
+    public Pair<MappingFunctionOperation, Map<String, Object>> onChange(Map<String, Object> newValues, Map<String, Object> oldValues, MappingFunctionOperation operation, boolean isSnapshot, Logger logger) {
+        // Synthetic sample. Source columns: ID, SAMPLE_DATE, SAMPLE_TIME, NOTE
+        // Target columns: ID, SAMPLE_DATETIME, NOTE
+        Map<String, Object> modifiedValues = newValues;
+        if (operation == MappingFunctionOperation.Delete) {
+            modifiedValues.put("SAMPLE_DATETIME", null);
+            return new Pair<>(operation, modifiedValues);
+        }
+        try {
+            BigDecimal date = new BigDecimal(newValues.get("SAMPLE_DATE").toString());
+            BigDecimal time = new BigDecimal(newValues.get("SAMPLE_TIME").toString());
+            modifiedValues.put("SAMPLE_DATETIME", makeDateTime(makeDate(date), time));
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+        return new Pair<>(operation, modifiedValues);
+    }
+
+    /* YYYYMMDD as a number -> LocalDate. */
+    private static LocalDate makeDate(BigDecimal value) {
+        int v = value.intValue();
+        return LocalDate.of(v / 10000, (v / 100) % 100, v % 100);
+    }
+
+    /* A date plus an HHMMSS number -> LocalDateTime. */
+    private static LocalDateTime makeDateTime(LocalDate date, BigDecimal value) {
+        int v = value.intValue();
+        return date.atTime(LocalTime.of(v / 10000, (v / 100) % 100, v % 100));
+    }
+}

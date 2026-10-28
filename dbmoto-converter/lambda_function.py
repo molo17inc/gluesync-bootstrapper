@@ -336,6 +336,37 @@ def download_from_ftp(remote_filename, local_path):
         raise Exception(error_msg)
 
 
+def _write_job_inputs(temp_dir, xml_content, template_content):
+    """Write the job's XML (and template, if any) under ``temp_dir``; returns (xml_path, template_path or None)."""
+    xml_path = os.path.join(temp_dir, "input.xml")
+    with open(xml_path, "wb") as f:
+        f.write(xml_content)
+
+    template_path = None
+    if template_content:
+        template_path = os.path.join(temp_dir, "template.yaml")
+        with open(template_path, "wb") as f:
+            f.write(template_content)
+    return xml_path, template_path
+
+
+def _set_job_environment(xml_path, output_dir, template_path, include_targets_flag, force_schemas_value):
+    """Set the environment the converter reads for this job."""
+    os.environ["XML_PATH"] = xml_path
+    os.environ["OUTPUT_DIR"] = output_dir
+    # A warm Lambda keeps os.environ between jobs: clear what this job does not set, so a previous job's
+    # template or forced schemas are never applied to this one.
+    if template_path:
+        os.environ["TEMPLATE_PATH"] = template_path
+    else:
+        os.environ.pop("TEMPLATE_PATH", None)
+    os.environ["INCLUDE_TARGETS"] = str(include_targets_flag)
+    if force_schemas_value:
+        os.environ["FORCE_SCHEMAS"] = force_schemas_value
+    else:
+        os.environ.pop("FORCE_SCHEMAS", None)
+
+
 def _run_conversion_job(xml_content, filename, template_content, include_targets, force_schemas, job_id, context):
     """Core conversion pipeline used by the async SQS worker.
 
@@ -393,26 +424,12 @@ def _run_conversion_job(xml_content, filename, template_content, include_targets
     force_schemas_value = force_schemas
 
     with tempfile.TemporaryDirectory() as temp_dir:
-        xml_path = os.path.join(temp_dir, "input.xml")
-        with open(xml_path, "wb") as f:
-            f.write(xml_content)
-
-        template_path = None
-        if template_content:
-            template_path = os.path.join(temp_dir, "template.yaml")
-            with open(template_path, "wb") as f:
-                f.write(template_content)
+        xml_path, template_path = _write_job_inputs(temp_dir, xml_content, template_content)
 
         output_dir = os.path.join(temp_dir, "output")
         os.makedirs(output_dir, exist_ok=True)
 
-        os.environ["XML_PATH"] = xml_path
-        os.environ["OUTPUT_DIR"] = output_dir
-        if template_path:
-            os.environ["TEMPLATE_PATH"] = template_path
-        os.environ["INCLUDE_TARGETS"] = str(include_targets_flag)
-        if force_schemas_value:
-            os.environ["FORCE_SCHEMAS"] = force_schemas_value
+        _set_job_environment(xml_path, output_dir, template_path, include_targets_flag, force_schemas_value)
 
         connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name, record_id_mappings, journal_checkpoints, refresh_filters = parse_xml()
         exported_count = export_as_yaml(

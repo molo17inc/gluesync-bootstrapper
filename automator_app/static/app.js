@@ -1,3 +1,4 @@
+import { initCustomImport } from './custom_import.js';
 const api = {
   async getState() {
     const res = await fetch('/api/state');
@@ -1793,6 +1794,13 @@ function bindEvents() {
       }
     });
   }
+
+  initCustomImport({
+    fileInput: importAllInput,
+    root: document.getElementById('custom-import-root'),
+    setMessage: (text, kind) => ui.setConfigMessage(text, kind),
+    log: logActivity,
+  });
 
   if (validateAllBtnEl && importAllInput) {
     validateAllBtnEl.addEventListener('click', async () => {

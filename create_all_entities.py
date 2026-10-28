@@ -30,7 +30,7 @@ from typing import Any
 from commons import get_node_info, get_table_columns, fetch_core_hub, get_pipeline_config, get_pipeline_agents, \
     get_agent_tables, create_entity_schedules, map_data_type, create_pipeline_schedules, create_group_schedules, load_yaml_config, \
     process_filter_clauses, create_group, assign_entities_to_group, get_table_id, extract_target_column_types, \
-    corehub_takes_grouped_matrix, canonicalize_target_type
+    corehub_takes_grouped_matrix, canonicalize_target_type, coerce_document_key_config
 from create_all_tables import TargetTableCreationError, handle_table_creation, \
     set_create_table_if_not_exists as _set_tables_flag
 from create_user_defined_functions import handle_udf_function_definition
@@ -39,6 +39,9 @@ from field_function_utils import build_field_functions_for_entity_type, normaliz
 from entity_mapping import ColumnNames, EntityMappingError, build_entries, derive_keys, drop_forbidden_key_links, \
     encode_entries, find_by_name, group_relations, grouped_only_forms, is_column_mappings, read_entry, yaml_relations
 import create_user_defined_functions as udf_module
+import import_options
+import table_target_schema
+import fan_in
 import function_collection
 from utils.log import get_logger, create_log_file, log_success, log_failure, lockfile_failure, lockfile_complete, exit_on_fail
 from utils.core_hub_client import CoreHubClient
@@ -233,6 +236,8 @@ def _is_column_whitelist(columns_list):
     Returns True when entries have 'name' and 'type' keys (column definitions).
     """
     if not columns_list:
+        return False
+    if not isinstance(columns_list, (list, tuple)):
         return False
     first = columns_list[0]
     if not isinstance(first, dict):
@@ -1535,10 +1540,7 @@ def _target_only_properties(target_col, target_columns, skip_errors, where=""):
     # Check if this column already exists in the target table
     discovered_column = None
     if target_columns and 'columns' in target_columns:
-        discovered_column = next(
-            (col for col in target_columns['columns'] if col.get('name') == col_name),
-            None
-        )
+        discovered_column = find_by_name(target_columns['columns'], col_name)
 
     if not discovered_column:
         # Column doesn't exist in target table, use user-defined properties
@@ -1634,6 +1636,12 @@ def _physical_keys(tb):
     return physical_source, physical_target
 
 
+def _target_key_known(tb):
+    """Whether discovery read the target table, so an empty physical key means it has no primary key."""
+    columns = (tb.discovered or {}).get("columns")
+    return bool(isinstance(columns, list) and columns) and _is_physical_key_honoured(tb.ctx.target_agent_tag)
+
+
 def _add_udf_target_keys(tb, physical_target):
     """The UDF writes every target column, a target primary key no source feeds included."""
     for key_name in physical_target:
@@ -1650,8 +1658,10 @@ def _add_udf_target_keys(tb, physical_target):
 def _add_unnamed_source_keys(columns, columns_def, source_key_names):
     """A source key no relation names is read and never written (1:null), as the field editor keeps it."""
     for key_name in source_key_names:
-        if not any(str(c.get("name", "")) == key_name for c in columns_def):
-            key_col = next(c for c in columns["columns"] if c.get("name") == key_name)
+        if find_by_name(columns_def, key_name) is None:
+            key_col = find_by_name(columns["columns"], key_name)
+            if key_col is None:
+                continue
             columns_def.append(_source_column_def(key_col, key_col.get("id"), key_col["name"], key_col["name"], True))
 
 
@@ -1677,6 +1687,7 @@ def _apply_key_rules(tb, columns_def, name_relations, target_entity_type):
         _add_udf_target_keys(tb, physical_target)
     produced = [c["name"] for c in tb.columns_def] if has_udf else produced_target_names(pair.custom_config.get("columns"))
 
+    key_warnings: list = []
     source_key_names, target_key_names = derive_keys(
         relations=name_relations,
         source_names=[c["name"] for c in columns_def] + [c["name"] for c in pair.columns["columns"]],
@@ -1688,7 +1699,12 @@ def _apply_key_rules(tb, columns_def, name_relations, target_entity_type):
         produced_targets=produced,
         label=pair.table_name,
         source_is_nosql=tb.ctx.source_is_nosql,
+        target_key_known=_target_key_known(tb),
+        strict=bool(getattr(import_options.current(), "strict_validate", False)),
+        warnings=key_warnings,
     )
+    for warning in key_warnings:
+        logger.warning(warning)
     _add_unnamed_source_keys(pair.columns, columns_def, source_key_names)
     for col in columns_def:
         col["isPK"] = col.get("name") in source_key_names
@@ -2100,24 +2116,35 @@ def set_create_table_if_not_exists(enabled: bool) -> None:
     _set_tables_flag(enabled)
 
 
-# Target categories for which the bootstrapper must NOT attempt to issue a
-# CREATE TABLE statement. These are non-RDBMS targets (e.g. NoSQL stores,
-# object stores like Azure Data Lake Storage, S3, GCS) where the CoreHub
-# create-table endpoint will fail with "This function must not be called.".
-_NO_CREATE_TABLE_TARGET_TYPES = frozenset({"NOSQL", "OBJECT STORE"})
+# Target categories that are explicitly non-RDBMS. Anything else that is not
+# SQL/RDBMS is also skipped (Event Streaming, Search, Object Store, …): Core Hub
+# refuses CREATE TABLE with "This function must not be called."
+_NO_CREATE_TABLE_TARGET_TYPES = frozenset({
+    "NOSQL", "OBJECT STORE", "EVENT STREAMING", "STREAMING", "SEARCH",
+})
+_SQL_TARGET_TYPES = frozenset({"SQL", "RDBMS"})
 
 
 def is_no_create_table_target(target_type) -> bool:
     """Return True when the given target type does not support CREATE TABLE.
 
-    The check is case-insensitive and tolerates None / empty values. Any
-    target category not classified as RDBMS/SQL should fall under this
-    predicate so the bootstrapper skips table creation for it.
+    The check is case-insensitive and tolerates None / empty values. Only
+    SQL/RDBMS targets get CREATE TABLE; every other category (NoSQL, Object
+    Store, Event Streaming, Search, unknown) is skipped — same conservatism as
+    ``_normalize_agent_category``.
     """
 
     if not target_type:
         return False
-    return str(target_type).strip().upper() in _NO_CREATE_TABLE_TARGET_TYPES
+    upper = str(target_type).strip().upper()
+    if not upper:
+        return False
+    if upper in _SQL_TARGET_TYPES:
+        return False
+    if upper in _NO_CREATE_TABLE_TARGET_TYPES:
+        return True
+    # Unknown / future categories: do not issue CREATE TABLE.
+    return True
 
 
 # ProtocolAwareAdapter and CoreHubClient have been moved to utils/core_hub_client.py
@@ -2464,7 +2491,7 @@ def _build_partition_settings(column_name, table_columns, schema_name, table_nam
     if not normalized_column:
         return None
 
-    matched_column = next((col for col in table_columns if col.get('name') == normalized_column), None)
+    matched_column = find_by_name(table_columns, normalized_column)
     if not matched_column:
         logger.warning(f"Partition column '{normalized_column}' not found in discovery for {schema_name}.{table_name}. Skipping partitionSettings.")
         return None
@@ -2572,7 +2599,11 @@ def _create_groups(token, pipeline_id, yaml_config, group_names):
             description = group_meta.get('description')
             color = group_meta.get('color')
 
-        group_id = create_group(token, pipeline_id, group_name, description=description, color=color)
+        if import_options.current().dry_run:
+            import_options.current().report.blocked_writes.append(f"create group {group_name!r} (if missing)")
+            group_id = f"dry-run:{group_name}"
+        else:
+            group_id = create_group(token, pipeline_id, group_name, description=description, color=color)
         logger.debug(f"Group '{group_name}' creation result: {group_id}")
 
         if group_id and group_id != _DEFAULT_GROUP:
@@ -2588,10 +2619,25 @@ def _create_groups(token, pipeline_id, yaml_config, group_names):
     return group_id_map
 
 
+def _node_info_or_none(token, pipeline_id, agent_id):
+    """The node info of an agent, {} when it cannot be read (offline entities only)."""
+    if import_options.current().no_discovery:
+        return {}
+    try:
+        return get_node_info(token, pipeline_id, agent_id) or {}
+    except Exception as error:  # pylint: disable=broad-except
+        logger.warning(f"Node info of agent {agent_id} unreadable ({error}); continuing without it")
+        return {}
+
+
 def _node_infos(token, pipeline_id, source_agent_id, target_agent_id, yaml_config):
     """The node info of both agents (for data type mapping), logged with the YAML."""
-    source_node_info = get_node_info(token, pipeline_id, source_agent_id)
-    target_node_info = get_node_info(token, pipeline_id, target_agent_id)
+    if import_options.current().offline:
+        source_node_info = _node_info_or_none(token, pipeline_id, source_agent_id)
+        target_node_info = _node_info_or_none(token, pipeline_id, target_agent_id)
+    else:
+        source_node_info = get_node_info(token, pipeline_id, source_agent_id)
+        target_node_info = get_node_info(token, pipeline_id, target_agent_id)
 
     logger.info("Source Node Info:")
     logger.info(json.dumps(source_node_info, indent=2))
@@ -2666,6 +2712,13 @@ class _EntityRun:
         self.chain_target_ids = {}
         self.last_table_name = None
         self.last_col = None
+        # Source discovery by casefolded table name: the pre-write validation and the entity build read it once.
+        self.columns_cache = {}
+        # Source tables whose entity was built from the YAML, not from discovery.
+        self.offline_tables = set()
+        self.untyped_tables = set()
+        # The whole YAML: the fan-in union of a target table reads the tables of every source schema.
+        self.yaml_config = None
 
     def refuse_table(self, table_label, error):
         logger.error(f"Entity for table {table_label} not created: {error}")
@@ -2678,7 +2731,12 @@ class _EntityRun:
         """The source discovery of a table of the schema, in the order the YAML ``custom_config`` of the table gives
         the columns when the source has no schema (see :func:`_with_exported_source_positions`)."""
         ctx = self.ctx
-        columns = get_table_columns(ctx.token, ctx.pipeline_id, self.source_agent_id, self.source_schema, table_name)
+        cache_key = str(table_name).casefold()
+        if cache_key in self.columns_cache:
+            columns = copy.deepcopy(self.columns_cache[cache_key])
+        else:
+            columns = _source_columns_or_offline(self, table_name, custom_config)
+            self.columns_cache[cache_key] = copy.deepcopy(columns)
         if ctx.source_is_nosql and custom_config:
             columns = _with_exported_source_positions(columns, custom_config, table_name)
         return columns
@@ -2693,9 +2751,131 @@ class _EntityRun:
             })
 
 
+def _yaml_column_sources(col):
+    """The source column names of a YAML column row (a name or a list of names)."""
+    sources = col.get('source')
+    return [sources] if isinstance(sources, str) else [x for x in (sources or []) if isinstance(x, str)]
+
+
+def _offline_column(col, name, position, keys):
+    """The discovery entry of source column ``name`` of YAML row ``col``, at ``position``."""
+    return {
+        "id": position,
+        "position": col.get('ordinalPosition') or position,
+        "name": name,
+        "dataType": col.get('type') or 'varchar',
+        "isPK": bool(col.get('isPK')) or name.casefold() in keys,
+        "isIdentity": bool(col.get('isIdentity', False)),
+        "isNullable": bool(col.get('isNullable', True)),
+        "charMaxLength": col.get('dataLength') or 0,
+        "numPrec": col.get('numericPrecision') or 0,
+        "numScale": col.get('numericScale') or 0,
+    }
+
+
+def _yaml_columns_discovery(custom_config):
+    """A discovery answer built from the YAML's own columns, keys and types (``--allow-offline-entities``).
+
+    The column ids are those of the YAML (else their position); a column is a key when the YAML marks it
+    ``isPK`` or lists it under ``keys``. Core Hub acceptance of entities built this way is not verified.
+    """
+    custom_config = custom_config or {}
+    keys = {str(k).casefold() for k in (custom_config.get('keys') or []) if isinstance(k, str)}
+    columns, seen = [], set()
+    rows = [col for col in custom_config.get('columns') or [] if isinstance(col, dict)]
+    for col in rows:
+        for name in _yaml_column_sources(col):
+            if name.casefold() not in seen:
+                seen.add(name.casefold())
+                columns.append(_offline_column(col, name, len(columns) + 1, keys))
+    return {"columns": columns, "offline": True} if columns else {"columns": []}
+
+
+_MISSING_SOURCE_TABLES = set()
+
+
+def _is_missing_source_table(schema, table_name):
+    """Whether ``--allow-missing-tables`` took this table from the YAML because the source does not list it."""
+    return (str(schema).casefold(), str(table_name).casefold()) in _MISSING_SOURCE_TABLES
+
+
+def _untyped_yaml_columns(custom_config):
+    """The source columns of a YAML table config without a ``type`` (a missing table cannot be built from them)."""
+    names = []
+    for col in (custom_config or {}).get('columns') or []:
+        if isinstance(col, dict) and not col.get('type') and not col.get('isTargetOnly'):
+            source = col.get('source')
+            names.append(source if isinstance(source, str) else str(source or col.get('target') or '?'))
+    return names
+
+
+def _discovered_columns_or_none(run, ctx, table_name, tolerated):
+    """The discovery of a source table; None when it fails and failures are ``tolerated`` (else it raises)."""
+    try:
+        return get_table_columns(ctx.token, ctx.pipeline_id, run.source_agent_id, run.source_schema, table_name)
+    except Exception as error:  # pylint: disable=broad-except
+        if not tolerated:
+            raise
+        logger.warning(f"Discovery of {run.source_schema}.{table_name} failed ({error}); building the entity "
+                       f"from the YAML")
+        return None
+
+
+def _missing_source_table(run, options, table_name, custom_config):
+    """Report a missing source table; the skipped discovery answer when the YAML lacks a column type, else None."""
+    label = f"{run.source_schema}.{table_name}"
+    untyped = _untyped_yaml_columns(custom_config)
+    if untyped:
+        warning = (f"source table {label} is missing and the YAML gives no type for column(s) "
+                   f"{', '.join(untyped)}: entity skipped (types are never guessed)")
+        logger.warning(warning)
+        run.untyped_tables.add(str(table_name).casefold())
+        options.report.warnings.append(warning)
+        return {"columns": [], "skip_reason": warning}
+    if label not in options.report.missing_source_tables:
+        options.report.missing_source_tables.append(label)
+    return None
+
+
+def _remember_missing_source_table(run, options, table_name):
+    """With --allow-missing-tables (and no --allow-offline-entities), remember a table discovery did not give
+    as missing; returns whether it is now treated as missing."""
+    if not options.allow_missing_tables or options.allow_offline_entities:
+        return False
+    _MISSING_SOURCE_TABLES.add((str(run.source_schema).casefold(), str(table_name).casefold()))
+    return True
+
+
+def _source_columns_or_offline(run, table_name, custom_config):
+    """The source discovery of a table; with ``--no-discovery``, or ``--allow-offline-entities`` when discovery
+    fails or finds no column, the YAML's own columns instead (the table is then reported as saved without
+    discovery)."""
+    ctx = run.ctx
+    options = import_options.current()
+    missing = _is_missing_source_table(run.source_schema, table_name)
+    fallback = options.allow_offline_entities or missing
+    if not options.no_discovery and not missing:
+        tolerated = fallback or options.allow_missing_tables
+        columns = _discovered_columns_or_none(run, ctx, table_name, tolerated)
+        if (columns and columns.get('columns')) or not tolerated:
+            return columns
+        missing = _remember_missing_source_table(run, options, table_name)
+    if missing:
+        skipped = _missing_source_table(run, options, table_name, custom_config)
+        if skipped is not None:
+            return skipped
+    offline = _yaml_columns_discovery(custom_config)
+    if offline.get('columns'):
+        run.offline_tables.add(f"{run.source_schema}.{table_name}")
+    return offline
+
+
 def _discover_target_tables(ctx):
     """The tables of the target schema by ``(schema, name)``, {} when they cannot be listed."""
     target_tables_lookup = {}
+    if import_options.current().no_discovery:
+        logger.info("--no-discovery: target tables are not listed")
+        return target_tables_lookup
     try:
         target_discovered_tables = get_agent_tables(ctx.token, ctx.pipeline_id, ctx.target_agent_id,
                                                     ctx.yaml_target_schema)
@@ -2766,26 +2946,27 @@ def _table_properties(run, custom_config, label, duplicate=False):
 
 def _document_key_column_id(run, columns, key_name, table_label, duplicate):
     """The id of the discovered column a documentKey key names, None if there is none."""
-    for col in columns["columns"]:
-        run.last_col = col
-        if col.get('name') == key_name:
-            # Use the id field from CoreHub API as the column ID
-            column_id = col.get('id')
-            if column_id is None and duplicate:
-                error_msg = f"Column '{key_name}' in {table_label} missing 'id' field"
-                logger.error(error_msg)
-                raise ValueError(error_msg)
-            if column_id is None:
-                _raise_missing_column_id(col.get('name'), table_label)
-            return column_id
-    return None
+    col = find_by_name(columns["columns"], key_name)
+    if col is None:
+        return None
+    run.last_col = col
+    column_id = col.get('id')
+    if column_id is None and duplicate:
+        error_msg = f"Column '{key_name}' in {table_label} missing 'id' field"
+        logger.error(error_msg)
+        raise ValueError(error_msg)
+    if column_id is None:
+        _raise_missing_column_id(col.get('name'), table_label)
+    return column_id
 
 
 def _document_key(run, custom_config, columns, table_label, duplicate=False):
     """The document key configuration of a table, with its key column names converted to column IDs."""
     if not (custom_config and 'documentKey' in custom_config):
         return None
-    doc_key_config = custom_config['documentKey']
+    doc_key_config = coerce_document_key_config(custom_config['documentKey'])
+    if not doc_key_config:
+        return None
 
     key_ids = []
     for key_name in doc_key_config['keys'] if 'keys' in doc_key_config else []:
@@ -2933,6 +3114,9 @@ def _target_entity(run, pair, target_columns_def, target_custom_properties, targ
 def _define_table_udfs(run, table_name, table_udfs, label):
     """Process the UDFs defined for a table (``label`` names it in the logs)."""
     logger.info(f"Found UDFs for {label}: {table_udfs}")
+    if import_options.current().dry_run:
+        import_options.current().report.blocked_writes.append(f"define/compile UDFs of {label}")
+        return
     try:
         handle_udf_function_definition(table_name, run.ctx.pipeline_id, table_udfs, run.ctx.token)
         logger.info(f"Successfully processed UDFs for {label}")
@@ -2954,17 +3138,36 @@ def _bare_table_name(table_name):
     return table_name.rsplit('.', 1)[-1] if '.' in table_name else table_name
 
 
+def _whitelist_entry_names(whitelist):
+    """String names listed in a YAML whitelist/blacklist (entries may be plain strings or ``{name: ...}``)."""
+    names = []
+    for item in whitelist or []:
+        if isinstance(item, str):
+            names.append(item)
+        elif isinstance(item, dict):
+            name = item.get("name") or item.get("sourceName")
+            if name:
+                names.append(str(name))
+    return names
+
+
+def _name_in_listing(name, listing):
+    """Whether ``name`` is listed (exact spelling, else the unique case-insensitive match)."""
+    return ColumnNames(_whitelist_entry_names(listing)).resolve(name) is not None
+
+
 def _in_schema_whitelist(run, table_name, bare_table_name):
     """STRICT WHITELIST ENFORCEMENT: if a whitelist is defined, ONLY the tables it lists are processed.
 
     If the agent returns FILELIB.TABLE but the whitelist has TABLE, the bare name is checked as a fallback so
-    tables are not silently dropped when the source uses qualified names.
+    tables are not silently dropped when the source uses qualified names. Matching follows column rules
+    (exact, else unique case-insensitive) so MySQL/MSSQL/Postgres/Oracle folds still hit the YAML entry.
     """
     whitelist = run.schema.whitelist
     if not whitelist:
         logger.debug(f"No whitelist defined for schema {run.source_schema}, allowing table {table_name}")
         return True
-    if table_name not in whitelist and bare_table_name not in whitelist:
+    if not _name_in_listing(table_name, whitelist) and not _name_in_listing(bare_table_name, whitelist):
         logger.info(f"Skipping table {table_name}: not in whitelist for schema {run.source_schema}")
         return False
     logger.debug(f"Table {table_name} is in whitelist for schema {run.source_schema} - processing")
@@ -2992,7 +3195,7 @@ def _skip_discovered_table(run, table_name, table_schema):
     # 'FILELIB.TABLE' from discovery).
     bare_table_name = _bare_table_name(table_name)
     blacklist = run.schema.blacklist
-    if blacklist and (table_name in blacklist or bare_table_name in blacklist):
+    if blacklist and (_name_in_listing(table_name, blacklist) or _name_in_listing(bare_table_name, blacklist)):
         logger.info(f"Skipping blacklisted table: {table_name}")
         return True
 
@@ -3002,6 +3205,8 @@ def _skip_discovered_table(run, table_name, table_schema):
 def _discover_source_table(run, table_name, custom_config=None):
     """The source discovery of a table, None (refused unless errors are skipped) when it has no columns."""
     columns = run.table_columns(table_name, custom_config)
+    if columns and columns.get('skip_reason'):
+        return None
 
     # Debug logging for column discovery
     if columns and columns.get('columns'):
@@ -3017,32 +3222,64 @@ def _discover_source_table(run, table_name, custom_config=None):
     return None
 
 
+def _custom_by_ci_key(custom_tables, table_name):
+    """``(config, key)`` from a case-insensitive YAML table key match, else ``(None, None)``."""
+    matched_key = ColumnNames(custom_tables.keys()).resolve(table_name)
+    if matched_key is None:
+        return None, None
+    return custom_tables[matched_key], matched_key
+
+
+def _custom_by_source_table_name(custom_tables, table_name):
+    """``(config, key)`` when ``sourceTableName`` matches ``table_name`` (duplicate-table YAML)."""
+    for key, config in custom_tables.items():
+        if not isinstance(config, dict):
+            continue
+        if ColumnNames([config.get('sourceTableName') or ""]).resolve(table_name):
+            logger.info(f"Found custom config for table {table_name} under YAML key '{key}' (duplicate table)")
+            return config, key
+    return None, None
+
+
+def _custom_by_bare_name(custom_tables, table_name):
+    """``(config, key)`` for library-qualified discovery names matched to a bare YAML key."""
+    if '.' not in table_name:
+        return None, None
+    matched_bare = ColumnNames(custom_tables.keys()).resolve(_bare_table_name(table_name))
+    if matched_bare is None:
+        return None, None
+    logger.info(
+        f"Matched library-qualified table '{table_name}' to YAML key '{matched_bare}' "
+        "via bare-name fallback"
+    )
+    return custom_tables[matched_bare], matched_bare
+
+
 def _custom_config_of(custom_tables, table_name):
     """``(custom_config, yaml_table_key)``: the YAML entry of a discovered table and the key it is under.
 
     Handles both a direct key match and a ``sourceTableName`` match (duplicate table), then, for a
     library-qualified name (e.g. AS/400 FILELIB.TABLE), the bare table name as the YAML key: the backup YAML uses
     the unqualified name as the key but the source agent returns the library-prefixed form during discovery.
+    Table keys match as column names do: exact spelling first, else the unique case-insensitive one.
     """
     custom_config = custom_tables.get(table_name, {})
     yaml_table_key = table_name  # Track which YAML key we're using
 
     if not custom_config:
-        for key, config in custom_tables.items():
-            if isinstance(config, dict) and config.get('sourceTableName') == table_name:
-                custom_config = config
-                yaml_table_key = key
-                logger.info(f"Found custom config for table {table_name} under YAML key '{key}' (duplicate table)")
-                break
+        cfg, key = _custom_by_ci_key(custom_tables, table_name)
+        if key is not None:
+            custom_config, yaml_table_key = cfg, key
 
-    bare_table_name = _bare_table_name(table_name)
-    if not custom_config and '.' in table_name and bare_table_name in custom_tables:
-        custom_config = custom_tables[bare_table_name]
-        yaml_table_key = bare_table_name
-        logger.info(
-            f"Matched library-qualified table '{table_name}' to YAML key '{bare_table_name}' "
-            "via bare-name fallback"
-        )
+    if not custom_config:
+        cfg, key = _custom_by_source_table_name(custom_tables, table_name)
+        if key is not None:
+            custom_config, yaml_table_key = cfg, key
+
+    if not custom_config:
+        cfg, key = _custom_by_bare_name(custom_tables, table_name)
+        if key is not None:
+            custom_config, yaml_table_key = cfg, key
 
     if custom_config is None:
         custom_config = {}
@@ -3065,6 +3302,11 @@ def _create_target_table(run, pair, keys, label=None) -> bool:
     if is_no_create_table_target(run.target_type):
         logger.info(f"Skipping table creation for {pair.target_table_name} - target is {run.target_type}")
         return True
+    if import_options.current().dry_run:
+        if not (_discover_target_columns(ctx, pair.target_table_name) or {}).get('columns'):
+            import_options.current().report.blocked_writes.append(
+                f"create target table {ctx.yaml_target_schema}.{pair.target_table_name} (if missing)")
+        return True
     logger.info(f"CREATE_TABLE_IF_NOT_EXISTS is enabled - creating table {pair.target_table_name}")
     try:
         pair.created_table = handle_table_creation(
@@ -3077,11 +3319,18 @@ def _create_target_table(run, pair, keys, label=None) -> bool:
             pair.custom_config,
             ctx.source_node_info,
             ctx.target_node_info,
+            fan_in_peers=_fan_in_peers(run, pair.target_table_name),
         ) is True
     except TargetTableCreationError as error:
         if (_discover_target_columns(ctx, pair.target_table_name) or {}).get('columns'):
             logger.warning(f"Creating table {pair.target_table_name} failed ({error}), but the target reports its "
                            f"columns: using the table that is there")
+            return True
+        if _is_missing_source_table(run.source_schema, pair.table_name):
+            pending = f"{ctx.yaml_target_schema}.{pair.target_table_name}"
+            logger.warning(f"Target table {pending} could not be created ({error}): reported as pending, the entity "
+                           f"of the missing source table is still saved")
+            import_options.current().report.pending_target_tables.append(pending)
             return True
         run.refuse_table(label or pair.table_name, error)
         return False
@@ -3116,7 +3365,8 @@ def resolve_group_id(custom_config, group_id_map, token, pipeline_id):
         logger.debug(f"Using cached group ID for '{requested_group}': {group_id}")
     else:
         # Fallback: try to create/get the group (e.g. if upfront pre-creation failed)
-        group_id = create_group(token, pipeline_id, requested_group)
+        group_id = (f"dry-run:{requested_group}" if import_options.current().dry_run
+                    else create_group(token, pipeline_id, requested_group))
         if group_id != _DEFAULT_GROUP:
             # Cache it so subsequent entities skip the API call
             group_id_map[requested_group] = group_id
@@ -3136,7 +3386,7 @@ def _requested_group_id(run, custom_config):
 def _entity_payload(entity_name, source_entity, target_entity, group_id):
     """A SingleTable entity; the groupId is only added for a valid group ID."""
     entity = {
-        "entityName": entity_name,
+        "entityName": import_options.current().remap.entity_name(entity_name),
         "agentEntities": [source_entity, target_entity],
     }
     if group_id and group_id != _DEFAULT_GROUP:
@@ -3262,6 +3512,8 @@ def _process_discovered_table(run, table):
     custom_config, yaml_table_key = _custom_config_of(run.schema.custom_tables, table_name)
     columns = _discover_source_table(run, table_name, custom_config)
     if columns is None:
+        if str(table_name).casefold() in run.untyped_tables:
+            run.processed_yaml_keys.add(yaml_table_key)
         return
 
     # Mark this YAML key as processed
@@ -3301,12 +3553,13 @@ def _duplicate_table_label(run, yaml_table_key, custom_config):
 
     # Skip system tables and blacklisted tables
     blacklist, whitelist = run.schema.blacklist, run.schema.whitelist
-    if table_name.startswith("sys") or (blacklist and table_name in blacklist):
+    if table_name.startswith("sys") or (blacklist and _name_in_listing(table_name, blacklist)):
         logger.info(f"Skipping duplicate table {yaml_table_key}: system or blacklisted")
         return None
 
-    # Check whitelist using the actual table name
-    if whitelist and table_name not in whitelist:
+    # Check whitelist using the actual table name, or the @@ key itself (a pass per target schema keeps only the
+    # keys of its tables, so the source name of an @@ table may be left out of it)
+    if whitelist and not _name_in_listing(table_name, whitelist) and not _name_in_listing(yaml_table_key, whitelist):
         logger.info(f"Skipping duplicate table {yaml_table_key}: not in whitelist")
         return None
 
@@ -3993,20 +4246,26 @@ def _legacy_chain_matrix(run, tables_list):
     return columns_mapping_matrix
 
 
+def _snapshot_commands_from_target_props(target_props):
+    """pre/postSnapshotCommand from YAML ``customProperties.target`` (strings, as SingleTable).
+
+    Older accidental dict values are still forwarded; empty / missing values are omitted.
+    """
+    out = {}
+    for key in ("preSnapshotCommand", "postSnapshotCommand"):
+        value = (target_props or {}).get(key)
+        if (isinstance(value, str) and value.strip()) or (isinstance(value, dict) and value):
+            out[key] = value
+    return out
+
+
 def _chain_target_custom_properties(last_table_data):
     """The customProperties of a MultiTable target: ttlValue and the pre/post snapshot commands."""
-    table_target_properties = last_table_data.get('customProperties', {}).get('target', {})
+    table_target_properties = last_table_data.get('customProperties', {}).get('target', {}) or {}
     target_custom_properties = {
         "ttlValue": table_target_properties.get('ttlValue', 0)
     }
-
-    post_snapshot_cmd = last_table_data.get('customProperties', {}).get('target', {}).get('postSnapshotCommand', {})
-    if isinstance(post_snapshot_cmd, dict) and post_snapshot_cmd:
-        target_custom_properties["postSnapshotCommand"] = post_snapshot_cmd
-
-    pre_snapshot_cmd = last_table_data.get('customProperties', {}).get('target', {}).get('preSnapshotCommand', {})
-    if isinstance(pre_snapshot_cmd, dict) and pre_snapshot_cmd:
-        target_custom_properties["preSnapshotCommand"] = pre_snapshot_cmd
+    target_custom_properties.update(_snapshot_commands_from_target_props(table_target_properties))
     return target_custom_properties
 
 
@@ -4046,6 +4305,10 @@ def _chain_target_entity(cb, entity_name, tables_list, last_table_data):
         "columns": cb.target_columns
     }
 
+    # Same as SingleTable: pre/postSnapshotCommand belong on entityType (hub stores them there).
+    for cmd_key, cmd_val in _snapshot_commands_from_target_props(mt_target_props).items():
+        target_entity["entityType"][cmd_key] = cmd_val
+
     if cb.mt_field_functions:
         target_entity["entityType"]["fieldFunctions"] = cb.mt_field_functions
     return target_entity
@@ -4056,12 +4319,15 @@ def _chain_tables_in_whitelist(run, chain_id, tables_list):
     whitelist = run.schema.whitelist
     if not whitelist:
         return tables_list
-    filtered_tables_list = [(table_key, table_data) for table_key, table_data in tables_list if table_key in whitelist]
+    filtered_tables_list = [
+        (table_key, table_data) for table_key, table_data in tables_list
+        if _name_in_listing(table_key, whitelist)
+    ]
     if not filtered_tables_list:
         logger.info(f"Skipping chain '{chain_id}' - no tables in whitelist for schema '{run.source_schema}'")
         return None
     if len(filtered_tables_list) != len(tables_list):
-        skipped_tables = [tk for tk, _ in tables_list if tk not in whitelist]
+        skipped_tables = [tk for tk, _ in tables_list if not _name_in_listing(tk, whitelist)]
         logger.info(f"For chain '{chain_id}', filtered out tables not in whitelist for schema '{run.source_schema}': {skipped_tables}")
         logger.info(f"Remaining tables in chain: {[tk for tk, _ in filtered_tables_list]}")
     return filtered_tables_list
@@ -4083,7 +4349,8 @@ def _build_multi_table_entity(run, chain_id, tables_list):
 
     # We'll reuse the entity name captured during export if available
     first_table_key, first_table_data = tables_list[0]
-    entity_name = first_table_data.get("entityName") or f"{run.source_schema}.{first_table_key}"
+    entity_name = import_options.current().remap.entity_name(
+        first_table_data.get("entityName") or f"{run.source_schema}.{first_table_key}")
 
     cb = _ChainBuild(run, chain_id)
     # Process each table in the chain (in YAML order)
@@ -4181,7 +4448,12 @@ def _strip_table_item_columns(item):
 
 
 def _put_entities(ctx, body):
-    """Save entities on CoreHub."""
+    """Save entities on CoreHub (recorded, not sent, during a dry run)."""
+    options = import_options.current()
+    if options.dry_run:
+        options.report.blocked_writes.append(
+            f"PUT {_ENTITIES_CONFIG_PATH.format(pipeline_id=ctx.pipeline_id)} ({len(body.get('entities', []))} entities)")
+        return {"dryRun": True}
     return fetch_core_hub(
         _ENTITIES_CONFIG_PATH.format(pipeline_id=ctx.pipeline_id),
         method="PUT",
@@ -4408,21 +4680,49 @@ def _schedules_schema_config(yaml_config, source_schema):
     return _declares_schedules(current_schema_config), current_schema_config
 
 
-def _entity_ids_by_table(response):
-    """The entity ID of each entity of a pipeline listing, by the table name its entity name ends with."""
+def _is_listed_entity(item):
+    """Whether a pipeline listing item is an entity with an ID and a name."""
+    entity = item.get('entity') if isinstance(item, dict) else None
+    return isinstance(entity, dict) and 'entityId' in entity and 'entityName' in entity
+
+
+def _in_schema(source, wanted_schema):
+    return wanted_schema is not None and source is not None and source[0] == wanted_schema
+
+
+def _name_and_id_key(entity):
+    return str(entity.get('entityName') or ''), str(entity.get('entityId') or '')
+
+
+def _entity_ids_by_table(response, source_schema=None):
+    """The entity ID of each entity of a pipeline listing, by the table name its entity name ends with.
+
+    Deterministic: the listing is read sorted by entity name, so two entities ending with the same table name
+    (two schemas holding a table of that name) always resolve the same way. With ``source_schema`` an entity
+    whose source table lives in that schema wins over one of another schema; the source schema+table of each
+    entity is also kept under the key ``(schema, table)``, casefolded.
+    """
     entities_map = {}
-    for item in response:
-        if 'entity' in item and isinstance(item['entity'], dict) \
-                and 'entityId' in item['entity'] and 'entityName' in item['entity']:
-            entity = item['entity']
-            entity_id = entity['entityId']
-            entity_name = entity['entityName']
-            # Extract table name from entity name (typically schema.table)
-            # Split at first dot only to preserve dots inside table names.
-            parts = entity_name.split('.', 1)
-            table_name = parts[-1] if len(parts) > 1 else entity_name
+    preferred = set()
+    items = [item for item in response or [] if _is_listed_entity(item)]
+    items.sort(key=lambda item: (str(item['entity']['entityName']), str(item['entity']['entityId'])))
+    wanted_schema = str(source_schema).casefold() if source_schema else None
+    for item in items:
+        entity = item['entity']
+        entity_id = entity['entityId']
+        entity_name = entity['entityName']
+        # Extract table name from entity name (typically schema.table)
+        # Split at first dot only to preserve dots inside table names.
+        table_name = entity_name.split('.', 1)[-1]
+        source = _source_table_of(entity)
+        if source is not None:
+            entities_map.setdefault(source, entity_id)
+        in_schema = _in_schema(source, wanted_schema)
+        if table_name not in entities_map or (in_schema and table_name not in preferred):
             entities_map[table_name] = entity_id
-            logger.info(f"Found entity: {entity_name} (ID: {entity_id})")
+            if in_schema:
+                preferred.add(table_name)
+        logger.info(f"Found entity: {entity_name} (ID: {entity_id})")
     return entities_map
 
 
@@ -4433,9 +4733,11 @@ def _create_entity_level_schedules(run, schema_config, entities_map, chronos_tok
     for table_key, table_data in schema_config['tables']['custom'].items():
         # Use the table_key directly instead of looking for 'name' field
         table_name = table_key
+        source_name = str((table_data or {}).get('sourceTableName') or table_key).split('@@', 1)[0]
+        by_source = entities_map.get((str(run.source_schema).casefold(), source_name.casefold()))
+        entity_id = by_source or entities_map.get(table_name)
 
-        if table_name in entities_map and 'schedules' in table_data:
-            entity_id = entities_map[table_name]
+        if entity_id and 'schedules' in table_data:
             logger.info(f"Creating schedules for table {table_name} (Entity ID: {entity_id})")
             create_entity_schedules(run.ctx.token, run.ctx.pipeline_id, entity_id, table_name,
                                     table_data['schedules'], chronos_token=chronos_token)
@@ -4555,7 +4857,7 @@ def _create_schedules(run, yaml_config, chronos_token):
             return
 
         # Process entities in the format used in main.py
-        entities_map = _entity_ids_by_table(response)
+        entities_map = _entity_ids_by_table(response, run.source_schema)
 
         _create_entity_level_schedules(run, current_schema_config, entities_map, chronos_token)
 
@@ -4634,6 +4936,55 @@ def _start_entity_run(token, pipeline_id, yaml_config, source_schema, target_sch
 
 
 
+def _validation_failure(run, tables, options):
+    """Validate the YAML against discovery and report the issues; the run's result when --strict-validate stops it,
+    else None."""
+    issues = _validate_against_discovery(run, tables) if options.validate else []
+    options.report.validation_issues.extend(issues)
+    for issue in issues:
+        logger.warning(f"Validation: {issue}")
+    if issues and options.strict_validate and not options.dry_run:
+        logger.error(f"{len(issues)} validation issue(s) against discovery: nothing written "
+                     f"(drop --strict-validate, or fix the YAML / use a remap)")
+        total = max(1, len(_yaml_source_tables(run.schema)))
+        return {"successful": 0, "failed": total, "total": total,
+                "errors": [f"validation: {issue}" for issue in issues], "validation_failed": True}
+    return None
+
+
+def _report_fan_in_warnings(run, yaml_config, source_schema, options):
+    """Log the fan-in warnings and add them to the import report."""
+    for warning in _fan_in_warnings(run, yaml_config, source_schema):
+        logger.warning(f"Fan-in: {warning}")
+        options.report.warnings.append(warning)
+
+
+def _build_multi_table_entities(run, chained_tables):
+    """One MultiTable entity per chainId (chains that cannot be built are left out)."""
+    multi_table_entities = []
+    for chain_id, tables_list in chained_tables.items():
+        multi_table_entity = _build_multi_table_entity(run, chain_id, tables_list)
+        if multi_table_entity is not None:
+            multi_table_entities.append(multi_table_entity)
+    return multi_table_entities
+
+
+def _entity_run_result(run, options, offline_names, counts):
+    """The result of create_entities from its (successful, failed, total) counts."""
+    successful, failed, total = counts
+    result = {
+        "successful": successful,
+        "failed": failed,
+        "total": total,
+        "errors": run.errors,
+    }
+    if offline_names:
+        result["saved_without_discovery"] = offline_names
+    if options.dry_run:
+        result["dry_run"] = True
+    return result
+
+
 def create_entities(token, pipeline_id, source_schema, target_schema, tables, source_agent_id, target_agent_id, source_type, target_type, yaml_config, skip_errors=True, chunk_size=50, source_agent_tag=None, target_agent_tag=None, chronos_token=None):
     """Create entities for the pipeline.
 
@@ -4650,21 +5001,42 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
     else:
         logger.info("CREATE_TABLE_IF_NOT_EXISTS is disabled - assuming all tables exist")
 
-    # First, collect the group names of the whole YAML and the MultiTable chains of this source schema, and
-    # create the groups before creating entities.
-    group_names, chained_tables = _collect_groups_and_chains(yaml_config, source_schema)
-    group_id_map = _create_groups(token, pipeline_id, yaml_config, group_names)
-
     if not yaml_config:
         yaml_config = {}
+    options = import_options.current()
 
     run = _start_entity_run(token, pipeline_id, yaml_config, source_schema, target_schema, source_agent_id,
                             target_agent_id, source_type, target_type, skip_errors, source_agent_tag,
                             target_agent_tag)
-    run.group_id_map = group_id_map
 
     run.source_tables_lookup = _build_table_lookup(tables, source_schema)
     run.target_tables_lookup = _discover_target_tables(run.ctx)
+
+    # Every schema, table and column the YAML names that discovery lacks, in one report, before any write.
+    # Default: reported as warnings and the run goes on as before; --strict-validate stops before writing.
+    validation_failure = _validation_failure(run, tables, options)
+    if validation_failure is not None:
+        return validation_failure
+
+    # Fan-in: target tables several YAML tables feed (union of columns, type conflicts, columns an existing
+    # target table lacks). Warnings only: nothing is ALTERed.
+    run.yaml_config = yaml_config
+    _report_fan_in_warnings(run, yaml_config, source_schema, options)
+
+    # The entities already in the pipeline, listed before any write (groups included): with --on-existing or a
+    # resume, a failed listing stops this schema instead of creating duplicates.
+    try:
+        existing = _existing_entities(run, required=bool(options.on_existing)) \
+            if (options.on_existing or options.dry_run) else None
+    except ExistingEntitiesUnavailable as error:
+        logger.error(str(error))
+        total = max(1, len(tables))
+        return {"successful": 0, "failed": total, "total": total, "errors": [str(error)], "aborted": True}
+
+    # First, collect the group names of the whole YAML and the MultiTable chains of this source schema, and
+    # create the groups before creating entities.
+    group_names, chained_tables = _collect_groups_and_chains(yaml_config, source_schema)
+    run.group_id_map = _create_groups(token, pipeline_id, yaml_config, group_names)
 
     for table in tables:
         _process_discovered_table(run, table)
@@ -4672,11 +5044,12 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
     _process_duplicate_tables(run)
 
     # For each chainId, create a MultiTable entity
-    multi_table_entities = []
-    for chain_id, tables_list in chained_tables.items():
-        multi_table_entity = _build_multi_table_entity(run, chain_id, tables_list)
-        if multi_table_entity is not None:
-            multi_table_entities.append(multi_table_entity)
+    multi_table_entities = _build_multi_table_entities(run, chained_tables)
+
+    plan_flags = _apply_on_existing(run, multi_table_entities, existing)
+
+    if options.dry_run:
+        _record_dry_run_plan(run, multi_table_entities, plan_flags)
 
     # Process MultiTable entities first, then the regular entities in chunks
     successful_multi_tables, failed_multi_tables, total_multi_tables = \
@@ -4688,7 +5061,8 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         failed_entities += len(run.refused_tables)
         total_entities += len(run.refused_tables)
 
-    _apply_logical_partitions(token, pipeline_id, run.pending_partition_requests, skip_errors)
+    if not options.dry_run:
+        _apply_logical_partitions(token, pipeline_id, run.pending_partition_requests, skip_errors)
 
     _print_summary({
         "total": total_entities, "successful": successful_entities, "failed": failed_entities,
@@ -4696,20 +5070,361 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
         "failed_multi": failed_multi_tables,
     })
 
+    offline_names = _offline_entity_names(run, multi_table_entities)
+    options.report.offline_entities.extend(offline_names)
+
     # MultiTable entities count with the regular ones, as their chains refused before any request already do.
-    result = {
-        "successful": successful_entities + successful_multi_tables,
-        "failed": failed_entities + failed_multi_tables,
-        "total": total_entities + total_multi_tables,
-        "errors": run.errors,
-    }
+    result = _entity_run_result(run, options, offline_names,
+                                (successful_entities + successful_multi_tables,
+                                 failed_entities + failed_multi_tables,
+                                 total_entities + total_multi_tables))
 
     # Assign entities to their groups and create schedules if successful
-    if successful_entities > 0:
+    if successful_entities > 0 and not options.dry_run:
         _assign_entities_to_groups(run)
         _create_schedules(run, yaml_config, chronos_token)
 
     return result
+
+
+# --- backup import options (import_options.py) ------------------------------------------------------------
+
+def _yaml_source_tables(schema):
+    """``{casefolded source table: (source table, custom config, yaml key)}`` of the YAML of the run's schema."""
+    found = {}
+    for entry in schema.whitelist or []:
+        if isinstance(entry, str):
+            found.setdefault(entry.casefold(), (entry, {}, entry))
+    for key, config in (schema.custom_tables or {}).items():
+        config = config if isinstance(config, dict) else {}
+        source = config.get('sourceTableName') or str(key).split('@@')[0]
+        previous = found.get(source.casefold())
+        if previous is None or not previous[1]:
+            found[source.casefold()] = (source, config, key)
+    return found
+
+
+def _yaml_source_column_names(custom_config):
+    names = []
+    for col in (custom_config or {}).get('columns') or []:
+        if not isinstance(col, dict) or col.get('isTargetOnly') or col.get('targetOnly'):
+            continue
+        sources = col.get('source')
+        names.extend([sources] if isinstance(sources, str) else [x for x in (sources or []) if isinstance(x, str)])
+    return names
+
+
+def _fan_in_peers(run, target_table_name):
+    """The YAML table cfgs of every table feeding ``target_table_name`` in the target schema of the run (the whole
+    YAML, all source schemas); empty without a YAML or when only one table feeds it."""
+    yaml_config = getattr(run, 'yaml_config', None)
+    if not yaml_config:
+        return []
+    try:
+        peers = fan_in.peers_of(yaml_config, run.ctx.yaml_target_schema, target_table_name, run.ctx.yaml_target_schema)
+    except Exception as error:  # pylint: disable=broad-except
+        logger.debug(f"Fan-in peers of {target_table_name} skipped: {error}")
+        return []
+    return peers if len(peers) > 1 else []
+
+
+def _fan_in_warnings(run, yaml_config, source_schema):
+    """fan_in.fan_in_warnings for this run, reading existing target tables through discovery (GET only)."""
+    if not yaml_config:
+        return []
+
+    def existing_columns(schema, table):
+        if options_offline() or _find_discovered_table(run.target_tables_lookup or {}, schema, table) is None:
+            return None
+        try:
+            found = get_table_columns(run.ctx.token, run.ctx.pipeline_id, run.ctx.target_agent_id, schema, table)
+        except Exception:  # pylint: disable=broad-except
+            return None
+        return [c.get('name') for c in (found or {}).get('columns') or [] if isinstance(c, dict)]
+
+    def options_offline():
+        return import_options.current().no_discovery
+
+    try:
+        return fan_in.fan_in_warnings(yaml_config, source_schema, run.ctx.yaml_target_schema, existing_columns)
+    except Exception as error:  # pylint: disable=broad-except
+        logger.debug(f"Fan-in analysis skipped: {error}")
+        return []
+
+
+def _validate_against_discovery(run, tables):
+    """The schemas, tables and columns the YAML of this schema names that discovery lacks, with suggestions.
+
+    Names are compared as the entity build compares them (exact spelling, else unique case-insensitive);
+    a name that differs by case only is reported with the discovered spelling. Nothing is checked with
+    ``--no-discovery``.
+    """
+    options = import_options.current()
+    if options.no_discovery:
+        return []
+    yaml_tables = _yaml_source_tables(run.schema)
+    if not yaml_tables:
+        return []
+    discovered = _discovered_by_name(tables)
+    tolerant = options.allow_offline_entities or options.allow_missing_tables
+    if not discovered:
+        return [] if tolerant else [f"source schema {run.source_schema}: discovery lists no table"]
+    issues = []
+    discovered_names = ColumnNames(discovered.keys())
+    for source, config, key in yaml_tables.values():
+        matched = discovered_names.resolve(source)
+        if matched is not None:
+            issues.extend(_source_column_issues(run, matched if matched in discovered else source, config))
+        elif not tolerant:
+            issues.append(f"source table {run.source_schema}.{source} (YAML {key}) not found in discovery"
+                          f"{import_options.suggest(source, list(discovered))}")
+    if not CREATE_TABLE_IF_NOT_EXISTS and run.target_tables_lookup:
+        issues.extend(_missing_target_table_issues(run, yaml_tables))
+    return issues
+
+
+def _discovered_by_name(tables):
+    """The discovered tables by name, and by bare name when not taken."""
+    discovered = {}
+    for table in tables or []:
+        name, _schema = _table_name_and_schema(table)
+        if name:
+            discovered[name] = table
+            discovered.setdefault(_bare_table_name(name), table)
+    return discovered
+
+
+def _source_column_issues(run, source, config):
+    """The YAML source columns of a discovered table that its discovery lacks."""
+    label = f"{run.source_schema}.{source}"
+    wanted = _yaml_source_column_names(config)
+    if not wanted:
+        return []
+    try:
+        columns = run.table_columns(source, config)
+    except Exception as error:  # pylint: disable=broad-except
+        return [f"source table {label}: discovery failed ({error})"]
+    if label in run.offline_tables:
+        return []
+    discovered_columns = [c.get('name') for c in (columns or {}).get('columns') or [] if isinstance(c, dict)]
+    names = ColumnNames(discovered_columns)
+    return [f"source column {label}.{name} not found in discovery{import_options.suggest(name, discovered_columns)}"
+            for name in wanted if names.resolve(name) is None]
+
+
+def _missing_target_table_issues(run, yaml_tables):
+    """The target tables the YAML writes that do not exist, when they are not created."""
+    target_names = sorted({name for (_s, name) in run.target_tables_lookup})
+    issues = []
+    for source, config, key in yaml_tables.values():
+        target = (config or {}).get('name') or source
+        if _find_discovered_table(run.target_tables_lookup, run.ctx.yaml_target_schema, target) is None:
+            issues.append(f"target table {run.ctx.yaml_target_schema}.{target} (for {key}) not found and "
+                          f"CREATE_TABLE_IF_NOT_EXISTS is off{import_options.suggest(target, target_names)}")
+    return issues
+
+
+def _listing_entity(item):
+    return item.get('entity') if isinstance(item, dict) and isinstance(item.get('entity'), dict) else item
+
+
+def _source_table_of(entity):
+    """``(schema, table)`` of the source side of an entity payload or listing, casefolded; None when unknown."""
+    source = next((agent_entity for agent_entity in (entity or {}).get('agentEntities') or []
+                   if _is_source_agent_entity(agent_entity)), None)
+    if source is None:
+        return None
+    schema, name = _agent_entity_table(source)
+    return (str(schema or '').casefold(), str(name).casefold()) if name else None
+
+
+def _is_source_agent_entity(agent_entity):
+    return isinstance(agent_entity, dict) and (agent_entity.get('entityType') or {}).get('type') in (None, 'Source')
+
+
+def _agent_entity_table(agent_entity):
+    """``(schema, name)`` of the table of an agent entity (single-table, NoSQL or first of a multi-table one)."""
+    table = agent_entity.get('table') or {}
+    obj = agent_entity.get('entityObject') or {}
+    schema = table.get('schema') or obj.get('scope')
+    name = table.get('name') or obj.get('collection')
+    if not name and agent_entity.get('tables'):
+        first = agent_entity['tables'][0]
+        first = first.get('table', first) if isinstance(first, dict) else {}
+        schema, name = first.get('schema'), first.get('name')
+    return schema, name
+
+
+def _target_table_of(entity):
+    agent_entities = (entity or {}).get('agentEntities') or []
+    if len(agent_entities) < 2 or not isinstance(agent_entities[-1], dict):
+        return None
+    table = agent_entities[-1].get('table') or {}
+    obj = agent_entities[-1].get('entityObject') or {}
+    schema = table.get('schema') or obj.get('scope')
+    name = table.get('name') or obj.get('collection')
+    return f"{schema}.{name}" if name else None
+
+
+class ExistingEntitiesUnavailable(RuntimeError):
+    """The existing entities could not be listed while --on-existing (or a resume) needs them."""
+
+
+def _existing_entities(run, required=False):
+    """The entities already in the pipeline (GET). When they cannot be listed: ExistingEntitiesUnavailable if
+    ``required`` (--on-existing or a resume: going on with [] would create every entity again, i.e.
+    duplicates after a transient Core Hub error), else [] (a dry run without --on-existing)."""
+    try:
+        response = fetch_core_hub(_ENTITIES_PATH.format(pipeline_id=run.ctx.pipeline_id), token=run.ctx.token)
+    except Exception as error:  # pylint: disable=broad-except
+        if required:
+            raise ExistingEntitiesUnavailable(f"could not list the entities already in the pipeline ({error}); "
+                                              "nothing created, to avoid duplicates (on-existing / resume)") \
+                from None
+        logger.warning(f"Could not list the existing entities ({error}); taking the pipeline as empty")
+        return []
+    return [_listing_entity(item) for item in response or [] if isinstance(_listing_entity(item), dict)] \
+        if isinstance(response, list) else []
+
+
+class _ExistingIndex:
+    """The existing entities by casefolded entityName and by source ``(schema, table)``, deterministic order."""
+
+    def __init__(self, existing, payloads=()):
+        self.by_name = {}
+        self.by_source = {}
+        # Source tables read by exactly one payload of this run: only there is the source-table fallback safe.
+        counts = {}
+        for payload in payloads:
+            source = _source_table_of(payload)
+            if source:
+                counts[source] = counts.get(source, 0) + 1
+        self.single_payload_sources = {source for source, n in counts.items() if n == 1}
+        for entity in sorted(existing or [], key=_name_and_id_key):
+            name = str(entity.get('entityName') or '').casefold()
+            if name:
+                self.by_name.setdefault(name, entity)
+            source = _source_table_of(entity)
+            if source:
+                self.by_source.setdefault(source, []).append(entity)
+        self.claimed = set()
+        self.payload_names = set()
+
+    def match(self, payload):
+        name = str(payload.get('entityName') or '').casefold()
+        entity = self.by_name.get(name)
+        if entity is None:
+            entity = self._by_source(payload)
+        if entity is not None:
+            self.claimed.add(id(entity))
+        return entity
+
+
+    def _by_source(self, payload):
+        """The fallback when no entityName matches (a renamed entity, an entityPrefix remap): only when exactly
+        one payload of the run and exactly one existing entity read that source table. With several (one source
+        table feeding T1 and T2), the match would depend on the order and could pick the other table's entity."""
+        source = _source_table_of(payload)
+        candidates = self.by_source.get(source, [])
+        if source not in self.single_payload_sources or len(candidates) != 1:
+            if candidates:
+                logger.warning(f"{payload.get('entityName')}: no existing entity with that name; "
+                               f"{len(candidates)} existing entit(y/ies) read the same source table, not matched "
+                               f"by source (ambiguous)")
+            return None
+        entity = candidates[0]
+        if id(entity) in self.claimed or str(entity.get('entityName') or '').casefold() in self.payload_names:
+            return None
+        return entity
+
+def _apply_on_existing(run, multi_table_entities, existing):
+    """``--on-existing``: skip, fail or update (with the existing entityId) the entities already in the pipeline.
+
+    Returns ``{id(payload): (exists, status)}`` for the dry-run plan. Without the option nothing changes.
+    """
+    options = import_options.current()
+    flags = {}
+    if existing is None:
+        return flags
+    payloads = list(run.entities) + [m['entities'][0] for m in multi_table_entities]
+    index = _ExistingIndex(existing, payloads)
+    index.payload_names = {str(p.get('entityName') or '').casefold() for p in payloads}
+
+    def decide(payload):
+        match = index.match(payload)
+        if match is None:
+            flags[id(payload)] = (False, 'ok')
+            return True
+        name = payload.get('entityName', _UNKNOWN_ENTITY)
+        if options.on_existing == 'skip':
+            options.report.skipped_existing.append(name)
+            flags[id(payload)] = (True, 'skip')
+            return False
+        if options.on_existing == 'fail':
+            error = (f"already in the pipeline as {match.get('entityName')!r} "
+                     f"(entityId {match.get('entityId')}); --on-existing fail")
+            flags[id(payload)] = (True, 'fail')
+            run.refused_tables.append(name)
+            run.errors.append(f"{name}: {error}")
+            return False
+        if options.on_existing == 'update':
+            # Sent again with the existing entityId: how a live Core Hub handles it is not verified.
+            payload['entityId'] = match.get('entityId', '')
+            options.report.updated_existing.append(name)
+            flags[id(payload)] = (True, 'update')
+            return True
+        flags[id(payload)] = (True, 'ok')
+        return True
+
+    run.entities[:] = [payload for payload in run.entities if decide(payload)]
+    multi_table_entities[:] = [m for m in multi_table_entities if decide(m['entities'][0])]
+    return flags
+
+
+def _pk_names(agent_entity):
+    columns = (agent_entity or {}).get('columns') or []
+    if not columns and (agent_entity or {}).get('tables'):
+        columns = [c for t in agent_entity['tables'] if isinstance(t, dict) for c in t.get('columns') or []]
+    return [c.get('name') for c in columns if isinstance(c, dict) and c.get('isPK')]
+
+
+def _record_dry_run_plan(run, multi_table_entities, flags):
+    """The per-table plan of a dry run in the report: every entity that would be sent, and every refusal."""
+    report = import_options.current().report
+    payloads = list(run.entities) + [m['entities'][0] for m in multi_table_entities]
+    for payload in payloads:
+        agent_entities = payload.get('agentEntities') or [{}, {}]
+        source = _source_table_of(payload)
+        exists, status = flags.get(id(payload), (False, 'ok'))
+        report.plan.append({
+            "entity": payload.get('entityName'),
+            "source": f"{run.source_schema}.{source[1]}" if source else run.source_schema,
+            "target": _target_table_of(payload),
+            "keys": _pk_names(agent_entities[0]),
+            "target_keys": _pk_names(agent_entities[-1]),
+            "exists": exists,
+            "status": 'update' if status == 'update' else 'ok',
+        })
+    for error in run.errors:
+        label, _sep, reason = error.partition(': ')
+        hint = ""
+        if 'targetKeys' in reason and 'inherit' in reason:
+            hint = " [K9: see the targetKeys note in README 'Backup import options']"
+        report.plan.append({"entity": label, "source": label, "target": None, "keys": None, "target_keys": None,
+                            "exists": 'already in the pipeline' in reason, "status": 'fail',
+                            "reason": reason + hint})
+    for name in report.skipped_existing:
+        report.plan.append({"entity": name, "source": None, "target": None, "keys": None, "target_keys": None,
+                            "exists": True, "status": 'skip'})
+
+
+def _offline_entity_names(run, multi_table_entities):
+    """The entity names built from the YAML instead of discovery (``--allow-offline-entities``)."""
+    if not run.offline_tables:
+        return []
+    offline = {tuple(t.casefold().split('.', 1)) for t in run.offline_tables}
+    payloads = list(run.entities) + [m['entities'][0] for m in multi_table_entities]
+    return [p.get('entityName') for p in payloads if _source_table_of(p) in offline]
 
 
 def _function_collection_sources(yaml_file, yaml_config):
@@ -4749,14 +5464,65 @@ def _resolve_udf_path(yaml_file):
     With the app-owned workspace design, the Automator UI extracts each upload/import's YAML + UDF files into a single
     session directory under the workspace root, and sets UDF_PATH to it. When running standalone (no UDF_PATH), fall
     back to the YAML's own directory — which, for Automator-driven runs, IS that session directory and therefore
-    already contains the UDF files. find_udf_definition_in_path additionally scans the whole workspace root, so UDFs
-    are found even without this hint.
+    already contains the UDF files. find_udf_definition_in_path then searches that
+    folder only, so a same-named UDF left by another session is never picked up.
     """
     if yaml_file and not udf_module.UDF_PATH:
         yaml_dir = os.path.dirname(os.path.abspath(yaml_file))
         if yaml_dir and os.path.isdir(yaml_dir):
             udf_module.UDF_PATH = yaml_dir
             logger.info(f"UDF_PATH not set; falling back to YAML directory: {yaml_dir}")
+
+
+def _with_missing_yaml_tables(tables, source_schema, yaml_config):
+    """``--allow-missing-tables``: the discovered tables plus the YAML tables of the schema the source does not list
+    (each recorded as a missing source table; the source table itself is never created)."""
+    tables = list(tables or [])
+    listed = set()
+    for table in tables:
+        name, _schema = _table_name_and_schema(table)
+        if name:
+            listed.add(str(name).casefold())
+            listed.add(_bare_table_name(name).casefold())
+    schema = _SchemaSettings(yaml_config or {}, source_schema, source_schema)
+    for source, _config, _key in _yaml_source_tables(schema).values():
+        if str(source).casefold() in listed:
+            continue
+        listed.add(str(source).casefold())
+        _MISSING_SOURCE_TABLES.add((str(source_schema).casefold(), str(source).casefold()))
+        tables.append({"name": source, "schema": source_schema})
+        logger.warning(f"Source table {source_schema}.{source} is not on the source: its entity is built from the "
+                       f"YAML (--allow-missing-tables, Core Hub acceptance UNVERIFIED)")
+    return tables
+
+
+def _discovered_source_tables(token, pipeline_id, source_agent_id, source_schema, fallback):
+    """The tables discovery lists; [] when it fails and a fallback is allowed (else the error is raised)."""
+    try:
+        return get_agent_tables(token, pipeline_id, source_agent_id, source_schema)
+    except Exception as error:  # pylint: disable=broad-except
+        if not fallback:
+            raise
+        logger.warning(f"Table discovery of {source_schema} failed ({error}); using the YAML's tables")
+        return []
+
+
+def _source_tables_or_offline(token, pipeline_id, source_agent_id, source_schema, yaml_config):
+    """The tables of the source schema; from the YAML with ``--no-discovery``, or ``--allow-offline-entities``
+    when discovery fails or lists none."""
+    options = import_options.current()
+    _MISSING_SOURCE_TABLES.clear()
+    fallback = options.allow_offline_entities or options.allow_missing_tables
+    if not options.no_discovery:
+        tables = _discovered_source_tables(token, pipeline_id, source_agent_id, source_schema, fallback)
+        if options.allow_missing_tables and not options.allow_offline_entities:
+            return _with_missing_yaml_tables(tables, source_schema, yaml_config)
+        if tables or not fallback:
+            return tables
+    schema = _SchemaSettings(yaml_config or {}, source_schema, source_schema)
+    tables = [{"name": source, "schema": source_schema} for source, _c, _k in _yaml_source_tables(schema).values()]
+    logger.warning(f"{len(tables)} tables of {source_schema} taken from the YAML, not from discovery")
+    return tables
 
 
 def _fail_run(error_msg):
@@ -4792,7 +5558,7 @@ def _pipeline_agents(token, pipeline_id, source_type, target_type):
 
 
 def main(pipeline_id, source_schema, target_schema, source_type, target_type, yaml_file, token, skip_errors=True,
-         chunk_size=50, chronos_token=None, restore_function_collection=True):
+         chunk_size=50, chronos_token=None, restore_function_collection=True, import_opts=None):
     """
     Main function to create entities for a pipeline.
 
@@ -4802,10 +5568,35 @@ def main(pipeline_id, source_schema, target_schema, source_type, target_type, ya
 
     The function collection that comes with the YAML (see :func:`_function_collection_sources`) is published and
     installed first, unless ``restore_function_collection`` is False because the caller has done it.
+
+    ``import_opts`` (:class:`import_options.ImportOptions`, default: the options in use) adds the backup import
+    options: remap, dry run, validation, offline entities, on-existing. The result then carries ``report`` when ``import_opts`` is given.
     """
+    options = import_opts or import_options.current()
+    with import_options.use(options):
+        result = _main(pipeline_id, source_schema, target_schema, source_type, target_type, yaml_file, token,
+                       skip_errors, chunk_size, chronos_token, restore_function_collection)
+    rendered = options.report.render(dry_run=options.dry_run)
+    if rendered:
+        logger.info("\n" + rendered)
+        print(rendered)
+    report = options.report.as_dict()
+    # Only when options were given: the result of a plain call stays as before
+    if isinstance(result, dict) and import_opts is not None:
+        result["report"] = report
+    return result
+
+
+def _main(pipeline_id, source_schema, target_schema, source_type, target_type, yaml_file, token, skip_errors,
+          chunk_size, chronos_token, restore_function_collection):
+    """:func:`main` with its import options in use."""
+    options = import_options.current()
     logger.info(f"Starting entity creation for pipeline {pipeline_id}")
     try:
-        yaml_config = load_yaml_config(yaml_file) if yaml_file else None
+        yaml_config, source_schema, target_schema = _prepared_yaml(options, yaml_file, source_schema, target_schema)
+        if options.dry_run:
+            restore_function_collection = False
+            options.report.blocked_writes.append("publish/install the function collection of the YAML")
 
         _resolve_udf_path(yaml_file)
 
@@ -4820,7 +5611,7 @@ def main(pipeline_id, source_schema, target_schema, source_type, target_type, ya
             token, pipeline_id, source_type, target_type)
 
         # Get tables from source agent
-        tables = get_agent_tables(token, pipeline_id, source_agent_id, source_schema)
+        tables = _source_tables_or_offline(token, pipeline_id, source_agent_id, source_schema, yaml_config)
 
         if not tables:
             _fail_run(f"No tables found in schema {source_schema}")
@@ -4828,15 +5619,21 @@ def main(pipeline_id, source_schema, target_schema, source_type, target_type, ya
         # Debug logging before calling create_entities
         logger.debug(f"main() about to call create_entities with: source_type='{source_type}', target_type='{target_type}'")
 
-        # Create entities
-        result = create_entities(
-            token, pipeline_id, source_schema, target_schema,
+        # Create entities: one pass per target schema when tables carry their own targetSchema (else one pass)
+        for warning in table_target_schema.snapshot_command_warnings(yaml_config, source_schema, target_schema):
+            logger.warning(f"Snapshot command: {warning}")
+            options.report.warnings.append(warning)
+        passes = table_target_schema.split_by_target_schema(yaml_config, source_schema, target_schema) \
+            if yaml_config else [(target_schema, yaml_config)]
+        results = [create_entities(
+            token, pipeline_id, source_schema, pass_target if len(passes) > 1 else target_schema,
             tables, source_agent_id, target_agent_id,
-            source_type, target_type, yaml_config, skip_errors, chunk_size,
+            source_type, target_type, pass_yaml, skip_errors, chunk_size,
             source_agent_tag=source_agent.get('agentTag'),
             target_agent_tag=target_agent.get('agentTag'),
             chronos_token=chronos_token
-        )
+        ) for pass_target, pass_yaml in passes]
+        result = table_target_schema.merge_results(results)
 
         if result.get('skipped_discovery', False):
             logger.info("Entity discovery was skipped as tables will be created on demand")
@@ -4849,16 +5646,61 @@ def main(pipeline_id, source_schema, target_schema, source_type, target_type, ya
         logger.warning("Skipping error due to skip_errors=True")
         return {"successful": 0, "failed": 0, "total": 0, "errors": [str(e)]}
 
+    _log_run_outcome(options, result, pipeline_id)
+    return result
+
+
+def _prepared_yaml(options, yaml_file, source_schema, target_schema):
+    """``(yaml_config, source_schema, target_schema)``: the YAML loaded, remapped and with inferred target schemas."""
+    yaml_config = load_yaml_config(yaml_file) if yaml_file else None
+    if options.remap:
+        # In memory, before any request: the file on disk is left as it is.
+        yaml_config = options.remap.apply(yaml_config)
+        source_schema = options.remap.schema(source_schema)
+        target_schema = options.remap.target_schema(target_schema)
+        logger.info(f"Remap applied: source schema {source_schema}, target schema {target_schema}")
+    if yaml_config:
+        # Tables an older exporter filed under the wrong target schema: their snapshot commands name the right one.
+        yaml_config, inferred = table_target_schema.apply_inferred_target_schemas(yaml_config, target_schema)
+        options.report.warnings.extend(n for n in inferred if n.split(".", 1)[0] == str(source_schema))
+    return yaml_config, source_schema, target_schema
+
+
+def _log_run_outcome(options, result, pipeline_id):
+    if options.dry_run:
+        logger.info("Dry run: nothing was written")
     if result.get('failed'):
         log_failure(logger, f"Entity creation completed with {result['failed']} of {result['total']} entities "
                             f"failed for pipeline {pipeline_id}")
     else:
         log_success(logger, f"Entity creation completed successfully for pipeline {pipeline_id}")
     lockfile_complete()
-    return result
 
 
-if __name__ == "__main__":
+def _exit_code(result, options):
+    """The exit code of the command line, compatible with main: 0 even when some entities failed (main.py, the
+    Windows exe and scripts treat non-zero as "the schema could not be processed" and the per-entity outcome is
+    in the log and in the import report). Non-zero (1) only when the run stopped as a whole:
+
+    - no result (a fatal error);
+    - ``--strict-validate`` found issues (nothing written, opt-in);
+    - the existing entities could not be listed under --on-existing / a resume (nothing written);
+    - a ``--dry-run`` (opt-in check mode, nothing written) found something that would fail.
+
+    automator_app/import_backup.py does not read this code: its own 0 full / 1 failed / 2 partial comes from
+    the report.
+    """
+    if not isinstance(result, dict):
+        return 1
+    if result.get('validation_failed') or result.get('aborted'):
+        return 1
+    if options.dry_run and (options.report.validation_issues
+                            or any(row.get('status') == 'fail' for row in options.report.plan)):
+        return 1
+    return 0
+
+
+def build_arg_parser():
     parser = argparse.ArgumentParser(description="Gluesync Entity Creation Script")
     parser.add_argument('--pipeline', required=True, help="Pipeline ID")
     parser.add_argument('--source-schema', required=True, help="Source schema name")
@@ -4871,18 +5713,47 @@ if __name__ == "__main__":
     parser.add_argument('--yaml-file', help="YAML configuration file path")
     parser.add_argument('--token', required=True, help="Authentication token")
     parser.add_argument('--chronos-token', default=None, help="User token for Chronos authentication (falls back to --token if omitted)")
+    import_options.add_cli_arguments(parser)
+    return parser
 
-    args = parser.parse_args()
 
-    main(
-        args.pipeline,
-        args.source_schema,
-        args.target_schema,
-        args.source_type,
-        args.target_type,
-        args.yaml_file,
-        args.token,
-        args.skip_errors,
-        args.chunk_size,
-        chronos_token=args.chronos_token
+def cli(argv=None):
+    """The command line: exit code 0 also with per-entity failures, as before (see _exit_code)."""
+    args = build_arg_parser().parse_args(argv)
+    # main.py hands its options over through the environment; flags given here win.
+    env_options = import_options.ImportOptions.from_env()
+    options = import_options.ImportOptions.from_args(args)
+    options = import_options.ImportOptions(
+        remap=env_options.remap.merged(options.remap),
+        dry_run=options.dry_run or env_options.dry_run,
+        validate=options.validate and env_options.validate,
+        strict_validate=options.strict_validate or env_options.strict_validate,
+        allow_offline_entities=options.allow_offline_entities or env_options.allow_offline_entities,
+        no_discovery=options.no_discovery or env_options.no_discovery,
+        allow_missing_tables=options.allow_missing_tables or env_options.allow_missing_tables,
+        on_existing=options.on_existing or env_options.on_existing,
+        corehub_version=options.corehub_version or env_options.corehub_version,
     )
+    try:
+        result = main(
+            args.pipeline,
+            args.source_schema,
+            args.target_schema,
+            args.source_type,
+            args.target_type,
+            args.yaml_file,
+            args.token,
+            args.skip_errors,
+            args.chunk_size,
+            chronos_token=args.chronos_token,
+            import_opts=options,
+        )
+    except Exception as error:  # pylint: disable=broad-except
+        logger.error(f"Entity creation failed: {error}")
+        return 1
+    return _exit_code(result, options)
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(cli())

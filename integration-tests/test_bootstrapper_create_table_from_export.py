@@ -74,7 +74,7 @@ def _order_rows():
         {"source": "CREATED_BY", "target": "CREATED_BY", "type": "VARCHAR2", "dataLength": 10,
          "numericPrecision": 0, "numericScale": 0, "isNullable": False, "isPK": False, "id": 106,
          "ordinalPosition": 19, "charSet": "37", "targetPosition": 16, "targetIsNullable": True},
-        {"target": "CHANGED_FLAG", "type": "VARCHAR2", "expression": {"type": "StaticStr", "staticValue": "Y"}},
+        {"target": "CHANGE_MARK", "type": "VARCHAR2", "expression": {"type": "StaticStr", "staticValue": "Y"}},
         {"target": "LAST_MODIFIED_DATE", "type": "TIMESTAMP", "expression": {"type": "LocalTs"}},
     ]
 
@@ -230,7 +230,7 @@ EXPECTED_ORDER_RESULT = [
     ("STATUS_CODE", "VARCHAR2", 1, 0, 0, False, True),
     ("RECEIVED_DATE", "TIMESTAMP", 0, 8, 0, False, True),
     ("CREATED_BY", "VARCHAR2", 10, 0, 0, False, True),
-    ("CHANGED_FLAG", "VARCHAR2", 1024, 0, 0, False, True),
+    ("CHANGE_MARK", "VARCHAR2", 1024, 0, 0, False, True),
     ("LAST_MODIFIED_DATE", "TIMESTAMP", 0, 0, 0, False, True),
 ]
 
@@ -290,14 +290,14 @@ class OlderExportsTests(unittest.TestCase):
         types = {name: data_type for name, data_type, *_ in created(hub, "ORDER_RESULT")}
         self.assertEqual(types, {
             "ORDER_NUMBER": "NUMBER", "TAX_ID": "NUMBER", "STATUS_CODE": "VARCHAR2", "RECEIVED_DATE": "TIMESTAMP",
-            "CREATED_BY": "VARCHAR2", "CHANGED_FLAG": "VARCHAR2", "LAST_MODIFIED_DATE": "TIMESTAMP",
+            "CREATED_BY": "VARCHAR2", "CHANGE_MARK": "VARCHAR2", "LAST_MODIFIED_DATE": "TIMESTAMP",
         })
 
     def test_without_positions_the_columns_keep_the_order_of_their_source_columns(self):
         hub = CreatingHub()
         run_import(hub, orders_yaml(self._old_rows()))
         self.assertEqual([c[0] for c in created(hub, "ORDER_RESULT")],
-                         ["ORDER_NUMBER", "TAX_ID", "STATUS_CODE", "RECEIVED_DATE", "CREATED_BY", "CHANGED_FLAG",
+                         ["ORDER_NUMBER", "TAX_ID", "STATUS_CODE", "RECEIVED_DATE", "CREATED_BY", "CHANGE_MARK",
                           "LAST_MODIFIED_DATE"])
 
     def test_nullability_is_the_one_of_the_source_column_without_targetIsNullable(self):
@@ -305,7 +305,7 @@ class OlderExportsTests(unittest.TestCase):
         run_import(hub, orders_yaml(self._old_rows()))
         by_name = {c[0]: c for c in created(hub, "ORDER_RESULT")}
         self.assertFalse(by_name["TAX_ID"][6])
-        self.assertTrue(by_name["CHANGED_FLAG"][6])
+        self.assertTrue(by_name["CHANGE_MARK"][6])
 
     def test_a_declared_target_data_type_is_sent_as_declared(self):
         rows = _order_rows()
@@ -512,9 +512,9 @@ class RowShapesTests(unittest.TestCase):
         self.assertEqual(names, ["STATUS_CODE", "ORD_NO"])
 
     def test_rows_that_write_no_source_column_fall_back_to_the_source_columns_as_the_entity_does(self):
-        names, _ = self._columns([{"target": "CHANGED_FLAG", "type": "VARCHAR2",
+        names, _ = self._columns([{"target": "CHANGE_MARK", "type": "VARCHAR2",
                                    "expression": {"type": "StaticStr", "staticValue": "Y"}}])
-        self.assertEqual(names, ["ORD_SEQ", "ORD_NO", "CUST_TAX", "STATUS", "PLACED_ON", "CREATED_BY", "CHANGED_FLAG"])
+        self.assertEqual(names, ["ORD_SEQ", "ORD_NO", "CUST_TAX", "STATUS", "PLACED_ON", "CREATED_BY", "CHANGE_MARK"])
 
     def test_the_target_only_columns_no_row_writes_come_last(self):
         rows = [{"source": "ORD_NO", "target": "ORDER_NUMBER", "type": "NUMBER", "targetPosition": 1},
@@ -574,20 +574,20 @@ def account_rows():
     """ACCOUNTS has no primary key: the entity is keyed on the targets of ``keys`` plus ``targetKeys``, which names a
     column a field function writes."""
     return [
-        {"source": "OWNER_ID", "target": "OWNER_SIN", "type": "NUMBER", "dataLength": 0, "numericPrecision": 9,
+        {"source": "OWNER_ID", "target": "OWNER_REF", "type": "NUMBER", "dataLength": 0, "numericPrecision": 9,
          "numericScale": 0, "isNullable": False, "isPK": False, "id": 302, "ordinalPosition": 2, "targetPosition": 1,
          "targetIsNullable": False},
-        {"source": "ACC_NO", "target": "ACCOUNT_NUMBER", "type": "NUMBER", "dataLength": 0, "numericPrecision": 10,
+        {"source": "ACC_NO", "target": "ACCOUNT_REF", "type": "NUMBER", "dataLength": 0, "numericPrecision": 10,
          "numericScale": 0, "isNullable": False, "isPK": False, "id": 301, "ordinalPosition": 1, "targetPosition": 2,
          "targetIsNullable": False},
         {"source": "NOTE", "target": "NOTE", "type": "VARCHAR2", "dataLength": 20, "numericPrecision": 0,
          "numericScale": 0, "isNullable": True, "isPK": False, "id": 303, "ordinalPosition": 3, "targetPosition": 3,
          "targetIsNullable": True},
-        {"target": "INSTITUTION_CODE", "type": "VARCHAR2", "expression": {"type": "StaticStr", "staticValue": "X"}},
+        {"target": "BRANCH_CODE", "type": "VARCHAR2", "expression": {"type": "StaticStr", "staticValue": "X"}},
     ]
 
 
-def accounts_yaml(target_keys=("OWNER_SIN", "INSTITUTION_CODE", "ACCOUNT_NUMBER")):
+def accounts_yaml(target_keys=("OWNER_REF", "BRANCH_CODE", "ACCOUNT_REF")):
     return yaml_of(ACCOUNTS={"name": "ACCOUNT_RESULT", "entityName": "SALES.ACCOUNTS", "keys": ["ACC_NO", "OWNER_ID"],
                              "targetKeys": list(target_keys), "columns": account_rows()})
 
@@ -603,7 +603,7 @@ class TargetKeysTests(unittest.TestCase):
         hub = CreatingHub(reflect_created=True)
         result = run_import(hub, accounts_yaml())
         self.assertEqual(sorted(self._primary_key(hub, "ACCOUNT_RESULT")),
-                         ["ACCOUNT_NUMBER", "INSTITUTION_CODE", "OWNER_SIN"])
+                         ["ACCOUNT_REF", "BRANCH_CODE", "OWNER_REF"])
         self.assertEqual((result["failed"], result["errors"]), (0, []))
 
     def test_the_entity_is_accepted_with_those_target_keys(self):
@@ -611,17 +611,17 @@ class TargetKeysTests(unittest.TestCase):
         run_import(hub, accounts_yaml())
         target = hub.saved[0]["agentEntities"][1]
         self.assertEqual(sorted(c["name"] for c in target["columns"] if c["isPK"]),
-                         ["ACCOUNT_NUMBER", "INSTITUTION_CODE", "OWNER_SIN"])
+                         ["ACCOUNT_REF", "BRANCH_CODE", "OWNER_REF"])
 
     def test_target_keys_are_matched_without_regard_to_case(self):
         hub = CreatingHub()
-        run_import(hub, accounts_yaml(target_keys=("owner_sin", "institution_code", "Account_Number")))
+        run_import(hub, accounts_yaml(target_keys=("owner_ref", "branch_code", "Account_Ref")))
         self.assertEqual(sorted(self._primary_key(hub, "ACCOUNT_RESULT")),
-                         ["ACCOUNT_NUMBER", "INSTITUTION_CODE", "OWNER_SIN"])
+                         ["ACCOUNT_REF", "BRANCH_CODE", "OWNER_REF"])
 
     def test_a_target_key_that_is_no_column_of_the_table_refuses_it(self):
         hub = CreatingHub(reflect_created=True)
-        result = run_import(hub, accounts_yaml(target_keys=("OWNER_SIN", "NO_SUCH_COLUMN")))
+        result = run_import(hub, accounts_yaml(target_keys=("OWNER_REF", "NO_SUCH_COLUMN")))
         self.assertEqual((entity_names(hub), hub.statements, result["failed"]), ([], {}, 1))
         self.assertIn("NO_SUCH_COLUMN", result["errors"][0])
 
@@ -904,7 +904,7 @@ class RoundTripTests(unittest.TestCase):
         target["columns"] += [
             {"id": 14, "name": "LAST_MODIFIED_DATE", "dataType": "TIMESTAMP", "position": 5, "isPK": False,
              "isNullable": True, "charMaxLength": 11, "numPrec": 0, "numScale": 6, "tableId": 2},
-            {"id": 15, "name": "CHANGED_FLAG", "dataType": "VARCHAR2", "position": 4, "isPK": False,
+            {"id": 15, "name": "CHANGE_MARK", "dataType": "VARCHAR2", "position": 4, "isPK": False,
              "isNullable": True, "charMaxLength": 1, "numPrec": 0, "numScale": 0, "tableId": 2},
         ]
         target["entityType"]["columnsMappingMatrix"] += [
@@ -914,7 +914,7 @@ class RoundTripTests(unittest.TestCase):
         exported, _ = _export_rows(entity)
         table = exported[SOURCE_SCHEMA]["tables"]["custom"]["ORDERS"]
         by_target = {row["target"]: row for row in table["columns"]}
-        self.assertEqual((by_target["CHANGED_FLAG"]["targetPosition"], by_target["LAST_MODIFIED_DATE"]["targetPosition"]),
+        self.assertEqual((by_target["CHANGE_MARK"]["targetPosition"], by_target["LAST_MODIFIED_DATE"]["targetPosition"]),
                          (4, 5))
         self.assertNotIn("dataLength", by_target["LAST_MODIFIED_DATE"])
         self.assertNotIn("numericScale", by_target["LAST_MODIFIED_DATE"])
@@ -930,9 +930,9 @@ class RoundTripTests(unittest.TestCase):
         result = run_import(hub, yaml.safe_dump(exported, sort_keys=False))
         self.assertEqual(result["failed"], 0, result)
         self.assertEqual([c[0] for c in created(hub, "ORDER_RESULT")],
-                         ["ORDER_NUMBER", "CUSTOMER_NAME", "NOTE", "CHANGED_FLAG", "LAST_MODIFIED_DATE"])
+                         ["ORDER_NUMBER", "CUSTOMER_NAME", "NOTE", "CHANGE_MARK", "LAST_MODIFIED_DATE"])
         positions = {c["name"]: c["position"] for c in hub.saved[0]["agentEntities"][1]["columns"]}
-        self.assertEqual((positions["CHANGED_FLAG"], positions["LAST_MODIFIED_DATE"]), (4, 5))
+        self.assertEqual((positions["CHANGE_MARK"], positions["LAST_MODIFIED_DATE"]), (4, 5))
 
     def test_an_older_export_gives_the_columns_no_source_feeds_the_places_of_the_table_it_created(self):
         rows = _order_rows()
@@ -944,7 +944,7 @@ class RoundTripTests(unittest.TestCase):
         result = run_import(first, orders_yaml(rows))
         self.assertEqual(result["failed"], 0, result)
         table = [c[0] for c in created(first, "ORDER_RESULT")]
-        self.assertEqual(table[-3:], ["CHANGED_FLAG", "LAST_MODIFIED_BY", "LAST_MODIFIED_DATE"])
+        self.assertEqual(table[-3:], ["CHANGE_MARK", "LAST_MODIFIED_BY", "LAST_MODIFIED_DATE"])
         entity = copy.deepcopy(first.saved[0])
         target_columns = entity["agentEntities"][1]["columns"]
         self.assertEqual({c["name"]: c["position"] for c in target_columns},
@@ -967,7 +967,7 @@ class RoundTripTests(unittest.TestCase):
         run_import(hub, orders_yaml(rows))
         positions = {c["name"]: c["position"] for c in hub.saved[0]["agentEntities"][1]["columns"]}
         self.assertEqual(positions["LAST_MODIFIED_DATE"], 0)
-        self.assertEqual(positions["CHANGED_FLAG"], 0)
+        self.assertEqual(positions["CHANGE_MARK"], 0)
 
     def _positions(self, hub):
         return {c["name"]: c["position"] for c in hub.saved[0]["agentEntities"][1]["columns"]}

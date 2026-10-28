@@ -179,7 +179,7 @@
        "isIdentity": false,
        "isNullable": true,
        "isPK": false,
-       "name": "CHANGED_FLAG",
+       "name": "CHANGE_MARK",
        "position": 0,
        "tableId": 1249964763
       },

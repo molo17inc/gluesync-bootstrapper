@@ -43,7 +43,7 @@ from utils.log import get_logger, create_log_file, log_success, log_failure, loc
 from utils.gluesync_sdk_client import initialize_gluesync_sdk, get_token, get_gluesync_client
 from utils.core_hub_client import CoreHubClient
 from utils.transactions_audit_client import TransactionsAuditClient
-from commons import extract_schemas_from_yaml, extract_all_schemas_from_yaml, extract_schema_types_from_yaml, configure_core_hub
+from commons import extract_schemas_from_yaml, extract_all_schemas_from_yaml, extract_schema_types_from_yaml, configure_core_hub, catalog_type_for_agent_tag
 from commons import admin_credentials_path, admin_password_problem, load_admin_password, login_password_candidates, save_admin_credentials
 from utils.redact import redact
 
@@ -220,6 +220,17 @@ def _load_agent_type_catalog_for_bootstrapper() -> dict[str, str]:
     return mapping
 
 
+def _inferred_type_for_agent(agent, catalog) -> tuple[Optional[str], Optional[str]]:
+    """Return ``(SOURCE|TARGET, SQL|NoSQL)`` for one agents-config entry, or ``(None, None)``."""
+    if not isinstance(agent, dict):
+        return None, None
+    tag = str(agent.get("agentTag") or "").lower()
+    agent_type = agent.get("agentType")
+    if not tag or agent_type not in {"SOURCE", "TARGET"}:
+        return None, None
+    return agent_type, catalog_type_for_agent_tag(catalog, tag) or "SQL"
+
+
 def infer_pipeline_schema_types_from_config(conf: dict) -> tuple[str, str]:
     """Infer (sourceType, targetType) as SQL/NoSQL from config agents.
 
@@ -239,17 +250,11 @@ def infer_pipeline_schema_types_from_config(conf: dict) -> tuple[str, str]:
     tgt_type: Optional[str] = None
 
     for agent in agents_cfg:
-        if not isinstance(agent, dict):
-            continue
-        tag = str(agent.get("agentTag") or "").lower()
-        agent_type = agent.get("agentType")
-        if not tag or agent_type not in {"SOURCE", "TARGET"}:
-            continue
-
-        if agent_type == "SOURCE" and src_type is None:
-            src_type = catalog.get(tag, "SQL")
-        elif agent_type == "TARGET" and tgt_type is None:
-            tgt_type = catalog.get(tag, "SQL")
+        role, inferred = _inferred_type_for_agent(agent, catalog)
+        if role == "SOURCE" and src_type is None:
+            src_type = inferred
+        elif role == "TARGET" and tgt_type is None:
+            tgt_type = inferred
 
     return src_type or "SQL", tgt_type or "SQL"
 
@@ -289,7 +294,9 @@ CONFIG_BASE_DIR = Path(file_conf_path).expanduser().resolve().parent
 # Retrieve CoreHub URL from SDK if not specified
 core_hub_url = os.getenv('CORE_HUB_URL')
 
-# use_sdk variable is now defined earlier in the code
+# USE_SDK is read here, before its first use below (it used to be read only further down, so a run
+# without CORE_HUB_URL failed with NameError instead of discovering the Core Hub through the SDK).
+use_sdk = os.getenv('USE_SDK', 'False').lower() in ['true', '1', 't', 'y', 'yes']
 
 if not core_hub_url:
     if use_sdk:
@@ -706,8 +713,7 @@ def _complete_default_login(token, change_required):
     return token
 
 
-# Retrieve use_sdk from environment early to avoid unnecessary imports/checks
-use_sdk = os.getenv('USE_SDK', 'False').lower() in ['true', '1', 't', 'y', 'yes']
+# use_sdk is read near the top of the module (see CORE_HUB_URL discovery)
 
 # Only check license file and initialize SDK if USE_SDK is true
 if use_sdk:
@@ -1344,6 +1350,8 @@ def _run_entity_creation(schema_label, source_schema, target_schema, pipeline_id
         else:
             logger.warning(f"TABLE_LIST.yaml not found at {TABLE_LIST_YAML}. Proceeding without it.")
 
+        # The GS_IMPORT_* variables (GS_IMPORT_REMAP, GS_IMPORT_ON_EXISTING, GS_IMPORT_ALLOW_OFFLINE, ...) are
+        # inherited by the subprocess, whose cli() reads them (import_options.ImportOptions.from_env).
         subprocess.run(cmd, check=True)
         log_success(
             logger,
@@ -1447,6 +1455,11 @@ def _complete_pipeline(token, pipeline_id, pipeline_name):
 
 def main():
     args = _parse_args()
+    if os.getenv('GS_IMPORT_DRY_RUN', '').strip().lower() in ('1', 'true', 'yes', 'y', 't'):
+        # main.py creates a pipeline and its agents before any entity: there is no write-free run of it.
+        raise BootstrapperError(
+            "GS_IMPORT_DRY_RUN is not supported by main.py (it creates the pipeline first). Dry-run the entity "
+            "stage against an existing pipeline instead: python create_all_entities.py --pipeline <id> ... --dry-run")
     _log_startup_banner()
 
     schema_pairs, effective_source_type, effective_target_type = _extract_yaml_schema_hints()

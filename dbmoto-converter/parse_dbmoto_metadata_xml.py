@@ -35,6 +35,45 @@ from decimal import Decimal
 from typing import Dict, List, Optional
 import yaml
 
+try:  # the bootstrapper's remap (repo root); absent from a Lambda package built from this folder alone
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    import import_options as _import_options
+except ImportError:  # pragma: no cover
+    _import_options = None
+finally:
+    sys.path.pop(0)
+
+_TRUE = ('1', 'true', 'yes', 'y', 't')
+
+
+def _template_substring_match():
+    """Opt-in (--template-substring-match / TEMPLATE_SUBSTRING_MATCH=true): old substring template matching."""
+    return os.environ.get('TEMPLATE_SUBSTRING_MATCH', '').strip().lower() in _TRUE
+
+
+def _active_remap():
+    """The remap of --remap/--schema-map/... or of the file in DBMOTO_REMAP; None when none is asked for."""
+    if _import_options is None:
+        if os.environ.get('DBMOTO_REMAP'):
+            print("Warning: DBMOTO_REMAP is set but import_options.py is not available: no remap applied")
+        return None
+    remap = _import_options.Remap()
+    if os.environ.get('DBMOTO_REMAP'):
+        remap = _import_options.Remap.load(os.environ['DBMOTO_REMAP'])
+    cli_remap = getattr(args, 'remap_obj', None)
+    if cli_remap is not None:
+        remap = remap.merged(cli_remap)
+    return remap if remap else None
+
+
+def _apply_active_remap(yaml_data):
+    """``yaml_data`` with the active remap applied; unchanged when no remap is asked for."""
+    remap = _active_remap()
+    if remap is not None:
+        yaml_data = remap.apply(yaml_data)
+    return yaml_data
+
+
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Parse DbMoto metadata XML and generate YAML configurations.')
     parser.add_argument('xml_path', type=str, help='Path to the DbMoto metadata XML file')
@@ -50,7 +89,16 @@ def parse_arguments():
                     help='Do not process schemas from target connections (sets include-targets to False)')
     parser.add_argument('--force-schemas', type=str,
                     help='Force schema mappings (format: SOURCE:TARGET,SOURCE2:TARGET2)')
-    return parser.parse_args()
+    parser.add_argument('--template-substring-match', action='store_true',
+                    help='Also match a template schema whose name contains (or is contained in) the schema name '
+                         '(old behaviour; default: exact, case-insensitive match only)')
+    if _import_options is not None:
+        _import_options.add_cli_arguments(parser, entity_options=False)
+    parsed = parser.parse_args()
+    if parsed.template_substring_match:
+        os.environ['TEMPLATE_SUBSTRING_MATCH'] = 'true'
+    parsed.remap_obj = _import_options.remap_from_args(parsed) if _import_options is not None else None
+    return parsed
 
 # Parse command line arguments (only if running as CLI script)
 if __name__ == "__main__" and len(sys.argv) > 1:
@@ -64,6 +112,7 @@ else:
             self.template = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'table-list-template-basic.yaml')
             self.include_targets = True
             self.force_schemas = None
+            self.remap_obj = None
     args = MockArgs()
 
 # Override with environment variables if running in Lambda/serverless environment
@@ -866,9 +915,12 @@ def find_matching_template_schema(schema_name, template_schemas):
         _, schema = template_schemas[schema_name.lower()]
         return schema
     
-    # Try partial match (case insensitive)
-    for template_lower, (template_name, schema) in template_schemas.items():
+    # Partial match only when asked for: "SALES" used to pick the template of "SALES_ARCHIVE" (or of "SAL").
+    if not _template_substring_match():
+        return None
+    for template_lower, (template_name, schema) in sorted(template_schemas.items()):
         if schema_name.lower() in template_lower or template_lower in schema_name.lower():
+            print(f"Warning: schema {schema_name} uses template schema {template_name} (substring match)")
             return schema
     
     # No match found, return None
@@ -1095,7 +1147,26 @@ def _build_table_entry_helper(table, table_lookup, replications, field_mappings,
 
     return whitelist_name, table_config, is_disabled, target_schema_name, target_conn_name
 
+def _unique_output_path(output_dir, filename, schema_name, written_files):
+    """``output_dir/filename``, never one this export already wrote: the schema, then a counter, is added."""
+    path = os.path.join(output_dir, filename)
+    if path not in written_files:
+        written_files.add(path)
+        return path
+    stem, ext = os.path.splitext(filename)
+    candidate = f"{stem}__{schema_name}{ext}".replace("/", "_")
+    counter = 2
+    while os.path.join(output_dir, candidate) in written_files:
+        candidate = f"{stem}__{schema_name}__{counter}{ext}".replace("/", "_")
+        counter += 1
+    new_path = os.path.join(output_dir, candidate)
+    print(f"Warning: {filename} was already written for another schema; writing schema {schema_name} to {candidate}")
+    written_files.add(new_path)
+    return new_path
+
+
 def export_as_yaml(connections, groups, chains, replications, source_to_target_schemas, field_mappings, field_id_to_name, record_id_mappings=None, output_dir=None, template_file=None, journal_checkpoints=None, refresh_filters=None):
+    written_files = set()  # the YAML paths this export wrote: a second schema never overwrites one
     # Use environment variables if parameters are not provided (Lambda mode)
     if output_dir is None:
         output_dir = os.environ.get('OUTPUT_DIR')
@@ -1393,7 +1464,9 @@ def export_as_yaml(connections, groups, chains, replications, source_to_target_s
                             filename = f"{conn_name}__{schema_name}.yaml".replace("/", "_")
                     else:
                         filename = f"{conn_name}__{schema_name}.yaml".replace("/", "_")
-                    filepath = os.path.join(output_dir, filename)
+                    filepath = _unique_output_path(output_dir, filename, schema_name, written_files)
+
+                    yaml_data = _apply_active_remap(yaml_data)
 
                     with open(filepath, "w", encoding='utf-8') as f:
                         # Write header comment with source database information

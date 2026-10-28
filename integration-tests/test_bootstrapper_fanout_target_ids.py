@@ -2,7 +2,7 @@
 """One source column fanned out onto several target columns (1:N) must give each target column its own id.
 
 A target column discovery does not report took the id of its source column, so the two targets of a fan-out
-(``{source: AFUSER, target: CREATED_BY}`` and ``{source: AFUSER, target: LAST_MODIFIED_BY}``) got the same id on a
+(``{source: AUDIT_USER, target: CREATED_BY}`` and ``{source: AUDIT_USER, target: LAST_MODIFIED_BY}``) got the same id on a
 target table that does not exist yet, and the restore failed on the column mapping of the entity. Every target column
 takes its id from one place (``_TargetBuild.target_column_id``): a column keeps the id it got, a discovered column
 keeps its own, and a new one takes the id of its source column unless another target column holds it.
@@ -25,27 +25,27 @@ import entity_mapping  # noqa: E402
 from fake_corehub import column  # noqa: E402
 from test_bootstrapper_entity_payloads_23 import matrix, run, sides, table  # noqa: E402
 
-AFUSER_ID = 5528
+AUDIT_USER_ID = 5528
 
-SOURCE = {("src", "SAAFTR"): [
+SOURCE = {("src", "SAMPLE_AUDIT"): [
     column("ID", 1, "integer", is_pk=True, nullable=False),
-    column("AFUSER", AFUSER_ID, "varchar"),
+    column("AUDIT_USER", AUDIT_USER_ID, "varchar"),
     column("NOTE", 3, "varchar"),
 ]}
 # The same table with the fanned-out column as its primary key.
-SOURCE_KEYED_ON_AFUSER = {("src", "SAAFTR"): [
+SOURCE_KEYED_ON_AUDIT_USER = {("src", "SAMPLE_AUDIT"): [
     column("ID", 1, "integer"),
-    column("AFUSER", AFUSER_ID, "varchar", is_pk=True, nullable=False),
+    column("AUDIT_USER", AUDIT_USER_ID, "varchar", is_pk=True, nullable=False),
     column("NOTE", 3, "varchar"),
 ]}
 
 FAN_OUT = table("""        keys: [ID]
-        name: SAAFTR
+        name: SAMPLE_AUDIT
         columns:
           - {source: ID, target: ID}
-          - {source: AFUSER, target: CREATED_BY}
-          - {source: AFUSER, target: LAST_MODIFIED_BY}
-          - {source: NOTE, target: NOTE}""", "SAAFTR")
+          - {source: AUDIT_USER, target: CREATED_BY}
+          - {source: AUDIT_USER, target: LAST_MODIFIED_BY}
+          - {source: NOTE, target: NOTE}""", "SAMPLE_AUDIT")
 
 
 def run_capturing(yaml_text, **kwargs):
@@ -59,7 +59,7 @@ def run_capturing(yaml_text, **kwargs):
         return result
 
     with mock.patch.object(create_all_entities, "_assemble_target_side", side_effect=spy):
-        hub, result, entities = run(yaml_text, "SAAFTR", **kwargs)
+        hub, result, entities = run(yaml_text, "SAMPLE_AUDIT", **kwargs)
     return hub, result, entities, captured
 
 
@@ -79,75 +79,75 @@ class FanOutTargetIdsTests(unittest.TestCase):
         self.assertEqual(len(target_ids), len(set(target_ids)), f"a target id is shared: {ids_by_name(target['columns'])}")
         by_name = ids_by_name(target["columns"])
         self.assertNotEqual(by_name["CREATED_BY"], by_name["LAST_MODIFIED_BY"])
-        fanned = [e for e in raw_matrix(entity) if e["sourceColumnIds"] == [AFUSER_ID]]
+        fanned = [e for e in raw_matrix(entity) if e["sourceColumnIds"] == [AUDIT_USER_ID]]
         self.assertEqual(len(fanned), 1)
         self.assertCountEqual(fanned[0]["targetColumnIds"], [by_name["CREATED_BY"], by_name["LAST_MODIFIED_BY"]])
         self.assertEqual(len(fanned[0]["targetColumnIds"]), 2)
 
     def test_target_table_that_does_not_exist_yet(self):
         # The customer restore: discovery of the target returns no column at all.
-        _, result, entities = run(FAN_OUT, "SAAFTR", source_tables=SOURCE, target_tables={})
+        _, result, entities = run(FAN_OUT, "SAMPLE_AUDIT", source_tables=SOURCE, target_tables={})
         self.assertEqual((result["failed"], result["successful"]), (0, 1), result.get("errors"))
-        entity = entities["src.SAAFTR"]
+        entity = entities["src.SAMPLE_AUDIT"]
         self.assert_fan_out_ids_are_distinct(entity)
         self.assertEqual(matrix(entity), [
-            (["ID"], ["ID"]), (["NOTE"], ["NOTE"]), (["AFUSER"], ["CREATED_BY", "LAST_MODIFIED_BY"]),
+            (["ID"], ["ID"]), (["NOTE"], ["NOTE"]), (["AUDIT_USER"], ["CREATED_BY", "LAST_MODIFIED_BY"]),
         ])
         # the first target keeps the id of its source column, the second one takes a fresh one
         _, target = sides(entity)
         by_name = ids_by_name(target["columns"])
-        self.assertEqual(by_name["CREATED_BY"], AFUSER_ID)
-        self.assertEqual(by_name["LAST_MODIFIED_BY"], AFUSER_ID + 1)
+        self.assertEqual(by_name["CREATED_BY"], AUDIT_USER_ID)
+        self.assertEqual(by_name["LAST_MODIFIED_BY"], AUDIT_USER_ID + 1)
 
     def test_discovered_target_columns_keep_their_ids(self):
-        target_tables = {("tgt", "SAAFTR"): [
+        target_tables = {("tgt", "SAMPLE_AUDIT"): [
             column("ID", 201, "integer", is_pk=True, nullable=False),
             column("CREATED_BY", 202, "varchar"),
             column("LAST_MODIFIED_BY", 203, "varchar"),
             column("NOTE", 204, "varchar"),
         ]}
-        _, result, entities = run(FAN_OUT, "SAAFTR", source_tables=SOURCE, target_tables=target_tables)
+        _, result, entities = run(FAN_OUT, "SAMPLE_AUDIT", source_tables=SOURCE, target_tables=target_tables)
         self.assertEqual(result["failed"], 0, result.get("errors"))
-        entity = entities["src.SAAFTR"]
+        entity = entities["src.SAMPLE_AUDIT"]
         self.assert_fan_out_ids_are_distinct(entity)
         _, target = sides(entity)
         self.assertEqual(ids_by_name(target["columns"]),
                          {"ID": 201, "CREATED_BY": 202, "LAST_MODIFIED_BY": 203, "NOTE": 204})
 
     def test_one_fanned_target_discovered_the_other_not(self):
-        # The discovered CREATED_BY holds the id of the source column AFUSER, which the new column would take.
-        target_tables = {("tgt", "SAAFTR"): [column("CREATED_BY", AFUSER_ID, "varchar")]}
-        _, result, entities = run(FAN_OUT, "SAAFTR", source_tables=SOURCE, target_tables=target_tables)
+        # The discovered CREATED_BY holds the id of the source column AUDIT_USER, which the new column would take.
+        target_tables = {("tgt", "SAMPLE_AUDIT"): [column("CREATED_BY", AUDIT_USER_ID, "varchar")]}
+        _, result, entities = run(FAN_OUT, "SAMPLE_AUDIT", source_tables=SOURCE, target_tables=target_tables)
         self.assertEqual(result["failed"], 0, result.get("errors"))
-        entity = entities["src.SAAFTR"]
+        entity = entities["src.SAMPLE_AUDIT"]
         self.assert_fan_out_ids_are_distinct(entity)
         _, target = sides(entity)
         by_name = ids_by_name(target["columns"])
-        self.assertEqual(by_name["CREATED_BY"], AFUSER_ID)
-        self.assertNotIn(by_name["LAST_MODIFIED_BY"], {AFUSER_ID, by_name["ID"], by_name["NOTE"]})
+        self.assertEqual(by_name["CREATED_BY"], AUDIT_USER_ID)
+        self.assertNotIn(by_name["LAST_MODIFIED_BY"], {AUDIT_USER_ID, by_name["ID"], by_name["NOTE"]})
         self.assertEqual(by_name["LAST_MODIFIED_BY"], max(v for k, v in by_name.items() if k != "LAST_MODIFIED_BY") + 1)
 
     def test_the_other_fanned_target_discovered(self):
-        target_tables = {("tgt", "SAAFTR"): [column("LAST_MODIFIED_BY", AFUSER_ID, "varchar")]}
-        _, result, entities = run(FAN_OUT, "SAAFTR", source_tables=SOURCE, target_tables=target_tables)
+        target_tables = {("tgt", "SAMPLE_AUDIT"): [column("LAST_MODIFIED_BY", AUDIT_USER_ID, "varchar")]}
+        _, result, entities = run(FAN_OUT, "SAMPLE_AUDIT", source_tables=SOURCE, target_tables=target_tables)
         self.assertEqual(result["failed"], 0, result.get("errors"))
-        self.assert_fan_out_ids_are_distinct(entities["src.SAAFTR"])
-        _, target = sides(entities["src.SAAFTR"])
-        self.assertEqual(ids_by_name(target["columns"])["LAST_MODIFIED_BY"], AFUSER_ID)
+        self.assert_fan_out_ids_are_distinct(entities["src.SAMPLE_AUDIT"])
+        _, target = sides(entities["src.SAMPLE_AUDIT"])
+        self.assertEqual(ids_by_name(target["columns"])["LAST_MODIFIED_BY"], AUDIT_USER_ID)
 
     def test_source_id_held_by_a_discovered_column_of_another_name_is_not_taken(self):
         # OTHER (a column of the target table no mapping names) holds 7, the id of the source column ID.
-        source = {("src", "SAAFTR"): [column("ID", 7, "integer", is_pk=True, nullable=False),
+        source = {("src", "SAMPLE_AUDIT"): [column("ID", 7, "integer", is_pk=True, nullable=False),
                                       column("NOTE", 3, "varchar")]}
-        target_tables = {("tgt", "SAAFTR"): [column("OTHER", 7, "varchar"), column("NOTE", 3, "varchar")]}
+        target_tables = {("tgt", "SAMPLE_AUDIT"): [column("OTHER", 7, "varchar"), column("NOTE", 3, "varchar")]}
         yaml_text = table("""        keys: [ID]
-        name: SAAFTR
+        name: SAMPLE_AUDIT
         columns:
           - {source: ID, target: ID_COPY}
-          - {source: NOTE, target: NOTE}""", "SAAFTR")
-        _, result, entities = run(yaml_text, "SAAFTR", source_tables=source, target_tables=target_tables)
+          - {source: NOTE, target: NOTE}""", "SAMPLE_AUDIT")
+        _, result, entities = run(yaml_text, "SAMPLE_AUDIT", source_tables=source, target_tables=target_tables)
         self.assertEqual(result["failed"], 0, result.get("errors"))
-        entity = entities["src.SAAFTR"]
+        entity = entities["src.SAMPLE_AUDIT"]
         _, target = sides(entity)
         by_name = ids_by_name(target["columns"])
         self.assertNotEqual(by_name["ID_COPY"], 7)
@@ -157,14 +157,14 @@ class FanOutTargetIdsTests(unittest.TestCase):
 
 
 class FanOutTargetKeyIdsTests(unittest.TestCase):
-    YAML = table("""        keys: [AFUSER]
+    YAML = table("""        keys: [AUDIT_USER]
         targetKeys: [CREATED_BY]
-        name: SAAFTR
+        name: SAMPLE_AUDIT
         columns:
           - {source: ID, target: ID}
-          - {source: AFUSER, target: CREATED_BY}
-          - {source: AFUSER, target: LAST_MODIFIED_BY}
-          - {source: NOTE, target: NOTE}""", "SAAFTR")
+          - {source: AUDIT_USER, target: CREATED_BY}
+          - {source: AUDIT_USER, target: LAST_MODIFIED_BY}
+          - {source: NOTE, target: NOTE}""", "SAMPLE_AUDIT")
 
     def assert_keys_share_the_id_of_their_column(self, target_columns, target_keys):
         by_name = ids_by_name(target_columns)
@@ -175,16 +175,16 @@ class FanOutTargetKeyIdsTests(unittest.TestCase):
         self.assertIn("CREATED_BY", [k["name"] for k in target_keys])
 
     def test_target_key_of_a_fanned_out_source_key_on_a_sql_target(self):
-        _, result, entities, captured = run_capturing(self.YAML, source_tables=SOURCE_KEYED_ON_AFUSER, target_tables={})
+        _, result, entities, captured = run_capturing(self.YAML, source_tables=SOURCE_KEYED_ON_AUDIT_USER, target_tables={})
         self.assertEqual(result["failed"], 0, result.get("errors"))
         target_columns, target_keys = captured[0]
         self.assert_keys_share_the_id_of_their_column(target_columns, target_keys)
-        _, target = sides(entities["src.SAAFTR"])
+        _, target = sides(entities["src.SAMPLE_AUDIT"])
         self.assertEqual(ids_by_name(target["columns"]), ids_by_name(target_columns))
 
     def test_target_key_of_a_fanned_out_source_key_on_a_target_without_key_rules(self):
         # A NoSQL target builds its keys from the YAML pairs (_mapped_target_key), not from the key rules.
-        _, result, entities, captured = run_capturing(self.YAML, source_tables=SOURCE_KEYED_ON_AFUSER,
+        _, result, entities, captured = run_capturing(self.YAML, source_tables=SOURCE_KEYED_ON_AUDIT_USER,
                                                       target_tables={}, target_type="NoSQL")
         self.assertEqual(result["failed"], 0, result.get("errors"))
         target_columns, target_keys = captured[0]
@@ -192,8 +192,8 @@ class FanOutTargetKeyIdsTests(unittest.TestCase):
         self.assert_keys_share_the_id_of_their_column(target_columns, target_keys)
 
     def test_target_key_ids_do_not_depend_on_the_discovery_of_the_target(self):
-        target_tables = {("tgt", "SAAFTR"): [column("CREATED_BY", 202, "varchar"), column("ID", 201, "integer")]}
-        _, result, entities, captured = run_capturing(self.YAML, source_tables=SOURCE_KEYED_ON_AFUSER,
+        target_tables = {("tgt", "SAMPLE_AUDIT"): [column("CREATED_BY", 202, "varchar"), column("ID", 201, "integer")]}
+        _, result, entities, captured = run_capturing(self.YAML, source_tables=SOURCE_KEYED_ON_AUDIT_USER,
                                                       target_tables=target_tables, target_type="NoSQL")
         self.assertEqual(result["failed"], 0, result.get("errors"))
         target_columns, target_keys = captured[0]
@@ -203,21 +203,21 @@ class FanOutTargetKeyIdsTests(unittest.TestCase):
 
 class NoSqlTargetFanOutTests(unittest.TestCase):
     def test_fan_out_onto_a_nosql_target_that_does_not_exist_yet(self):
-        _, result, entities = run(FAN_OUT, "SAAFTR", source_tables=SOURCE, target_tables={}, target_type="NoSQL")
+        _, result, entities = run(FAN_OUT, "SAMPLE_AUDIT", source_tables=SOURCE, target_tables={}, target_type="NoSQL")
         self.assertEqual(result["failed"], 0, result.get("errors"))
-        entity = entities["src.SAAFTR"]
+        entity = entities["src.SAMPLE_AUDIT"]
         _, target = sides(entity)
         by_name = ids_by_name(target["columns"])
         self.assertEqual(len(set(by_name.values())), len(by_name), by_name)
-        fanned = [e for e in raw_matrix(entity) if e["sourceColumnIds"] == [AFUSER_ID]]
+        fanned = [e for e in raw_matrix(entity) if e["sourceColumnIds"] == [AUDIT_USER_ID]]
         self.assertCountEqual(fanned[0]["targetColumnIds"], [by_name["CREATED_BY"], by_name["LAST_MODIFIED_BY"]])
 
     def test_fan_out_onto_a_nosql_target_that_exists(self):
-        target_tables = {("tgt", "SAAFTR"): [column("CREATED_BY", 302, "string"), column("LAST_MODIFIED_BY", 303, "string")]}
-        _, result, entities = run(FAN_OUT, "SAAFTR", source_tables=SOURCE, target_tables=target_tables,
+        target_tables = {("tgt", "SAMPLE_AUDIT"): [column("CREATED_BY", 302, "string"), column("LAST_MODIFIED_BY", 303, "string")]}
+        _, result, entities = run(FAN_OUT, "SAMPLE_AUDIT", source_tables=SOURCE, target_tables=target_tables,
                                   target_type="NoSQL")
         self.assertEqual(result["failed"], 0, result.get("errors"))
-        _, target = sides(entities["src.SAAFTR"])
+        _, target = sides(entities["src.SAMPLE_AUDIT"])
         by_name = ids_by_name(target["columns"])
         self.assertEqual((by_name["CREATED_BY"], by_name["LAST_MODIFIED_BY"]), (302, 303))
         self.assertEqual(len(set(by_name.values())), len(by_name), by_name)
@@ -243,7 +243,7 @@ class FreshTargetColumnIdTests(unittest.TestCase):
 
 
 class TargetColumnsSharingAnIdTests(unittest.TestCase):
-    SOURCE_COLUMNS = [{"id": 1, "name": "ID", "position": 1}, {"id": 2, "name": "AFUSER", "position": 2}]
+    SOURCE_COLUMNS = [{"id": 1, "name": "ID", "position": 1}, {"id": 2, "name": "AUDIT_USER", "position": 2}]
 
     def test_two_target_columns_of_different_names_with_one_id_are_refused_naming_both(self):
         targets = [{"id": 10, "name": "ID", "position": 1}, {"id": 11, "name": "CREATED_BY", "position": 2},
@@ -251,9 +251,9 @@ class TargetColumnsSharingAnIdTests(unittest.TestCase):
         relations = [{"sources": [1], "targets": [10]}, {"sources": [2], "targets": [11]}]
         with self.assertRaises(entity_mapping.EntityMappingError) as raised:
             entity_mapping.build_entries(100, 200, relations, self.SOURCE_COLUMNS, targets, grouped=True,
-                                         label="SAAFTR")
+                                         label="SAMPLE_AUDIT")
         message = str(raised.exception)
-        for part in ("CREATED_BY", "LAST_MODIFIED_BY", "SAAFTR", "11", "its own id"):
+        for part in ("CREATED_BY", "LAST_MODIFIED_BY", "SAMPLE_AUDIT", "11", "its own id"):
             self.assertIn(part, message)
         self.assertNotIn("more than once", message)
 

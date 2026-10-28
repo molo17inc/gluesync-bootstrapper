@@ -43,8 +43,8 @@ import sys
 BUNDLED_MODULES = (
     "requests", "urllib3", "yaml", "faker", "colorama", "pydantic", "logstash_async",
     "commons", "create_all_entities", "create_all_tables", "create_user_defined_functions", "entity_mapping",
-    "field_function_utils", "function_collection", "connect_portable", "hub_first_login",
-    "utils.log", "utils.core_hub_client", "utils.transactions_audit_client", "utils.gluesync_sdk_client",
+    "field_function_utils", "function_collection", "import_options", "fan_in", "table_target_schema", "connect_portable", "hub_first_login",
+    "import_plan", "utils.log", "utils.core_hub_client", "utils.transactions_audit_client", "utils.gluesync_sdk_client",
     "utils.udf_signature", "utils.redact", "utils.chronos_client",
 )
 

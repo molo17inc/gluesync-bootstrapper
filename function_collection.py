@@ -208,6 +208,9 @@ def extract_function_collection_members(zip_file, root: Path) -> int:
             continue
         prefix, path = found
         destination = root.joinpath(*([prefix] if prefix else []), FUNCTION_COLLECTION_FOLDER, *path.split("/"))
+        # The parts are already sanitized (no "..", no separators); this is a second guard against zip slip
+        if not destination.resolve().is_relative_to(Path(root).resolve()):
+            raise ValueError(f"Unsafe path in the backup ZIP, refusing to extract it: {member!r}")
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(zip_file.read(member))
         written += 1

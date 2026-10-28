@@ -650,6 +650,7 @@ button:disabled {
 
 .message {
   min-height: 1.2rem;
+  white-space: pre-line;
   font-size: 0.85rem;
   color: var(--muted);
 }
@@ -811,3 +812,14 @@ body.is-authenticated #auth-card {
   margin-top: 0.25rem;
   line-height: 1.4;
 }
+
+/* Customizable backup import */
+.custom-import { margin-top: 1rem; display: grid; gap: 0.75rem; }
+.custom-import-pipeline { border: 1px solid var(--border, #d0d7de); border-radius: 6px; padding: 0.5rem 0.75rem; }
+.custom-import-pipeline > summary { cursor: pointer; font-weight: 600; }
+.custom-import-tables { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+.custom-import-tables th, .custom-import-tables td { padding: 2px 4px; text-align: left; }
+.custom-import-tables input[type="text"] { width: 100%; }
+.custom-import-agents, .custom-import-parts { display: grid; gap: 0.5rem; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); }
+.custom-import-agent { display: grid; gap: 0.25rem; }
+.custom-import-preview { white-space: pre-wrap; max-height: 24rem; overflow: auto; font-size: 0.8rem; }

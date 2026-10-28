@@ -75,6 +75,66 @@ def configure_core_hub(base_url: str, *, use_ssl: Optional[bool] = None, skip_ve
     return client
 
 
+def catalog_type_for_agent_tag(catalog: Dict[str, str], tag: Optional[str]) -> Optional[str]:
+    """Resolve an agents.json ``internalName`` type for a Core Hub ``agentTag``.
+
+    Exact match first. Otherwise the longest catalog key that equals the tag or is a
+    hyphen-bounded prefix of it (so ``couchbase`` matches ``couchbase-dcp``, while
+    ``redis`` does not steal ``redis-streams`` when that key is listed exactly).
+    """
+    if not tag or not catalog:
+        return None
+    t = str(tag).strip().lower()
+    if not t:
+        return None
+    if t in catalog:
+        return catalog[t]
+    best_name = None
+    best_len = -1
+    for name in catalog:
+        if not name:
+            continue
+        if (t == name or t.startswith(f"{name}-")) and len(name) > best_len:
+            best_name = name
+            best_len = len(name)
+    return catalog.get(best_name) if best_name is not None else None
+
+
+def coerce_document_key_config(doc_key_config: Any) -> Optional[Dict[str, Any]]:
+    """Normalize YAML ``documentKey`` to the object form ``{keys, prefix, suffix, separator}``.
+
+    Accepts the documented object shape and the string shorthand ``documentKey: id``
+    (treated as ``keys: [id]``). Returns None when the value is empty/unusable.
+    """
+    if doc_key_config is None:
+        return None
+    if isinstance(doc_key_config, str):
+        name = doc_key_config.strip()
+        if not name:
+            return None
+        return {"keys": [name], "prefix": "", "suffix": "", "separator": "-"}
+    if isinstance(doc_key_config, dict):
+        return doc_key_config
+    return None
+
+
+# Schedules of the backup that could not be restored (scheduler not reachable, schedule refused). Filled by the
+# create_*_schedules helpers, read and cleared by the import (take_schedule_failures) so that a lost schedule
+# makes the import PARTIAL instead of FULL. Nothing is recorded when there are no schedules or scheduling is off.
+SCHEDULE_FAILURES: list = []
+
+
+def record_schedule_failure(message: str) -> None:
+    SCHEDULE_FAILURES.append(message)
+
+
+def take_schedule_failures() -> list:
+    """The schedule failures recorded since the last call (and clear them)."""
+    failures = list(SCHEDULE_FAILURES)
+    SCHEDULE_FAILURES.clear()
+    return failures
+
+
 def set_scheduling_enabled(enabled: bool):
     """Toggle scheduling feature at runtime."""
     global ENABLE_SCHEDULING
@@ -390,11 +450,41 @@ def corehub_version(token, fetch=None):
         try:
             version = fetch("/version", token=token)
         except Exception as e:  # pylint: disable=broad-except
-            logger.warning(f"Could not read the CoreHub version ({e}); assuming a current CoreHub (Gluesync 2.3+)")
             version = None
+            error = e
+        else:
+            error = None
+        version = _version_or_override(version, error)
         logger.info(f"CoreHub version: {version!r}")
         _COREHUB_VERSION_BY_URL[key] = version
     return _COREHUB_VERSION_BY_URL[key]
+
+
+def corehub_version_override():
+    """The version to assume when ``GET /version`` is unreadable: ``--corehub-version``, else ``COREHUB_VERSION``."""
+    try:
+        from import_options import current
+        explicit = current().corehub_version
+    except ImportError:  # pragma: no cover
+        explicit = None
+    return explicit or os.getenv('COREHUB_VERSION') or None
+
+
+def _version_or_override(version, error):
+    """``version`` when readable, else the override, else None (taken as Gluesync 2.3+), with a clear warning."""
+    from utils.udf_signature import parse_corehub_version
+
+    if version is not None and parse_corehub_version(version) is not None:
+        return version
+    reason = f"failed: {error}" if error is not None else f"answered {version!r}"
+    override = corehub_version_override()
+    if override:
+        logger.warning(f"GET /version {reason}; using the configured CoreHub version {override!r} "
+                       f"(--corehub-version / COREHUB_VERSION)")
+        return override
+    logger.warning(f"GET /version {reason}; ASSUMING A GLUESYNC 2.3+ CORE HUB (grouped column mapping matrix, "
+                   f"2.3 key rules). If the Core Hub is older, pass --corehub-version X.Y.Z or set COREHUB_VERSION.")
+    return version if error is None else None
 
 
 def corehub_takes_grouped_matrix(token, fetch=None):
@@ -409,9 +499,25 @@ def corehub_takes_grouped_matrix(token, fetch=None):
     return parsed is None or parsed[:2] >= GROUPED_MATRIX_MIN_COREHUB_VERSION
 
 
+def normalize_columns_payload(payload):
+    """Discovery columns as ``{"columns": [...]}``: bare list, dict with ``columns``, or empty."""
+    if payload is None:
+        return {"columns": []}
+    if isinstance(payload, list):
+        return {"columns": payload}
+    if isinstance(payload, dict):
+        cols = payload.get("columns")
+        if isinstance(cols, list):
+            return payload if "columns" in payload else {"columns": cols}
+        return {"columns": []}
+    return {"columns": []}
+
+
 def get_table_columns(token, pipeline_id, agent_id, schema_name, table_name):
     params = {'tableschema': schema_name, 'tablename': table_name}
-    return fetch_core_hub(f"/pipelines/{pipeline_id}/agents/{agent_id}/discovery/columns", token=token, params=params)
+    return normalize_columns_payload(
+        fetch_core_hub(f"/pipelines/{pipeline_id}/agents/{agent_id}/discovery/columns", token=token, params=params)
+    )
 
 def compute_java_hashcode(s):
     """
@@ -451,6 +557,8 @@ def create_entity_schedules(token, pipeline_id, entity_id, entity_name, schedule
     # Wait for Chronos to be available before attempting to create schedules
     if not chronos_client.wait_for_chronos():
         logger.error(f"Chronos is not available. Skipping schedule creation for entity {entity_name}")
+        record_schedule_failure(f"{len(schedules_config)} schedule(s) of entity {entity_name} "
+                                "(scheduler not reachable)")
         return
 
     for schedule_config in schedules_config:
@@ -493,6 +601,7 @@ def create_entity_schedules(token, pipeline_id, entity_id, entity_name, schedule
         except Exception as e:
             error_msg = f"Failed to create schedule for entity {entity_name}: {str(e)}"
             log_failure(logger, error_msg)
+            record_schedule_failure(f"schedule {schedule_config.get('name')!r} of entity {entity_name} (refused)")
             logger.error(traceback.format_exc())
             # Continue creating other schedules even if one fails
 
@@ -517,6 +626,7 @@ def create_group_schedules(token, pipeline_id, group_schedules, chronos_token=No
     # Wait for Chronos to be available before attempting to create schedules
     if not chronos_client.wait_for_chronos():
         logger.error(f"Chronos is not available. Skipping group schedule creation for pipeline {pipeline_id}")
+        record_schedule_failure(f"{len(group_schedules)} group schedule(s) (scheduler not reachable)")
         return
     
     # Handle case where group_schedules is a list of schedule configs for multiple groups
@@ -607,6 +717,7 @@ def _process_group_schedule(chronos_client, pipeline_id, group_ids, schedule_con
         group_info = f"groups {group_ids}" if group_ids else "unknown group"
         error_msg = f"Failed to create schedule for {group_info}: {str(e)}"
         log_failure(logger, error_msg)
+        record_schedule_failure(f"group schedule {schedule_config.get('name')!r} (refused)")
         logger.error(traceback.format_exc())
         # Continue creating other schedules even if one fails
 
@@ -623,6 +734,7 @@ def create_pipeline_schedules(token, pipeline_id, pipeline_schedules, chronos_to
     # Wait for Chronos to be available before attempting to create schedules
     if not chronos_client.wait_for_chronos():
         logger.error(f"Chronos is not available. Skipping pipeline schedule creation for pipeline {pipeline_id}")
+        record_schedule_failure(f"{len(pipeline_schedules)} pipeline schedule(s) (scheduler not reachable)")
         return
 
     for schedule_config in pipeline_schedules:
@@ -663,6 +775,7 @@ def create_pipeline_schedules(token, pipeline_id, pipeline_schedules, chronos_to
         except Exception as e:
             error_msg = f"Failed to create pipeline schedule: {str(e)}"
             log_failure(logger, error_msg)
+            record_schedule_failure(f"pipeline schedule {schedule_config.get('name')!r} (refused)")
             logger.error(traceback.format_exc())
             # Continue creating other schedules even if one fails
 
@@ -742,6 +855,58 @@ def _first_compatible_default_type(category, members, source_gluesync_type, targ
     return None
 
 
+def _category_as_target_gsd(category, target_types_by_gsd):
+    """If ``category`` is itself a target ``gluesyncDataType``, return its ``defaultType``."""
+    by_gsd = target_types_by_gsd.get(category)
+    if not by_gsd or not by_gsd.get('defaultType'):
+        return None
+    logger.debug(
+        f"map_data_type: compatibility category '{category}' is a target gluesyncDataType "
+        f"-> '{by_gsd['defaultType']}'"
+    )
+    return by_gsd['defaultType']
+
+
+def _matrix_item_native_for_category(item, needle, category):
+    """Match ``needle`` (lowered category) against one matrix item's defaultType or supportedTypes."""
+    if not isinstance(item, dict):
+        return None
+    default_type = item.get('defaultType')
+    if default_type and str(default_type).strip().lower() == needle:
+        logger.debug(
+            f"map_data_type: compatibility category '{category}' matches target defaultType "
+            f"-> '{default_type}'"
+        )
+        return str(default_type)
+    for st in item.get('supportedTypes') or []:
+        if st and str(st).strip().lower() == needle:
+            chosen = default_type or st
+            logger.debug(
+                f"map_data_type: compatibility category '{category}' matches target "
+                f"supportedType '{st}' -> '{chosen}'"
+            )
+            return str(chosen)
+    return None
+
+
+def _category_native_default_type(category, target_matrix, target_types_by_gsd):
+    """When a compatibility group lists no gluesync types the target implements (Oracle: NUMBER
+    groups SHORT/INT/LONG but the matrix only has BIG_DECIMAL→NUMBER), use the category name as a
+    native type: a ``gluesyncDataType`` equal to the category, or a ``defaultType``/``supportedTypes``
+    match (e.g. category NUMBER → Oracle ``NUMBER``)."""
+    if not category:
+        return None
+    as_gsd = _category_as_target_gsd(category, target_types_by_gsd)
+    if as_gsd is not None:
+        return as_gsd
+    needle = str(category).strip().lower()
+    for item in target_matrix:
+        matched = _matrix_item_native_for_category(item, needle, category)
+        if matched is not None:
+            return matched
+    return None
+
+
 def _compatibility_group_default_type(source_gluesync_type, target_node_info, target_matrix):
     """Look up the target's compatibility group of ``source_gluesync_type`` (or None)."""
     compatibility_matrix = target_node_info.get('dataTypeCompatibilityMatrix', {}) or {}
@@ -754,7 +919,12 @@ def _compatibility_group_default_type(source_gluesync_type, target_node_info, ta
         if not isinstance(members, list) or source_gluesync_type not in members:
             continue
         # Only the first category containing the source type is considered.
-        return _first_compatible_default_type(category, members, source_gluesync_type, target_types_by_gsd)
+        matched = _first_compatible_default_type(category, members, source_gluesync_type, target_types_by_gsd)
+        if matched is not None:
+            return matched
+        # Oracle (and similar): NUMBER groups SHORT/INT/LONG but the matrix has no INT entry —
+        # fall back to the category name as a native type (NUMBER).
+        return _category_native_default_type(category, target_matrix, target_types_by_gsd)
     return None
 
 
@@ -1076,9 +1246,10 @@ def extract_schema_types_from_yaml(yaml_file_path):
             upper = text.upper()
             if upper in {"RDBMS", "SQL"}:
                 return "SQL"
-            if upper == "NOSQL":
-                return "NoSQL"
-            return text
+            # Collapse every non-RDBMS category to NoSQL (Object Store, Event
+            # Streaming, Search, …) so create-table and entity-type paths agree
+            # with automator_app.corehub._normalize_agent_category.
+            return "NoSQL"
 
         source_types = set()
         target_types = set()
@@ -1148,12 +1319,12 @@ _FILTER_COLUMN_OPTIONAL_FIELDS = [
 
 
 def _find_discovered_column(columns_info, column_name):
-    """Return the discovered column named ``column_name`` (or None)."""
-    if columns_info and 'columns' in columns_info:
-        for col in columns_info['columns']:
-            if col.get('name') == column_name:
-                return col
-    return None
+    """Return the discovered column named ``column_name`` (exact, else unique case-insensitive)."""
+    from entity_mapping import find_by_name
+    cols = (columns_info or {}).get("columns") if isinstance(columns_info, dict) else None
+    if not cols:
+        return None
+    return find_by_name(cols, column_name)
 
 
 def _build_filter_column(column_name, matched_column, fallback_type, table_id,

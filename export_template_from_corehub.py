@@ -30,7 +30,7 @@ from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
 
 import yaml
 
-from commons import fetch_core_hub, get_table_columns, is_length_type, is_temporal_type
+from commons import fetch_core_hub, get_table_columns, is_length_type, is_temporal_type, catalog_type_for_agent_tag
 from field_function_utils import apply_field_functions_to_column_mappings, normalize_expression_for_yaml
 from entity_mapping import read_entry, relations_of, yaml_rows
 from utils.chronos_client import ChronosClient
@@ -162,9 +162,9 @@ def infer_pipeline_schema_types_from_agents(token: str, pipeline_id: str) -> Tup
     """Return (sourceType, targetType) as SQL/NoSQL according to the agents.json catalog.
 
     A side is None when the catalog cannot tell: the agent has no tag, the tag is
-    not listed in agents.json (for example ``couchbase-dcp``), the pipeline has no
-    agent for that side, or the pipeline config could not be fetched. The caller
-    decides what an unknown side falls back to.
+    not listed in agents.json and has no hyphen-bounded prefix there, the pipeline
+    has no agent for that side, or the pipeline config could not be fetched. The
+    caller decides what an unknown side falls back to.
     """
 
     try:
@@ -181,7 +181,7 @@ def infer_pipeline_schema_types_from_agents(token: str, pipeline_id: str) -> Tup
 
     def _classify(agent: Optional[Dict[str, Any]]) -> Optional[str]:
         tag = str((agent or {}).get("agentTag") or "").lower()
-        return catalog.get(tag) if tag else None
+        return catalog_type_for_agent_tag(catalog, tag) if tag else None
 
     source_agent = next((a for a in agents if isinstance(a, dict) and a.get("agentType") == "SOURCE"), None)
     target_agent = next((a for a in agents if isinstance(a, dict) and a.get("agentType") == "TARGET"), None)
@@ -1031,14 +1031,8 @@ def _udf_config(target_et: Dict[str, Any]) -> Any:
 _DEFAULT_ALLOWED_OPERATIONS = ["INSERT", "DELETE", "UPDATE", "TRUNCATE"]
 
 
-def _target_custom_properties(target_ae: Dict[str, Any], target_et: Dict[str, Any]) -> Dict[str, Any]:
-    """``customProperties.target`` of a table: its own custom properties and the non-default target settings."""
-    target_cp = (target_ae.get("customProperties") or {}).copy()
-
-    udf_cfg = _udf_config(target_et)
-    if udf_cfg:
-        target_cp["udf"] = udf_cfg
-
+def _lift_nondefault_target_settings(target_cp: Dict[str, Any], target_et: Dict[str, Any]) -> None:
+    """Merge non-default entityType settings into ``customProperties.target`` (in place)."""
     # Snapshot concurrency: expose only when different from default 1
     snapshot_conc = target_et.get("snapshotWritingConcurrency")
     if isinstance(snapshot_conc, int) and snapshot_conc != 1:
@@ -1054,6 +1048,27 @@ def _target_custom_properties(target_ae: Dict[str, Any], target_et: Dict[str, An
     allowed_ops = target_et.get("allowedOperations")
     if isinstance(allowed_ops, list) and allowed_ops and allowed_ops != _DEFAULT_ALLOWED_OPERATIONS:
         target_cp["allowedOperations"] = allowed_ops
+
+    # pre/postSnapshotCommand live on entityType after import (create_all_entities spreads them from
+    # customProperties.target; live hub fixtures keep agentEntity.customProperties empty). Lift them
+    # back into YAML customProperties.target the same way as concurrency / bulk / allowedOperations.
+    for cmd_key in ("preSnapshotCommand", "postSnapshotCommand"):
+        if cmd_key in target_cp:
+            continue
+        cmd = target_et.get(cmd_key)
+        if isinstance(cmd, str) and cmd.strip():
+            target_cp[cmd_key] = cmd
+
+
+def _target_custom_properties(target_ae: Dict[str, Any], target_et: Dict[str, Any]) -> Dict[str, Any]:
+    """``customProperties.target`` of a table: its own custom properties and the non-default target settings."""
+    target_cp = (target_ae.get("customProperties") or {}).copy()
+
+    udf_cfg = _udf_config(target_et)
+    if udf_cfg:
+        target_cp["udf"] = udf_cfg
+
+    _lift_nondefault_target_settings(target_cp, target_et)
     return target_cp
 
 
@@ -1108,6 +1123,12 @@ def _process_single_entity(
     # Table name (target name / collection)
     table_cfg["name"] = target_table_name
     table_cfg["entityName"] = entity_name
+    # The schema entry's target comes from the first table met: a table targeting another schema says so,
+    # otherwise the import would create it in the schema of that first table (Synth1: TGT02 vs TGT01).
+    if target_schema and target_schema != schema_cfg.get("target"):
+        table_cfg["targetSchema"] = target_schema
+        logger.info(f"{source_schema}.{source_table_name} targets schema {target_schema}, not the schema "
+                    f"default {schema_cfg.get('target')}: exported with targetSchema")
 
     # If the YAML key is different from the actual source table name (duplicate table case),
     # store the real source table name so import can find it in the database
@@ -1354,6 +1375,47 @@ def _export_multitable_table(export: _MultiTableExport, tbl: Dict[str, Any]) -> 
     _export_where_clause(table_cfg, export.source_ae, export.source_schema, table_name, f"MultiTable {table_name}")
 
 
+def _multitable_schema_cfg(
+    entity_name: str,
+    source_schema: str,
+    target_ae: Dict[str, Any],
+    schemas: Dict[str, Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Resolve schema config for a MultiTable entity and warn on mixed target schemas."""
+    target_tables = target_ae.get("tables", []) or []
+    target_schema = (target_tables[0].get("schema") or source_schema) if target_tables else source_schema
+    schema_cfg = _schema_cfg_for(schemas, source_schema, target_schema)
+    target_schemas_of_chain = sorted({str(t.get("schema")) for t in target_tables if t.get("schema")})
+    if any(s_ != schema_cfg.get("target") for s_ in target_schemas_of_chain):
+        # Known limitation: per-table target schemas inside one MultiTable chain are not exported (one entity,
+        # one pass); the warning below tells the user to check them.
+        logger.warning(f"MultiTable entity {entity_name} targets schema(s) {', '.join(target_schemas_of_chain)} "
+                       f"while {source_schema} is exported with target {schema_cfg.get('target')}: check its "
+                       f"target schema after import")
+    return schema_cfg
+
+
+def _attach_multitable_last_target_custom_properties(
+    tables: List[Dict[str, Any]],
+    schema_cfg: Dict[str, Any],
+    target_ae: Dict[str, Any],
+    target_type: Dict[str, Any],
+) -> None:
+    """Import reads MultiTable target settings from the *last* table's customProperties.target."""
+    last_name = tables[-1].get("name") if tables else None
+    if not last_name:
+        return
+    last_cfg = schema_cfg["tables"]["custom"].get(last_name)
+    if last_cfg is None:
+        return
+    target_cp = _target_custom_properties(target_ae, target_type)
+    # MultiTable import always writes ttlValue: 0; omit that default so hub-empty
+    # exports do not invent a no-op customProperties.target.
+    if target_cp.get("ttlValue") == 0:
+        target_cp = {k: v for k, v in target_cp.items() if k != "ttlValue"}
+    _attach_custom_properties(last_cfg, {}, target_cp)
+
+
 def _process_multitable_entity(
     ent: Dict[str, Any],
     source_ae: Dict[str, Any],
@@ -1388,11 +1450,9 @@ def _process_multitable_entity(
     if _is_custom_group(group_id):
         group_name = group_id_to_name.get(str(group_id), str(group_id))
 
-    # Ensure schema config exists
-    # Target schema for MultiTable is inferred from first target table
+    # Ensure schema config exists (target schema from first target table)
     target_tables = target_ae.get("tables", []) or []
-    target_schema = (target_tables[0].get("schema") or source_schema) if target_tables else source_schema
-    schema_cfg = _schema_cfg_for(schemas, source_schema, target_schema)
+    schema_cfg = _multitable_schema_cfg(entity_name, source_schema, target_ae, schemas)
 
     column_groups = _group_multitable_entries(source_ae.get("columns"))
     key_groups = _group_multitable_entries(source_ae.get("keys"))
@@ -1420,6 +1480,10 @@ def _process_multitable_entity(
     # For each table in the chain, assign chain metadata and restore columns/keys
     for tbl in tables:
         _export_multitable_table(export, tbl)
+
+    # Reconstruct last-table customProperties.target the same way as SingleTable
+    # via _target_custom_properties (entityType lift when AE customProperties is empty).
+    _attach_multitable_last_target_custom_properties(tables, schema_cfg, target_ae, target_type)
 
 
 def attach_schedules_from_jobs(

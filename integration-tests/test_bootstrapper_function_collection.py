@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The function collection of a pipeline travels with its backup and is restored before its entities.
 
-Found restoring backup_Ontario on another Core Hub: the entity upsert failed with "column RECEIVED_DATE is composed
+Found restoring backup_Synth1 on another Core Hub: the entity upsert failed with "column RECEIVED_DATE is composed
 by 'convertDate', which the function collection does not export". The function collection (Gluesync 2.3.0.0+) is a
 set of Java sources scoped to the pipeline; the backup held the YAML and the UDF sources only, so a restore could not
 recreate it and the target agent refused every entity whose ``CustomFn`` names one of its functions.
@@ -216,7 +216,7 @@ class RestoreTests(FunctionCollectionTestCase):
             "collectionErrors": [{"file": "DateFunctions.java", "line": 12, "column": 5, "message": "cannot find symbol"}],
             "consumerFailures": [{"consumer": "UDF_ORDERS", "language": "Java",
                                   "errors": [{"message": "incompatible types"}]}],
-            "fieldFunctionFailures": [{"entityId": "e1", "entityName": "ONTARIO.IVTSTR", "columnName": "RECEIVED_DATE",
+            "fieldFunctionFailures": [{"entityId": "e1", "entityName": "SAMPLE.SAMPLE_INV", "columnName": "RECEIVED_DATE",
                                        "findings": ["convertDate no longer takes a String"]}],
             "warnings": [], "unverifiedConsumers": [],
         })
@@ -228,7 +228,7 @@ class RestoreTests(FunctionCollectionTestCase):
         self.assertIn("pipe", message)
         self.assertIn("DateFunctions.java:12:5: cannot find symbol", message)
         self.assertIn("UDF UDF_ORDERS no longer compiles: incompatible types", message)
-        self.assertIn("entity ONTARIO.IVTSTR column RECEIVED_DATE: convertDate no longer takes a String", message)
+        self.assertIn("entity SAMPLE.SAMPLE_INV column RECEIVED_DATE: convertDate no longer takes a String", message)
         self.assertNotIn(("POST", "/install"), collection.requests)
 
     def test_a_publication_that_cannot_be_carried_out_says_why(self):

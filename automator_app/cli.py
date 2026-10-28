@@ -36,6 +36,7 @@ import uvicorn
 from .app import create_app
 
 LOGGER = logging.getLogger(__name__)
+_STARTUP_ERROR_TITLE = "Gluesync Automator - Startup Error"
 
 
 def _show_error_dialog(title: str, message: str) -> None:
@@ -203,7 +204,7 @@ def _start_uvicorn_thread(args: argparse.Namespace) -> threading.Thread:
     if not _wait_for_server_ready(args.host, args.port):
         error_msg = "Server failed to start within timeout"
         LOGGER.error(error_msg)
-        _show_error_dialog("Gluesync Automator - Startup Error", error_msg)
+        _show_error_dialog(_STARTUP_ERROR_TITLE, error_msg)
         raise SystemExit(1)
     return server_thread
 
@@ -277,11 +278,8 @@ class GluesyncTrayApp:
             self.show_window()
 
 
-def main(argv: Optional[list[str]] = None) -> None:
-    # Filter out multiprocessing fork arguments that shouldn't be parsed
-    if argv is None:
-        argv = sys.argv[1:]
-    
+def _filter_multiprocessing_args(argv: list[str]) -> list[str]:
+    """``argv`` without the arguments multiprocessing adds when it re-launches the frozen executable."""
     # Remove multiprocessing-specific arguments - be more aggressive
     filtered_argv = []
     i = 0
@@ -303,7 +301,16 @@ def main(argv: Optional[list[str]] = None) -> None:
             
         filtered_argv.append(arg)
         i += 1
+    return filtered_argv
+
+
+def main(argv: Optional[list[str]] = None) -> None:
+    # Filter out multiprocessing fork arguments that shouldn't be parsed
+    if argv is None:
+        argv = sys.argv[1:]
     
+    filtered_argv = _filter_multiprocessing_args(argv)
+
     args = _parse_args(filtered_argv)
 
     try:
@@ -311,6 +318,13 @@ def main(argv: Optional[list[str]] = None) -> None:
         # Only auto-discover a free port when the default (8080) is used.
         if args.port is None:
             args.port = _find_available_port(args.host, 8080)
+        elif _is_port_in_use(args.host, args.port):
+            # The readiness check only probes the port: another process listening there would pass it while
+            # uvicorn's bind fails in its thread, and the Automator would exit 0 without serving.
+            error_msg = f"Port {args.port} on {args.host} is already in use; pick another --port"
+            LOGGER.error(error_msg)
+            _show_error_dialog(_STARTUP_ERROR_TITLE, error_msg)
+            raise SystemExit(1)
         # else: use the explicit port as-is
 
         url = f"http://{args.host}:{args.port}"
@@ -337,5 +351,5 @@ def main(argv: Optional[list[str]] = None) -> None:
 
     except Exception as e:
         LOGGER.error("Failed to start Gluesync Automator: %s", e, exc_info=True)
-        _show_error_dialog("Gluesync Automator - Startup Error", f"Failed to start: {e}")
+        _show_error_dialog(_STARTUP_ERROR_TITLE, f"Failed to start: {e}")
         raise SystemExit(1) from e

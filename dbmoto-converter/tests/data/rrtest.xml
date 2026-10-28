@@ -144,7 +144,7 @@
       <SysValueID>4</SysValueID>
       <Timestamp>0</Timestamp>
       <ID>ServerIPAddress</ID>
-      <Value>[10.17.3.249]:58361</Value>
+      <Value>[192.0.2.40]:58361</Value>
     </DBMMSysValues>
     <DBMMSysValues>
       <SysValueID>5</SysValueID>

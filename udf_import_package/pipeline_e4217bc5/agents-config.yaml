@@ -3,7 +3,7 @@ agents:
   agentTag: postgresql-cdc
   hostCredentials:
     connectionName: ''
-    host: 10.17.3.252
+    host: 192.0.2.30
     port: 5432
     databaseName: n8n
     username: gluesync
@@ -24,7 +24,7 @@ agents:
   agentTag: mssql-ct
   hostCredentials:
     connectionName: ''
-    host: 10.17.3.169
+    host: 192.0.2.31
     port: 1433
     databaseName: LicenseManager
     username: gluesync

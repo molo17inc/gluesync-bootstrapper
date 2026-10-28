@@ -374,8 +374,18 @@ def is_column_mappings(columns_list):
     - User format:    [{col_name: "target_name"}, ...]  e.g. [{id: "ID"}]
 
     Column *definitions* (not mappings) have a 'name' key.
+    A mapping (dict) under ``columns:`` is not a list of rows — refuse it with a clear
+    error instead of ``KeyError: 0`` from ``columns_list[0]`` on a dict.
     """
     if not columns_list:
+        return False
+    if isinstance(columns_list, dict):
+        raise EntityMappingError(
+            "columns must be a YAML list of mapping rows "
+            "(e.g. [{source: ID, target: id_pk}, {source: NAME, destination: name_renamed}]), "
+            f"not a mapping with keys {sorted(str(k) for k in columns_list)[:8]}"
+        )
+    if not isinstance(columns_list, (list, tuple)):
         return False
     first = columns_list[0]
     if not isinstance(first, dict):
@@ -422,9 +432,18 @@ def _explicit_targets(sources: List[str], target: Any, where: str) -> List[str]:
     return sources
 
 
+def _row_target(row: Mapping[str, Any]) -> Any:
+    """The target name(s) of a mapping row: export uses ``target``, hand-written YAML may use ``destination``."""
+    if "target" in row:
+        return row.get("target")
+    return row.get("destination")
+
+
 def _is_produced_row(row: Mapping[str, Any]) -> bool:
     """A column fed by no source, ``{target, expression | type, ...}``, as the export writes it."""
-    return "target" in row and "name" not in row and ("expression" in row or "type" in row)
+    return _row_target(row) is not None and "source" not in row and "name" not in row and (
+        "expression" in row or "type" in row
+    )
 
 
 def _mapping_row_relations(row: Mapping[str, Any], where: str) -> List[Dict[str, Any]]:
@@ -434,9 +453,10 @@ def _mapping_row_relations(row: Mapping[str, Any], where: str) -> List[Dict[str,
         if source is None or source == []:
             return []
         sources = _names_of(source)
-        return [_relation(sources, _explicit_targets(sources, row.get("target"), where), row)]
+        return [_relation(sources, _explicit_targets(sources, _row_target(row), where), row)]
     if _is_produced_row(row):
-        return [_relation([], [str(row["target"])], row)] if row.get("target") is not None else []
+        target = _row_target(row)
+        return [_relation([], [str(target)], row)] if target is not None else []
     return [
         _relation([str(key)], [value if isinstance(value, str) else str(value)], row)
         for key, value in row.items()
@@ -661,16 +681,29 @@ def _check_k2b_keys(requested, k2b, spelling, where) -> None:
     if manual:
         problems.append(
             f"K9: {_joined(spelling[k] for k in sorted(manual))} cannot be a key next to the keys the "
-            f"target primary key gives the source ({_joined(spelling[k] for k in sorted(k2b))})"
+            f"target primary key gives the source ({_joined(spelling[k] for k in sorted(k2b))}): the source table "
+            f"has no primary key, so its keys are the source columns feeding the target primary key and no other"
         )
+    # K9: the rule itself is unchanged on purpose (Core Hub 2.3.1 accepts no extra manual keys here).
     raise EntityMappingError(
         "; ".join(problems) + f"{where}. Leave keys: out to key the entity on {_joined(spelling[k] for k in sorted(k2b))}"
     )
 
 
-def _source_keys(requested, ph_s, k2b, physical_source, spelling, where, source_is_nosql) -> set:
-    """Step 1 of :func:`derive_keys`: the source keys, lower-cased."""
+def _source_keys(requested, ph_s, k2b, physical_source, spelling, where, source_is_nosql, strict=False,
+                 warnings=None) -> set:
+    """Step 1 of :func:`derive_keys`: the source keys, lower-cased.
+
+    YAML keys that contain the whole source primary key and more are kept as they are, with a warning (Core Hub
+    decides), unless ``strict``: they still identify each row. Keys that miss a primary key column are refused."""
     if ph_s:
+        if requested and requested > ph_s and not strict:
+            if warnings is not None:
+                warnings.append(
+                    f"R12.1: the keys{where} ({_joined(spelling[k] for k in sorted(requested))}) contain the source "
+                    f"table's primary key ({_joined(sorted(physical_source))}) and more: kept as the YAML gives them, "
+                    f"Core Hub decides (--strict-validate refuses them)")
+            return requested
         if requested and requested != ph_s:
             raise EntityMappingError(
                 f"R12.1: the keys{where} ({_joined(spelling[k] for k in sorted(requested))}) are not the source "
@@ -694,7 +727,9 @@ def _primary_target_keys(ph_t, requested, target_names, fed, produced, physical_
     if requested and requested != ph_t:
         raise EntityMappingError(
             f"R12.2: targetKeys{where} ({_joined(spelling[k] for k in sorted(requested))}) is not the "
-            f"target table's primary key ({_joined(sorted(physical_target))}); leave targetKeys out"
+            f"target table's physical primary key as discovery reports it ({_joined(sorted(physical_target))}): "
+            f"with a primary key on the target, targetKeys must name exactly its columns; leave targetKeys out, or "
+            f"set it to exactly {_joined(sorted(physical_target))}"
         )
     in_entity = {str(n).lower() for n in target_names}
     for key in sorted(ph_t):
@@ -722,19 +757,45 @@ def _check_single_non_key_sources(relations, source_keys, requested, where) -> N
             )
 
 
-def _inherited_target_keys(relations, source_keys, ph_s, requested, spelling, where) -> set:
-    """B4, B5 and B7 on a target without a primary key: the targets of the source keys, plus ``targetKeys:``."""
+def _check_k9(requested, inherited, spelling, where, target_key_known, strict, warnings) -> None:
+    """K9 on targetKeys naming keys next to the inherited ones: refused when enforced (see
+    :func:`_inherited_target_keys`), else a warning."""
+    extra = _joined(spelling[k] for k in sorted(requested - inherited))
+    kept = _joined(spelling[k] for k in sorted(inherited))
+    if target_key_known:
+        raise EntityMappingError(
+            f"K9: targetKeys{where} names {extra} next to the keys the target inherits from the source primary "
+            f"key ({kept}), and discovery reports no primary key on the target table; leave targetKeys out (or "
+            f"set it to exactly those inherited keys) in this table's YAML entry, or give the target table a "
+            f"primary key that targetKeys then names exactly")
+    if strict:
+        raise EntityMappingError(
+            f"K9: targetKeys{where} names {extra} next to the keys the target inherits from the source primary "
+            f"key ({kept}); the target's primary key could not be read and --strict-validate is set")
+    if warnings is not None:
+        warnings.append(
+            f"K9 not checked{where}: targetKeys names {extra} next to the keys inherited from the source primary "
+            f"key ({kept}); the target's primary key could not be read (no discovery, agent unreachable or table "
+            f"missing), so the keys are sent as the YAML names them and Core Hub decides (valid when the "
+            f"target's primary key is exactly the targetKeys)")
+
+
+def _inherited_target_keys(relations, source_keys, ph_s, requested, spelling, where,
+                           target_key_known=True, strict=False, warnings=None) -> set:
+    """B4, B5 and B7 on a target without a primary key: the targets of the source keys, plus ``targetKeys:``.
+
+    K9 (no target key next to the keys inherited from a source primary key) is a Core Hub rule for a target table
+    with NO physical primary key (Core Hub 2.3.1.1, GluesyncMainRoutesOrchestrator). It is enforced here only when
+    ``target_key_known`` (discovery read the target table and it has no primary key) or ``strict``; otherwise the
+    target may have a primary key the bootstrapper cannot see (no discovery, agent unreachable, table missing):
+    the keys are kept as the YAML names them, with a warning, and Core Hub decides."""
     inherited = {
         t.lower() for relation in relations
         if any(s.lower() in source_keys for s in relation["sources"])
         for t in relation["targets"]
     }
     if ph_s and requested - inherited:
-        raise EntityMappingError(
-            f"K9: targetKeys{where} names {_joined(spelling[k] for k in sorted(requested - inherited))} next to the keys "
-            f"the target inherits from the source primary key ({_joined(spelling[k] for k in sorted(inherited))}); "
-            f"leave targetKeys out"
-        )
+        _check_k9(requested, inherited, spelling, where, target_key_known, strict, warnings)
     if not ph_s:
         _check_single_non_key_sources(relations, source_keys, requested, where)
     return inherited | requested
@@ -764,6 +825,9 @@ def derive_keys(
     produced_targets: Iterable[str],
     label: str = "",
     source_is_nosql: bool = False,
+    target_key_known: bool = True,
+    strict: bool = False,
+    warnings: Optional[List[str]] = None,
 ) -> Tuple[List[str], List[str]]:
     """The source and target key columns of a Gluesync 2.3 entity with a SQL target, by name.
 
@@ -783,6 +847,9 @@ def derive_keys(
        source that is not a key (B5). A target left without a key is refused, as CoreHub refuses every
        agent entity without keys.
 
+    ``target_key_known`` is False when discovery could not read the target table (it may then have a primary
+    key nobody saw): K9 is then only a warning appended to ``warnings``, unless ``strict``.
+
     Returns ``(source_keys, target_keys)`` spelt as the columns are, in column order.
     """
     where = f" of {label}" if label else ""
@@ -798,7 +865,7 @@ def derive_keys(
     _refuse_unknown(yaml_keys, source_spelling, f"the keys{where} name {{}}, which are not columns of the source table")
     requested = {str(k).lower() for k in yaml_keys}
     source_keys = _source_keys(requested, ph_s, _k2b_keys(relations, ph_s, ph_t), physical_source,
-                               source_spelling, where, source_is_nosql)
+                               source_spelling, where, source_is_nosql, strict, warnings)
 
     _refuse_unknown(yaml_target_keys, target_spelling,
                     f"targetKeys{where} names {{}}, which are not target columns of the entity")
@@ -809,7 +876,8 @@ def derive_keys(
         target_keys = _primary_target_keys(ph_t, target_requested, target_names, fed, produced, physical_target,
                                            target_spelling, where)
     else:
-        target_keys = _inherited_target_keys(relations, source_keys, ph_s, target_requested, target_spelling, where)
+        target_keys = _inherited_target_keys(relations, source_keys, ph_s, target_requested, target_spelling, where,
+                                             target_key_known, strict, warnings)
     if not target_keys:
         raise EntityMappingError(
             f"the target table{where} has no key: no source key column feeds a target column and targetKeys names none. "

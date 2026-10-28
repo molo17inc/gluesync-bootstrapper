@@ -251,7 +251,7 @@ dbo:
             ttlValue: 20000000
             udf: # User defined functions
               - name: UPPERCASE_DRIVERS
-                type: java
+                type: Java
 
       # Example of a table with unlocked schema
       # This allows different column counts and data types between source and target
@@ -285,7 +285,7 @@ dbo:
             # UDF is mandatory for unlocked schema tables
             udf:
               - name: UDF_ARTICLES_TRANSFORM
-                type: java
+                type: Java
 
       VEHICLES:
         groupId: "finance" # Connects this entity to the 'finance' group defined at top-level under groups:
