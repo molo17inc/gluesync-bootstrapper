@@ -2499,7 +2499,8 @@ def _yaml_table_count(yaml_path: Path, schema_pairs: list) -> Optional[int]:
 
     A schema's ``tables`` is ``{whitelist: [names], blacklist: [names], custom: {name: settings}}``: its tables
     are the whitelisted and custom names (a custom table is usually whitelisted too), less the blacklisted ones.
-    A schema with neither whitelist nor custom takes every discovered table: unknown without discovery."""
+    An empty or missing whitelist (allow-all discovery), or a schema with neither whitelist nor custom, takes
+    every discovered table: unknown without discovery."""
     try:
         config = load_yaml_config(str(yaml_path)) or {}
     except Exception:  # pylint: disable=broad-except
@@ -2515,14 +2516,22 @@ def _yaml_table_count(yaml_path: Path, schema_pairs: list) -> Optional[int]:
 
 
 def _schema_table_count(schemas: Any, src_schema: str) -> Optional[int]:
-    """How many tables schema ``src_schema`` of a YAML holds (see :func:`_yaml_table_count`); None when unknown."""
+    """How many tables schema ``src_schema`` of a YAML holds (see :func:`_yaml_table_count`); None when unknown.
+
+    An empty or missing ``whitelist`` means the import takes every discovered table (custom only customizes
+    some of them): the total cannot be told from the YAML alone, so None — otherwise a report would say
+    ``9 of 2`` when discovery created nine 1:1 tables plus two named customs.
+    """
     schema = schemas.get(src_schema) if isinstance(schemas, dict) else None
     tables = schema.get("tables") if isinstance(schema, dict) else None
     if isinstance(tables, list):
         return len(tables)
     if not isinstance(tables, dict):
         return None
-    names = {str(name) for name in map(_whitelist_name, tables.get("whitelist") or []) if name}
+    whitelist = tables.get("whitelist")
+    if not whitelist:
+        return None
+    names = {str(name) for name in map(_whitelist_name, whitelist) if name}
     names.update(str(n) for n in (tables.get("custom") or {}))
     if not names:
         return None
@@ -3135,12 +3144,17 @@ def _pipeline_report_line(outcome: Dict[str, Any]) -> str:
 
 
 def _report_total(outcome: Dict[str, Any]) -> Any:
-    """The entity total of a pipeline outcome; when unknown but entities ran, the sum of the counts (or None)."""
+    """The entity total of a pipeline outcome; when unknown but entities ran, the sum of the counts (or None).
+
+    When discovery created more entities than the YAML named (empty whitelist = allow all), prefer the
+    counted sum so the report never says ``9 of 2``.
+    """
     total = outcome.get("total")
-    if total is None and outcome.get("entitiesRun"):
-        counted = (outcome.get("created", 0) + outcome.get("failed", 0) + outcome.get("skipped", 0)
-                   + outcome.get("notAttempted", 0))
-        total = counted or None
+    counted = (outcome.get("created", 0) + outcome.get("failed", 0) + outcome.get("skipped", 0)
+               + outcome.get("notAttempted", 0))
+    if outcome.get("entitiesRun") and counted:
+        if total is None or counted > total:
+            return counted
     return total
 
 
@@ -3949,6 +3963,10 @@ def _analyze_archive(contents: bytes, apply_overrides: bool = False) -> Dict[str
     index, errors = [], []
     for name, stem, text in _archive_pipeline_members(contents, errors):
         old_id, embedded_name = _resolve_pipeline_identity(text, stem)
+        # Hand-written / fixture YAMLs without exportMetadata and without a backup_* stem
+        # used to become plan key "None" (str(None)). Prefer the member stem instead.
+        if not old_id:
+            old_id = stem
         meta = job.meta_by_old_id.get(old_id)
         try:
             config = yaml.safe_load(text)

@@ -30,7 +30,7 @@ from typing import Any
 from commons import get_node_info, get_table_columns, fetch_core_hub, get_pipeline_config, get_pipeline_agents, \
     get_agent_tables, create_entity_schedules, map_data_type, create_pipeline_schedules, create_group_schedules, load_yaml_config, \
     process_filter_clauses, create_group, assign_entities_to_group, get_table_id, extract_target_column_types, \
-    corehub_takes_grouped_matrix, canonicalize_target_type
+    corehub_takes_grouped_matrix, canonicalize_target_type, coerce_document_key_config
 from create_all_tables import TargetTableCreationError, handle_table_creation, \
     set_create_table_if_not_exists as _set_tables_flag
 from create_user_defined_functions import handle_udf_function_definition
@@ -236,6 +236,8 @@ def _is_column_whitelist(columns_list):
     Returns True when entries have 'name' and 'type' keys (column definitions).
     """
     if not columns_list:
+        return False
+    if not isinstance(columns_list, (list, tuple)):
         return False
     first = columns_list[0]
     if not isinstance(first, dict):
@@ -1538,10 +1540,7 @@ def _target_only_properties(target_col, target_columns, skip_errors, where=""):
     # Check if this column already exists in the target table
     discovered_column = None
     if target_columns and 'columns' in target_columns:
-        discovered_column = next(
-            (col for col in target_columns['columns'] if col.get('name') == col_name),
-            None
-        )
+        discovered_column = find_by_name(target_columns['columns'], col_name)
 
     if not discovered_column:
         # Column doesn't exist in target table, use user-defined properties
@@ -1659,8 +1658,10 @@ def _add_udf_target_keys(tb, physical_target):
 def _add_unnamed_source_keys(columns, columns_def, source_key_names):
     """A source key no relation names is read and never written (1:null), as the field editor keeps it."""
     for key_name in source_key_names:
-        if not any(str(c.get("name", "")) == key_name for c in columns_def):
-            key_col = next(c for c in columns["columns"] if c.get("name") == key_name)
+        if find_by_name(columns_def, key_name) is None:
+            key_col = find_by_name(columns["columns"], key_name)
+            if key_col is None:
+                continue
             columns_def.append(_source_column_def(key_col, key_col.get("id"), key_col["name"], key_col["name"], True))
 
 
@@ -2115,24 +2116,35 @@ def set_create_table_if_not_exists(enabled: bool) -> None:
     _set_tables_flag(enabled)
 
 
-# Target categories for which the bootstrapper must NOT attempt to issue a
-# CREATE TABLE statement. These are non-RDBMS targets (e.g. NoSQL stores,
-# object stores like Azure Data Lake Storage, S3, GCS) where the CoreHub
-# create-table endpoint will fail with "This function must not be called.".
-_NO_CREATE_TABLE_TARGET_TYPES = frozenset({"NOSQL", "OBJECT STORE"})
+# Target categories that are explicitly non-RDBMS. Anything else that is not
+# SQL/RDBMS is also skipped (Event Streaming, Search, Object Store, …): Core Hub
+# refuses CREATE TABLE with "This function must not be called."
+_NO_CREATE_TABLE_TARGET_TYPES = frozenset({
+    "NOSQL", "OBJECT STORE", "EVENT STREAMING", "STREAMING", "SEARCH",
+})
+_SQL_TARGET_TYPES = frozenset({"SQL", "RDBMS"})
 
 
 def is_no_create_table_target(target_type) -> bool:
     """Return True when the given target type does not support CREATE TABLE.
 
-    The check is case-insensitive and tolerates None / empty values. Any
-    target category not classified as RDBMS/SQL should fall under this
-    predicate so the bootstrapper skips table creation for it.
+    The check is case-insensitive and tolerates None / empty values. Only
+    SQL/RDBMS targets get CREATE TABLE; every other category (NoSQL, Object
+    Store, Event Streaming, Search, unknown) is skipped — same conservatism as
+    ``_normalize_agent_category``.
     """
 
     if not target_type:
         return False
-    return str(target_type).strip().upper() in _NO_CREATE_TABLE_TARGET_TYPES
+    upper = str(target_type).strip().upper()
+    if not upper:
+        return False
+    if upper in _SQL_TARGET_TYPES:
+        return False
+    if upper in _NO_CREATE_TABLE_TARGET_TYPES:
+        return True
+    # Unknown / future categories: do not issue CREATE TABLE.
+    return True
 
 
 # ProtocolAwareAdapter and CoreHubClient have been moved to utils/core_hub_client.py
@@ -2479,7 +2491,7 @@ def _build_partition_settings(column_name, table_columns, schema_name, table_nam
     if not normalized_column:
         return None
 
-    matched_column = next((col for col in table_columns if col.get('name') == normalized_column), None)
+    matched_column = find_by_name(table_columns, normalized_column)
     if not matched_column:
         logger.warning(f"Partition column '{normalized_column}' not found in discovery for {schema_name}.{table_name}. Skipping partitionSettings.")
         return None
@@ -2934,26 +2946,27 @@ def _table_properties(run, custom_config, label, duplicate=False):
 
 def _document_key_column_id(run, columns, key_name, table_label, duplicate):
     """The id of the discovered column a documentKey key names, None if there is none."""
-    for col in columns["columns"]:
-        run.last_col = col
-        if col.get('name') == key_name:
-            # Use the id field from CoreHub API as the column ID
-            column_id = col.get('id')
-            if column_id is None and duplicate:
-                error_msg = f"Column '{key_name}' in {table_label} missing 'id' field"
-                logger.error(error_msg)
-                raise ValueError(error_msg)
-            if column_id is None:
-                _raise_missing_column_id(col.get('name'), table_label)
-            return column_id
-    return None
+    col = find_by_name(columns["columns"], key_name)
+    if col is None:
+        return None
+    run.last_col = col
+    column_id = col.get('id')
+    if column_id is None and duplicate:
+        error_msg = f"Column '{key_name}' in {table_label} missing 'id' field"
+        logger.error(error_msg)
+        raise ValueError(error_msg)
+    if column_id is None:
+        _raise_missing_column_id(col.get('name'), table_label)
+    return column_id
 
 
 def _document_key(run, custom_config, columns, table_label, duplicate=False):
     """The document key configuration of a table, with its key column names converted to column IDs."""
     if not (custom_config and 'documentKey' in custom_config):
         return None
-    doc_key_config = custom_config['documentKey']
+    doc_key_config = coerce_document_key_config(custom_config['documentKey'])
+    if not doc_key_config:
+        return None
 
     key_ids = []
     for key_name in doc_key_config['keys'] if 'keys' in doc_key_config else []:
@@ -3125,17 +3138,36 @@ def _bare_table_name(table_name):
     return table_name.rsplit('.', 1)[-1] if '.' in table_name else table_name
 
 
+def _whitelist_entry_names(whitelist):
+    """String names listed in a YAML whitelist/blacklist (entries may be plain strings or ``{name: ...}``)."""
+    names = []
+    for item in whitelist or []:
+        if isinstance(item, str):
+            names.append(item)
+        elif isinstance(item, dict):
+            name = item.get("name") or item.get("sourceName")
+            if name:
+                names.append(str(name))
+    return names
+
+
+def _name_in_listing(name, listing):
+    """Whether ``name`` is listed (exact spelling, else the unique case-insensitive match)."""
+    return ColumnNames(_whitelist_entry_names(listing)).resolve(name) is not None
+
+
 def _in_schema_whitelist(run, table_name, bare_table_name):
     """STRICT WHITELIST ENFORCEMENT: if a whitelist is defined, ONLY the tables it lists are processed.
 
     If the agent returns FILELIB.TABLE but the whitelist has TABLE, the bare name is checked as a fallback so
-    tables are not silently dropped when the source uses qualified names.
+    tables are not silently dropped when the source uses qualified names. Matching follows column rules
+    (exact, else unique case-insensitive) so MySQL/MSSQL/Postgres/Oracle folds still hit the YAML entry.
     """
     whitelist = run.schema.whitelist
     if not whitelist:
         logger.debug(f"No whitelist defined for schema {run.source_schema}, allowing table {table_name}")
         return True
-    if table_name not in whitelist and bare_table_name not in whitelist:
+    if not _name_in_listing(table_name, whitelist) and not _name_in_listing(bare_table_name, whitelist):
         logger.info(f"Skipping table {table_name}: not in whitelist for schema {run.source_schema}")
         return False
     logger.debug(f"Table {table_name} is in whitelist for schema {run.source_schema} - processing")
@@ -3163,7 +3195,7 @@ def _skip_discovered_table(run, table_name, table_schema):
     # 'FILELIB.TABLE' from discovery).
     bare_table_name = _bare_table_name(table_name)
     blacklist = run.schema.blacklist
-    if blacklist and (table_name in blacklist or bare_table_name in blacklist):
+    if blacklist and (_name_in_listing(table_name, blacklist) or _name_in_listing(bare_table_name, blacklist)):
         logger.info(f"Skipping blacklisted table: {table_name}")
         return True
 
@@ -3196,26 +3228,35 @@ def _custom_config_of(custom_tables, table_name):
     Handles both a direct key match and a ``sourceTableName`` match (duplicate table), then, for a
     library-qualified name (e.g. AS/400 FILELIB.TABLE), the bare table name as the YAML key: the backup YAML uses
     the unqualified name as the key but the source agent returns the library-prefixed form during discovery.
+    Table keys match as column names do: exact spelling first, else the unique case-insensitive one.
     """
     custom_config = custom_tables.get(table_name, {})
     yaml_table_key = table_name  # Track which YAML key we're using
 
     if not custom_config:
+        matched_key = ColumnNames(custom_tables.keys()).resolve(table_name)
+        if matched_key is not None:
+            custom_config = custom_tables[matched_key]
+            yaml_table_key = matched_key
+
+    if not custom_config:
         for key, config in custom_tables.items():
-            if isinstance(config, dict) and config.get('sourceTableName') == table_name:
+            if isinstance(config, dict) and ColumnNames([config.get('sourceTableName') or ""]).resolve(table_name):
                 custom_config = config
                 yaml_table_key = key
                 logger.info(f"Found custom config for table {table_name} under YAML key '{key}' (duplicate table)")
                 break
 
     bare_table_name = _bare_table_name(table_name)
-    if not custom_config and '.' in table_name and bare_table_name in custom_tables:
-        custom_config = custom_tables[bare_table_name]
-        yaml_table_key = bare_table_name
-        logger.info(
-            f"Matched library-qualified table '{table_name}' to YAML key '{bare_table_name}' "
-            "via bare-name fallback"
-        )
+    if not custom_config and '.' in table_name:
+        matched_bare = ColumnNames(custom_tables.keys()).resolve(bare_table_name)
+        if matched_bare is not None:
+            custom_config = custom_tables[matched_bare]
+            yaml_table_key = matched_bare
+            logger.info(
+                f"Matched library-qualified table '{table_name}' to YAML key '{matched_bare}' "
+                "via bare-name fallback"
+            )
 
     if custom_config is None:
         custom_config = {}
@@ -3489,13 +3530,13 @@ def _duplicate_table_label(run, yaml_table_key, custom_config):
 
     # Skip system tables and blacklisted tables
     blacklist, whitelist = run.schema.blacklist, run.schema.whitelist
-    if table_name.startswith("sys") or (blacklist and table_name in blacklist):
+    if table_name.startswith("sys") or (blacklist and _name_in_listing(table_name, blacklist)):
         logger.info(f"Skipping duplicate table {yaml_table_key}: system or blacklisted")
         return None
 
     # Check whitelist using the actual table name, or the @@ key itself (a pass per target schema keeps only the
     # keys of its tables, so the source name of an @@ table may be left out of it)
-    if whitelist and table_name not in whitelist and yaml_table_key not in whitelist:
+    if whitelist and not _name_in_listing(table_name, whitelist) and not _name_in_listing(yaml_table_key, whitelist):
         logger.info(f"Skipping duplicate table {yaml_table_key}: not in whitelist")
         return None
 
@@ -4255,12 +4296,15 @@ def _chain_tables_in_whitelist(run, chain_id, tables_list):
     whitelist = run.schema.whitelist
     if not whitelist:
         return tables_list
-    filtered_tables_list = [(table_key, table_data) for table_key, table_data in tables_list if table_key in whitelist]
+    filtered_tables_list = [
+        (table_key, table_data) for table_key, table_data in tables_list
+        if _name_in_listing(table_key, whitelist)
+    ]
     if not filtered_tables_list:
         logger.info(f"Skipping chain '{chain_id}' - no tables in whitelist for schema '{run.source_schema}'")
         return None
     if len(filtered_tables_list) != len(tables_list):
-        skipped_tables = [tk for tk, _ in tables_list if tk not in whitelist]
+        skipped_tables = [tk for tk, _ in tables_list if not _name_in_listing(tk, whitelist)]
         logger.info(f"For chain '{chain_id}', filtered out tables not in whitelist for schema '{run.source_schema}': {skipped_tables}")
         logger.info(f"Remaining tables in chain: {[tk for tk, _ in filtered_tables_list]}")
     return filtered_tables_list
@@ -5088,8 +5132,9 @@ def _fan_in_warnings(run, yaml_config, source_schema):
 def _validate_against_discovery(run, tables):
     """The schemas, tables and columns the YAML of this schema names that discovery lacks, with suggestions.
 
-    Names are compared as the entity build compares them (exactly); a name that differs by case only is
-    reported with the discovered spelling. Nothing is checked with ``--no-discovery``.
+    Names are compared as the entity build compares them (exact spelling, else unique case-insensitive);
+    a name that differs by case only is reported with the discovered spelling. Nothing is checked with
+    ``--no-discovery``.
     """
     options = import_options.current()
     if options.no_discovery:
@@ -5102,9 +5147,11 @@ def _validate_against_discovery(run, tables):
     if not discovered:
         return [] if tolerant else [f"source schema {run.source_schema}: discovery lists no table"]
     issues = []
+    discovered_names = ColumnNames(discovered.keys())
     for source, config, key in yaml_tables.values():
-        if source in discovered:
-            issues.extend(_source_column_issues(run, source, config))
+        matched = discovered_names.resolve(source)
+        if matched is not None:
+            issues.extend(_source_column_issues(run, matched if matched in discovered else source, config))
         elif not tolerant:
             issues.append(f"source table {run.source_schema}.{source} (YAML {key}) not found in discovery"
                           f"{import_options.suggest(source, list(discovered))}")
@@ -5137,8 +5184,9 @@ def _source_column_issues(run, source, config):
     if label in run.offline_tables:
         return []
     discovered_columns = [c.get('name') for c in (columns or {}).get('columns') or [] if isinstance(c, dict)]
+    names = ColumnNames(discovered_columns)
     return [f"source column {label}.{name} not found in discovery{import_options.suggest(name, discovered_columns)}"
-            for name in wanted if name not in discovered_columns]
+            for name in wanted if names.resolve(name) is None]
 
 
 def _missing_target_table_issues(run, yaml_tables):

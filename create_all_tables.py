@@ -30,7 +30,7 @@ from utils.log import get_logger, create_log_file, log_success, log_failure, loc
 from utils.core_hub_client import CoreHubClient
 from commons import get_node_info, get_table_columns, fetch_core_hub, get_pipeline_config, get_pipeline_agents, \
     get_agent_tables, map_data_type, load_yaml_config, create_group, \
-    process_filter_clauses, canonicalize_target_type, is_length_type
+    process_filter_clauses, canonicalize_target_type, is_length_type, coerce_document_key_config
 from entity_mapping import ColumnNames, EntityMappingError, find_by_name, is_column_mappings, yaml_relations
 from pydantic import BaseModel, Field, PrivateAttr
 from typing import Optional
@@ -316,7 +316,7 @@ def _custom_keys(table_name: str, key_defs, columns) -> list:
         key_name, key_alias, key_type = _parse_key_def(key_def)
 
         # Try to find the key in the columns to get its type if not specified
-        key_column = next((col for col in columns["columns"] if col["name"] == key_name), None)
+        key_column = find_by_name(columns["columns"], key_name)
 
         if key_column:
             keys.append({
@@ -340,12 +340,13 @@ def _yaml_fallback_keys(table_name: str, custom_config: dict, columns) -> list:
     keys = []
     yaml_fallback_keys = custom_config.get('keys') or []
     if not yaml_fallback_keys and 'documentKey' in custom_config:
-        yaml_fallback_keys = custom_config['documentKey'].get('keys', [])
+        doc_cfg = coerce_document_key_config(custom_config['documentKey']) or {}
+        yaml_fallback_keys = doc_cfg.get('keys', [])
 
     if yaml_fallback_keys:
         logger.info(f"Source table {table_name} has no PKs — using YAML-defined keys as fallback: {yaml_fallback_keys}")
         for key_name in yaml_fallback_keys:
-            key_column = next((col for col in columns["columns"] if col["name"].lower() == key_name.lower()), None)
+            key_column = find_by_name(columns["columns"], key_name)
             if key_column:
                 keys.append({
                     "name": key_column["name"],
@@ -392,7 +393,7 @@ def _log_table_settings(ctx: _TableCreationContext, table_name: str, custom_conf
 
     # Get document key configuration if it exists
     if custom_config and 'documentKey' in custom_config:
-        doc_key_config = custom_config['documentKey']
+        doc_key_config = coerce_document_key_config(custom_config['documentKey']) or {}
         document_key = {
             "prefix": doc_key_config.get('prefix', ''),
             "suffix": doc_key_config.get('suffix', ''),
