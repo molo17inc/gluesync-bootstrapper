@@ -3222,6 +3222,39 @@ def _discover_source_table(run, table_name, custom_config=None):
     return None
 
 
+def _custom_by_ci_key(custom_tables, table_name):
+    """``(config, key)`` from a case-insensitive YAML table key match, else ``(None, None)``."""
+    matched_key = ColumnNames(custom_tables.keys()).resolve(table_name)
+    if matched_key is None:
+        return None, None
+    return custom_tables[matched_key], matched_key
+
+
+def _custom_by_source_table_name(custom_tables, table_name):
+    """``(config, key)`` when ``sourceTableName`` matches ``table_name`` (duplicate-table YAML)."""
+    for key, config in custom_tables.items():
+        if not isinstance(config, dict):
+            continue
+        if ColumnNames([config.get('sourceTableName') or ""]).resolve(table_name):
+            logger.info(f"Found custom config for table {table_name} under YAML key '{key}' (duplicate table)")
+            return config, key
+    return None, None
+
+
+def _custom_by_bare_name(custom_tables, table_name):
+    """``(config, key)`` for library-qualified discovery names matched to a bare YAML key."""
+    if '.' not in table_name:
+        return None, None
+    matched_bare = ColumnNames(custom_tables.keys()).resolve(_bare_table_name(table_name))
+    if matched_bare is None:
+        return None, None
+    logger.info(
+        f"Matched library-qualified table '{table_name}' to YAML key '{matched_bare}' "
+        "via bare-name fallback"
+    )
+    return custom_tables[matched_bare], matched_bare
+
+
 def _custom_config_of(custom_tables, table_name):
     """``(custom_config, yaml_table_key)``: the YAML entry of a discovered table and the key it is under.
 
@@ -3234,29 +3267,19 @@ def _custom_config_of(custom_tables, table_name):
     yaml_table_key = table_name  # Track which YAML key we're using
 
     if not custom_config:
-        matched_key = ColumnNames(custom_tables.keys()).resolve(table_name)
-        if matched_key is not None:
-            custom_config = custom_tables[matched_key]
-            yaml_table_key = matched_key
+        cfg, key = _custom_by_ci_key(custom_tables, table_name)
+        if key is not None:
+            custom_config, yaml_table_key = cfg, key
 
     if not custom_config:
-        for key, config in custom_tables.items():
-            if isinstance(config, dict) and ColumnNames([config.get('sourceTableName') or ""]).resolve(table_name):
-                custom_config = config
-                yaml_table_key = key
-                logger.info(f"Found custom config for table {table_name} under YAML key '{key}' (duplicate table)")
-                break
+        cfg, key = _custom_by_source_table_name(custom_tables, table_name)
+        if key is not None:
+            custom_config, yaml_table_key = cfg, key
 
-    bare_table_name = _bare_table_name(table_name)
-    if not custom_config and '.' in table_name:
-        matched_bare = ColumnNames(custom_tables.keys()).resolve(bare_table_name)
-        if matched_bare is not None:
-            custom_config = custom_tables[matched_bare]
-            yaml_table_key = matched_bare
-            logger.info(
-                f"Matched library-qualified table '{table_name}' to YAML key '{matched_bare}' "
-                "via bare-name fallback"
-            )
+    if not custom_config:
+        cfg, key = _custom_by_bare_name(custom_tables, table_name)
+        if key is not None:
+            custom_config, yaml_table_key = cfg, key
 
     if custom_config is None:
         custom_config = {}

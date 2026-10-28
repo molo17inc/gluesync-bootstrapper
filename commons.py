@@ -94,10 +94,9 @@ def catalog_type_for_agent_tag(catalog: Dict[str, str], tag: Optional[str]) -> O
     for name in catalog:
         if not name:
             continue
-        if t == name or t.startswith(f"{name}-"):
-            if len(name) > best_len:
-                best_name = name
-                best_len = len(name)
+        if (t == name or t.startswith(f"{name}-")) and len(name) > best_len:
+            best_name = name
+            best_len = len(name)
     return catalog.get(best_name) if best_name is not None else None
 
 
@@ -856,6 +855,40 @@ def _first_compatible_default_type(category, members, source_gluesync_type, targ
     return None
 
 
+def _category_as_target_gsd(category, target_types_by_gsd):
+    """If ``category`` is itself a target ``gluesyncDataType``, return its ``defaultType``."""
+    by_gsd = target_types_by_gsd.get(category)
+    if not by_gsd or not by_gsd.get('defaultType'):
+        return None
+    logger.debug(
+        f"map_data_type: compatibility category '{category}' is a target gluesyncDataType "
+        f"-> '{by_gsd['defaultType']}'"
+    )
+    return by_gsd['defaultType']
+
+
+def _matrix_item_native_for_category(item, needle, category):
+    """Match ``needle`` (lowered category) against one matrix item's defaultType or supportedTypes."""
+    if not isinstance(item, dict):
+        return None
+    default_type = item.get('defaultType')
+    if default_type and str(default_type).strip().lower() == needle:
+        logger.debug(
+            f"map_data_type: compatibility category '{category}' matches target defaultType "
+            f"-> '{default_type}'"
+        )
+        return str(default_type)
+    for st in item.get('supportedTypes') or []:
+        if st and str(st).strip().lower() == needle:
+            chosen = default_type or st
+            logger.debug(
+                f"map_data_type: compatibility category '{category}' matches target "
+                f"supportedType '{st}' -> '{chosen}'"
+            )
+            return str(chosen)
+    return None
+
+
 def _category_native_default_type(category, target_matrix, target_types_by_gsd):
     """When a compatibility group lists no gluesync types the target implements (Oracle: NUMBER
     groups SHORT/INT/LONG but the matrix only has BIG_DECIMAL→NUMBER), use the category name as a
@@ -863,32 +896,14 @@ def _category_native_default_type(category, target_matrix, target_types_by_gsd):
     match (e.g. category NUMBER → Oracle ``NUMBER``)."""
     if not category:
         return None
-    by_gsd = target_types_by_gsd.get(category)
-    if by_gsd and by_gsd.get('defaultType'):
-        logger.debug(
-            f"map_data_type: compatibility category '{category}' is a target gluesyncDataType "
-            f"-> '{by_gsd['defaultType']}'"
-        )
-        return by_gsd['defaultType']
+    as_gsd = _category_as_target_gsd(category, target_types_by_gsd)
+    if as_gsd is not None:
+        return as_gsd
     needle = str(category).strip().lower()
     for item in target_matrix:
-        if not isinstance(item, dict):
-            continue
-        default_type = item.get('defaultType')
-        if default_type and str(default_type).strip().lower() == needle:
-            logger.debug(
-                f"map_data_type: compatibility category '{category}' matches target defaultType "
-                f"-> '{default_type}'"
-            )
-            return str(default_type)
-        for st in item.get('supportedTypes') or []:
-            if st and str(st).strip().lower() == needle:
-                chosen = default_type or st
-                logger.debug(
-                    f"map_data_type: compatibility category '{category}' matches target "
-                    f"supportedType '{st}' -> '{chosen}'"
-                )
-                return str(chosen)
+        matched = _matrix_item_native_for_category(item, needle, category)
+        if matched is not None:
+            return matched
     return None
 
 
