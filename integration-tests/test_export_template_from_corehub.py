@@ -405,7 +405,8 @@ class PipelineTypesTests(unittest.TestCase):
         )
         self.assertEqual(types, ("SQL", "NoSQL"))
 
-    def test_the_catalog_answer_is_none_per_side_when_it_does_not_know_the_tag(self):
+    def test_a_hyphen_suffix_tag_resolves_via_catalog_prefix(self):
+        """agentTag couchbase-dcp matches agents.json internalName couchbase."""
         import export_template_from_corehub as export_mod
 
         config = {"agents": [
@@ -414,8 +415,18 @@ class PipelineTypesTests(unittest.TestCase):
         ]}
         with mock.patch.object(export_mod, "fetch_core_hub", return_value=config), \
                 mock.patch.object(export_mod, "_load_agent_type_catalog", return_value=self.CATALOG):
-            self.assertEqual(export_mod.infer_pipeline_schema_types_from_agents("t", "p1"), ("SQL", None))
+            self.assertEqual(export_mod.infer_pipeline_schema_types_from_agents("t", "p1"), ("SQL", "NoSQL"))
 
+    def test_the_catalog_answer_is_none_per_side_when_it_does_not_know_the_tag(self):
+        import export_template_from_corehub as export_mod
+
+        config = {"agents": [
+            {"agentTag": "mssql-cdc", "agentType": "SOURCE"},
+            {"agentTag": "totally-unknown-agent", "agentType": "TARGET"},
+        ]}
+        with mock.patch.object(export_mod, "fetch_core_hub", return_value=config), \
+                mock.patch.object(export_mod, "_load_agent_type_catalog", return_value=self.CATALOG):
+            self.assertEqual(export_mod.infer_pipeline_schema_types_from_agents("t", "p1"), ("SQL", None))
 
 if __name__ == "__main__":
     unittest.main()
