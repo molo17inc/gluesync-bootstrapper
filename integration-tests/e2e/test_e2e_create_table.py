@@ -114,15 +114,15 @@ def test_create_table_if_missing_mssql_style_inference(tracked_hub, hub_env, age
         table=table,
         pre_snapshot=f"DELETE FROM [E2E_TGT].[{tgt_name}]",
     )
-    db = e2e_env.load_db("mssql")
+    # Prefer mssql-cdc when source is already mssql-ct so source/target tags stay distinct
+    target_tag = os.getenv("GS_E2E_MSSQL_TARGET_AGENT_TAG") or "mssql-cdc"
+    # Probe the *target* kit (mssql_cdc @1434), not the source mssql @1433 — create-table
+    # writes through the TARGET agent overrides.
+    target_kit = e2e_env._kit_for_agent_tag(target_tag)
+    db = e2e_env.load_db_for_kit(target_kit) or e2e_env.load_db("mssql")
     ok, reason = db_probe.available(db)
     if not ok:
         pytest.skip(f"MSSQL probe unavailable ({reason}); cannot verify create-table on live target")
-
-    # Prefer mssql-cdc when source is already mssql-ct so source/target tags stay distinct
-    target_tag = (db.agent_tag if db and db.agent_tag != agents_env.source_tag else None) or (
-        os.getenv("GS_E2E_MSSQL_TARGET_AGENT_TAG") or "mssql-cdc"
-    )
     if target_tag == agents_env.source_tag:
         pytest.skip(
             f"MSSQL target tag {target_tag!r} equals source {agents_env.source_tag!r}; "

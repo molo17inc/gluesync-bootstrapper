@@ -37,6 +37,31 @@ def test_idempotent_reimport_on_existing_skip(hub_env, overrides_json, hub, agen
 
 
 @skip_without_hub
+
+def test_idempotent_reimport_on_existing_update(hub_env, overrides_json, hub, agents_env):
+    """Second import with --on-existing update must not hard-fail (0 or 2)."""
+    from e2e.runner import run_import_backup_tracked
+    from e2e.zip_builder import live_synth_archive
+    data = live_synth_archive(agents_env, "synth1")
+    code1 = run_import_backup_tracked(data, hub_env, overrides_json, hub, "--on-existing", "skip")
+    if code1 not in (0, 2):
+        pytest.skip(f"first import failed entirely ({code1})")
+    code2 = run_import_backup_tracked(data, hub_env, overrides_json, hub, "--on-existing", "update")
+    assert code2 in (0, 2), f"on-existing update unexpected exit {code2}"
+
+
+def test_idempotent_reimport_on_existing_fail(hub_env, overrides_json, hub, agents_env):
+    """Second import with --on-existing fail must report conflict (exit 1 or 2)."""
+    from e2e.runner import run_import_backup_tracked
+    from e2e.zip_builder import live_synth_archive
+    data = live_synth_archive(agents_env, "synth1")
+    code1 = run_import_backup_tracked(data, hub_env, overrides_json, hub, "--on-existing", "skip")
+    if code1 not in (0, 2):
+        pytest.skip(f"first import failed entirely ({code1})")
+    code2 = run_import_backup_tracked(data, hub_env, overrides_json, hub, "--on-existing", "fail")
+    assert code2 in (1, 2), f"on-existing fail expected conflict exit 1/2, got {code2}"
+
+
 def test_partial_failure_resume_flag_accepted(hub_env, overrides_json, hub, agents_env):
     code = run_import_backup_tracked(
         live_synth_archive(agents_env), hub_env, overrides_json, hub,

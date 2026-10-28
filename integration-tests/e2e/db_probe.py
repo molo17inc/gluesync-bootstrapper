@@ -11,7 +11,7 @@ def _connect(db: DbEnv):
         import pymssql
         return pymssql.connect(server=db.host, port=db.port, user=db.username, password=db.password,
                                database=db.database)
-    if db.dialect == "mysql":
+    if db.dialect in ("mysql", "mariadb"):
         import pymysql
         return pymysql.connect(host=db.host, port=db.port, user=db.username, password=db.password,
                                database=db.database)
@@ -31,7 +31,7 @@ def table_exists(db: DbEnv, schema: str, table: str) -> bool:
                 "SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s",
                 (schema, table),
             )
-        elif db.dialect == "mysql":
+        elif db.dialect in ("mysql", "mariadb"):
             cur.execute(
                 "SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s",
                 (schema or db.database, table),
@@ -56,7 +56,7 @@ def column_names(db: DbEnv, schema: str, table: str) -> Sequence[str]:
                 "WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s ORDER BY ORDINAL_POSITION",
                 (schema, table),
             )
-        elif db.dialect == "mysql":
+        elif db.dialect in ("mysql", "mariadb"):
             cur.execute(
                 "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS "
                 "WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s ORDER BY ORDINAL_POSITION",
@@ -82,7 +82,7 @@ def drop_table_if_exists(db: DbEnv, schema: str, table: str) -> None:
         cur = conn.cursor()
         if db.dialect == "mssql":
             cur.execute(f"IF OBJECT_ID(N'[{schema}].[{table}]', N'U') IS NOT NULL DROP TABLE [{schema}].[{table}]")
-        elif db.dialect == "mysql":
+        elif db.dialect in ("mysql", "mariadb"):
             ident_schema = f"`{schema}`." if schema else ""
             cur.execute(f"DROP TABLE IF EXISTS {ident_schema}`{table}`")
         else:
@@ -96,7 +96,7 @@ def available(db: Optional[DbEnv]) -> Tuple[bool, str]:
     if db is None:
         return False, "env incomplete"
     try:
-        __import__({"mssql": "pymssql", "mysql": "pymysql", "postgres": "psycopg2"}[db.dialect])
+        __import__({"mssql": "pymssql", "mysql": "pymysql", "mariadb": "pymysql", "postgres": "psycopg2"}[db.dialect])
     except ImportError as exc:
         return False, f"driver missing: {exc}"
     try:
@@ -121,7 +121,7 @@ def ensure_schema(db: DbEnv, schema: str) -> None:
                 f"EXEC(N'CREATE SCHEMA [{schema}]')",
                 (schema,),
             )
-        elif db.dialect == "mysql":
+        elif db.dialect in ("mysql", "mariadb"):
             # MySQL "schema" == database; CREATE DATABASE if missing
             cur.execute(f"CREATE DATABASE IF NOT EXISTS `{schema}`")
         else:
@@ -146,7 +146,7 @@ def ensure_source_table(db: DbEnv, schema: str, table: str) -> None:
                 f"CREATE TABLE [{schema}].[{table}] ("
                 f"[ID] INT NOT NULL PRIMARY KEY, [NAME] VARCHAR(64) NULL)"
             )
-        elif db.dialect == "mysql":
+        elif db.dialect in ("mysql", "mariadb"):
             sch = schema or db.database
             cur.execute(
                 f"CREATE TABLE `{sch}`.`{table}` ("

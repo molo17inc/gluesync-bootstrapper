@@ -213,3 +213,48 @@ def archive_with_udf(
         zf.writestr("entities.yaml", yaml.safe_dump(entities, sort_keys=False))
         zf.writestr(f"{udf_folder}/{udf_name}{ext}", udf_code)
     return buffer.getvalue()
+
+
+def multi_pipeline_archive(
+    pipeline_specs: list,
+    *,
+    source_tag: str,
+    target_tag: str,
+    agents_tag: str = "synth1",
+) -> bytes:
+    """ZIP with one agents-config and several ``backup_<name>_<id>.yaml`` members.
+
+    ``pipeline_specs``: list of dicts with keys ``pipeline_id``, ``pipeline_name``, ``entities``.
+    Used by Customize e2e (turn one pipeline off, import the rest).
+    """
+    agents = rewrite_agent_tags(agents_dict(agents_tag), source_tag=source_tag, target_tag=target_tag)
+    # One pipelines[] entry per spec, sharing the two agents from the fixture.
+    base_agents = list(agents.get("agents") or [])
+    pipes = []
+    for spec in pipeline_specs:
+        pipes.append({
+            "pipelineId": spec["pipeline_id"],
+            "pipelineName": spec["pipeline_name"],
+            "agents": [
+                {"agentType": a.get("agentType"), "agentTag": a.get("agentTag"), "agentId": a.get("agentId")}
+                for a in base_agents if isinstance(a, dict)
+            ],
+        })
+    agents["pipelines"] = pipes
+    for agent in agents.get("agents") or []:
+        creds = agent.get("hostCredentials") or {}
+        if isinstance(creds.get("host"), str) and "example.invalid" in creds["host"]:
+            creds["host"] = SAMPLE_HOST
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as zf:
+        zf.writestr("agents-config.yaml", yaml.safe_dump(agents, sort_keys=False))
+        for spec in pipeline_specs:
+            ents = dict(spec["entities"])
+            ents["exportMetadata"] = {
+                "pipelineId": spec["pipeline_id"],
+                "pipelineName": spec["pipeline_name"],
+            }
+            safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in spec["pipeline_name"])
+            member = f"backup_{safe}_{spec['pipeline_id']}.yaml"
+            zf.writestr(member, yaml.safe_dump(ents, sort_keys=False))
+    return buffer.getvalue()
