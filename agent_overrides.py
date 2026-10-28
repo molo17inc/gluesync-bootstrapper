@@ -28,7 +28,11 @@ example a local MSSQL container) before its credentials are sent.
 The mapping is keyed by the agent's tag (``agentTag``, e.g. ``mssql-ct``; case-insensitive) or by its id in the
 backup (``agentId``, e.g. ``a9e00004``)::
 
-    {"mssql-ct": {"host": "host.docker.internal", "port": 1433, "database": "demo", "username": "sa"}}
+    {"mssql-ct": {"host": "host.docker.internal", "port": 1433, "database": "demo", "username": "sa",
+                   "trustServerCertificate": true},
+     "mysql-cdc": {"host": "host.docker.internal", "port": 3306, "database": "demo",
+                   "trustServerCertificate": true,
+                   "customHostCredentials": {"allowPublicKeyRetrieval": true}}}
 
 Sources, later ones win field by field: the JSON file named by ``GS_IMPORT_AGENT_OVERRIDES_FILE``, the inline
 JSON of ``GS_IMPORT_AGENT_OVERRIDES``, then what the caller passes (the Automator form field / CLI flag).
@@ -50,7 +54,14 @@ PASSWORD_ENV_PREFIX = "GS_IMPORT_AGENT_PASSWORD_"
 
 # override field -> hostCredentials key of agents-config.yaml
 FIELDS = {"host": "host", "port": "port", "database": "databaseName", "databaseName": "databaseName",
-          "username": "username"}
+          "username": "username",
+          # Core Hub 2.3+ JDBC: trustServerCertificate false requires an uploaded keystore
+          # ("Keystore not found, please upload a keystore when using verify server certificate").
+          # Local/lab imports pass trustServerCertificate true via overrides.
+          "trustServerCertificate": "trustServerCertificate",
+          "enableTls": "enableTls",
+          # Kafka/local brokers and some NoSQL kits: skip SASL/SSL defaults.
+          "disableAuth": "disableAuth"}
 _PASSWORD_KEYS = ("password", "pwd", "pass")
 
 
@@ -116,7 +127,8 @@ def _check_entry_field(key: Any, field: str, origin: str) -> None:
             f"environment variable {password_env_name(key)} (or name one under 'passwordEnv')")
     if field not in FIELDS and field not in ("passwordEnv", "customHostCredentials"):
         raise AgentOverrideError(f"{origin}: {key!r} has unknown field {field!r} (allowed: host, port, "
-                                 f"database, username, passwordEnv, customHostCredentials)")
+                                 f"database, username, trustServerCertificate, enableTls, passwordEnv, "
+                                 f"customHostCredentials)")
 
 
 def _parsed_entry(key: Any, entry: Any, origin: str) -> Dict[str, Any]:

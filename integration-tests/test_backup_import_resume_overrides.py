@@ -52,6 +52,25 @@ class AgentOverridesTests(unittest.TestCase):
         self.assertEqual(items[0]["hostCredentials"]["host"], "pub400")
         self.assertEqual(items[0]["hostCredentials"]["password"], "pw")
 
+    def test_trust_server_certificate_and_custom_host_credentials(self):
+        """MySQL/local JDBC: trustServerCertificate + allowPublicKeyRetrieval must reach hostCredentials
+        (Core Hub 2.3: Keystore not found when trustServerCertificate is false)."""
+        items = [
+            {"agentId": "m1", "agentTag": "mysql-cdc", "agentType": "SOURCE",
+             "hostCredentials": {"host": "old", "port": 3306, "databaseName": "demo", "username": "u",
+                                 "password": "old", "trustServerCertificate": False, "enableTls": False}},
+        ]
+        overrides = agent_overrides.load(
+            '{"mysql-cdc": {"host": "host.docker.internal", "trustServerCertificate": true,'
+            ' "customHostCredentials": {"allowPublicKeyRetrieval": true}}}', env={})
+        lines = agent_overrides.apply(items, overrides, env={"GS_IMPORT_AGENT_PASSWORD_MYSQL_CDC": "pw"})
+        creds = items[0]["hostCredentials"]
+        self.assertEqual(creds["host"], "host.docker.internal")
+        self.assertIs(creds["trustServerCertificate"], True)
+        self.assertEqual(items[0]["customHostCredentials"]["allowPublicKeyRetrieval"], True)
+        self.assertIn("trustServerCertificate=True", "\n".join(lines))
+        self.assertIn("customHostCredentials.allowPublicKeyRetrieval=True", "\n".join(lines))
+
     def test_password_in_json_is_refused(self):
         with self.assertRaises(agent_overrides.AgentOverrideError):
             agent_overrides.load('{"mssql-ct": {"password": "x"}}', env={})
