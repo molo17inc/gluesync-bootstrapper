@@ -30,7 +30,7 @@ from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
 
 import yaml
 
-from commons import fetch_core_hub, get_table_columns, is_length_type, is_temporal_type
+from commons import fetch_core_hub, get_table_columns, is_length_type, is_temporal_type, catalog_type_for_agent_tag
 from field_function_utils import apply_field_functions_to_column_mappings, normalize_expression_for_yaml
 from entity_mapping import read_entry, relations_of, yaml_rows
 from utils.chronos_client import ChronosClient
@@ -162,9 +162,9 @@ def infer_pipeline_schema_types_from_agents(token: str, pipeline_id: str) -> Tup
     """Return (sourceType, targetType) as SQL/NoSQL according to the agents.json catalog.
 
     A side is None when the catalog cannot tell: the agent has no tag, the tag is
-    not listed in agents.json (for example ``couchbase-dcp``), the pipeline has no
-    agent for that side, or the pipeline config could not be fetched. The caller
-    decides what an unknown side falls back to.
+    not listed in agents.json and has no hyphen-bounded prefix there, the pipeline
+    has no agent for that side, or the pipeline config could not be fetched. The
+    caller decides what an unknown side falls back to.
     """
 
     try:
@@ -181,7 +181,7 @@ def infer_pipeline_schema_types_from_agents(token: str, pipeline_id: str) -> Tup
 
     def _classify(agent: Optional[Dict[str, Any]]) -> Optional[str]:
         tag = str((agent or {}).get("agentTag") or "").lower()
-        return catalog.get(tag) if tag else None
+        return catalog_type_for_agent_tag(catalog, tag) if tag else None
 
     source_agent = next((a for a in agents if isinstance(a, dict) and a.get("agentType") == "SOURCE"), None)
     target_agent = next((a for a in agents if isinstance(a, dict) and a.get("agentType") == "TARGET"), None)

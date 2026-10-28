@@ -47,6 +47,7 @@ from commons import (
     get_table_columns,
     extract_all_schemas_from_yaml,
     extract_schema_types_from_yaml,
+    catalog_type_for_agent_tag,
 )
 from create_all_entities import (
     CREATE_TABLE_IF_NOT_EXISTS,
@@ -186,7 +187,7 @@ def _infer_schema_types_from_agents_list(agents: Any) -> Tuple[Optional[str], Op
         tag = str(agent.get("agentTag") or "").lower()
         if not tag:
             return None
-        return _normalize_agent_category(catalog.get(tag))
+        return _normalize_agent_category(catalog_type_for_agent_tag(catalog, tag))
 
     source_agent = next((a for a in agents if isinstance(a, dict) and a.get("agentType") == "SOURCE"), None)
     target_agent = next((a for a in agents if isinstance(a, dict) and a.get("agentType") == "TARGET"), None)

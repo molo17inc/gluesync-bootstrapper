@@ -43,7 +43,7 @@ from utils.log import get_logger, create_log_file, log_success, log_failure, loc
 from utils.gluesync_sdk_client import initialize_gluesync_sdk, get_token, get_gluesync_client
 from utils.core_hub_client import CoreHubClient
 from utils.transactions_audit_client import TransactionsAuditClient
-from commons import extract_schemas_from_yaml, extract_all_schemas_from_yaml, extract_schema_types_from_yaml, configure_core_hub
+from commons import extract_schemas_from_yaml, extract_all_schemas_from_yaml, extract_schema_types_from_yaml, configure_core_hub, catalog_type_for_agent_tag
 from commons import admin_credentials_path, admin_password_problem, load_admin_password, login_password_candidates, save_admin_credentials
 from utils.redact import redact
 
@@ -247,9 +247,9 @@ def infer_pipeline_schema_types_from_config(conf: dict) -> tuple[str, str]:
             continue
 
         if agent_type == "SOURCE" and src_type is None:
-            src_type = catalog.get(tag, "SQL")
+            src_type = catalog_type_for_agent_tag(catalog, tag) or "SQL"
         elif agent_type == "TARGET" and tgt_type is None:
-            tgt_type = catalog.get(tag, "SQL")
+            tgt_type = catalog_type_for_agent_tag(catalog, tag) or "SQL"
 
     return src_type or "SQL", tgt_type or "SQL"
 
