@@ -102,8 +102,9 @@ class TestSchemaUrlEncodingBug:
 
 class TestAgentOverridesOffline:
     def test_password_key_refused(self):
+        payload = json.dumps({"mssql-ct": {"password": "nope"}})
         with pytest.raises(agent_overrides.AgentOverrideError) as exc:
-            agent_overrides.load(json.dumps({"mssql-ct": {"password": "nope"}}))
+            agent_overrides.load(payload)
         assert "password" in str(exc.value).lower()
         assert "GS_IMPORT_AGENT_PASSWORD_MSSQL_CT" in str(exc.value)
 

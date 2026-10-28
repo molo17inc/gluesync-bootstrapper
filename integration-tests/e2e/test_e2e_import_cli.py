@@ -58,5 +58,6 @@ def test_agent_overrides_refuse_inline_password(tmp_path):
     import agent_overrides
     bad = tmp_path / "bad.json"
     bad.write_text(json.dumps({"mssql-ct": {"host": "127.0.0.1", "password": "x"}}), encoding="utf-8")
+    payload = bad.read_text(encoding="utf-8")
     with pytest.raises(agent_overrides.AgentOverrideError):
-        agent_overrides.load(bad.read_text(encoding="utf-8"))
+        agent_overrides.load(payload)

@@ -348,7 +348,8 @@ class TestFanInEdges:
         p1 = fan_in.peers_of(config, "T1", "X")
         p2 = fan_in.peers_of(config, "T2", "X")
         # peers_of is scoped by target schema — conflicting targets stay apart
-        assert isinstance(p1, list) and isinstance(p2, list)
+        assert isinstance(p1, list)
+        assert isinstance(p2, list)
 
     def test_merge_types_conflict_returns_err(self):
         result, err = fan_in.merge_types([
@@ -376,7 +377,8 @@ class TestUdfIsSnapshot:
         )
         adapted_old = adapt_udf_signature(code, "JAVA", supports_is_snapshot=False, udf_name="f")
         adapted_new = adapt_udf_signature(code, "JAVA", supports_is_snapshot=True, udf_name="f")
-        assert adapted_old.code and adapted_new.code
+        assert adapted_old.code
+        assert adapted_new.code
 
 
 # ---------------------------------------------------------------------------
@@ -546,11 +548,11 @@ class TestMalformedAndAuth:
 
     def test_missing_password_env_named_in_override(self, monkeypatch):
         monkeypatch.delenv("GS_E2E_MISSING_PW", raising=False)
+        overrides = agent_overrides.load(json.dumps({
+            "mssql-ct": {"passwordEnv": "GS_E2E_MISSING_PW"},
+        }))
+        agents = [{"agentTag": "mssql-ct", "hostCredentials": {"host": "192.0.2.10", "password": "<PASSWORD>"}}]
         with pytest.raises(agent_overrides.AgentOverrideError):
-            overrides = agent_overrides.load(json.dumps({
-                "mssql-ct": {"passwordEnv": "GS_E2E_MISSING_PW"},
-            }))
-            agents = [{"agentTag": "mssql-ct", "hostCredentials": {"host": "192.0.2.10", "password": "<PASSWORD>"}}]
             agent_overrides.apply(agents, overrides)
 
 
@@ -578,8 +580,9 @@ class TestDryRunExitCodesApiErrors:
             with mock.patch.object(cat, "CREATE_TABLE_IF_NOT_EXISTS", True):
                 # table_exists path uses GET — creation PUT for statement then entity is separate;
                 # exercise generate + create_target_table style conflict via create_target_table
+                req = cat.CreateTableRequest(statement="CREATE TABLE t(i int)")
                 with pytest.raises(RuntimeError):
-                    cat.create_target_table("p", cat.CreateTableRequest(statement="CREATE TABLE t(i int)"), "tok")
+                    cat.create_target_table("p", req, "tok")
 
     def test_hub_500_and_timeout(self):
         hub = RecordingHub(fail_status=500)
@@ -738,9 +741,11 @@ class TestImportOptionsFields:
         assert creds["password"] == "synth-only"
 
     def test_agent_override_rejects_password_literal(self):
+        payload = json.dumps({"mssql-ct": {"password": "nope"}})
         with pytest.raises(agent_overrides.AgentOverrideError):
-            agent_overrides.load(json.dumps({"mssql-ct": {"password": "nope"}}))
+            agent_overrides.load(payload)
 
     def test_agent_override_rejects_unknown_field(self):
+        payload = json.dumps({"mssql-ct": {"jdbcUrl": "x"}})
         with pytest.raises(agent_overrides.AgentOverrideError):
-            agent_overrides.load(json.dumps({"mssql-ct": {"jdbcUrl": "x"}}))
+            agent_overrides.load(payload)

@@ -171,7 +171,8 @@ def test_live_udf_restore_from_synthetic_backup(hub_env, overrides_json, hub, ag
                 assert str(udf_type).lower() in ("java", "jvm"), f"unexpected UDF type {udf_type!r}"
         else:
             # Some hubs return raw string code
-            assert isinstance(mf, str) and "isSnapshot" in mf, f"unexpected mapping-function body: {mf!r}"
+            assert isinstance(mf, str), f"unexpected mapping-function body: {mf!r}"
+            assert "isSnapshot" in mf, f"unexpected mapping-function body: {mf!r}"
 
         attached = hub.entity_udf_names(pid)
         print(f"e2e_udf_attached_names={attached}")
@@ -271,7 +272,8 @@ def test_roundtrip_export_import_equality(hub, hub_env, overrides_json, tmp_path
         names_b = sorted(
             (e.get("entityName") or e.get("name") or "") for e in again if isinstance(e, dict)
         )
-        assert names_a == names_b and names_a != [""]
+        assert names_a == names_b
+        assert names_a != [""]
         deleted = hub.delete_tracked_pipelines()
         if deleted:
             print(f"e2e_cleanup_tracked_ids={','.join(deleted)}")

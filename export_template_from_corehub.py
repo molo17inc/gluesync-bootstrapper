@@ -1031,14 +1031,8 @@ def _udf_config(target_et: Dict[str, Any]) -> Any:
 _DEFAULT_ALLOWED_OPERATIONS = ["INSERT", "DELETE", "UPDATE", "TRUNCATE"]
 
 
-def _target_custom_properties(target_ae: Dict[str, Any], target_et: Dict[str, Any]) -> Dict[str, Any]:
-    """``customProperties.target`` of a table: its own custom properties and the non-default target settings."""
-    target_cp = (target_ae.get("customProperties") or {}).copy()
-
-    udf_cfg = _udf_config(target_et)
-    if udf_cfg:
-        target_cp["udf"] = udf_cfg
-
+def _lift_nondefault_target_settings(target_cp: Dict[str, Any], target_et: Dict[str, Any]) -> None:
+    """Merge non-default entityType settings into ``customProperties.target`` (in place)."""
     # Snapshot concurrency: expose only when different from default 1
     snapshot_conc = target_et.get("snapshotWritingConcurrency")
     if isinstance(snapshot_conc, int) and snapshot_conc != 1:
@@ -1064,6 +1058,17 @@ def _target_custom_properties(target_ae: Dict[str, Any], target_et: Dict[str, An
         cmd = target_et.get(cmd_key)
         if isinstance(cmd, str) and cmd.strip():
             target_cp[cmd_key] = cmd
+
+
+def _target_custom_properties(target_ae: Dict[str, Any], target_et: Dict[str, Any]) -> Dict[str, Any]:
+    """``customProperties.target`` of a table: its own custom properties and the non-default target settings."""
+    target_cp = (target_ae.get("customProperties") or {}).copy()
+
+    udf_cfg = _udf_config(target_et)
+    if udf_cfg:
+        target_cp["udf"] = udf_cfg
+
+    _lift_nondefault_target_settings(target_cp, target_et)
     return target_cp
 
 
@@ -1370,6 +1375,47 @@ def _export_multitable_table(export: _MultiTableExport, tbl: Dict[str, Any]) -> 
     _export_where_clause(table_cfg, export.source_ae, export.source_schema, table_name, f"MultiTable {table_name}")
 
 
+def _multitable_schema_cfg(
+    entity_name: str,
+    source_schema: str,
+    target_ae: Dict[str, Any],
+    schemas: Dict[str, Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Resolve schema config for a MultiTable entity and warn on mixed target schemas."""
+    target_tables = target_ae.get("tables", []) or []
+    target_schema = (target_tables[0].get("schema") or source_schema) if target_tables else source_schema
+    schema_cfg = _schema_cfg_for(schemas, source_schema, target_schema)
+    target_schemas_of_chain = sorted({str(t.get("schema")) for t in target_tables if t.get("schema")})
+    if any(s_ != schema_cfg.get("target") for s_ in target_schemas_of_chain):
+        # Known limitation: per-table target schemas inside one MultiTable chain are not exported (one entity,
+        # one pass); the warning below tells the user to check them.
+        logger.warning(f"MultiTable entity {entity_name} targets schema(s) {', '.join(target_schemas_of_chain)} "
+                       f"while {source_schema} is exported with target {schema_cfg.get('target')}: check its "
+                       f"target schema after import")
+    return schema_cfg
+
+
+def _attach_multitable_last_target_custom_properties(
+    tables: List[Dict[str, Any]],
+    schema_cfg: Dict[str, Any],
+    target_ae: Dict[str, Any],
+    target_type: Dict[str, Any],
+) -> None:
+    """Import reads MultiTable target settings from the *last* table's customProperties.target."""
+    last_name = tables[-1].get("name") if tables else None
+    if not last_name:
+        return
+    last_cfg = schema_cfg["tables"]["custom"].get(last_name)
+    if last_cfg is None:
+        return
+    target_cp = _target_custom_properties(target_ae, target_type)
+    # MultiTable import always writes ttlValue: 0; omit that default so hub-empty
+    # exports do not invent a no-op customProperties.target.
+    if target_cp.get("ttlValue") == 0:
+        target_cp = {k: v for k, v in target_cp.items() if k != "ttlValue"}
+    _attach_custom_properties(last_cfg, {}, target_cp)
+
+
 def _process_multitable_entity(
     ent: Dict[str, Any],
     source_ae: Dict[str, Any],
@@ -1404,18 +1450,9 @@ def _process_multitable_entity(
     if _is_custom_group(group_id):
         group_name = group_id_to_name.get(str(group_id), str(group_id))
 
-    # Ensure schema config exists
-    # Target schema for MultiTable is inferred from first target table
+    # Ensure schema config exists (target schema from first target table)
     target_tables = target_ae.get("tables", []) or []
-    target_schema = (target_tables[0].get("schema") or source_schema) if target_tables else source_schema
-    schema_cfg = _schema_cfg_for(schemas, source_schema, target_schema)
-    target_schemas_of_chain = sorted({str(t.get("schema")) for t in target_tables if t.get("schema")})
-    if any(s_ != schema_cfg.get("target") for s_ in target_schemas_of_chain):
-        # Known limitation: per-table target schemas inside one MultiTable chain are not exported (one entity,
-        # one pass); the warning below tells the user to check them.
-        logger.warning(f"MultiTable entity {entity_name} targets schema(s) {', '.join(target_schemas_of_chain)} "
-                       f"while {source_schema} is exported with target {schema_cfg.get('target')}: check its "
-                       f"target schema after import")
+    schema_cfg = _multitable_schema_cfg(entity_name, source_schema, target_ae, schemas)
 
     column_groups = _group_multitable_entries(source_ae.get("columns"))
     key_groups = _group_multitable_entries(source_ae.get("keys"))
@@ -1444,19 +1481,9 @@ def _process_multitable_entity(
     for tbl in tables:
         _export_multitable_table(export, tbl)
 
-    # Import reads MultiTable target settings from the *last* table's customProperties.target
-    # (see create_all_entities._chain_target_*). Reconstruct them the same way as SingleTable
+    # Reconstruct last-table customProperties.target the same way as SingleTable
     # via _target_custom_properties (entityType lift when AE customProperties is empty).
-    last_name = tables[-1].get("name") if tables else None
-    if last_name:
-        last_cfg = schema_cfg["tables"]["custom"].get(last_name)
-        if last_cfg is not None:
-            target_cp = _target_custom_properties(target_ae, target_type)
-            # MultiTable import always writes ttlValue: 0; omit that default so hub-empty
-            # exports do not invent a no-op customProperties.target.
-            if target_cp.get("ttlValue") == 0:
-                target_cp = {k: v for k, v in target_cp.items() if k != "ttlValue"}
-            _attach_custom_properties(last_cfg, {}, target_cp)
+    _attach_multitable_last_target_custom_properties(tables, schema_cfg, target_ae, target_type)
 
 
 def attach_schedules_from_jobs(

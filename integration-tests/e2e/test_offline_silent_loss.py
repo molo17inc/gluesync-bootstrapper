@@ -34,10 +34,12 @@ class TestSilentLossDocumented:
 
     def test_export_lifts_snapshot_commands_from_entity_type(self):
         """S2 fixed: export lifts pre/postSnapshotCommand from entityType (hub-empty customProperties)."""
-        src = inspect.getsource(exp._target_custom_properties)
+        # Lift lives in _lift_nondefault_target_settings; _target_custom_properties delegates to it.
+        src = inspect.getsource(exp._lift_nondefault_target_settings)
         assert "preSnapshotCommand" in src
         assert "postSnapshotCommand" in src
         assert "snapshotWritingConcurrency" in src
+        assert "_lift_nondefault_target_settings" in inspect.getsource(exp._target_custom_properties)
         # Behavioural: empty AE customProperties + commands on entityType → YAML target cp
         lifted = exp._target_custom_properties(
             {"customProperties": {}},
@@ -65,5 +67,6 @@ class TestSilentLossDocumented:
 
     def test_import_reads_snapshot_commands_from_custom_properties_target(self):
         text = Path(cae.__file__).read_text(encoding="utf-8")
-        assert "preSnapshotCommand" in text and "postSnapshotCommand" in text
+        assert "preSnapshotCommand" in text
+        assert "postSnapshotCommand" in text
         assert "_snapshot_commands_from_target_props" in text
