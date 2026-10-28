@@ -88,6 +88,29 @@ class InferAgentSchemaTypesTests(unittest.TestCase):
         self.assertEqual(tgt, "NoSQL")
 
 
+    def test_hyphen_suffix_tag_matches_catalog_prefix(self):
+        """Core Hub agentTag couchbase-dcp resolves via agents.json internalName couchbase."""
+        import automator_app.corehub as corehub
+
+        with mock.patch.object(corehub, "_load_agent_type_catalog", return_value={
+            "mssql-cdc": "RDBMS",
+            "couchbase": "NOSQL",
+        }), \
+             mock.patch.object(corehub, "get_pipeline_agents", return_value=[
+            {"agentType": "SOURCE", "agentTag": "mssql-cdc"},
+            {"agentType": "TARGET", "agentTag": "couchbase-dcp"},
+        ]):
+            src, tgt = corehub.infer_agent_schema_types(
+                token="tok",
+                base_url="http://test",
+                pipeline_id="pipe",
+                use_ssl=False,
+                skip_verify=False,
+            )
+        self.assertEqual(src, "SQL")
+        self.assertEqual(tgt, "NoSQL")
+
+
 class RunCreateEntitiesForTablesTests(unittest.TestCase):
     """Verify bulk table-list-driven entity creation in Automator."""
 

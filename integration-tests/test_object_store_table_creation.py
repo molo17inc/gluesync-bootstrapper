@@ -55,6 +55,11 @@ class IsNoCreateTableTargetTests(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertTrue(self.is_no_create_table_target(value))
 
+    def test_event_streaming_and_search_are_skipped(self):
+        for value in ("Event Streaming", "Streaming", "Search", "Kafka", "unknown-type"):
+            with self.subTest(value=value):
+                self.assertTrue(self.is_no_create_table_target(value))
+
     def test_sql_targets_are_not_skipped(self):
         """RDBMS / SQL targets must continue to receive CREATE TABLE calls."""
         for value in ("SQL", "sql", "RDBMS", "rdbms"):
