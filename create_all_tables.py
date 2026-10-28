@@ -139,10 +139,11 @@ def table_exists(pipeline_id: str, schema_name: str, table_name: str, token: str
     expected_statuses = {404} if CREATE_TABLE_IF_NOT_EXISTS else None
 
     try:
-        # URL-encode the table name to handle special characters
+        # URL-encode schema and table names (spaces, unicode, reserved chars)
+        encoded_schema_name = urllib.parse.quote(schema_name, safe='')
         encoded_table_name = urllib.parse.quote(table_name, safe='')
         fetch_core_hub(
-            f"/pipelines/{pipeline_id}/config/entities/schemas/{schema_name}/tables/{encoded_table_name}",
+            f"/pipelines/{pipeline_id}/config/entities/schemas/{encoded_schema_name}/tables/{encoded_table_name}",
             method="GET",
             token=token,
             expected_error_statuses=expected_statuses
@@ -167,10 +168,10 @@ def table_exists(pipeline_id: str, schema_name: str, table_name: str, token: str
             return False
 
         try:
-            # URL-encode the alternate table name as well
+            # URL-encode the alternate table name as well (schema already encoded above)
             encoded_alternate_table_name = urllib.parse.quote(alternate_table_name, safe='')
             fetch_core_hub(
-                f"/pipelines/{pipeline_id}/config/entities/schemas/{schema_name}/tables/{encoded_alternate_table_name}",
+                f"/pipelines/{pipeline_id}/config/entities/schemas/{encoded_schema_name}/tables/{encoded_alternate_table_name}",
                 method="GET",
                 token=token,
                 expected_error_statuses=expected_statuses
@@ -186,11 +187,12 @@ def table_exists(pipeline_id: str, schema_name: str, table_name: str, token: str
 def generate_create_table_statement(pipeline_id: str, schema_name: str, table_name: str, token: str,
                                     table_data: GenerateCreateTargetTableStatementRequest) -> str:
     try:
-        # URL-encode the table name to handle special characters
+        # URL-encode schema and table names (spaces, unicode, reserved chars)
+        encoded_schema_name = urllib.parse.quote(schema_name, safe='')
         encoded_table_name = urllib.parse.quote(table_name, safe='')
         logger.info(f"table data: {table_data.model_dump()}")
         response = fetch_core_hub(
-            f"/pipelines/{pipeline_id}/config/entities/schemas/{schema_name}/tables/{encoded_table_name}/statements/create-table",
+            f"/pipelines/{pipeline_id}/config/entities/schemas/{encoded_schema_name}/tables/{encoded_table_name}/statements/create-table",
             method="PUT",
             token=token,
             body=table_data.model_dump()
@@ -722,10 +724,21 @@ def _metadata_column_dtos(metadata_columns, target_table_name: str, key_lookup: 
     return column_dtos
 
 
+def _discovery_column_list(columns) -> list:
+    """The column dicts of a discovery payload: ``{"columns": [...]}``, a bare list, or empty."""
+    if columns is None:
+        return []
+    if isinstance(columns, list):
+        return columns
+    if isinstance(columns, dict):
+        return list(columns.get("columns") or [])
+    return []
+
+
 def _source_column_dtos(columns, key_lookup: _KeyLookup, source_node_info, target_node_info) -> list:
     """When no metadata is provided, fall back to source column properties directly."""
     column_dtos = []
-    for col in columns["columns"]:
+    for col in _discovery_column_list(columns):
         # Map source type to target type (e.g. CHARACTER -> varchar)
         mapped_type = map_data_type(
             col.get("dataType"),
@@ -915,10 +928,10 @@ def _exported_column_dtos(relations, custom_config: dict, columns, key_lookup: _
     no column falls back to every discovered source column, as the entity does. Then come the columns of the YAML
     ``keys`` no row names and the ``targetOnlyColumns`` no row writes. Empty when no source column feeds any.
     """
-    source_columns = (columns or {}).get('columns') or []
+    source_columns = _discovery_column_list(columns)
     table = _TableColumns(relations)
     if not _fed_relation_columns(table, relations, source_columns, key_lookup, source_node_info, target_node_info):
-        for column in _source_column_dtos(columns or {'columns': []}, key_lookup, source_node_info, target_node_info):
+        for column in _source_column_dtos(columns, key_lookup, source_node_info, target_node_info):
             table.add(column)
         if not table.columns:
             return []

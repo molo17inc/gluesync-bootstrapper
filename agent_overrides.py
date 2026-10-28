@@ -114,9 +114,9 @@ def _check_entry_field(key: Any, field: str, origin: str) -> None:
         raise AgentOverrideError(
             f"{origin}: {key!r} has a {field!r} key; passwords are never read from the mapping, set the "
             f"environment variable {password_env_name(key)} (or name one under 'passwordEnv')")
-    if field not in FIELDS and field != "passwordEnv":
+    if field not in FIELDS and field not in ("passwordEnv", "customHostCredentials"):
         raise AgentOverrideError(f"{origin}: {key!r} has unknown field {field!r} (allowed: host, port, "
-                                 f"database, username, passwordEnv)")
+                                 f"database, username, passwordEnv, customHostCredentials)")
 
 
 def _parsed_entry(key: Any, entry: Any, origin: str) -> Dict[str, Any]:
@@ -130,6 +130,15 @@ def _parsed_entry(key: Any, entry: Any, origin: str) -> Dict[str, Any]:
             entry = {**entry, "port": int(entry["port"])}
         except (TypeError, ValueError):
             raise AgentOverrideError(f"{origin}: port of {key!r} must be a number") from None
+    if "customHostCredentials" in entry:
+        custom = entry["customHostCredentials"]
+        if not isinstance(custom, dict):
+            raise AgentOverrideError(f"{origin}: customHostCredentials of {key!r} must be an object")
+        for ck in custom:
+            if str(ck).lower() in _PASSWORD_KEYS:
+                raise AgentOverrideError(
+                    f"{origin}: {key!r} customHostCredentials has a {ck!r} key; passwords are never "
+                    f"read from the mapping")
     return entry
 
 
@@ -179,7 +188,7 @@ def _agent_refs(agents: List[Any]) -> List[str]:
 def _overridden_credentials(creds: Dict[str, Any], entry: Dict[str, Any], changed: List[str]) -> None:
     """Set the overridden fields of ``entry`` on ``creds``, noting the changed ones."""
     for field, value in entry.items():
-        if field == "passwordEnv":
+        if field in ("passwordEnv", "customHostCredentials"):
             continue
         target = FIELDS[field]
         if creds.get(target) != value:
@@ -199,6 +208,13 @@ def _apply_to_agent(agent: Dict[str, Any], entry: Dict[str, Any], env: Mapping[s
         changed.append(f"password from ${password_var}")
     elif entry.get("passwordEnv"):
         raise AgentOverrideError(f"{label}: passwordEnv names {password_var}, which is not set")
+    if "customHostCredentials" in entry:
+        custom = dict(agent.get("customHostCredentials") or {})
+        for ck, cv in entry["customHostCredentials"].items():
+            if custom.get(ck) != cv:
+                changed.append(f"customHostCredentials.{ck}={cv}")
+            custom[ck] = cv
+        agent["customHostCredentials"] = custom
     if not changed:
         return None
     agent["hostCredentials"] = creds

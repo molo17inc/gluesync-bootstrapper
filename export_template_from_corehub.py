@@ -1054,6 +1054,16 @@ def _target_custom_properties(target_ae: Dict[str, Any], target_et: Dict[str, An
     allowed_ops = target_et.get("allowedOperations")
     if isinstance(allowed_ops, list) and allowed_ops and allowed_ops != _DEFAULT_ALLOWED_OPERATIONS:
         target_cp["allowedOperations"] = allowed_ops
+
+    # pre/postSnapshotCommand live on entityType after import (create_all_entities spreads them from
+    # customProperties.target; live hub fixtures keep agentEntity.customProperties empty). Lift them
+    # back into YAML customProperties.target the same way as concurrency / bulk / allowedOperations.
+    for cmd_key in ("preSnapshotCommand", "postSnapshotCommand"):
+        if cmd_key in target_cp:
+            continue
+        cmd = target_et.get(cmd_key)
+        if isinstance(cmd, str) and cmd.strip():
+            target_cp[cmd_key] = cmd
     return target_cp
 
 
@@ -1433,6 +1443,20 @@ def _process_multitable_entity(
     # For each table in the chain, assign chain metadata and restore columns/keys
     for tbl in tables:
         _export_multitable_table(export, tbl)
+
+    # Import reads MultiTable target settings from the *last* table's customProperties.target
+    # (see create_all_entities._chain_target_*). Reconstruct them the same way as SingleTable
+    # via _target_custom_properties (entityType lift when AE customProperties is empty).
+    last_name = tables[-1].get("name") if tables else None
+    if last_name:
+        last_cfg = schema_cfg["tables"]["custom"].get(last_name)
+        if last_cfg is not None:
+            target_cp = _target_custom_properties(target_ae, target_type)
+            # MultiTable import always writes ttlValue: 0; omit that default so hub-empty
+            # exports do not invent a no-op customProperties.target.
+            if target_cp.get("ttlValue") == 0:
+                target_cp = {k: v for k, v in target_cp.items() if k != "ttlValue"}
+            _attach_custom_properties(last_cfg, {}, target_cp)
 
 
 def attach_schedules_from_jobs(

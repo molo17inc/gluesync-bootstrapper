@@ -4182,20 +4182,28 @@ def _legacy_chain_matrix(run, tables_list):
     return columns_mapping_matrix
 
 
+def _snapshot_commands_from_target_props(target_props):
+    """pre/postSnapshotCommand from YAML ``customProperties.target`` (strings, as SingleTable).
+
+    Older accidental dict values are still forwarded; empty / missing values are omitted.
+    """
+    out = {}
+    for key in ("preSnapshotCommand", "postSnapshotCommand"):
+        value = (target_props or {}).get(key)
+        if isinstance(value, str) and value.strip():
+            out[key] = value
+        elif isinstance(value, dict) and value:
+            out[key] = value
+    return out
+
+
 def _chain_target_custom_properties(last_table_data):
     """The customProperties of a MultiTable target: ttlValue and the pre/post snapshot commands."""
-    table_target_properties = last_table_data.get('customProperties', {}).get('target', {})
+    table_target_properties = last_table_data.get('customProperties', {}).get('target', {}) or {}
     target_custom_properties = {
         "ttlValue": table_target_properties.get('ttlValue', 0)
     }
-
-    post_snapshot_cmd = last_table_data.get('customProperties', {}).get('target', {}).get('postSnapshotCommand', {})
-    if isinstance(post_snapshot_cmd, dict) and post_snapshot_cmd:
-        target_custom_properties["postSnapshotCommand"] = post_snapshot_cmd
-
-    pre_snapshot_cmd = last_table_data.get('customProperties', {}).get('target', {}).get('preSnapshotCommand', {})
-    if isinstance(pre_snapshot_cmd, dict) and pre_snapshot_cmd:
-        target_custom_properties["preSnapshotCommand"] = pre_snapshot_cmd
+    target_custom_properties.update(_snapshot_commands_from_target_props(table_target_properties))
     return target_custom_properties
 
 
@@ -4234,6 +4242,10 @@ def _chain_target_entity(cb, entity_name, tables_list, last_table_data):
         "tables": cb.target_tables,
         "columns": cb.target_columns
     }
+
+    # Same as SingleTable: pre/postSnapshotCommand belong on entityType (hub stores them there).
+    for cmd_key, cmd_val in _snapshot_commands_from_target_props(mt_target_props).items():
+        target_entity["entityType"][cmd_key] = cmd_val
 
     if cb.mt_field_functions:
         target_entity["entityType"]["fieldFunctions"] = cb.mt_field_functions

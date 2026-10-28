@@ -22,6 +22,22 @@ os.environ.setdefault("CORE_HUB_TIMEOUT", "5")
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
 
+def _e2e_allowed_hosts():
+    """Hostnames live e2e may call (GS_E2E_HUB_URL and optional GS_E2E_ALLOW_HOSTS). Never hardcode secrets."""
+    allowed = set()
+    for var in ("GS_E2E_HUB_URL", "GS_COREHUB_URL", "GS_E2E_AUTOMATOR_URL"):
+        hub = (os.getenv(var) or "").strip()
+        if hub:
+            host = urlparse(hub).hostname
+            if host:
+                allowed.add(host.lower())
+    for item in (os.getenv("GS_E2E_ALLOW_HOSTS") or "").split(","):
+        item = item.strip().lower()
+        if item:
+            allowed.add(item)
+    return allowed
+
+
 @pytest.fixture(autouse=True)
 def _no_real_network(monkeypatch):
     try:
@@ -31,9 +47,10 @@ def _no_real_network(monkeypatch):
         yield
         return
     original_send = HTTPAdapter.send
+    allowed = _LOCAL_HOSTS | _e2e_allowed_hosts()
 
     def guarded_send(self, request, *args, **kwargs):
-        if (urlparse(request.url).hostname or "") in _LOCAL_HOSTS:
+        if (urlparse(request.url).hostname or "").lower() in allowed:
             return original_send(self, request, *args, **kwargs)
         raise requests.exceptions.ConnectionError(f"network disabled in tests: {request.method} {request.url}")
 
