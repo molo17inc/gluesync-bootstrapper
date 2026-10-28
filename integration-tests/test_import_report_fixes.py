@@ -146,6 +146,45 @@ if __name__ == "__main__":
     unittest.main()
 
 
+
+
+class EmptyWhitelistReportTests(unittest.TestCase):
+    """Empty whitelist = allow-all discovery: YAML cannot name the total; report must not say N of M with M < N."""
+
+    def test_empty_whitelist_yaml_total_is_unknown(self):
+        schemas = {"demo": {"tables": {"whitelist": [], "custom": {"a": {}, "b": {}}}}}
+        self.assertIsNone(app._schema_table_count(schemas, "demo"))
+
+    def test_missing_whitelist_yaml_total_is_unknown(self):
+        schemas = {"demo": {"tables": {"custom": {"only": {}}}}}
+        self.assertIsNone(app._schema_table_count(schemas, "demo"))
+
+    def test_filled_whitelist_counts_union_with_custom(self):
+        schemas = {"demo": {"tables": {"whitelist": ["t1", "t2"], "custom": {"t2": {}, "t3": {}}}}}
+        self.assertEqual(app._schema_table_count(schemas, "demo"), 3)
+
+    def test_report_total_prefers_counted_when_larger_than_yaml(self):
+        # Live bug: 9 created + 2 failed with yaml total 2 → "9 of 2". Counted sum wins.
+        total = app._report_total({
+            "entitiesRun": True, "total": 2, "created": 9, "failed": 2, "skipped": 0, "notAttempted": 0,
+        })
+        self.assertEqual(total, 11)
+
+    def test_report_total_keeps_yaml_when_counted_is_smaller(self):
+        total = app._report_total({
+            "entitiesRun": True, "total": 58, "created": 0, "failed": 0, "skipped": 0, "notAttempted": 58,
+        })
+        self.assertEqual(total, 58)
+
+    def test_pipeline_report_line_never_says_nine_of_two(self):
+        line = app._pipeline_report_line({
+            "pipelineName": "GS_IMP", "pipelineId": "x", "entitiesRun": True,
+            "total": 2, "created": 9, "failed": 2, "skipped": 0, "notAttempted": 0,
+            "errors": 2,
+        })
+        self.assertIn("9 of 11 entities created", line)
+        self.assertNotIn("of 2 entities", line)
+
 class DryRunOverrideTests(unittest.TestCase):
     """The dry run reports the passwords the agent overrides / GS_IMPORT_AGENT_PASSWORD_<TAG> would give."""
 

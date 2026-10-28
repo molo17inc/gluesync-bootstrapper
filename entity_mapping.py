@@ -374,8 +374,18 @@ def is_column_mappings(columns_list):
     - User format:    [{col_name: "target_name"}, ...]  e.g. [{id: "ID"}]
 
     Column *definitions* (not mappings) have a 'name' key.
+    A mapping (dict) under ``columns:`` is not a list of rows — refuse it with a clear
+    error instead of ``KeyError: 0`` from ``columns_list[0]`` on a dict.
     """
     if not columns_list:
+        return False
+    if isinstance(columns_list, dict):
+        raise EntityMappingError(
+            "columns must be a YAML list of mapping rows "
+            "(e.g. [{source: ID, target: id_pk}, {source: NAME, destination: name_renamed}]), "
+            f"not a mapping with keys {sorted(str(k) for k in columns_list)[:8]}"
+        )
+    if not isinstance(columns_list, (list, tuple)):
         return False
     first = columns_list[0]
     if not isinstance(first, dict):
@@ -422,9 +432,18 @@ def _explicit_targets(sources: List[str], target: Any, where: str) -> List[str]:
     return sources
 
 
+def _row_target(row: Mapping[str, Any]) -> Any:
+    """The target name(s) of a mapping row: export uses ``target``, hand-written YAML may use ``destination``."""
+    if "target" in row:
+        return row.get("target")
+    return row.get("destination")
+
+
 def _is_produced_row(row: Mapping[str, Any]) -> bool:
     """A column fed by no source, ``{target, expression | type, ...}``, as the export writes it."""
-    return "target" in row and "name" not in row and ("expression" in row or "type" in row)
+    return _row_target(row) is not None and "source" not in row and "name" not in row and (
+        "expression" in row or "type" in row
+    )
 
 
 def _mapping_row_relations(row: Mapping[str, Any], where: str) -> List[Dict[str, Any]]:
@@ -434,9 +453,10 @@ def _mapping_row_relations(row: Mapping[str, Any], where: str) -> List[Dict[str,
         if source is None or source == []:
             return []
         sources = _names_of(source)
-        return [_relation(sources, _explicit_targets(sources, row.get("target"), where), row)]
+        return [_relation(sources, _explicit_targets(sources, _row_target(row), where), row)]
     if _is_produced_row(row):
-        return [_relation([], [str(row["target"])], row)] if row.get("target") is not None else []
+        target = _row_target(row)
+        return [_relation([], [str(target)], row)] if target is not None else []
     return [
         _relation([str(key)], [value if isinstance(value, str) else str(value)], row)
         for key, value in row.items()
