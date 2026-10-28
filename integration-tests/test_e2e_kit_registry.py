@@ -18,7 +18,6 @@ def _clean_kit_env(monkeypatch):
     for k in list(os.environ):
         if k.startswith("GS_E2E_") or k.startswith("GS_IMPORT_"):
             monkeypatch.delenv(k, raising=False)
-    yield
 
 
 def test_offline_only_kits_never_configured():
@@ -34,8 +33,12 @@ def test_available_kits_respects_role_and_env(monkeypatch):
     monkeypatch.setenv("GS_E2E_VERTICA_PASSWORD", "v")
     src = e2e_env.available_kits(role="source")
     tgt = e2e_env.available_kits(role="target")
-    assert "mssql" in src and "kafka" not in src and "vertica" not in src
-    assert "kafka" in tgt and "vertica" in tgt and "mssql" in tgt
+    assert "mssql" in src
+    assert "kafka" not in src
+    assert "vertica" not in src
+    assert "kafka" in tgt
+    assert "vertica" in tgt
+    assert "mssql" in tgt
 
 
 def test_overrides_pair_uses_host_docker_internal(monkeypatch):
@@ -45,7 +48,8 @@ def test_overrides_pair_uses_host_docker_internal(monkeypatch):
     monkeypatch.setenv("GS_E2E_MYSQL_PASSWORD", "y")
     monkeypatch.setenv("GS_E2E_AGENT_CONNECT_HOST", "host.docker.internal")
     ov = e2e_env.overrides_dict_for_pair("mssql", "mysql")
-    assert "mssql-ct" in ov and "mysql-cdc" in ov
+    assert "mssql-ct" in ov
+    assert "mysql-cdc" in ov
     assert ov["mssql-ct"]["host"] == "host.docker.internal"
     assert ov["mysql-cdc"]["port"] == 3306
 

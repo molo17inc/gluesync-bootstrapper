@@ -67,7 +67,7 @@ class AgentOverridesTests(unittest.TestCase):
         creds = items[0]["hostCredentials"]
         self.assertEqual(creds["host"], "host.docker.internal")
         self.assertIs(creds["trustServerCertificate"], True)
-        self.assertEqual(items[0]["customHostCredentials"]["allowPublicKeyRetrieval"], True)
+        self.assertTrue(items[0]["customHostCredentials"]["allowPublicKeyRetrieval"])
         self.assertIn("trustServerCertificate=True", "\n".join(lines))
         self.assertIn("customHostCredentials.allowPublicKeyRetrieval=True", "\n".join(lines))
 

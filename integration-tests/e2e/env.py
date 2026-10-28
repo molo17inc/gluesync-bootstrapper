@@ -217,45 +217,31 @@ def agent_connect_host(probe_host: Optional[str] = None) -> str:
     return "host.docker.internal"
 
 
+_DIALECT_TAG_NEEDLES = (
+    (("mysql", "mariadb"), "mysql"),
+    (("postgres", "pgsql", "cockroach", "yugabyte"), "postgres"),
+    (("oracle",), "oracle"),
+    (("db2",), "db2"),
+    (("vertica",), "vertica"),
+    (("couch",), "couchbase"),
+    (("mongo",), "mongodb"),
+    (("dynamo",), "dynamodb"),
+    (("kafka",), "kafka"),
+    (("s3", "awss3"), "awss3"),
+)
+
+
 def _dialect_for_agent_tag(tag: str) -> str:
     """Map Core Hub agentTag to env dialect / kit key for load_db / overrides."""
     t = (tag or "").lower()
-    if "mysql" in t or "mariadb" in t:
-        return "mysql"
-    if "postgres" in t or "pgsql" in t or "cockroach" in t or "yugabyte" in t:
-        return "postgres"
-    if "oracle" in t:
-        return "oracle"
-    if "db2" in t:
-        return "db2"
-    if "vertica" in t:
-        return "vertica"
-    if "couch" in t:
-        return "couchbase"
-    if "mongo" in t:
-        return "mongodb"
-    if "dynamo" in t:
-        return "dynamodb"
-    if "kafka" in t:
-        return "kafka"
-    if "s3" in t or "awss3" in t:
-        return "awss3"
+    for needles, dialect in _DIALECT_TAG_NEEDLES:
+        if any(n in t for n in needles):
+            return dialect
     return "mssql"
 
 
-def overrides_dict_for(agents: Optional[AgentEnv] = None, dialect: Optional[str] = None,
-                       target_tag: Optional[str] = None) -> dict:
-    """Build agent-overrides JSON-serializable dict from env (hosts/ports only; passwordEnv names).
-
-    Keys are always ``agents.source_tag`` / target tag (must match agents-config in the ZIP).
-    Connection hosts use ``agent_connect_host`` so Docker agents reach Mac-published DB ports.
-    Target dialect is inferred from the target agent tag when ``dialect`` is omitted, so a
-    default pair like mssql-ct → mysql-cdc does not put MSSQL ports under the mysql-cdc key.
-    """
-    agents = agents or load_agents()
-    tgt = target_tag or agents.target_tag
-    dialect = dialect or _dialect_for_agent_tag(tgt)
-    # Prefer kit-registry overrides when both tags map to configured kits
+def _kit_registry_overrides_or_none(agents: "AgentEnv", tgt: str):
+    """Prefer kit-registry pair overrides when both tags map to configured kits."""
     try:
         src_kit = _kit_for_agent_tag(agents.source_tag)
         tgt_kit = _kit_for_agent_tag(tgt)
@@ -264,9 +250,12 @@ def overrides_dict_for(agents: Optional[AgentEnv] = None, dialect: Optional[str]
         if tgt_kit == "pgsql" and kit_configured("postgres"):
             return overrides_dict_for_pair(src_kit, "pgsql", agents.source_tag, tgt)
     except Exception:
-        pass
-    db = load_db(dialect)
-    # Prefer dialect DB connection when present; else generic GS_E2E_TARGET_* defaults
+        return None
+    return None
+
+
+def _target_override_entry(dialect: str, db, tgt: str, target_tag: Optional[str], agents: "AgentEnv") -> dict:
+    """Host/port/db/user/passwordEnv (+ JDBC extras) for the target agent tag."""
     probe_host = (db.host if db else None) or "127.0.0.1"
     host = agent_connect_host(probe_host)
     port = (db.port if db else None) or int(_get("GS_E2E_TARGET_PORT") or {
@@ -276,12 +265,27 @@ def overrides_dict_for(agents: Optional[AgentEnv] = None, dialect: Optional[str]
     username = (db.username if db else None) or _get("GS_E2E_TARGET_USERNAME") or (
         "gluesync" if dialect != "mssql" else "sa"
     )
-    # Target password env must match the tag key we emit (dialect may swap target tag)
     target_pw_env = (
         "GS_IMPORT_AGENT_PASSWORD_" + tgt.upper().replace("-", "_").replace(".", "_")
         if target_tag else agents.target_password_env
     )
-    # Source follows the source agent tag's dialect (or explicit GS_E2E_SOURCE_*); any source↔target pair.
+    entry = {
+        "host": host,
+        "port": port,
+        "database": database,
+        "username": username,
+        "passwordEnv": target_pw_env,
+        "trustServerCertificate": True,
+    }
+    # MySQL JDBC (mysql-cdc) on Core Hub 2.3 needs allowPublicKeyRetrieval for non-SSL local DBs.
+    if dialect == "mysql" or "mysql" in tgt.lower():
+        entry["customHostCredentials"] = {"allowPublicKeyRetrieval": True}
+    entry["_probe_host"] = probe_host  # internal; stripped by caller
+    return entry
+
+
+def _source_override_entry(agents: "AgentEnv", probe_host: str) -> dict:
+    """Host/port/db/user/passwordEnv (+ JDBC extras) for the source agent tag."""
     source_dialect = _dialect_for_agent_tag(agents.source_tag)
     source_db_env = load_db(source_dialect)
     source_defaults = {"mssql": (1433, "sa"), "mysql": (3306, "gluesync"), "postgres": (15432, "gluesync")}
@@ -307,19 +311,7 @@ def overrides_dict_for(agents: Optional[AgentEnv] = None, dialect: Optional[str]
         or _get(f"GS_E2E_{source_dialect.upper()}_DATABASE")
         or "demo"
     )
-    target_entry = {
-        "host": host,
-        "port": port,
-        "database": database,
-        "username": username,
-        "passwordEnv": target_pw_env,
-    }
-    # Core Hub 2.3 JDBC: trustServerCertificate false needs a keystore; local kits have none.
-    target_entry["trustServerCertificate"] = True
-    # MySQL JDBC (mysql-cdc) on Core Hub 2.3 needs allowPublicKeyRetrieval for non-SSL local DBs.
-    if dialect == "mysql" or "mysql" in tgt.lower():
-        target_entry["customHostCredentials"] = {"allowPublicKeyRetrieval": True}
-    source_entry = {
+    entry = {
         "host": source_host,
         "port": source_port,
         "database": source_db,
@@ -328,7 +320,30 @@ def overrides_dict_for(agents: Optional[AgentEnv] = None, dialect: Optional[str]
         "trustServerCertificate": True,
     }
     if source_dialect == "mysql" or "mysql" in agents.source_tag.lower():
-        source_entry["customHostCredentials"] = {"allowPublicKeyRetrieval": True}
+        entry["customHostCredentials"] = {"allowPublicKeyRetrieval": True}
+    return entry
+
+
+def overrides_dict_for(agents: Optional[AgentEnv] = None, dialect: Optional[str] = None,
+                       target_tag: Optional[str] = None) -> dict:
+    """Build agent-overrides JSON-serializable dict from env (hosts/ports only; passwordEnv names).
+
+    Keys are always ``agents.source_tag`` / target tag (must match agents-config in the ZIP).
+    Connection hosts use ``agent_connect_host`` so Docker agents reach Mac-published DB ports.
+    Target dialect is inferred from the target agent tag when ``dialect`` is omitted, so a
+    default pair like mssql-ct → mysql-cdc does not put MSSQL ports under the mysql-cdc key.
+    """
+    agents = agents or load_agents()
+    tgt = target_tag or agents.target_tag
+    dialect = dialect or _dialect_for_agent_tag(tgt)
+    # Prefer kit-registry overrides when both tags map to configured kits
+    kit_ov = _kit_registry_overrides_or_none(agents, tgt)
+    if kit_ov is not None:
+        return kit_ov
+    db = load_db(dialect)
+    target_entry = _target_override_entry(dialect, db, tgt, target_tag, agents)
+    probe_host = target_entry.pop("_probe_host")
+    source_entry = _source_override_entry(agents, probe_host)
     return {
         agents.source_tag: source_entry,
         tgt: target_entry,
@@ -426,18 +441,21 @@ def kit_configured(kit: str) -> bool:
     return bool(pw)
 
 
+def _kit_env_is_configured(key: str) -> bool:
+    """Whether ``key`` has env credentials (pgsql may be filled via POSTGRES_*)."""
+    if kit_configured(key):
+        return True
+    return key == "pgsql" and kit_configured("postgres")
+
+
 def available_kits(*, role: Optional[str] = None) -> list:
     """Kits with env configured. role=source|target filters by KitSpec capability."""
     out = []
     for key, spec in KIT_SPECS.items():
         if key == "postgres":
             continue  # alias of pgsql — prefer pgsql key in matrices
-        if not kit_configured(key) and not (key == "pgsql" and kit_configured("postgres")):
-            # pgsql may be configured only via POSTGRES_* 
-            if key == "pgsql" and kit_configured("postgres"):
-                pass
-            elif not kit_configured(key):
-                continue
+        if not _kit_env_is_configured(key):
+            continue
         if role == "source" and not spec.default_source_tag:
             continue
         if role == "target" and not spec.default_target_tag:
@@ -488,20 +506,93 @@ def _kit_for_agent_tag(tag: str) -> str:
     return "mssql"
 
 
+def _kit_env_lookup(kit: str, prefix: str, suffix: str, default=None):
+    """Read ``GS_E2E_<KIT>_<suffix>``, with pgsql/postgres cross-fill."""
+    v = _get(prefix + suffix)
+    if v:
+        return v
+    if kit == "pgsql":
+        return _get("GS_E2E_POSTGRES_" + suffix) or default
+    if kit == "postgres":
+        return _get("GS_E2E_PGSQL_" + suffix) or default
+    return default
+
+
+_JDBC_TLS_KITS = frozenset({
+    "mysql", "mariadb", "mssql", "mssql_cdc", "pgsql", "postgres", "oracle",
+    "db2", "sap_hana", "sybase", "informix", "vertica",
+})
+
+
+def _enrich_rdbms_overrides(entry: dict, kit: str, agent_tag: str, g) -> None:
+    """JDBC trust-server + MySQL public-key + Oracle serviceName extras."""
+    if kit in _JDBC_TLS_KITS:
+        entry["trustServerCertificate"] = True
+    if kit in ("mysql", "mariadb") or "mysql" in agent_tag or "mariadb" in agent_tag:
+        entry["customHostCredentials"] = {"allowPublicKeyRetrieval": True}
+    if kit != "oracle":
+        return
+    service = g("SERVICE") or g("DATABASE") or "XEPDB1"
+    entry["database"] = service
+    entry.setdefault("customHostCredentials", {})
+    entry["customHostCredentials"]["serviceName"] = service
+
+
+def _enrich_nosql_overrides(entry: dict, kit: str, g) -> None:
+    """Couchbase bucket / MongoDB auth + directConnection extras."""
+    if kit == "couchbase":
+        entry["database"] = g("BUCKET") or "demo"
+        return
+    if kit != "mongodb":
+        return
+    ch = entry.setdefault("customHostCredentials", {})
+    if g("AUTH_DB"):
+        ch["authDatabase"] = g("AUTH_DB")
+    if g("REPLICA_SET"):
+        ch["replicaSet"] = g("REPLICA_SET")
+    # EnvBuilder RS member advertises "mongodb:27017"; agents reach the published
+    # port via host.docker.internal. directConnection skips RS rediscovery.
+    # Core Hub: without it PUT credentials times out
+    # ("Coroutine \"jetty-call-handler\" timed out waiting for 10000 ms").
+    ch["directConnection"] = True
+
+
+def _enrich_streaming_overrides(entry: dict, kit: str, g, username) -> None:
+    """AWSS3 / Kafka / DynamoDB agent-override extras for local EnvBuilder kits."""
+    if kit == "awss3":
+        # Agent builds endpointOverride as f"{host}:{port}" then URI.create — needs a scheme.
+        # Core Hub: java.net.URISyntaxException: Expected scheme-specific part at index 21: host.docker.internal:
+        scheme = (g("SCHEME") or "http").rstrip(":/")
+        if not str(entry["host"]).startswith(("http://", "https://")):
+            entry["host"] = f"{scheme}://{entry['host']}"
+        ch = entry.setdefault("customHostCredentials", {})
+        ch["region"] = g("REGION") or "us-east-1"
+        if g("BUCKET"):
+            entry["database"] = g("BUCKET")
+        return
+    if kit == "kafka":
+        # Defaults are SASL_SSL; EnvBuilder kit is PLAINTEXT.
+        entry["disableAuth"] = True
+        entry.pop("passwordEnv", None)
+        entry.pop("username", None)
+        ch = entry.setdefault("customHostCredentials", {})
+        ch["securityProtocol"] = g("SECURITY_PROTOCOL") or "PLAINTEXT"
+        return
+    if kit != "dynamodb":
+        return
+    # Agent uses host as AWS *region* and has no endpointOverride field.
+    entry.pop("passwordEnv", None)
+    if not username:
+        entry.pop("username", None)
+
+
 def overrides_entry_for_kit(kit: str, agent_tag: str) -> dict:
     """One agent-overrides entry for a kit (host/port/db/user/passwordEnv + extras)."""
     spec = KIT_SPECS[kit]
     prefix = _kit_env_prefix(kit)
-    # Allow POSTGRES_* to fill pgsql
+
     def g(suffix, default=None):
-        v = _get(prefix + suffix)
-        if v:
-            return v
-        if kit == "pgsql":
-            return _get("GS_E2E_POSTGRES_" + suffix) or default
-        if kit == "postgres":
-            return _get("GS_E2E_PGSQL_" + suffix) or default
-        return default
+        return _kit_env_lookup(kit, prefix, suffix, default)
 
     host = agent_connect_host(g("HOST", "127.0.0.1"))
     port = int(g("PORT", str(spec.default_port)))
@@ -518,64 +609,10 @@ def overrides_entry_for_kit(kit: str, agent_tag: str) -> dict:
     # Core Hub 2.3 JDBC agents: trustServerCertificate false requires an uploaded keystore
     # (Marco: "Keystore not found, please upload a keystore when using verify server certificate").
     # Local EnvBuilder kits have no keystore, so trust the server cert.
-    _jdbc_tls_kits = {
-        "mysql", "mariadb", "mssql", "mssql_cdc", "pgsql", "postgres", "oracle",
-        "db2", "sap_hana", "sybase", "informix", "vertica",
-    }
-    if kit in _jdbc_tls_kits:
-        entry["trustServerCertificate"] = True
-    if kit in ("mysql", "mariadb") or "mysql" in agent_tag or "mariadb" in agent_tag:
-        entry["customHostCredentials"] = {"allowPublicKeyRetrieval": True}
-    if kit == "oracle":
-        service = g("SERVICE") or g("DATABASE") or "XEPDB1"
-        entry["database"] = service
-        entry.setdefault("customHostCredentials", {})
-        # agents often want serviceName
-        entry["customHostCredentials"]["serviceName"] = service
-    if kit == "couchbase":
-        entry["database"] = g("BUCKET") or "demo"
-    if kit == "mongodb":
-        ch = entry.setdefault("customHostCredentials", {})
-        if g("AUTH_DB"):
-            ch["authDatabase"] = g("AUTH_DB")
-        if g("REPLICA_SET"):
-            ch["replicaSet"] = g("REPLICA_SET")
-        # EnvBuilder RS member advertises "mongodb:27017"; agents reach the published
-        # port via host.docker.internal. directConnection skips RS rediscovery.
-        # Core Hub: without it PUT credentials times out
-        # ("Coroutine \"jetty-call-handler\" timed out waiting for 10000 ms").
-        ch["directConnection"] = True
-    if kit == "awss3":
-        # Agent builds endpointOverride as f"{host}:{port}" then URI.create — needs a scheme.
-        # Core Hub: java.net.URISyntaxException: Expected scheme-specific part at index 21: host.docker.internal:
-        scheme = (g("SCHEME") or "http").rstrip(":/")
-        if not str(entry["host"]).startswith(("http://", "https://")):
-            entry["host"] = f"{scheme}://{entry['host']}"
-        ch = entry.setdefault("customHostCredentials", {})
-        # AWSS3CustomHostCredentials.region (pathStyle is derived from !amazonaws host)
-        ch["region"] = g("REGION") or "us-east-1"
-        if g("BUCKET"):
-            entry["database"] = g("BUCKET")
-    if kit == "kafka":
-        # Defaults are SASL_SSL; EnvBuilder kit is PLAINTEXT.
-        # Also prefer docker DNS host when GS_E2E_KAFKA_HOST is a non-loopback name
-        # (e.g. "kafka" after core-hub is attached to the kafka compose network) so
-        # advertised listeners (OUTSIDE://kafka:9092) resolve.
-        # Core Hub without PLAINTEXT/disableAuth: TimeoutException listTopics.
-        entry["disableAuth"] = True
-        entry.pop("passwordEnv", None)
-        entry.pop("username", None)
-        ch = entry.setdefault("customHostCredentials", {})
-        ch["securityProtocol"] = g("SECURITY_PROTOCOL") or "PLAINTEXT"
-    if kit == "dynamodb":
-        # Agent uses host as AWS *region* and has no endpointOverride field
-        # (DynamoDbCustomHostCredentials is empty). Local DynamoDB cannot be targeted;
-        # host.docker.internal → UnknownHostException dynamodb.host.docker.internal.amazonaws.com.
-        entry.pop("passwordEnv", None)
-        if not username:
-            entry.pop("username", None)
+    _enrich_rdbms_overrides(entry, kit, agent_tag, g)
+    _enrich_nosql_overrides(entry, kit, g)
+    _enrich_streaming_overrides(entry, kit, g, username)
     return entry
-
 
 
 def role_password_env(agent_tag: str, role: str) -> str:

@@ -3152,9 +3152,8 @@ def _report_total(outcome: Dict[str, Any]) -> Any:
     total = outcome.get("total")
     counted = (outcome.get("created", 0) + outcome.get("failed", 0) + outcome.get("skipped", 0)
                + outcome.get("notAttempted", 0))
-    if outcome.get("entitiesRun") and counted:
-        if total is None or counted > total:
-            return counted
+    if outcome.get("entitiesRun") and counted and (total is None or counted > total):
+        return counted
     return total
 
 

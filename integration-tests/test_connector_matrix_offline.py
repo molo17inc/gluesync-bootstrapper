@@ -77,7 +77,7 @@ class ConnectorCatalogTests(unittest.TestCase):
         cons = data_connectors()
         self.assertGreaterEqual(len(cons), 30, cons)
         types = {t for _, t, _ in cons}
-        self.assertTrue({"RDBMS", "NoSQL", "Object Store", "Event Streaming"} <= types, types)
+        self.assertLessEqual({"RDBMS", "NoSQL", "Object Store", "Event Streaming"}, types, types)
 
 
 class CreateTableSkipByTargetCategoryTests(unittest.TestCase):

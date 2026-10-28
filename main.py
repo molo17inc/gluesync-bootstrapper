@@ -220,6 +220,17 @@ def _load_agent_type_catalog_for_bootstrapper() -> dict[str, str]:
     return mapping
 
 
+def _inferred_type_for_agent(agent, catalog) -> tuple[Optional[str], Optional[str]]:
+    """Return ``(SOURCE|TARGET, SQL|NoSQL)`` for one agents-config entry, or ``(None, None)``."""
+    if not isinstance(agent, dict):
+        return None, None
+    tag = str(agent.get("agentTag") or "").lower()
+    agent_type = agent.get("agentType")
+    if not tag or agent_type not in {"SOURCE", "TARGET"}:
+        return None, None
+    return agent_type, catalog_type_for_agent_tag(catalog, tag) or "SQL"
+
+
 def infer_pipeline_schema_types_from_config(conf: dict) -> tuple[str, str]:
     """Infer (sourceType, targetType) as SQL/NoSQL from config agents.
 
@@ -239,17 +250,11 @@ def infer_pipeline_schema_types_from_config(conf: dict) -> tuple[str, str]:
     tgt_type: Optional[str] = None
 
     for agent in agents_cfg:
-        if not isinstance(agent, dict):
-            continue
-        tag = str(agent.get("agentTag") or "").lower()
-        agent_type = agent.get("agentType")
-        if not tag or agent_type not in {"SOURCE", "TARGET"}:
-            continue
-
-        if agent_type == "SOURCE" and src_type is None:
-            src_type = catalog_type_for_agent_tag(catalog, tag) or "SQL"
-        elif agent_type == "TARGET" and tgt_type is None:
-            tgt_type = catalog_type_for_agent_tag(catalog, tag) or "SQL"
+        role, inferred = _inferred_type_for_agent(agent, catalog)
+        if role == "SOURCE" and src_type is None:
+            src_type = inferred
+        elif role == "TARGET" and tgt_type is None:
+            tgt_type = inferred
 
     return src_type or "SQL", tgt_type or "SQL"
 
