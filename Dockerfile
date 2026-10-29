@@ -19,9 +19,8 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-# Use an official Python runtime as a parent image (CI passes the Nexus pull-through copy of it)
-ARG PYTHON_BASE_IMAGE=python:3.10-slim
-FROM ${PYTHON_BASE_IMAGE}
+# Use an official Python runtime as a parent image
+FROM python:3.10-slim
 
 # Set the working directory in the container
 WORKDIR /opt/python
@@ -79,12 +78,15 @@ ENV TEST_NAME=${TEST_NAME}
 ENV VERSION=${VERSION}
 ENV JOB_ID=${JOB_ID}
 
-# Package index for pip (CI passes the Nexus PyPI proxy; an ARG is visible to RUN but is not kept in the image env)
+# Package index for pip (CI passes the Nexus PyPI proxy; an ARG is not kept in the image env)
 ARG PIP_INDEX_URL
 
 # Copy requirements.txt and install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy the application code including the submodule
+COPY . .
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -101,9 +103,6 @@ RUN pip install websockets==11.0.3 && \
     pip install pyasn1_modules && \
     pip install javaobj-py3 && \
     pip install pyjks
-
-# Copy the application code including the submodule (after the dependency layers, so a code change reuses them)
-COPY . .
 
 # Install the SDK by directly copying it to the Python path
 RUN if [ -d "./gluesync-client-sdk/gluesync_sdk" ]; then \

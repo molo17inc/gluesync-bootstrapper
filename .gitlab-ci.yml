@@ -681,12 +681,11 @@ deploy:
       NEXUS_NAME="nexus.hq.molo17.com/molo17-local/${APP_NAME}"
 
     # layer cache: the image of the previous run is pulled (a missing one is not an error) and its inline cache is used;
-    # the base image and the Python packages come from the Nexus proxies
+    # the Python packages come from the Nexus proxy
     - docker pull "${NEXUS_NAME}:latest" || true
     - |
       docker build \
         --build-arg BUILDKIT_INLINE_CACHE=1 \
-        --build-arg PYTHON_BASE_IMAGE=nexus.hq.molo17.com/docker-group/library/python:3.10-slim \
         --build-arg PIP_INDEX_URL="$PIP_INDEX_URL" \
         --cache-from "${NEXUS_NAME}:latest" \
         -t $DEFAULT_NAME:latest .
