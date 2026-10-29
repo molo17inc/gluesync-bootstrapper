@@ -465,40 +465,33 @@ def run_create_entities(
     return _create_entities_outcome(result_payload or {}, logs)
 
 
-def run_create_entities_for_tables(
-    *,
-    token: str,
-    base_url: str,
-    pipeline_id: str,
-    source_schema: str,
-    target_schema: str,
-    source_type: str,
-    target_type: str,
-    table_names: list[str],
-    skip_errors: bool,
-    chunk_size: int,
-    enable_scheduling: bool,
-    create_tables: bool,
-    use_ssl: Optional[bool],
-    skip_verify: Optional[bool],
-    chronos_token: Optional[str] = None,
-    entity_import_options: Optional[Any] = None,
-    yaml_config: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    """Create entities only for the specified source tables.
-
-    This is a bulk helper used by the Automator "Bulk operations" UI. It
-    mirrors run_create_entities, but restricts the processing to the
-    user-selected subset of tables instead of all discovered tables.
+@dataclass
+class EntityTablesRunOptions:
+    """Optional settings of :func:`run_create_entities_for_tables` (S107: keep the public kwargs ≤13).
 
     ``entity_import_options`` / ``yaml_config``: entity Customize plan (remap, on-existing, dry-run,
     overrides). Omitted = current behaviour.
     """
 
-    set_scheduling_enabled(enable_scheduling)
-    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+    skip_errors: bool = True
+    chunk_size: int = 50
+    chronos_token: Optional[str] = None
+    entity_import_options: Optional[Any] = None
+    yaml_config: Optional[Dict[str, Any]] = None
 
-    # Resolve source/target types from agents.json catalog (same as pipeline backup)
+
+def _bulk_apply_inferred_types(
+    *,
+    token: str,
+    base_url: str,
+    pipeline_id: str,
+    source_type: str,
+    target_type: str,
+    create_tables: bool,
+    use_ssl: Optional[bool],
+    skip_verify: Optional[bool],
+) -> Tuple[str, str, bool]:
+    """Catalog-inferred source/target types; disable CREATE TABLE for non-RDBMS targets."""
     inferred_source_type, inferred_target_type = infer_agent_schema_types(
         token=token,
         base_url=base_url,
@@ -514,133 +507,222 @@ def run_create_entities_for_tables(
             inferred_target_type,
         )
         create_tables = False
-    # Override the caller-supplied types with the authoritative inferred values
     if inferred_source_type:
         source_type = inferred_source_type
     if inferred_target_type:
         target_type = inferred_target_type
+    return source_type, target_type, create_tables
+
+
+def _bulk_source_target_agent_ids(
+    token: str, pipeline_id: str, source_type: str, target_type: str,
+) -> Tuple[list, Any, Any]:
+    """Pipeline agents list plus SOURCE/TARGET agent ids (raises if missing)."""
+    agents = get_pipeline_agents(token, pipeline_id)
+    if not isinstance(agents, list):
+        raise RuntimeError(f"Unexpected agents payload for pipeline {pipeline_id!r}: {agents!r}")
+
+    source_agent = next((a for a in agents if isinstance(a, dict) and a.get("agentType") == "SOURCE"), None)
+    target_agent = next((a for a in agents if isinstance(a, dict) and a.get("agentType") == "TARGET"), None)
+    if not source_agent or not target_agent:
+        raise RuntimeError(
+            f"Could not find required agents. Source ({source_type}): {source_agent}, Target ({target_type}): {target_agent}"
+        )
+
+    raw_source_id = source_agent.get("agentId") or source_agent.get("id")
+    raw_target_id = target_agent.get("agentId") or target_agent.get("id")
+    if not raw_source_id or not raw_target_id:
+        raise RuntimeError("Source/target agents are missing IDs")
+    return agents, raw_source_id, raw_target_id
+
+
+def _bulk_override_types_from_agents(agents: list, source_type: str, target_type: str) -> Tuple[str, str]:
+    """Prefer agents-list inferred catalog types; default missing sides to SQL."""
+    inferred_source_type, inferred_target_type = _infer_schema_types_from_agents_list(agents)
+    if inferred_source_type and inferred_source_type != source_type:
+        logger.info(
+            "Overriding provided source_type '%s' with inferred '%s' based on pipeline agents",
+            source_type,
+            inferred_source_type,
+        )
+        source_type = inferred_source_type
+    if inferred_target_type and inferred_target_type != target_type:
+        logger.info(
+            "Overriding provided target_type '%s' with inferred '%s' based on pipeline agents",
+            target_type,
+            inferred_target_type,
+        )
+        target_type = inferred_target_type
+    return source_type or "SQL", target_type or "SQL"
+
+
+def _bulk_resolve_agents(
+    token: str, pipeline_id: str, source_type: str, target_type: str,
+) -> Tuple[Any, Any, str, str]:
+    """SOURCE/TARGET agent ids and types after agents-list inference (defaults to SQL)."""
+    agents, raw_source_id, raw_target_id = _bulk_source_target_agent_ids(
+        token, pipeline_id, source_type, target_type,
+    )
+    source_type, target_type = _bulk_override_types_from_agents(agents, source_type, target_type)
+    return raw_source_id, raw_target_id, source_type, target_type
+
+
+def _bulk_filter_discovered_tables(
+    token: str, pipeline_id: str, source_agent_id: Any, source_schema: str, table_names: list[str],
+) -> list[Any]:
+    """Discovery tables restricted to the caller selection (case-insensitive name match)."""
+    discovered_tables = get_agent_tables(token, pipeline_id, source_agent_id, source_schema)
+    if not isinstance(discovered_tables, list):
+        raise RuntimeError(f"Unexpected tables payload for {source_schema!r}: {discovered_tables!r}")
+
+    wanted = {t.lower() for t in table_names}
+    filtered_tables: list[Any] = []
+    for tbl in discovered_tables:
+        name: Optional[str] = None
+        if isinstance(tbl, str):
+            name = tbl
+        elif isinstance(tbl, dict):
+            name = tbl.get("name") or tbl.get("tableName")
+        if name and name.lower() in wanted:
+            filtered_tables.append(tbl)
+
+    if not filtered_tables:
+        raise RuntimeError(
+            f"No matching tables found in discovery for schema {source_schema!r} and selection {sorted(table_names)!r}"
+        )
+    return filtered_tables
+
+
+def _bulk_invoke_create_entities(
+    *,
+    token: str,
+    pipeline_id: str,
+    source_schema: str,
+    target_schema: str,
+    filtered_tables: list[Any],
+    source_agent_id: Any,
+    target_agent_id: Any,
+    source_type: str,
+    target_type: str,
+    options: "EntityTablesRunOptions",
+) -> Any:
+    """Call create_entities, wrapping with ImportOptions when the plan supplied any."""
+    kwargs = dict(
+        yaml_config=options.yaml_config,
+        skip_errors=options.skip_errors,
+        chunk_size=options.chunk_size,
+        chronos_token=options.chronos_token,
+    )
+    args = (
+        token, pipeline_id, source_schema, target_schema, filtered_tables,
+        source_agent_id, target_agent_id, source_type, target_type,
+    )
+    if options.entity_import_options is not None:
+        with import_options.use(options.entity_import_options):
+            return create_entities(*args, **kwargs)
+    return create_entities(*args, **kwargs)
+
+
+def _bulk_tables_success_payload(result: Any, logs: list) -> Dict[str, Any]:
+    """Success/failure payload of a bulk table create (same shape as before the options split)."""
+    errors = (result or {}).get("errors") or []
+    success = not result or not (result.get("failed") or errors)
+    payload: Dict[str, Any] = {"success": success, "logs": logs, "result": result or {}}
+    if not success:
+        payload["error"] = f"Some entities failed: {result.get('failed')} out of {result.get('total')}"
+        if errors:
+            payload["error"] += ": " + "; ".join(errors)
+    return payload
+
+
+def _bulk_tables_http_error_detail(exc: BaseException) -> str:
+    """Prefer Core Hub exceptionMessage / message on HTTPError; else str(exc)."""
+    error_detail = str(exc)
+    try:
+        if isinstance(exc, requests.exceptions.HTTPError) and exc.response is not None:
+            body = exc.response.json()
+            corehub_msg = body.get("exceptionMessage") or body.get("message")
+            if corehub_msg:
+                return f"{exc}: {corehub_msg}"
+    except Exception:  # pylint: disable=broad-except
+        pass
+    return error_detail
+
+
+def run_create_entities_for_tables(
+    *,
+    token: str,
+    base_url: str,
+    pipeline_id: str,
+    source_schema: str,
+    target_schema: str,
+    source_type: str,
+    target_type: str,
+    table_names: list[str],
+    enable_scheduling: bool,
+    create_tables: bool,
+    use_ssl: Optional[bool],
+    skip_verify: Optional[bool],
+    options: Optional[EntityTablesRunOptions] = None,
+) -> Dict[str, Any]:
+    """Create entities only for the specified source tables.
+
+    This is a bulk helper used by the Automator "Bulk operations" UI. It
+    mirrors run_create_entities, but restricts the processing to the
+    user-selected subset of tables instead of all discovered tables.
+    """
+    options = options or EntityTablesRunOptions()
+
+    set_scheduling_enabled(enable_scheduling)
+    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+
+    source_type, target_type, create_tables = _bulk_apply_inferred_types(
+        token=token,
+        base_url=base_url,
+        pipeline_id=pipeline_id,
+        source_type=source_type,
+        target_type=target_type,
+        create_tables=create_tables,
+        use_ssl=use_ssl,
+        skip_verify=skip_verify,
+    )
 
     prev_env_create_tables = os.environ.get("CREATE_TABLE_IF_NOT_EXISTS")
     prev_flag_create_tables = CREATE_TABLE_IF_NOT_EXISTS
-    set_create_table_if_not_exists(create_tables)
-    os.environ["CREATE_TABLE_IF_NOT_EXISTS"] = "true" if create_tables else "false"
+    _apply_create_tables_setting(create_tables)
 
     buffer = io.StringIO()
 
     try:
-        # Discover source/target agents for the pipeline
-        agents = get_pipeline_agents(token, pipeline_id)
-        if not isinstance(agents, list):
-            raise RuntimeError(f"Unexpected agents payload for pipeline {pipeline_id!r}: {agents!r}")
-
-        source_agent = next((a for a in agents if isinstance(a, dict) and a.get("agentType") == "SOURCE"), None)
-        target_agent = next((a for a in agents if isinstance(a, dict) and a.get("agentType") == "TARGET"), None)
-        if not source_agent or not target_agent:
-            raise RuntimeError(
-                f"Could not find required agents. Source ({source_type}): {source_agent}, Target ({target_type}): {target_agent}"
-            )
-
-        raw_source_id = source_agent.get("agentId") or source_agent.get("id")
-        raw_target_id = target_agent.get("agentId") or target_agent.get("id")
-        if not raw_source_id or not raw_target_id:
-            raise RuntimeError("Source/target agents are missing IDs")
-
-        inferred_source_type, inferred_target_type = _infer_schema_types_from_agents_list(agents)
-        if inferred_source_type and inferred_source_type != source_type:
-            logger.info(
-                "Overriding provided source_type '%s' with inferred '%s' based on pipeline agents",
-                source_type,
-                inferred_source_type,
-            )
-            source_type = inferred_source_type
-        if inferred_target_type and inferred_target_type != target_type:
-            logger.info(
-                "Overriding provided target_type '%s' with inferred '%s' based on pipeline agents",
-                target_type,
-                inferred_target_type,
-            )
-            target_type = inferred_target_type
-
-        if not source_type:
-            source_type = "SQL"
-        if not target_type:
-            target_type = "SQL"
-
-        # Discover all tables for this schema, then restrict to the selected ones
-        discovered_tables = get_agent_tables(token, pipeline_id, raw_source_id, source_schema)
-        if not isinstance(discovered_tables, list):
-            raise RuntimeError(f"Unexpected tables payload for {source_schema!r}: {discovered_tables!r}")
-
-        wanted = {t.lower() for t in table_names}
-        filtered_tables: list[Any] = []
-        for tbl in discovered_tables:
-            name: Optional[str] = None
-            if isinstance(tbl, str):
-                name = tbl
-            elif isinstance(tbl, dict):
-                name = tbl.get("name") or tbl.get("tableName")
-            if not name:
-                continue
-            if name.lower() in wanted:
-                filtered_tables.append(tbl)
-
-        if not filtered_tables:
-            raise RuntimeError(
-                f"No matching tables found in discovery for schema {source_schema!r} and selection {sorted(table_names)!r}"
-            )
-
-        # Invoke the lower-level create_entities helper directly so we can
-        # pass the filtered tables list. YAML configuration is optional here;
-        # when omitted, create_entities will use discovery defaults.
+        raw_source_id, raw_target_id, source_type, target_type = _bulk_resolve_agents(
+            token, pipeline_id, source_type, target_type,
+        )
+        filtered_tables = _bulk_filter_discovered_tables(
+            token, pipeline_id, raw_source_id, source_schema, table_names,
+        )
         with redirect_stdout(buffer):
-            if entity_import_options is not None:
-                with import_options.use(entity_import_options):
-                    result = create_entities(
-                        token, pipeline_id, source_schema, target_schema, filtered_tables,
-                        raw_source_id, raw_target_id, source_type, target_type,
-                        yaml_config=yaml_config, skip_errors=skip_errors, chunk_size=chunk_size,
-                        chronos_token=chronos_token,
-                    )
-            else:
-                result = create_entities(
-                    token, pipeline_id, source_schema, target_schema, filtered_tables,
-                    raw_source_id, raw_target_id, source_type, target_type,
-                    yaml_config=yaml_config, skip_errors=skip_errors, chunk_size=chunk_size,
-                    chronos_token=chronos_token,
-                )
-
-        logs = buffer.getvalue().splitlines()
-        errors = (result or {}).get("errors") or []
-        success = not result or not (result.get("failed") or errors)
-        payload: Dict[str, Any] = {"success": success, "logs": logs, "result": result or {}}
-        if not success:
-            payload["error"] = f"Some entities failed: {result.get('failed')} out of {result.get('total')}"
-            if errors:
-                payload["error"] += ": " + "; ".join(errors)
-        return payload
+            result = _bulk_invoke_create_entities(
+                token=token,
+                pipeline_id=pipeline_id,
+                source_schema=source_schema,
+                target_schema=target_schema,
+                filtered_tables=filtered_tables,
+                source_agent_id=raw_source_id,
+                target_agent_id=raw_target_id,
+                source_type=source_type,
+                target_type=target_type,
+                options=options,
+            )
+        return _bulk_tables_success_payload(result, buffer.getvalue().splitlines())
 
     except Exception as exc:  # pylint: disable=broad-except
         logger.exception("Bulk create_entities_for_tables execution failed")
-        # Extract full CoreHub exceptionMessage from HTTPError responses
-        error_detail = str(exc)
-        try:
-            import requests as _requests
-            if isinstance(exc, _requests.exceptions.HTTPError) and exc.response is not None:
-                body = exc.response.json()
-                corehub_msg = body.get("exceptionMessage") or body.get("message")
-                if corehub_msg:
-                    error_detail = f"{exc}: {corehub_msg}"
-        except Exception:
-            pass
+        error_detail = _bulk_tables_http_error_detail(exc)
         logs = buffer.getvalue().splitlines()
         logs.append(f"ERROR: {error_detail}")
         return {"success": False, "logs": logs, "error": error_detail}
     finally:
-        if prev_env_create_tables is not None:
-            os.environ["CREATE_TABLE_IF_NOT_EXISTS"] = prev_env_create_tables
-        else:
-            os.environ.pop("CREATE_TABLE_IF_NOT_EXISTS", None)
-        set_create_table_if_not_exists(prev_flag_create_tables)
+        _restore_create_tables_setting(prev_env_create_tables, prev_flag_create_tables)
 
 
 def _get_source_agent(token: str, pipeline_id: str) -> Dict[str, Any]:
