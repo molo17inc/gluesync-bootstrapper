@@ -1652,20 +1652,21 @@ Deploy as a serverless API for programmatic access:
 
 The repository has two separate deployment pipelines:
 
-#### **1. DbMoto Converter (Lambda + WordPress)**
+#### **1. DbMoto Converter (Lambda)**
 
 Triggered by tags matching `dbmoto-*` (e.g., `dbmoto-1.0.0`, `dbmoto-v2.1.3`)
 
 ```bash
-# Deploy Lambda API and WordPress plugin
+# Deploy the Lambda API
 git tag dbmoto-1.0.0
 git push origin dbmoto-1.0.0
 ```
 
 This triggers:
 
-1. **Lambda function** deployment to AWS (manual approval required)
-2. **WordPress plugin** deployment to hosting via FTP (automatic, after Lambda success)
+1. **Lambda function** deployment to AWS
+
+The converter page is part of the MOLO17 website (molo17-com repository, `/syniti-replicate-metadata-converter/`), which calls the Lambda API at `https://dbmoto-converter.labs.molo17.com/convert`: a converter release needs no website change unless the API changes.
 
 #### **2. Bootstrapper Docker Image**
 
@@ -1689,24 +1690,7 @@ FTP_PASSWORD=your_ftp_password
 FTP_SITE=c1107198.sgvps.net
 ```
 
-### WordPress Integration
-
-The API includes WordPress integration options:
-
-#### Option 1: Simple HTML Page
-
-Use the HTML code in `dbmoto-converter/wordpress-integration.html` for quick integration.
-
-#### Option 2: WordPress Plugin
-
-Install the plugin from `dbmoto-converter/wordpress-plugin/` for a full-featured solution with shortcode support.
-
-Both options provide:
-
-- Drag & drop file upload
-- Progress indicators
-- Direct ZIP file download
-- Error handling and validation
+### API examples
 
 #### Python Example
 
