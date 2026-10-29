@@ -607,12 +607,12 @@ def _bulk_invoke_create_entities(
     options: "EntityTablesRunOptions",
 ) -> Any:
     """Call create_entities, wrapping with ImportOptions when the plan supplied any."""
-    kwargs = dict(
-        yaml_config=options.yaml_config,
-        skip_errors=options.skip_errors,
-        chunk_size=options.chunk_size,
-        chronos_token=options.chronos_token,
-    )
+    kwargs = {
+        "yaml_config": options.yaml_config,
+        "skip_errors": options.skip_errors,
+        "chunk_size": options.chunk_size,
+        "chronos_token": options.chronos_token,
+    }
     args = (
         token, pipeline_id, source_schema, target_schema, filtered_tables,
         source_agent_id, target_agent_id, source_type, target_type,

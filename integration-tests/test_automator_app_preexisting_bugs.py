@@ -107,6 +107,28 @@ class BulkCreateTypeTests(_AppTestCase):
 
         self.assertEqual((kwargs["source_type"], kwargs["target_type"]), ("SQL", "NoSQL"))
 
+    def test_bulk_create_passes_entity_tables_run_options(self):
+        """Regression for the S930 false positive: /api/bulk/create must call
+        run_create_entities_for_tables(..., options=EntityTablesRunOptions(...)).
+        A signature mismatch would raise TypeError on this path."""
+        self.patch(self.corehub, "infer_agent_schema_types", return_value=("SQL", "SQL"))
+
+        kwargs = self._post(skipErrors=False, chunkSize=25, plan={
+            "version": 1,
+            "defaults": {"onExistingEntity": "skip"},
+        })
+
+        self.assertIn("options", kwargs)
+        self.assertNotIn("skip_errors", kwargs)
+        self.assertNotIn("chunk_size", kwargs)
+        self.assertNotIn("entity_import_options", kwargs)
+        options = kwargs["options"]
+        self.assertIsInstance(options, self.corehub.EntityTablesRunOptions)
+        self.assertFalse(options.skip_errors)
+        self.assertEqual(options.chunk_size, 25)
+        self.assertIsNotNone(options.entity_import_options)
+        self.assertEqual(options.entity_import_options.on_existing, "skip")
+
     def test_types_fall_back_to_sql_when_core_hub_cannot_tell(self):
         self.patch(self.corehub, "infer_agent_schema_types", side_effect=RuntimeError("Core Hub down"))
 
