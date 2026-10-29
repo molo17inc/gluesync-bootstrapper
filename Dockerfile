@@ -78,6 +78,9 @@ ENV TEST_NAME=${TEST_NAME}
 ENV VERSION=${VERSION}
 ENV JOB_ID=${JOB_ID}
 
+# Package index for pip (CI passes the Nexus PyPI proxy; an ARG is not kept in the image env)
+ARG PIP_INDEX_URL
+
 # Copy requirements.txt and install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
