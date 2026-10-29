@@ -115,6 +115,7 @@ def _exclusive_import():
 
 LOGIN_REQUIRED = "Log in to a Core Hub first"
 AUTH_REQUIRED = "Authentication required"
+UPLOADED_YAML_NOT_FOUND = "Uploaded YAML not found"
 APPLICATION_ZIP = "application/zip"
 UPLOADED_FILE_EMPTY = "Uploaded file is empty"
 IMPORT_ALL_PARSE_FAILED = "Failed to parse %s during import-all: %s"
@@ -1175,15 +1176,17 @@ def _bulk_create_entities(request: BulkCreateRequest) -> ApiMessage:
             source_type=source_type,
             target_type=target_type,
             table_names=table_names,
-            skip_errors=request.skip_errors,
-            chunk_size=request.chunk_size,
             enable_scheduling=bool(enable_scheduling),
             create_tables=effective_create_tables,
             use_ssl=state.use_ssl,
             skip_verify=state.skip_verify,
-            chronos_token=state.chronos_token,
-            entity_import_options=import_opts,
-            yaml_config=bulk_yaml,
+            options=corehub.EntityTablesRunOptions(
+                skip_errors=request.skip_errors,
+                chunk_size=request.chunk_size,
+                chronos_token=state.chronos_token,
+                entity_import_options=import_opts,
+                yaml_config=bulk_yaml,
+            ),
         )
     except Exception as exc:  # pylint: disable=broad-except
         logger.exception("Bulk create entities failed")
@@ -4612,7 +4615,7 @@ async def _execute_run(run_id: str, request: RunRequest) -> None:
 
     yaml_path = state.get_upload_path(request.yaml_file_id)
     if not yaml_path:
-        state.finalize_run(run_id, "failed", "Uploaded YAML not found")
+        state.finalize_run(run_id, "failed", UPLOADED_YAML_NOT_FOUND)
         return
 
     try:
@@ -4676,7 +4679,7 @@ def _start_run(request: RunRequest) -> ApiMessage:
     # Refuse a bad plan before the run starts (empty plan == current behaviour).
     plan = _load_entity_plan_or_400(request.plan)
     if not state.get_upload_path(request.yaml_file_id):
-        raise HTTPException(status_code=400, detail="Uploaded YAML not found")
+        raise HTTPException(status_code=400, detail=UPLOADED_YAML_NOT_FOUND)
     # Cheap shape check: apply against the uploaded YAML so include/unknown tables fail fast.
     try:
         yaml_path = state.get_upload_path(request.yaml_file_id)
@@ -4772,7 +4775,7 @@ def _yaml_config_for_entity_preview(body: EntityPlanBody):
     if body.yaml_file_id:
         yaml_path = state.get_upload_path(body.yaml_file_id)
         if not yaml_path:
-            raise HTTPException(status_code=400, detail="Uploaded YAML not found")
+            raise HTTPException(status_code=400, detail=UPLOADED_YAML_NOT_FOUND)
         return load_yaml_config(str(yaml_path))
     if body.table_names is not None and body.source_schema:
         return {
@@ -4787,7 +4790,7 @@ def _yaml_config_for_entity_preview(body: EntityPlanBody):
     )
 
 
-async def entity_plan_draft(body: EntityPlanBody) -> Dict[str, Any]:
+def entity_plan_draft(body: EntityPlanBody) -> Dict[str, Any]:
     """Draft entity Customize plan JSON (every table included). Nothing is sent to Core Hub."""
     _require_session()
     yaml_config = _yaml_config_for_entity_preview(body)
@@ -4821,7 +4824,7 @@ def _register_run_routes(app: FastAPI) -> None:
 
     @app.post("/api/entities/plan/draft", responses=_RUN_RESPONSES)
     async def draft_entity_plan(body: EntityPlanBody) -> Dict[str, Any]:
-        return await entity_plan_draft(body)
+        return entity_plan_draft(body)
 
     @app.post("/api/entities/plan/preview", responses=_RUN_RESPONSES)
     async def preview_entity_plan(body: EntityPlanBody) -> Dict[str, Any]:
