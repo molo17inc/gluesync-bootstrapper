@@ -46,7 +46,7 @@ default:
 
 variables:
   DOCKER_TLS_CERTDIR: ""
-  AWS_REGION: us-east-1
+  AWS_REGION: eu-central-1
   STACK_NAME: dbmoto-xml-converter
   RESULTS_BUCKET_PREFIX: gluesync-conversion-results
   HOSTED_ZONE_ID: ""
@@ -748,8 +748,27 @@ deploy_lambda:
     - cp lambda_function.py lambda-package/
     - cd lambda-package && zip -r ../lambda-package.zip . -q && cd ..
     - |
-      # Check if stack exists and get its status
-      if aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
+      # Only eu-central-1 hosts the live stack; never touch other regions.
+      if [[ "$AWS_REGION" != "eu-central-1" ]]; then
+        echo "❌ AWS_REGION must be eu-central-1 for $STACK_NAME"
+        exit 1
+      fi
+
+      # Check if stack exists. Only "does not exist" means create; any other
+      # error (AccessDenied, throttling, bad credentials) must fail the job.
+      DESCRIBE_RC=0
+      DESCRIBE_OUT=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" 2>&1) || DESCRIBE_RC=$?
+      if [[ $DESCRIBE_RC -eq 0 ]]; then
+        STACK_EXISTS=true
+      elif [[ "$DESCRIBE_OUT" == *"does not exist"* ]]; then
+        STACK_EXISTS=false
+      else
+        echo "❌ describe-stacks failed (not a missing stack), refusing to create:"
+        echo "$DESCRIBE_OUT"
+        exit 1
+      fi
+
+      if [[ "$STACK_EXISTS" == "true" ]]; then
         STACK_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].StackStatus' --output text)
         echo "📊 Current stack status: $STACK_STATUS"
         
@@ -759,6 +778,7 @@ deploy_lambda:
           aws cloudformation delete-stack --stack-name "$STACK_NAME" --region "$AWS_REGION"
           aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" --region "$AWS_REGION"
           echo "✅ Stack deletion complete"
+          STACK_EXISTS=false
         fi
       fi
 
@@ -770,7 +790,7 @@ deploy_lambda:
       TEMPLATE_BODY=$(cat cloudformation-template.yaml)
 
       # Check if we need to update or create the stack
-      if aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
+      if [[ "$STACK_EXISTS" == "true" ]]; then
         echo "🔍 Checking for stack updates..."
         
         # Use change sets to check for updates without making changes
