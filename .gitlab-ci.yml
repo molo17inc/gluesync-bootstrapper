@@ -18,9 +18,23 @@
 #
 # Copyright (C) 2025 MOLO17. All rights reserved.
 
+
+# Pipeline layout (a job with `needs:` starts as soon as the jobs it needs are done, whatever its stage):
+#   prepare      fetch_agents                      agents.json for the build jobs
+#   validate     pyinstaller_syntax_check          cheap check, starts at once
+#   test         unit test shards, dbmoto tests, Linux smoke   all start at once (needs: [])
+#   build        automator builds, signing, Windows images, Windows smoke
+#   image-smoke  Windows image smoke tests
+#   build-sonar  SonarQube
+#   deploy       publish / image push / Lambda / Budibase
+# Linux jobs run on the HQ docker runners (default tag), Windows jobs on the HQ Windows shell runners. Images come from
+# the Nexus pull-through (docker-group) or from molo17-local, packages from the Nexus PyPI proxy (PIP_INDEX_URL), and the
+# pip / Python downloads are cached in the Nexus raw repository ui-build-cache (scripts/ci/nexus-cache.sh,
+# scripts/ci/setup-windows-python.ps1).
 stages:
+  - prepare
   - validate
-  - fetch-agents
+  - test
   - build
   - image-smoke
   - build-sonar
@@ -44,26 +58,43 @@ variables:
   DOWNLOADS_S3_PREFIX_DBMOTO: "gs-content/dbmoto-conversion"
   # Set to "1" to also mirror publishes to SiteGround FTP (default: S3-only)
   DUAL_WRITE_SG: "0"
+  # Nexus PyPI proxy (anonymous read) for every pip, Linux and Windows
+  PIP_INDEX_URL: "https://nexus.hq.molo17.com/repository/pypi-all/simple"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+
+# Python 3.11 (the PyInstaller builds and the tests target it), through the Nexus Docker Hub pull-through.
+# Debian 11 (bullseye) is end of life: its apt repositories are gone, so the jobs run on bookworm.
+.python311:
+  image: nexus.hq.molo17.com/docker-group/library/python:3.11-bookworm
+
+# Python job with the packages of $PIP_INSTALL_ARGS installed; the pip cache comes from (and on a miss goes to) the Nexus
+# raw cache, keyed on the hash of the requirements files, see scripts/ci/nexus-cache.sh
+.python_with_deps:
+  extends: .python311
+  before_script:
+    - python3 --version
+    - . scripts/ci/nexus-cache.sh
+    - pip_install_cached $PIP_INSTALL_ARGS
+
+# The jobs that check every merge request, the default branch and the automator release tags
+.rules_checks: &rules_checks
+  - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    when: always
+  - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    when: always
+  - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
+    when: always
+  - when: never
 
 # Run syntax check on every commit to catch PyInstaller issues early
 pyinstaller_syntax_check:
+  extends: .python_with_deps
   stage: validate
-  image: python:3.11-bullseye
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-      when: always
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-      when: always
-    - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
-      when: always
-    - when: never
+  needs: []
+  rules: *rules_checks
   variables:
-    PIP_DISABLE_PIP_VERSION_CHECK: "1"
-    PYTHONDONTWRITEBYTECODE: "1"
-  before_script:
-    - python3 --version
-    - pip3 install --break-system-packages --upgrade pip
-    - pip3 install --break-system-packages -r requirements.txt
+    PIP_INSTALL_ARGS: "-r requirements.txt"
   script:
     - echo "Running PyInstaller compatibility syntax check..."
     - python3 integration-tests/test_pyinstaller_compatibility.py --quick-check
@@ -73,8 +104,9 @@ pyinstaller_syntax_check:
 
 # Run DbMoto converter unit tests
 dbmoto_converter_tests:
-  stage: validate
-  image: python:3.11-bullseye
+  extends: .python_with_deps
+  stage: test
+  needs: []
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       when: always
@@ -84,81 +116,36 @@ dbmoto_converter_tests:
       when: always
     - when: never
   variables:
-    PIP_DISABLE_PIP_VERSION_CHECK: "1"
-    PYTHONDONTWRITEBYTECODE: "1"
-  before_script:
-    - python3 --version
-    - pip3 install --break-system-packages --upgrade pip
-    - cd dbmoto-converter
-    - pip3 install --break-system-packages -r requirements.txt pyyaml
+    PIP_INSTALL_ARGS: "-r dbmoto-converter/requirements.txt pyyaml"
   script:
+    - cd dbmoto-converter
     - echo "Running DbMoto converter unit tests..."
     - python3 -m unittest discover tests -v
   allow_failure: false
 
+# The bootstrapper core unit tests, split in 4 parallel jobs. scripts/ci/run_unit_shard.py holds the list of test groups
+# (the 12 `python3 -m unittest` invocations this job used to run one after the other) and assigns every test class to
+# exactly one shard: the classes it names go to the shard it says, every other class (new ones too) to the last shard.
+# Keep `parallel:` equal to SHARDS in that script (the script checks CI_NODE_TOTAL).
 bootstrapper_core_unit_tests:
-  stage: validate
-  image: python:3.11-bullseye
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-      when: always
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-      when: always
-    - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
-      when: always
-    - when: never
+  extends: .python_with_deps
+  stage: test
+  needs: []
+  parallel: 4
+  rules: *rules_checks
   variables:
-    PIP_DISABLE_PIP_VERSION_CHECK: "1"
-    PYTHONDONTWRITEBYTECODE: "1"
-  before_script:
-    - python3 --version
-    - pip3 install --break-system-packages --upgrade pip
-    - pip3 install --break-system-packages -r requirements.txt
+    PIP_INSTALL_ARGS: "-r requirements.txt"
   script:
-    - echo "Running bootstrapper core YAML payload unit tests..."
-    - python3 -m unittest discover integration-tests -p 'test_bootstrapper_*.py' -v
-    - echo "Running Connect portable unit tests..."
-    - python3 -m unittest integration-tests.test_connect_setup -v
-    - echo "Running Chronos export regression tests..."
-    - python3 -m unittest integration-tests.test_export_template_from_corehub -v
-    - echo "Running automator CoreHub flow tests..."
-    - python3 -m unittest integration-tests.test_automator_corehub_flows -v
-    - echo "Running automator backup/export tests..."
-    - python3 -m unittest integration-tests.test_automator_backup_export -v
-    - echo "Running automator backup/import tests..."
-    - python3 -m unittest integration-tests.test_automator_backup_import -v
-    - echo "Running AI settings backup tests..."
-    - python3 -m unittest integration-tests.test_ai_settings -v
-    - echo "Running user group and data-access policy backup tests..."
-    - python3 -m unittest integration-tests.test_automator_user_groups_backup -v
-    - echo "Running Connect backup exclusion tests..."
-    - python3 -m unittest integration-tests.test_automator_connect_backup_exclusion -v
-    - echo "Running column mapping matrix regression tests..."
-    - python3 -m unittest integration-tests.test_unlocked_schema_and_target_only_columns integration-tests.test_multitable_chains integration-tests.test_field_functions_export_import -v
-    - echo "Running demo-kits round-trip verifier tests..."
-    - python3 -m unittest integration-tests.test_automator_roundtrip -v
-    - echo "Running automator app regression tests..."
-    - python3 -m unittest integration-tests.test_automator_app_preexisting_bugs -v
+    - python3 scripts/ci/run_unit_shard.py
   allow_failure: false
 
 automator_smoke_linux:
-  stage: validate
-  image: python:3.11-bullseye
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-      when: always
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-      when: always
-    - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
-      when: always
-    - when: never
+  extends: .python_with_deps
+  stage: test
+  needs: []
+  rules: *rules_checks
   variables:
-    PIP_DISABLE_PIP_VERSION_CHECK: "1"
-    PYTHONDONTWRITEBYTECODE: "1"
-  before_script:
-    - python3 --version
-    - pip3 install --break-system-packages --upgrade pip
-    - pip3 install --break-system-packages -r requirements.txt
+    PIP_INSTALL_ARGS: "-r requirements.txt"
   script:
     - |
       set -euo pipefail
@@ -180,36 +167,23 @@ automator_smoke_linux:
       echo "Automator smoke test passed on Linux"
 
 automator_smoke_windows:
-  stage: validate
+  # Same runner as automator_build_windows (and the Windows image jobs): on a release tag it waits for the build, so the
+  # build that feeds signing and publishing starts first instead of queueing behind this check. In a pipeline without the
+  # build (merge request, default branch) the optional need is void and the job starts at once.
+  stage: build
   tags:
     - hq-windows-shell-2022
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-      when: always
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-      when: always
-    - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
-      when: always
-    - when: never
-  variables:
-    PIP_DISABLE_PIP_VERSION_CHECK: "1"
-    PYTHONDONTWRITEBYTECODE: "1"
+  needs:
+    - job: automator_build_windows
+      artifacts: false
+      optional: true
+  rules: *rules_checks
   before_script:
     - |
       $ErrorActionPreference = 'Stop'
       $pythonDir = Join-Path $env:CI_PROJECT_DIR 'python'
-      New-Item -ItemType Directory -Force -Path $pythonDir | Out-Null
-      $pythonZip = Join-Path $pythonDir 'python.zip'
-      Invoke-WebRequest -Uri 'https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip' -OutFile $pythonZip
-      Expand-Archive -Path $pythonZip -DestinationPath $pythonDir -Force
-      Remove-Item $pythonZip
+      & .\scripts\ci\setup-windows-python.ps1 -PythonDir $pythonDir -PipArgs @('-r', (Join-Path $env:CI_PROJECT_DIR 'requirements.txt'))
       $pthFile = Join-Path $pythonDir 'python311._pth'
-      (Get-Content $pthFile) -replace '#import site', 'import site' | Set-Content $pthFile
-      $getPip = Join-Path $pythonDir 'get-pip.py'
-      Invoke-WebRequest -Uri 'https://bootstrap.pypa.io/get-pip.py' -OutFile $getPip
-      & (Join-Path $pythonDir 'python.exe') $getPip
-      & (Join-Path $pythonDir 'python.exe') -m pip install --upgrade pip
-      & (Join-Path $pythonDir 'python.exe') -m pip install -r (Join-Path $env:CI_PROJECT_DIR 'requirements.txt')
       # Add project root to sys.path so automator_app is importable from embedded Python
       Add-Content $pthFile "`r`n$env:CI_PROJECT_DIR"
       $env:Path = "$pythonDir;$env:Path"
@@ -372,8 +346,8 @@ bootstrapper_windows_smoke_ltsc2019:
   allow_failure: true
 
 fetch_agents:
-  stage: fetch-agents
-  image: python:3.11-bullseye
+  extends: .python311
+  stage: prepare
   rules:
     - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
       when: always
@@ -386,13 +360,9 @@ fetch_agents:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       when: always
     - when: never
-  variables:
-    PIP_DISABLE_PIP_VERSION_CHECK: "1"
-    PYTHONDONTWRITEBYTECODE: "1"
   before_script:
     - python3 --version
-    - pip3 install --break-system-packages --upgrade pip
-    - pip3 install --break-system-packages requests
+    - pip install requests
   script:
     - echo "Fetching latest agents data..."
     - python3 scripts/fetch-agents.py
@@ -404,8 +374,12 @@ fetch_agents:
   allow_failure: false
 
 automator_build:
+  # Stays on Debian 11 (bullseye): the Linux binary is linked against the glibc of the image it is built on, and
+  # bookworm (glibc 2.36 instead of 2.31) would raise the minimum glibc of the published gluesync-automator-linux. The
+  # job needs no apt, so the end of life of the bullseye package repositories does not touch it.
+  extends: .python_with_deps
+  image: nexus.hq.molo17.com/docker-group/library/python:3.11-bullseye
   stage: build
-  image: python:3.11-bullseye
   needs:
     - job: fetch_agents
       artifacts: true
@@ -415,12 +389,7 @@ automator_build:
       when: always
     - when: never
   variables:
-    PIP_DISABLE_PIP_VERSION_CHECK: "1"
-    PYTHONDONTWRITEBYTECODE: "1"
-  before_script:
-    - python3 --version
-    - pip3 install --break-system-packages --upgrade pip
-    - pip3 install --break-system-packages -r requirements.txt pyinstaller
+    PIP_INSTALL_ARGS: "-r requirements.txt pyinstaller"
   script:
     - |
       export AUTOMATOR_VERSION="${CI_COMMIT_TAG#automator-}"
@@ -449,26 +418,11 @@ automator_build_windows:
     - if: $CI_COMMIT_TAG =~ /^automator-sign-rc-\d+$/
       when: always
     - when: never
-  variables:
-    PIP_DISABLE_PIP_VERSION_CHECK: "1"
-    PYTHONDONTWRITEBYTECODE: "1"
   before_script:
     - |
       $ErrorActionPreference = 'Stop'
       $pythonDir = Join-Path $env:CI_PROJECT_DIR 'python'
-      New-Item -ItemType Directory -Force -Path $pythonDir | Out-Null
-      $pythonZip = Join-Path $pythonDir 'python.zip'
-      Invoke-WebRequest -Uri 'https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip' -OutFile $pythonZip
-      Expand-Archive -Path $pythonZip -DestinationPath $pythonDir -Force
-      Remove-Item $pythonZip
-      $pthFile = Join-Path $pythonDir 'python311._pth'
-      (Get-Content $pthFile) -replace '#import site', 'import site' | Set-Content $pthFile
-      $getPip = Join-Path $pythonDir 'get-pip.py'
-      Invoke-WebRequest -Uri 'https://bootstrap.pypa.io/get-pip.py' -OutFile $getPip
-      & (Join-Path $pythonDir 'python.exe') $getPip
-      & (Join-Path $pythonDir 'python.exe') -m pip install --upgrade pip
-      & (Join-Path $pythonDir 'python.exe') -m pip install pyinstaller
-      & (Join-Path $pythonDir 'python.exe') -m pip install -r (Join-Path $env:CI_PROJECT_DIR 'requirements.txt')
+      & .\scripts\ci\setup-windows-python.ps1 -PythonDir $pythonDir -PipArgs @('pyinstaller', '-r', (Join-Path $env:CI_PROJECT_DIR 'requirements.txt'))
       $env:Path = "$pythonDir;$env:Path"
   script:
     - |
@@ -596,7 +550,7 @@ automator_smoke_signed_windows:
 
 automator_publish:
   stage: deploy
-  image: alpine:3.20
+  image: nexus.hq.molo17.com/docker-group/library/alpine:3.20
   needs:
     - job: automator_build
       artifacts: true
@@ -689,11 +643,15 @@ automator_publish:
 
 deploy:
   stage: deploy
-  image: docker:latest
+  image: nexus.hq.molo17.com/molo17-local/docker:27.3.1
   services:
-    - name: docker:dind
+    - name: nexus.hq.molo17.com/molo17-local/docker:27.3.1-dind
+      alias: docker
       variables:
         DOCKER_TLS_CERTDIR: ""
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_BUILDKIT: "1"
   needs:
     - job: fetch_agents
       artifacts: true
@@ -722,7 +680,16 @@ deploy:
     - |
       NEXUS_NAME="nexus.hq.molo17.com/molo17-local/${APP_NAME}"
 
-    - docker build -t $DEFAULT_NAME:latest .
+    # layer cache: the image of the previous run is pulled (a missing one is not an error) and its inline cache is used;
+    # the base image and the Python packages come from the Nexus proxies
+    - docker pull "${NEXUS_NAME}:latest" || true
+    - |
+      docker build \
+        --build-arg BUILDKIT_INLINE_CACHE=1 \
+        --build-arg PYTHON_BASE_IMAGE=nexus.hq.molo17.com/docker-group/library/python:3.10-slim \
+        --build-arg PIP_INDEX_URL="$PIP_INDEX_URL" \
+        --cache-from "${NEXUS_NAME}:latest" \
+        -t $DEFAULT_NAME:latest .
     - docker tag $DEFAULT_NAME:latest "$ADDITIONAL_TAG"
     - docker push "$ADDITIONAL_TAG"
 
@@ -736,7 +703,7 @@ deploy:
 build-sonar:
   stage: build-sonar
   image:
-    name: sonarsource/sonar-scanner-cli:11
+    name: nexus.hq.molo17.com/docker-group/sonarsource/sonar-scanner-cli:11
     entrypoint: [""]
   needs:
     - job: pyinstaller_syntax_check
@@ -1084,7 +1051,7 @@ deploy_lambda:
 # Manual cleanup job
 cleanup_lambda:
   stage: deploy
-  image: amazon/aws-cli:latest
+  image: nexus.hq.molo17.com/docker-group/amazon/aws-cli:2.17.0
   when: manual
   only:
     - web
@@ -1100,7 +1067,7 @@ cleanup_lambda:
 
 update_budibase_version:
   stage: deploy
-  image: alpine:latest
+  image: nexus.hq.molo17.com/docker-group/library/alpine:3.20
   needs:
     - job: automator_publish
       optional: true
