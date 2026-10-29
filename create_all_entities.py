@@ -30,7 +30,7 @@ from typing import Any
 from commons import get_node_info, get_table_columns, fetch_core_hub, get_pipeline_config, get_pipeline_agents, \
     get_agent_tables, create_entity_schedules, map_data_type, create_pipeline_schedules, create_group_schedules, load_yaml_config, \
     process_filter_clauses, create_group, assign_entities_to_group, get_table_id, extract_target_column_types, \
-    corehub_takes_grouped_matrix, canonicalize_target_type, coerce_document_key_config
+    corehub_takes_grouped_matrix, canonicalize_target_type, coerce_document_key_config, set_scheduling_enabled
 from create_all_tables import TargetTableCreationError, handle_table_creation, \
     set_create_table_if_not_exists as _set_tables_flag
 from create_user_defined_functions import handle_udf_function_definition
@@ -44,6 +44,7 @@ import import_plan
 from pathlib import Path
 import contextlib
 import tempfile
+import yaml
 import table_target_schema
 import fan_in
 import function_collection

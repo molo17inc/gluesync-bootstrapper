@@ -241,6 +241,80 @@ class CliPlanArgs(unittest.TestCase):
             ])
             self.assertEqual(code, 1)
 
+    def test_cli_apply_plan_dumps_filtered_yaml(self):
+        """Include that shrinks the YAML must dump via yaml.safe_dump (regression: NameError)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            yaml_path = Path(tmp) / "e.yaml"
+            plan_path = Path(tmp) / "plan.json"
+            yaml_path.write_text(yaml.safe_dump(SYNTH), encoding="utf-8")
+            plan_path.write_text(json.dumps({
+                "version": 1,
+                "pipelines": {"pipe-1": {
+                    "entities": {"include": ["SCH01.TAB001"]},
+                    "onExistingEntity": "skip",
+                }},
+            }), encoding="utf-8")
+            args = create_all_entities.build_arg_parser().parse_args([
+                "--pipeline", "pipe-1",
+                "--source-schema", "SCH01",
+                "--target-schema", "TGT01",
+                "--source-type", "SQL",
+                "--target-type", "SQL",
+                "--token", "t",
+                "--yaml-file", str(yaml_path),
+                "--plan", str(plan_path),
+            ])
+            options = create_all_entities._cli_merged_options(args)
+            planned_path, options, restore_fc = create_all_entities._cli_apply_plan(args, options)
+            try:
+                self.assertNotEqual(planned_path, str(yaml_path))
+                planned = yaml.safe_load(Path(planned_path).read_text(encoding="utf-8"))
+                ids = [e["id"] for e in import_plan.entity_ids(planned)]
+                self.assertEqual(ids, ["SCH01.TAB001"])
+                self.assertEqual(options.on_existing, "skip")
+                self.assertTrue(restore_fc)
+            finally:
+                if planned_path != str(yaml_path):
+                    Path(planned_path).unlink(missing_ok=True)
+
+
+    def test_cli_apply_plan_parts_schedules_off(self):
+        """parts.schedules=false must call set_scheduling_enabled (regression: NameError)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            yaml_path = Path(tmp) / "e.yaml"
+            plan_path = Path(tmp) / "plan.json"
+            yaml_path.write_text(yaml.safe_dump(SYNTH), encoding="utf-8")
+            plan_path.write_text(json.dumps({
+                "version": 1,
+                "pipelines": {"pipe-1": {
+                    "entities": {"include": ["SCH01.TAB001"]},
+                    "parts": {"schedules": False, "createTables": False,
+                              "udfs": False, "groups": False, "functionCollection": False},
+                    "onExistingEntity": "skip",
+                }},
+            }), encoding="utf-8")
+            args = create_all_entities.build_arg_parser().parse_args([
+                "--pipeline", "pipe-1",
+                "--source-schema", "SCH01",
+                "--target-schema", "TGT01",
+                "--source-type", "SQL",
+                "--target-type", "SQL",
+                "--token", "t",
+                "--yaml-file", str(yaml_path),
+                "--plan", str(plan_path),
+            ])
+            options = create_all_entities._cli_merged_options(args)
+            with mock.patch("create_all_entities.set_scheduling_enabled") as sched:
+                planned_path, options, restore_fc = create_all_entities._cli_apply_plan(args, options)
+                try:
+                    sched.assert_called_once_with(False)
+                    self.assertFalse(restore_fc)
+                    self.assertEqual(options.on_existing, "skip")
+                finally:
+                    if planned_path != str(yaml_path):
+                        Path(planned_path).unlink(missing_ok=True)
+
+
 
 class PreviewPayload(unittest.TestCase):
     def test_preview_lists_entities_and_conflicts(self):
