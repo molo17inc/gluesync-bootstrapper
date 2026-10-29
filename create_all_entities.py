@@ -30,7 +30,7 @@ from typing import Any
 from commons import get_node_info, get_table_columns, fetch_core_hub, get_pipeline_config, get_pipeline_agents, \
     get_agent_tables, create_entity_schedules, map_data_type, create_pipeline_schedules, create_group_schedules, load_yaml_config, \
     process_filter_clauses, create_group, assign_entities_to_group, get_table_id, extract_target_column_types, \
-    corehub_takes_grouped_matrix, canonicalize_target_type, coerce_document_key_config
+    corehub_takes_grouped_matrix, canonicalize_target_type, coerce_document_key_config, set_scheduling_enabled
 from create_all_tables import TargetTableCreationError, handle_table_creation, \
     set_create_table_if_not_exists as _set_tables_flag
 from create_user_defined_functions import handle_udf_function_definition
@@ -40,6 +40,11 @@ from entity_mapping import ColumnNames, EntityMappingError, build_entries, deriv
     encode_entries, find_by_name, group_relations, grouped_only_forms, is_column_mappings, read_entry, yaml_relations
 import create_user_defined_functions as udf_module
 import import_options
+import import_plan
+from pathlib import Path
+import contextlib
+import tempfile
+import yaml
 import table_target_schema
 import fan_in
 import function_collection
@@ -5703,27 +5708,85 @@ def _exit_code(result, options):
 def build_arg_parser():
     parser = argparse.ArgumentParser(description="Gluesync Entity Creation Script")
     parser.add_argument('--pipeline', required=True, help="Pipeline ID")
-    parser.add_argument('--source-schema', required=True, help="Source schema name")
+    parser.add_argument('--source-schema', default=None, help="Source schema name (required unless --write-plan)")
     parser.add_argument('--chunk-size', type=int, default=50,
                         help="Number of entities to process in each chunk (default: 50)")
     parser.add_argument('--skip-errors', action='store_true', help="Continue execution even if errors occur")
-    parser.add_argument('--target-schema', required=True, help="Target schema name")
-    parser.add_argument('--source-type', required=True, help="Source agent type")
-    parser.add_argument('--target-type', required=True, help="Target agent type")
+    parser.add_argument('--target-schema', default=None, help="Target schema name (required unless --write-plan)")
+    parser.add_argument('--source-type', default=None, help="Source agent type (required unless --write-plan)")
+    parser.add_argument('--target-type', default=None, help="Target agent type (required unless --write-plan)")
     parser.add_argument('--yaml-file', help="YAML configuration file path")
-    parser.add_argument('--token', required=True, help="Authentication token")
+    parser.add_argument('--token', default=None, help="Authentication token (required unless --write-plan)")
     parser.add_argument('--chronos-token', default=None, help="User token for Chronos authentication (falls back to --token if omitted)")
+    parser.add_argument('--plan', default=None,
+                        help="Entity Customize plan JSON file (single-pipeline subset of a backup plan). "
+                             "Empty {} keeps current behaviour. Refuses agents/globals/resumeInto/name/password.")
+    parser.add_argument('--write-plan', default=None, metavar='PATH',
+                        help="Write a draft entity plan JSON for --yaml-file and exit (offline; no Core Hub)")
     import_options.add_cli_arguments(parser)
     return parser
 
 
-def cli(argv=None):
-    """The command line: exit code 0 also with per-entity failures, as before (see _exit_code)."""
-    args = build_arg_parser().parse_args(argv)
-    # main.py hands its options over through the environment; flags given here win.
+def _cli_write_plan(args) -> int:
+    """``--write-plan``: draft plan JSON offline and exit."""
+    if not args.yaml_file:
+        logger.error("--write-plan needs --yaml-file")
+        return 1
+    yaml_config = load_yaml_config(args.yaml_file)
+    draft = import_plan.draft_entity(yaml_config, args.pipeline)
+    Path(args.write_plan).write_text(json.dumps(draft, indent=2) + "\n", encoding="utf-8")
+    logger.info("Wrote draft entity plan to %s", args.write_plan)
+    return 0
+
+
+def _cli_apply_plan(args, options):
+    """Load ``--plan``, apply YAML selection/overrides, merge ImportOptions. Returns (yaml_file, options, restore_fc)."""
+    if not args.plan:
+        return args.yaml_file, options, True
+    try:
+        plan = import_plan.load_entity(Path(args.plan).read_text(encoding="utf-8"))
+    except import_plan.PlanError as exc:
+        raise ValueError(f"Entity import plan: {exc}") from exc
+    if plan.empty:
+        return args.yaml_file, options, True
+    if not args.yaml_file:
+        raise ValueError("--plan needs --yaml-file")
+    yaml_config = load_yaml_config(args.yaml_file)
+    planned, notes, pipeline = import_plan.apply_entity(yaml_config, plan, args.pipeline)
+    for note in notes:
+        logger.info("[plan] %s", note)
+    parts = import_plan.entity_part_flags(plan, pipeline)
+    if not parts["schedules"]:
+        set_scheduling_enabled(False)
+    if not parts["createTables"]:
+        set_create_table_if_not_exists(False)
+        os.environ["CREATE_TABLE_IF_NOT_EXISTS"] = "false"
+    options = import_plan.entity_import_options(plan, pipeline, dry_run=options.dry_run, base=options)
+    if planned is yaml_config:
+        return args.yaml_file, options, parts["functionCollection"]
+    handle = tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False, encoding="utf-8")
+    try:
+        yaml.safe_dump(planned, handle, sort_keys=False, allow_unicode=True)
+        planned_path = handle.name
+    finally:
+        handle.close()
+    return planned_path, options, parts["functionCollection"]
+
+
+def _cli_require_run_args(args) -> None:
+    """Refuse a create run when required CLI flags are missing (``--write-plan`` skips this)."""
+    missing = [f for f, v in (("--source-schema", args.source_schema), ("--target-schema", args.target_schema),
+                              ("--source-type", args.source_type), ("--target-type", args.target_type),
+                              ("--token", args.token)) if not v]
+    if missing:
+        build_arg_parser().error("the following arguments are required: " + ", ".join(missing))
+
+
+def _cli_merged_options(args):
+    """CLI flags over environment ImportOptions (same merge as before ``--plan``)."""
     env_options = import_options.ImportOptions.from_env()
     options = import_options.ImportOptions.from_args(args)
-    options = import_options.ImportOptions(
+    return import_options.ImportOptions(
         remap=env_options.remap.merged(options.remap),
         dry_run=options.dry_run or env_options.dry_run,
         validate=options.validate and env_options.validate,
@@ -5734,23 +5797,41 @@ def cli(argv=None):
         on_existing=options.on_existing or env_options.on_existing,
         corehub_version=options.corehub_version or env_options.corehub_version,
     )
+
+
+def cli(argv=None):
+    """The command line: exit code 0 also with per-entity failures, as before (see _exit_code)."""
+    args = build_arg_parser().parse_args(argv)
+    if args.write_plan:
+        return _cli_write_plan(args)
+    _cli_require_run_args(args)
+    options = _cli_merged_options(args)
+    planned_temp = None
     try:
+        yaml_file, options, restore_fc = _cli_apply_plan(args, options)
+        if yaml_file != args.yaml_file:
+            planned_temp = yaml_file
         result = main(
             args.pipeline,
             args.source_schema,
             args.target_schema,
             args.source_type,
             args.target_type,
-            args.yaml_file,
+            yaml_file,
             args.token,
             args.skip_errors,
             args.chunk_size,
             chronos_token=args.chronos_token,
+            restore_function_collection=restore_fc,
             import_opts=options,
         )
     except Exception as error:  # pylint: disable=broad-except
         logger.error(f"Entity creation failed: {error}")
         return 1
+    finally:
+        if planned_temp:
+            with contextlib.suppress(OSError):
+                Path(planned_temp).unlink(missing_ok=True)
     return _exit_code(result, options)
 
 

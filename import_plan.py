@@ -57,7 +57,7 @@ import copy
 import hashlib
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 import import_options
@@ -644,6 +644,164 @@ def parse_agent_passwords(text: Optional[str]) -> Dict[str, Dict[str, str]]:
 
 def secret_values(agent_passwords: Mapping[str, Mapping[str, str]]) -> List[str]:
     return [v for entries in agent_passwords.values() for v in entries.values() if v]
+
+
+# -- entity import plan (single-pipeline subset of a backup plan) -------------------------------------------
+
+# Keys that only make sense for a backup ZIP import. Entity creation targets one existing pipeline, so these
+# are refused with a clear error (an empty plan still means "no customization", same as today).
+ENTITY_REFUSED_TOP = ("globals",)
+ENTITY_REFUSED_DEFAULTS = ("onExistingPipeline", "cleanupOnFailure")
+ENTITY_REFUSED_PIPELINE = ("agents", "resumeInto", "onExistingPipeline", "name", "import")
+ENTITY_ALLOWED_TOP = ("version", "defaults", "pipelines")
+ENTITY_ALLOWED_DEFAULTS = tuple(
+    k for k in _DEFAULT_KEYS if k not in ENTITY_REFUSED_DEFAULTS
+)
+ENTITY_ALLOWED_PIPELINE = ("entities", "remap", "tableTargetSchema", "parts", "onExistingEntity")
+
+
+def _refuse_entity_plan_keys(raw: Dict[str, Any]) -> None:
+    """PlanError for a field that belongs to backup Import All / Customize, not entity creation."""
+    _unknown(raw, ENTITY_ALLOWED_TOP, "plan")
+    for key in ENTITY_REFUSED_TOP:
+        if key in raw:
+            raise PlanError(
+                f"plan.{key}: not used for entity import (create entities into an existing pipeline); "
+                "use backup Import All / Customize for globals, agents, resumeInto and pipeline rename"
+            )
+    defaults = _mapping(raw.get("defaults"), "defaults")
+    for key in ENTITY_REFUSED_DEFAULTS:
+        if key in defaults:
+            raise PlanError(
+                f"defaults.{key}: not used for entity import; omit it (or use backup Customize)"
+            )
+    _unknown(defaults, ENTITY_ALLOWED_DEFAULTS, "defaults")
+    pipelines = _mapping(raw.get("pipelines"), "pipelines")
+    if len(pipelines) > 1:
+        raise PlanError(
+            f"plan.pipelines: entity import uses a single pipeline entry, got {len(pipelines)} "
+            f"({', '.join(sorted(pipelines))})"
+        )
+    for pid, entry in pipelines.items():
+        entry = _mapping(entry, f"pipelines.{pid}")
+        for key in ENTITY_REFUSED_PIPELINE:
+            if key in entry:
+                raise PlanError(
+                    f"pipelines.{pid}.{key}: not used for entity import (the Automator already picks the "
+                    "existing pipeline; agents/globals/resume are backup Customize only)"
+                )
+        _unknown(entry, ENTITY_ALLOWED_PIPELINE, f"pipelines.{pid}")
+
+
+def load_entity(source: Any) -> ImportPlan:
+    """An :class:`ImportPlan` for entity creation. Same JSON shape as a backup plan, minus refused keys.
+
+    ``{}`` / None is the empty plan (current behaviour). A plan with a password is refused. At most one
+    ``pipelines`` entry. Reuses :func:`load` after the entity-only checks."""
+    if source is None or (isinstance(source, str) and not source.strip()):
+        return ImportPlan()
+    if isinstance(source, dict) and not source:
+        return ImportPlan()
+    raw = _mapping(_parsed_json(source), "plan")
+    _refuse_secrets(raw)
+    if not raw:
+        return ImportPlan()
+    _refuse_entity_plan_keys(raw)
+    return load(raw)
+
+
+def entity_pipeline(plan: ImportPlan, pipeline_id: str) -> PipelinePlan:
+    """The single pipeline entry of an entity plan, or an empty :class:`PipelinePlan` for ``pipeline_id``.
+
+    The entry may be keyed by the Automator pipeline id or by any single label (e.g. a backup id); the
+    returned plan always uses ``pipeline_id`` as ``old_id`` so error messages name the selected pipeline.
+    """
+    pid = str(pipeline_id)
+    if not plan.pipelines:
+        return PipelinePlan(old_id=pid)
+    if pid in plan.pipelines:
+        pipeline = plan.pipelines[pid]
+    else:
+        # One entry under any key (e.g. "entity" or a backup id): apply it to the selected pipeline.
+        pipeline = next(iter(plan.pipelines.values()))
+    if pipeline.old_id == pid:
+        return pipeline
+    # Rebuild so the annotated return type stays PipelinePlan (S5886: dataclasses.replace).
+    return PipelinePlan(
+        old_id=pid,
+        import_=pipeline.import_,
+        name=pipeline.name,
+        resume_into=pipeline.resume_into,
+        agents=pipeline.agents,
+        remap=pipeline.remap,
+        remap_raw=pipeline.remap_raw,
+        table_target_schema=pipeline.table_target_schema,
+        include=pipeline.include,
+        exclude=pipeline.exclude,
+        overrides=pipeline.overrides,
+        parts=pipeline.parts,
+        on_existing_entity=pipeline.on_existing_entity,
+        on_existing_pipeline=pipeline.on_existing_pipeline,
+    )
+
+
+def draft_entity(yaml_config, pipeline_id: str) -> Dict[str, Any]:
+    """Draft plan JSON for entity import: every table included, defaults empty (current behaviour)."""
+    return {
+        "version": PLAN_VERSION,
+        "defaults": {},
+        "pipelines": {
+            str(pipeline_id): {
+                "entities": {"include": [e["id"] for e in entity_ids(yaml_config)]},
+            }
+        },
+    }
+
+
+def apply_entity(yaml_config, plan: ImportPlan, pipeline_id: str) -> Tuple[Any, List[str], PipelinePlan]:
+    """Apply the entity plan to a YAML config via :func:`apply_to_yaml`. Remap is left to ImportOptions.
+
+    Returns ``(yaml_config, notes, pipeline_plan)``. Empty plan returns the input YAML unchanged."""
+    pipeline = entity_pipeline(plan, pipeline_id)
+    if plan.empty and not pipeline.changes_yaml() and not pipeline.parts and not pipeline.remap_raw:
+        return yaml_config, [], pipeline
+    check_names(yaml_config, pipeline)
+    check_target_collisions(yaml_config, pipeline, pipeline.old_id)
+    selected = selected_ids(yaml_config, pipeline)
+    if pipeline.include is not None and not selected:
+        raise PlanError(
+            f"pipelines.{pipeline.old_id}: no table selected; leave entities.include out to take every table, "
+            "or list at least one SCHEMA.TABLE"
+        )
+    planned, notes = apply_to_yaml(yaml_config, plan, pipeline)
+    return planned, notes, pipeline
+
+
+def entity_import_options(plan: ImportPlan, pipeline: PipelinePlan, *, dry_run: bool = False,
+                          base: Optional["import_options.ImportOptions"] = None):
+    """ImportOptions for an entity run: plan remap / onExistingEntity / validate over ``base`` (env)."""
+    options = base or import_options.ImportOptions.from_env()
+    if pipeline.remap_raw or any(
+        (pipeline.remap.schemas, pipeline.remap.target_schemas, pipeline.remap.tables,
+         pipeline.remap.target_tables, pipeline.remap.groups, pipeline.remap.agents,
+         pipeline.remap.entity_prefix, pipeline.remap.entity_suffix)
+    ):
+        options.remap = options.remap.merged(pipeline.remap)
+    on_existing = plan.on_existing_entity(pipeline)
+    if on_existing and not options.on_existing:
+        options.on_existing = on_existing
+    if "validate" in plan.defaults:
+        options.validate = plan.defaults["validate"] is not False
+    if plan.defaults.get("strictValidate"):
+        options.strict_validate = True
+    if dry_run:
+        options.dry_run = True
+    return options
+
+
+def entity_part_flags(plan: ImportPlan, pipeline: PipelinePlan) -> Dict[str, bool]:
+    """Whether each PART is enabled for this entity run (defaults then pipeline.parts)."""
+    return {name: plan.part(pipeline, name) for name in PARTS}
 
 
 # -- the draft plan of an archive -----------------------------------------------------------------------------

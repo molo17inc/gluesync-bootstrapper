@@ -875,6 +875,32 @@ A plan never holds a password, and a plan with a password key is refused. In the
 
 Entities are named `SOURCESCHEMA.TABLE`, using the backup's own names. A name without `@@n` also matches its `@@n` variants. Unknown pipelines, tables or agents, a plan that selects nothing, and name clashes with `onExistingPipeline: "fail"` are all refused before anything is written.
 
+### Customize entity creation (Automator Create / Bulk / `create_all_entities --plan`)
+
+Create entities (`/api/run`), Bulk create (`/api/bulk/create`) and the CLI share one **entity Customize** plan: a single-pipeline subset of the backup Customize plan JSON (`import_plan.load_entity` / `apply_entity`). Use **Customize entity creation** on the Automator Create Entities page (or pass `--plan` on the CLI).
+
+What the plan can do:
+
+- **include / exclude** tables (`SCHEMA.TABLE`)
+- **overrides**: `targetSchema`, `targetTable`, `entityName` per table; `tableTargetSchema` map
+- **remap**: schemas / tables / groups (applied through `ImportOptions`, same as backup)
+- **onExistingEntity**: `skip` | `update` | `fail`
+- **parts**: skip `udfs`, `groups`, `functionCollection`, `createTables`, `schedules`
+- **dryRun**: plan the run without creating anything (Automator `dryRun`, CLI `--dry-run`)
+
+What it refuses (use backup Customize instead): `agents`, `globals`, `resumeInto`, `name`, `import`, `onExistingPipeline`, and any password / secret key. At most one `pipelines` entry. An empty plan (`{}` / omit) keeps current behaviour exactly.
+
+Preview and draft are GET-only against Core Hub (`POST /api/entities/plan/preview` and `/api/entities/plan/draft`). *Download plan JSON* saves the draft of the uploaded YAML.
+
+```bash
+# draft a plan offline from a YAML, then edit and apply
+python create_all_entities.py --pipeline PIPE --yaml-file tables.yaml --write-plan plan.json
+python create_all_entities.py --pipeline PIPE --source-schema S --target-schema T \
+  --source-type SQL --target-type SQL --token "$TOKEN" --yaml-file tables.yaml --plan plan.json
+```
+
+Object-store / streaming / NoSQL targets still skip create-table (same as Import All). Core Hub &lt;2.3 needs no new APIs.
+
 ### Transactions Auditing
 
 The bootstrapper supports configuring the **Transactions Auditing** feature via YAML. This feature allows you to track every transaction synchronized by Gluesync into a dedicated `GLUESYNC.TRANSACTIONS_AUDIT` table on a target agent of your choice.

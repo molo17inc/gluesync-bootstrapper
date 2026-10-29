@@ -53,6 +53,7 @@ import import_options
 import agent_overrides
 import import_plan
 import function_collection
+from . import entity_plan_runtime
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -114,6 +115,7 @@ def _exclusive_import():
 
 LOGIN_REQUIRED = "Log in to a Core Hub first"
 AUTH_REQUIRED = "Authentication required"
+UPLOADED_YAML_NOT_FOUND = "Uploaded YAML not found"
 APPLICATION_ZIP = "application/zip"
 UPLOADED_FILE_EMPTY = "Uploaded file is empty"
 IMPORT_ALL_PARSE_FAILED = "Failed to parse %s during import-all: %s"
@@ -378,6 +380,9 @@ class RunRequest(BaseModel):
     use_ssl: Optional[bool] = Field(None, alias="useSsl")
     skip_verify: Optional[bool] = Field(None, alias="skipVerify")
     auto_schemas: bool = Field(True, alias="autoSchemas")
+    # Entity-import Customize plan (single-pipeline subset of a backup plan). ``{}`` / omitted = current behaviour.
+    plan: Optional[Dict[str, Any]] = None
+    dry_run: bool = Field(False, alias="dryRun")
 
 
 class UploadResponse(BaseModel):
@@ -464,6 +469,8 @@ class BulkCreateRequest(BaseModel):
     skip_errors: bool = Field(True, alias="skipErrors")
     enable_scheduling: Optional[bool] = Field(None, alias="enableScheduling")
     create_tables: Optional[bool] = Field(None, alias="createTables")
+    plan: Optional[Dict[str, Any]] = None
+    dry_run: bool = Field(False, alias="dryRun")
 
 
 class DuplicatePipelineRequest(BaseModel):
@@ -1130,13 +1137,34 @@ def _bulk_create_entities(request: BulkCreateRequest) -> ApiMessage:
     if create_tables is None:
         create_tables = prefs["createTables"]
 
+    plan = _load_entity_plan_or_400(request.plan)
+    enable_scheduling, create_tables, _restore_fc = _entity_plan_flags(
+        plan, request.pipeline_id, enable_scheduling=enable_scheduling, create_tables=create_tables,
+    )
+    table_names = entity_plan_runtime.filter_table_names(
+        list(request.table_names), plan, request.pipeline_id, request.source_schema,
+    )
+    if not table_names:
+        raise HTTPException(
+            status_code=400,
+            detail="Entity import plan: no table selected; leave entities.include out to take every selected table, "
+                   "or list at least one SCHEMA.TABLE",
+        )
+
     source_type, target_type = _bulk_schema_types(request)
 
-    # Disable table creation for NoSQL targets (same logic as duplicate pipeline)
+    # Disable table creation for NoSQL / object-store / streaming targets (same as run_create_entities /
+    # duplicate pipeline — agents.json catalog type, not the request's SQL/NoSQL hint alone).
     effective_create_tables = bool(create_tables)
     if target_type and target_type.upper() == 'NOSQL':
         logger.info("Target is NoSQL - disabling table creation")
         effective_create_tables = False
+
+    pipeline = import_plan.entity_pipeline(plan, request.pipeline_id)
+    import_opts = _entity_run_import_options(plan, pipeline, dry_run=bool(request.dry_run))
+    bulk_yaml = _bulk_yaml_for_plan(
+        plan, pipeline, request.source_schema, request.target_schema, table_names,
+    )
 
     try:
         result = corehub.run_create_entities_for_tables(
@@ -1147,14 +1175,18 @@ def _bulk_create_entities(request: BulkCreateRequest) -> ApiMessage:
             target_schema=request.target_schema,
             source_type=source_type,
             target_type=target_type,
-            table_names=request.table_names,
-            skip_errors=request.skip_errors,
-            chunk_size=request.chunk_size,
+            table_names=table_names,
             enable_scheduling=bool(enable_scheduling),
             create_tables=effective_create_tables,
             use_ssl=state.use_ssl,
             skip_verify=state.skip_verify,
-            chronos_token=state.chronos_token,
+            options=corehub.EntityTablesRunOptions(
+                skip_errors=request.skip_errors,
+                chunk_size=request.chunk_size,
+                chronos_token=state.chronos_token,
+                entity_import_options=import_opts,
+                yaml_config=bulk_yaml,
+            ),
         )
     except Exception as exc:  # pylint: disable=broad-except
         logger.exception("Bulk create entities failed")
@@ -1167,7 +1199,7 @@ def _bulk_create_entities(request: BulkCreateRequest) -> ApiMessage:
             logger.info("[bulk-create] %s", line)
 
     msg = "Bulk entity creation completed successfully" if ok else result.get("error") or "Bulk entity creation failed"
-    return ApiMessage(success=ok, message=msg, logs=logs)
+    return ApiMessage(success=ok, message=msg, logs=logs, planUsed=plan.to_dict() if not plan.empty else None)
 
 
 def _template_schema_types(pipeline_id: str) -> tuple[Any, Any]:
@@ -4200,6 +4232,70 @@ def _load_plan_or_400(text: Any) -> import_plan.ImportPlan:
         raise HTTPException(status_code=400, detail=f"Import plan: {exc}") from exc
 
 
+def _load_entity_plan_or_400(source: Any) -> import_plan.ImportPlan:
+    """Entity Customize plan: refuses backup-only keys and any password."""
+    try:
+        return entity_plan_runtime.load_plan(source)
+    except import_plan.PlanError as exc:
+        raise HTTPException(status_code=400, detail=f"Entity import plan: {exc}") from exc
+
+
+def _entity_plan_flags(plan: import_plan.ImportPlan, pipeline_id: str,
+                       *, enable_scheduling: bool, create_tables: bool) -> tuple[bool, bool, bool]:
+    """``(enable_scheduling, create_tables, restore_function_collection)`` after plan.parts."""
+    pipeline = import_plan.entity_pipeline(plan, pipeline_id)
+    parts = import_plan.entity_part_flags(plan, pipeline)
+    return (
+        bool(enable_scheduling) and parts["schedules"],
+        bool(create_tables) and parts["createTables"],
+        parts["functionCollection"],
+    )
+
+
+def _entity_run_import_options(plan: import_plan.ImportPlan, pipeline: import_plan.PipelinePlan,
+                               *, dry_run: bool = False):
+    """ImportOptions for an entity run. Empty plan + no dry-run → same as today (env-if-requested)."""
+    base = import_options.from_env_if_requested()
+    if plan.empty and not dry_run:
+        return base
+    return entity_plan_runtime.options_for_run(
+        plan, pipeline, dry_run=dry_run,
+        base=base or import_options.ImportOptions.from_env(),
+    )
+
+
+def _bulk_yaml_for_plan(plan: import_plan.ImportPlan, pipeline: import_plan.PipelinePlan,
+                        source_schema: str, target_schema: str, table_names: list[str]):
+    """Minimal YAML for Bulk when the plan has overrides / part stripping; else None."""
+    parts = import_plan.entity_part_flags(plan, pipeline)
+    if not (pipeline.changes_yaml() or not parts["udfs"] or not parts["groups"]):
+        return None
+    bulk_yaml = {
+        source_schema: {
+            "target": target_schema,
+            "tables": {"whitelist": list(table_names), "custom": {}},
+        }
+    }
+    return entity_plan_runtime.apply_overrides_to_bulk_yaml(bulk_yaml, plan, pipeline.old_id)
+
+
+def _prepare_entity_yaml_for_run(yaml_path: Path, plan: import_plan.ImportPlan,
+                                 pipeline_id: str) -> tuple[Path, list[str], Any, Optional[Path]]:
+    """Apply the entity plan to the uploaded YAML. Returns (path_to_use, notes, pipeline, temp_or_None).
+
+    Empty plan leaves the original file untouched (parity with current behaviour).
+    """
+    if plan.empty:
+        return yaml_path, [], import_plan.entity_pipeline(plan, pipeline_id), None
+    yaml_config = load_yaml_config(str(yaml_path))
+    planned, notes, pipeline, _parts = entity_plan_runtime.prepare_yaml(yaml_config, plan, pipeline_id)
+    if planned is yaml_config and not notes:
+        # apply_to_yaml returned the same object: nothing to rewrite.
+        return yaml_path, notes, pipeline, None
+    temp = entity_plan_runtime.write_planned_yaml(planned, suffix=yaml_path.suffix or ".yaml")
+    return temp, notes, pipeline, temp
+
+
 def _passwords_or_400(text: Optional[str]) -> Dict[str, Dict[str, str]]:
     try:
         return import_plan.parse_agent_passwords(text)
@@ -4216,6 +4312,18 @@ class ImportPreviewRequest(BaseModel):
 
     def __repr__(self) -> str:  # never show the passwords
         return f"ImportPreviewRequest(uploadId={self.uploadId!r})"
+
+
+class EntityPlanBody(BaseModel):
+    """Plan body for entity Customize (draft / preview). Never holds a password."""
+
+    pipeline_id: str = Field(..., alias="pipelineId")
+    yaml_file_id: Optional[str] = Field(None, alias="yamlFileId")
+    plan: Optional[Dict[str, Any]] = None
+    # Bulk preview: table names instead of a YAML file.
+    source_schema: Optional[str] = Field(None, alias="sourceSchema")
+    target_schema: Optional[str] = Field(None, alias="targetSchema")
+    table_names: Optional[list[str]] = Field(None, alias="tableNames")
 
 
 async def import_analyze(file: UploadFile = File(...)) -> Dict[str, Any]:
@@ -4388,6 +4496,9 @@ class _RunSettings:
     yaml_file: str = ""
     source_type: str = ""
     target_type: str = ""
+    import_options: Any = None
+    restore_function_collection: bool = True
+    planned_temp: Optional[Path] = None
 
 
 def _run_schema_types(request: RunRequest, yaml_file_path: str) -> tuple[str, str]:
@@ -4432,7 +4543,12 @@ def _run_create_entities(request: RunRequest, settings: _RunSettings, source_sch
             chunk_size=request.chunk_size,
             log_callback=settings.log_callback,
             chronos_token=state.chronos_token,
-            import_options=import_options.from_env_if_requested(),
+            restore_function_collection=settings.restore_function_collection,
+            import_options=(
+                settings.import_options
+                if settings.import_options is not None
+                else import_options.from_env_if_requested()
+            ),
         ),
     )
 
@@ -4499,11 +4615,33 @@ async def _execute_run(run_id: str, request: RunRequest) -> None:
 
     yaml_path = state.get_upload_path(request.yaml_file_id)
     if not yaml_path:
-        state.finalize_run(run_id, "failed", "Uploaded YAML not found")
+        state.finalize_run(run_id, "failed", UPLOADED_YAML_NOT_FOUND)
         return
+
+    try:
+        plan = _load_entity_plan_or_400(request.plan)
+    except HTTPException as exc:
+        state.finalize_run(run_id, "failed", str(exc.detail))
+        return
+
+    enable_scheduling, create_tables, restore_fc = _entity_plan_flags(
+        plan, request.pipeline_id, enable_scheduling=enable_scheduling, create_tables=create_tables,
+    )
+    try:
+        yaml_for_run, notes, pipeline, planned_temp = _prepare_entity_yaml_for_run(
+            yaml_path, plan, request.pipeline_id,
+        )
+    except import_plan.PlanError as exc:
+        state.finalize_run(run_id, "failed", f"Entity import plan: {exc}")
+        return
+
+    import_opts = _entity_run_import_options(plan, pipeline, dry_run=bool(request.dry_run))
 
     def _log_callback(message: str) -> None:
         state.append_log(run_id, message)
+
+    for note in notes:
+        _log_callback(f"[plan] {note}")
 
     settings = _RunSettings(
         token=token,
@@ -4513,12 +4651,20 @@ async def _execute_run(run_id: str, request: RunRequest) -> None:
         use_ssl=use_ssl,
         skip_verify=skip_verify,
         log_callback=_log_callback,
+        import_options=import_opts,
+        restore_function_collection=restore_fc,
+        planned_temp=planned_temp,
     )
 
     loop = asyncio.get_running_loop()
 
     def _run_sync() -> dict:
-        return _run_entity_creation(request, settings, yaml_path)
+        try:
+            return _run_entity_creation(request, settings, yaml_for_run)
+        finally:
+            if planned_temp is not None:
+                with contextlib.suppress(OSError):
+                    planned_temp.unlink(missing_ok=True)
 
     result = await loop.run_in_executor(None, _run_sync)
 
@@ -4530,6 +4676,17 @@ def _start_run(request: RunRequest) -> ApiMessage:
     if not state.token:
         raise HTTPException(status_code=401, detail=AUTH_REQUIRED)
 
+    # Refuse a bad plan before the run starts (empty plan == current behaviour).
+    plan = _load_entity_plan_or_400(request.plan)
+    if not state.get_upload_path(request.yaml_file_id):
+        raise HTTPException(status_code=400, detail=UPLOADED_YAML_NOT_FOUND)
+    # Cheap shape check: apply against the uploaded YAML so include/unknown tables fail fast.
+    try:
+        yaml_path = state.get_upload_path(request.yaml_file_id)
+        _prepare_entity_yaml_for_run(yaml_path, plan, request.pipeline_id)
+    except import_plan.PlanError as exc:
+        raise HTTPException(status_code=400, detail=f"Entity import plan: {exc}") from exc
+
     try:
         run_status = state.start_run()
     except RuntimeError as exc:
@@ -4538,7 +4695,7 @@ def _start_run(request: RunRequest) -> ApiMessage:
     task = asyncio.create_task(_execute_run(run_status.run_id, request))
     _BACKGROUND_TASKS.add(task)
     task.add_done_callback(_BACKGROUND_TASKS.discard)
-    return ApiMessage(message="Entity creation started")
+    return ApiMessage(message="Entity creation started", planUsed=plan.to_dict() if not plan.empty else None)
 
 
 async def upload_certificate(
@@ -4593,12 +4750,85 @@ async def upload_certificate(
         ) from e
 
 
+def _existing_entity_sources(pipeline_id: str) -> set:
+    """``{(schema, table)}`` already in the pipeline. GET-only; empty set when listing fails."""
+    try:
+        listing = corehub.fetch_core_hub(
+            f"/pipelines/{pipeline_id}/entities", token=state.token,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.info("Entity preview: could not list existing entities: %s", exc)
+        return set()
+    sources = set()
+    for entity in listing if isinstance(listing, list) else []:
+        if not isinstance(entity, dict):
+            continue
+        schema = entity.get("sourceSchema") or entity.get("schema") or ""
+        table = entity.get("sourceTable") or entity.get("table") or entity.get("name") or ""
+        if schema and table:
+            sources.add((str(schema).casefold(), str(table).casefold()))
+    return sources
+
+
+def _yaml_config_for_entity_preview(body: EntityPlanBody):
+    """YAML config for draft/preview: uploaded file, or a Bulk table list."""
+    if body.yaml_file_id:
+        yaml_path = state.get_upload_path(body.yaml_file_id)
+        if not yaml_path:
+            raise HTTPException(status_code=400, detail=UPLOADED_YAML_NOT_FOUND)
+        return load_yaml_config(str(yaml_path))
+    if body.table_names is not None and body.source_schema:
+        return {
+            body.source_schema: {
+                "target": body.target_schema or body.source_schema,
+                "tables": {"whitelist": list(body.table_names), "custom": {}},
+            }
+        }
+    raise HTTPException(
+        status_code=400,
+        detail="Provide yamlFileId, or sourceSchema with tableNames for a Bulk preview",
+    )
+
+
+def entity_plan_draft(body: EntityPlanBody) -> Dict[str, Any]:
+    """Draft entity Customize plan JSON (every table included). Nothing is sent to Core Hub."""
+    _require_session()
+    yaml_config = _yaml_config_for_entity_preview(body)
+    return import_plan.draft_entity(yaml_config, body.pipeline_id)
+
+
+async def entity_plan_preview(body: EntityPlanBody) -> Dict[str, Any]:
+    """Read-only preview of an entity Customize plan. Core Hub is GET-only (existing entities)."""
+    _require_session()
+    plan = _load_entity_plan_or_400(body.plan)
+    yaml_config = _yaml_config_for_entity_preview(body)
+    try:
+        existing = await run_in_threadpool(_existing_entity_sources, body.pipeline_id)
+        return await run_in_threadpool(
+            entity_plan_runtime.preview_payload,
+            yaml_config=yaml_config,
+            plan=plan,
+            pipeline_id=body.pipeline_id,
+            existing_sources=existing,
+        )
+    except import_plan.PlanError as exc:
+        raise HTTPException(status_code=400, detail=f"Entity import plan: {exc}") from exc
+
+
 def _register_run_routes(app: FastAPI) -> None:
     """The entity creation run and the agent certificate upload routes."""
 
     @app.post("/api/run", responses=_RUN_RESPONSES)
     async def start_run(request: RunRequest) -> ApiMessage:
         return _start_run(request)
+
+    @app.post("/api/entities/plan/draft", responses=_RUN_RESPONSES)
+    async def draft_entity_plan(body: EntityPlanBody) -> Dict[str, Any]:
+        return entity_plan_draft(body)
+
+    @app.post("/api/entities/plan/preview", responses=_RUN_RESPONSES)
+    async def preview_entity_plan(body: EntityPlanBody) -> Dict[str, Any]:
+        return await entity_plan_preview(body)
 
     app.add_api_route(
         "/api/agent/certificate/upload", upload_certificate, methods=["POST"], responses=_CERTIFICATE_RESPONSES

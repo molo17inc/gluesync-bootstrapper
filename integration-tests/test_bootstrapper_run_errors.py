@@ -180,8 +180,9 @@ class AutomatorRunTests(unittest.TestCase):
              mock.patch.object(corehub, "create_entities", return_value=result):
             payload = corehub.run_create_entities_for_tables(
                 token="tok", base_url="http://test", pipeline_id="pipe", source_schema="src", target_schema="tgt",
-                source_type="SQL", target_type="SQL", table_names=["PARTS"], skip_errors=True, chunk_size=50,
+                source_type="SQL", target_type="SQL", table_names=["PARTS"],
                 enable_scheduling=False, create_tables=False, use_ssl=False, skip_verify=False,
+                options=corehub.EntityTablesRunOptions(skip_errors=True, chunk_size=50),
             )
         self.assertFalse(payload["success"])
         self.assertIn("MultiTable chain c1: SYNCED_AT has no expression", payload["error"])
