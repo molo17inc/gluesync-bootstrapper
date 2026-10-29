@@ -57,6 +57,7 @@ from create_all_entities import (
 )
 import create_user_defined_functions
 import function_collection
+import import_options
 import ai_settings
 from export_template_from_corehub import (
     fetch_pipeline_entities,
@@ -481,12 +482,17 @@ def run_create_entities_for_tables(
     use_ssl: Optional[bool],
     skip_verify: Optional[bool],
     chronos_token: Optional[str] = None,
+    entity_import_options: Optional[Any] = None,
+    yaml_config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Create entities only for the specified source tables.
 
     This is a bulk helper used by the Automator "Bulk operations" UI. It
     mirrors run_create_entities, but restricts the processing to the
     user-selected subset of tables instead of all discovered tables.
+
+    ``entity_import_options`` / ``yaml_config``: entity Customize plan (remap, on-existing, dry-run,
+    overrides). Omitted = current behaviour.
     """
 
     set_scheduling_enabled(enable_scheduling)
@@ -500,9 +506,10 @@ def run_create_entities_for_tables(
         use_ssl=use_ssl,
         skip_verify=skip_verify,
     )
-    if inferred_target_type and inferred_target_type.upper() == "NOSQL":
+    # Object store / streaming / NoSQL: never CREATE TABLE (same helper as run_create_entities).
+    if _is_nosql_target(inferred_target_type):
         logger.info(
-            "Pipeline %s has a NoSQL target (%s) - disabling table creation",
+            "Pipeline %s has a non-RDBMS target (%s) - disabling table creation",
             pipeline_id,
             inferred_target_type,
         )
@@ -586,21 +593,21 @@ def run_create_entities_for_tables(
         # pass the filtered tables list. YAML configuration is optional here;
         # when omitted, create_entities will use discovery defaults.
         with redirect_stdout(buffer):
-            result = create_entities(
-                token,
-                pipeline_id,
-                source_schema,
-                target_schema,
-                filtered_tables,
-                raw_source_id,
-                raw_target_id,
-                source_type,
-                target_type,
-                yaml_config=None,
-                skip_errors=skip_errors,
-                chunk_size=chunk_size,
-                chronos_token=chronos_token,
-            )
+            if entity_import_options is not None:
+                with import_options.use(entity_import_options):
+                    result = create_entities(
+                        token, pipeline_id, source_schema, target_schema, filtered_tables,
+                        raw_source_id, raw_target_id, source_type, target_type,
+                        yaml_config=yaml_config, skip_errors=skip_errors, chunk_size=chunk_size,
+                        chronos_token=chronos_token,
+                    )
+            else:
+                result = create_entities(
+                    token, pipeline_id, source_schema, target_schema, filtered_tables,
+                    raw_source_id, raw_target_id, source_type, target_type,
+                    yaml_config=yaml_config, skip_errors=skip_errors, chunk_size=chunk_size,
+                    chronos_token=chronos_token,
+                )
 
         logs = buffer.getvalue().splitlines()
         errors = (result or {}).get("errors") or []

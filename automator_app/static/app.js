@@ -1,4 +1,5 @@
 import { initCustomImport } from './custom_import.js';
+import { initEntityImport } from './entity_import.js';
 const api = {
   async getState() {
     const res = await fetch('/api/state');
@@ -1621,6 +1622,8 @@ function bindEvents() {
       createTables: document.getElementById('create-tables').checked,
       useSsl: document.getElementById('use-ssl').checked,
       skipVerify: document.getElementById('skip-verify').checked,
+      ...((typeof entityImport !== 'undefined' && entityImport.planPayload)
+        ? entityImport.planPayload() : {}),
     };
 
     ui.setConfigMessage('Starting…');
@@ -1794,6 +1797,16 @@ function bindEvents() {
       }
     });
   }
+
+  const entityImport = initEntityImport({
+    root: document.getElementById('entity-customize-root'),
+    getContext: () => ({
+      pipelineId: document.getElementById('pipeline-id')?.value,
+      yamlFileId: stateManager.yamlFileId,
+    }),
+    setMessage: (msg, kind) => ui.setConfigMessage(msg, kind),
+    log: logActivity,
+  });
 
   initCustomImport({
     fileInput: importAllInput,
