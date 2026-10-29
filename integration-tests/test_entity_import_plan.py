@@ -258,3 +258,46 @@ class PreviewPayload(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CaseInsensitiveAndParity(unittest.TestCase):
+    def test_include_casefold_matching(self):
+        plan = _plan(pipelines={"pipe": {"entities": {"include": ["sch01.tab001"]}}})
+        planned, _n, _p = import_plan.apply_entity(copy.deepcopy(SYNTH), plan, "pipe")
+        ids = [e["id"] for e in import_plan.entity_ids(planned)]
+        self.assertEqual(ids, ["SCH01.TAB001"])
+
+    def test_filter_bulk_casefold(self):
+        plan = _plan(pipelines={"p": {"entities": {"include": ["sch.t1"]}}})
+        names = entity_plan_runtime.filter_table_names(["T1", "T2"], plan, "p", "SCH")
+        self.assertEqual(names, ["T1"])
+
+    def test_empty_plan_import_options_is_env_base(self):
+        sentinel = import_options.ImportOptions()
+        with mock.patch.object(import_options, "from_env_if_requested", return_value=sentinel):
+            plan = import_plan.ImportPlan()
+            pipeline = import_plan.entity_pipeline(plan, "pipe")
+            got = automator._entity_run_import_options(plan, pipeline, dry_run=False)
+            self.assertIs(got, sentinel)
+
+    def test_prepare_yaml_empty_plan_same_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "e.yaml"
+            path.write_text(yaml.safe_dump(SYNTH), encoding="utf-8")
+            out, notes, pipeline, temp = automator._prepare_entity_yaml_for_run(
+                path, import_plan.ImportPlan(), "pipe",
+            )
+            self.assertIs(out, path)
+            self.assertEqual(notes, [])
+            self.assertIsNone(temp)
+
+    def test_refuse_unknown_pipeline_key(self):
+        with self.assertRaises(import_plan.PlanError) as ctx:
+            import_plan.load_entity({"pipelines": {"p": {"notARealKey": 1}}})
+        self.assertIn("notARealKey", str(ctx.exception))
+
+    def test_entity_pipeline_relabels_old_id(self):
+        plan = _plan(pipelines={"backup-id": {"entities": {"include": ["SCH01.TAB001"]}}})
+        pipeline = import_plan.entity_pipeline(plan, "live-pipe")
+        self.assertEqual(pipeline.old_id, "live-pipe")
+        self.assertEqual(pipeline.include, ["SCH01.TAB001"])

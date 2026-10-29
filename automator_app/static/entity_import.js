@@ -59,6 +59,10 @@ export function buildEntityPlan(panel, pipelineId) {
   return plan;
 }
 
+export function planIsEmpty(plan) {
+  return !plan || (!Object.keys(plan.defaults || {}).length && !Object.keys(plan.pipelines || {}).length);
+}
+
 export function initEntityImport({ root, getContext, setMessage, log }) {
   if (!root) return { currentPlan() { return null; }, isDryRun() { return false; } };
 
@@ -108,10 +112,6 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
 
   function isDryRun() {
     return Boolean(panel.querySelector('#entity-plan-dry-run')?.checked);
-  }
-
-  function planIsEmpty(plan) {
-    return !plan || (!Object.keys(plan.defaults || {}).length && !Object.keys(plan.pipelines || {}).length);
   }
 
   btnRow.querySelector('#entity-plan-draft-btn').addEventListener('click', async () => {

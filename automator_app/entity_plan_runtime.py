@@ -76,7 +76,7 @@ def filter_table_names(table_names: List[str], plan: import_plan.ImportPlan, pip
             "tables": {"whitelist": list(table_names), "custom": {}},
         }
     }
-    selected = set(i.casefold() for i in import_plan.selected_ids(yaml_config, pipeline))
+    selected = {i.casefold() for i in import_plan.selected_ids(yaml_config, pipeline)}
     return [name for name, eid in zip(table_names, ids) if eid.casefold() in selected]
 
 

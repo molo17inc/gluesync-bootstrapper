@@ -1622,7 +1622,7 @@ function bindEvents() {
       createTables: document.getElementById('create-tables').checked,
       useSsl: document.getElementById('use-ssl').checked,
       skipVerify: document.getElementById('skip-verify').checked,
-      ...((typeof entityImport !== 'undefined' && entityImport.planPayload)
+      ...(entityImport?.planPayload !== undefined
         ? entityImport.planPayload() : {}),
     };
 

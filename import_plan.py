@@ -716,16 +716,33 @@ def entity_pipeline(plan: ImportPlan, pipeline_id: str) -> PipelinePlan:
     The entry may be keyed by the Automator pipeline id or by any single label (e.g. a backup id); the
     returned plan always uses ``pipeline_id`` as ``old_id`` so error messages name the selected pipeline.
     """
+    pid = str(pipeline_id)
     if not plan.pipelines:
-        return PipelinePlan(old_id=str(pipeline_id))
-    if str(pipeline_id) in plan.pipelines:
-        pipeline = plan.pipelines[str(pipeline_id)]
+        return PipelinePlan(old_id=pid)
+    if pid in plan.pipelines:
+        pipeline = plan.pipelines[pid]
     else:
         # One entry under any key (e.g. "entity" or a backup id): apply it to the selected pipeline.
         pipeline = next(iter(plan.pipelines.values()))
-    if pipeline.old_id == str(pipeline_id):
+    if pipeline.old_id == pid:
         return pipeline
-    return replace(pipeline, old_id=str(pipeline_id))
+    # Rebuild so the annotated return type stays PipelinePlan (S5886: dataclasses.replace).
+    return PipelinePlan(
+        old_id=pid,
+        import_=pipeline.import_,
+        name=pipeline.name,
+        resume_into=pipeline.resume_into,
+        agents=pipeline.agents,
+        remap=pipeline.remap,
+        remap_raw=pipeline.remap_raw,
+        table_target_schema=pipeline.table_target_schema,
+        include=pipeline.include,
+        exclude=pipeline.exclude,
+        overrides=pipeline.overrides,
+        parts=pipeline.parts,
+        on_existing_entity=pipeline.on_existing_entity,
+        on_existing_pipeline=pipeline.on_existing_pipeline,
+    )
 
 
 def draft_entity(yaml_config, pipeline_id: str) -> Dict[str, Any]:

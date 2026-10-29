@@ -8,7 +8,7 @@ from pathlib import Path
 JS = Path(__file__).resolve().parents[1] / "automator_app" / "static" / "entity_import.js"
 
 SCRIPT = r"""
-import { buildEntityPlan } from './entity_import.mjs';
+import { buildEntityPlan, planIsEmpty } from './entity_import.mjs';
 
 // Minimal DOM for buildEntityPlan (no full document)
 class FakeEl {
@@ -52,6 +52,8 @@ emptyPanel._kids['[data-exclude]'] = { value: '' };
 const empty = buildEntityPlan(emptyPanel, 'pipe-1');
 assert(Object.keys(empty.defaults).length === 0, 'empty defaults');
 assert(Object.keys(empty.pipelines).length === 0, 'empty pipelines');
+assert(planIsEmpty(empty), 'planIsEmpty empty');
+assert(!planIsEmpty(plan), 'planIsEmpty filled');
 console.log('ok');
 """
 

@@ -148,12 +148,11 @@ class RunCreateEntitiesForTablesTests(unittest.TestCase):
                 source_type="SQL",
                 target_type="SQL",
                 table_names=["A", "C"],
-                skip_errors=False,
-                chunk_size=50,
                 enable_scheduling=False,
                 create_tables=False,
                 use_ssl=False,
                 skip_verify=False,
+                options=corehub.EntityTablesRunOptions(skip_errors=False, chunk_size=50),
             )
 
         self.assertTrue(result["success"])
@@ -190,12 +189,11 @@ class RunCreateEntitiesForTablesTests(unittest.TestCase):
                 source_type="SQL",
                 target_type="SQL",
                 table_names=["A"],
-                skip_errors=False,
-                chunk_size=50,
                 enable_scheduling=False,
                 create_tables=True,  # User asked for table creation
                 use_ssl=False,
                 skip_verify=False,
+                options=corehub.EntityTablesRunOptions(skip_errors=False, chunk_size=50),
             )
 
         self.assertTrue(result["success"])
