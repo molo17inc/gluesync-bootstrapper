@@ -709,14 +709,21 @@ def _source_custom_properties(source_ae: Dict[str, Any]) -> Dict[str, Any]:
     return exported
 
 
-def _single_source_location(entity_name: str, source_table: Dict[str, Any]) -> Tuple[Any, Any]:
+def _single_source_location(
+    entity_name: str,
+    source_table: Dict[str, Any],
+    source_entity_object: Optional[Dict[str, Any]] = None,
+) -> Tuple[Any, Any]:
     """Source schema and table name of a SingleTable/NoSqlEntity entity.
 
-    Fallbacks from entityName if table metadata missing. Split at the first dot only so table names that
-    themselves contain dots (e.g. "my.table") are preserved intact.
+    Prefer ``table.schema`` / ``table.name`` (RDBMS). For NoSQL sources CoreHub puts the
+    scope/collection on ``entityObject`` instead of ``table``, so fall back to those.
+    Last resort: split ``entityName`` at the first dot (table names that themselves contain
+    dots stay intact).
     """
-    source_schema = source_table.get("schema")
-    source_table_name = source_table.get("name")
+    source_entity_object = source_entity_object or {}
+    source_schema = source_table.get("schema") or source_entity_object.get("scope")
+    source_table_name = source_table.get("name") or source_entity_object.get("collection")
     if not source_schema or not source_table_name:
         parts = entity_name.split(".", 1)
         if len(parts) >= 2:
@@ -1095,10 +1102,13 @@ def _process_single_entity(
     source_table = source_ae.get("table", {}) or {}
     target_table = target_ae.get("table", {}) or {}
 
-    # For NoSQL entities, also check entityObject which contains collection name
+    # For NoSQL entities, entityObject holds scope/collection (source and/or target)
+    source_entity_object = source_ae.get("entityObject", {}) or {}
     target_entity_object = target_ae.get("entityObject", {}) or {}
 
-    source_schema, source_table_name = _single_source_location(entity_name, source_table)
+    source_schema, source_table_name = _single_source_location(
+        entity_name, source_table, source_entity_object
+    )
     if not source_schema or not source_table_name:
         logger.warning(f"Unable to determine source schema/table for entity {entity_name}. Skipping.")
         return
