@@ -1,5 +1,6 @@
 // Entity Customize (single-pipeline plan subset): picker, include/exclude, parts, onExisting, dryRun.
 // Reuses the same plan JSON as backup Customize minus agents/globals/resumeInto/name. No passwords.
+// Per-entity target schema/table: New (editable) or Existing (discovery dropdown).
 
 const PARTS = [
   ['udfs', 'UDFs'],
@@ -43,11 +44,28 @@ function advancedIncludeExclude(panel) {
   return { include, exclude, used: include.length > 0 || exclude.length > 0 };
 }
 
+/** Resolve effective target for an entity from overrides Map/object or YAML defaults. */
+export function resolveTarget(entity, overrides) {
+  const ov = overrides instanceof Map ? overrides.get(entity.id) : overrides?.[entity.id];
+  const targetSchema = String(ov?.targetSchema ?? entity.targetSchema ?? '').trim();
+  const targetTable = String(ov?.targetTable ?? entity.targetTable ?? '').trim();
+  const mode = ov?.mode === 'existing' ? 'existing' : 'new';
+  return { targetSchema, targetTable, mode };
+}
+
+/** True when override differs from the YAML-default target. */
+export function targetDiffersFromDefault(entity, resolved) {
+  const defSchema = String(entity.targetSchema || '').trim();
+  const defTable = String(entity.targetTable || '').trim();
+  return resolved.targetSchema !== defSchema || resolved.targetTable !== defTable;
+}
+
 /**
  * Build the plan from the panel.
  * @param selectedIds Set|null  null = picker not loaded (omit include); Set of exact ids when loaded.
+ * @param targetOverrides Map|object|null  per-entity {targetSchema,targetTable,mode}
  */
-export function buildEntityPlan(panel, pipelineId, loadedEntities, selectedIds) {
+export function buildEntityPlan(panel, pipelineId, loadedEntities, selectedIds, targetOverrides) {
   const plan = { version: 1, defaults: {}, pipelines: {} };
   const entry = {};
   const onExisting = panel.querySelector('[data-on-existing]')?.value;
@@ -70,6 +88,21 @@ export function buildEntityPlan(panel, pipelineId, loadedEntities, selectedIds) 
     }
   }
 
+  const overrideMap = {};
+  (loadedEntities || []).forEach((entity) => {
+    if (selectedIds && !selectedIds.has(entity.id)) return;
+    const resolved = resolveTarget(entity, targetOverrides);
+    if (!targetDiffersFromDefault(entity, resolved)) return;
+    const piece = {};
+    if (resolved.targetSchema) piece.targetSchema = resolved.targetSchema;
+    if (resolved.targetTable) piece.targetTable = resolved.targetTable;
+    if (Object.keys(piece).length) overrideMap[entity.id] = piece;
+  });
+  if (Object.keys(overrideMap).length) {
+    entry.entities = entry.entities || {};
+    entry.entities.overrides = overrideMap;
+  }
+
   if (Object.keys(entry).length) plan.pipelines[pipelineId || 'entity'] = entry;
   return plan;
 }
@@ -78,12 +111,28 @@ export function planIsEmpty(plan) {
   return !plan || (!Object.keys(plan.defaults || {}).length && !Object.keys(plan.pipelines || {}).length);
 }
 
-export function selectionError(panel, loadedEntities, selectedIds) {
+/** Validate picker selection and per-entity target names (empty / duplicate new targets). */
+export function selectionError(panel, loadedEntities, selectedIds, targetOverrides) {
   const advanced = advancedIncludeExclude(panel);
   if (advanced.used) return null;
   if (!loadedEntities?.length) return null;
   if (!selectedIds?.size) {
     return 'Select at least one entity (or use Advanced include), or Select all to import every table';
+  }
+  const seen = new Map();
+  for (let i = 0; i < loadedEntities.length; i += 1) {
+    const entity = loadedEntities[i];
+    if (!selectedIds.has(entity.id)) continue;
+    const resolved = resolveTarget(entity, targetOverrides);
+    if (!resolved.targetTable) {
+      return `Entity ${entity.id}: target table (or collection) name is required`;
+    }
+    const key = `${resolved.targetSchema}.${resolved.targetTable}`.toLowerCase();
+    if (seen.has(key)) {
+      return `Duplicate target ${resolved.targetSchema || '(no schema)'}.${resolved.targetTable}`
+        + ` for ${seen.get(key)} and ${entity.id}`;
+    }
+    seen.set(key, entity.id);
   }
   return null;
 }
@@ -108,7 +157,6 @@ function partialChains(loaded, checkedSet) {
   return out;
 }
 
-
 function rowMatchesFilter(entity, filter) {
   if (!filter) return true;
   const hay = [entity.id, entity.entityName, entity.source,
@@ -127,11 +175,39 @@ function groupBySchema(entities) {
   return groups;
 }
 
+function sourceTableParts(entity) {
+  const source = String(entity.source || '');
+  const dot = source.indexOf('.');
+  if (dot < 0) return { schema: entity.schema || '', table: source || entity.id || '' };
+  return { schema: source.slice(0, dot), table: source.slice(dot + 1) };
+}
+
+function columnMismatchNote(sourceCols, targetCols) {
+  if (!sourceCols || !targetCols) return 'Column check unverified (discovery unavailable).';
+  if (!sourceCols.length && !targetCols.length) {
+    return 'Column check unverified (no columns returned).';
+  }
+  const src = new Set(sourceCols.map((c) => c.toLowerCase()));
+  const tgt = new Set(targetCols.map((c) => c.toLowerCase()));
+  const missingOnTarget = [...src].filter((c) => !tgt.has(c));
+  const extraOnTarget = [...tgt].filter((c) => !src.has(c));
+  if (!missingOnTarget.length && !extraOnTarget.length) return '';
+  const bits = [];
+  if (missingOnTarget.length) bits.push(`missing on target: ${missingOnTarget.slice(0, 8).join(', ')}`);
+  if (extraOnTarget.length) bits.push(`extra on target: ${extraOnTarget.slice(0, 8).join(', ')}`);
+  return `Column mismatch — ${bits.join('; ')}`;
+}
+
 export function initEntityImport({ root, getContext, setMessage, log }) {
   if (!root) return { currentPlan() { return null; }, isDryRun() { return false; } };
 
   let loadedEntities = [];
   let selectedIds = null; // null until first successful load; then a Set of exact ids
+  const targetOverrides = new Map(); // id -> {targetSchema, targetTable, mode}
+  let targetSchemas = []; // discovery cache
+  const tablesBySchema = new Map(); // schema -> string[]
+  const columnWarnById = new Map(); // id -> warn string
+  let discoveryOk = true;
 
   const panel = el('div', { className: 'entity-import', id: 'entity-customize-panel' });
   root.append(panel);
@@ -141,6 +217,11 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
     ...PARTS.map(([key, label]) => el('label', { className: 'checkbox' },
       el('input', { type: 'checkbox', dataset: { part: key }, checked: true }),
       ` ${label}`)));
+
+  const createTablesHint = el('p', { className: 'hint-text entity-create-hint' },
+    'Create missing tables is global (CREATE IF NOT EXISTS). '
+    + 'Picking an existing target for an entity routes data there; that entity does not need a new table. '
+    + 'New names still respect the global checkbox.');
 
   const onExisting = el('label', {}, 'On existing entity ',
     el('select', { dataset: { onExisting: '1' } },
@@ -191,13 +272,14 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
     el('h3', {}, 'Customize entity creation'),
     el('p', { className: 'hint-text' },
       'Optional plan for this run only. Empty choices keep current behaviour. '
-      + 'Pick entities below after upload; Agents, globals, resumeInto and pipeline rename are backup Customize only.'),
-    partsRow, onExisting, picker, advanced, dryRun, btnRow, previewOut,
+      + 'Pick entities below after upload; Agents, globals, resumeInto and pipeline rename are backup Customize only. '
+      + 'Per row you can rename the target (New) or pick an existing target table/collection (Existing).'),
+    partsRow, createTablesHint, onExisting, picker, advanced, dryRun, btnRow, previewOut,
   );
 
   function currentPlan() {
     const ctx = getContext() || {};
-    return buildEntityPlan(panel, ctx.pipelineId, loadedEntities, selectedIds);
+    return buildEntityPlan(panel, ctx.pipelineId, loadedEntities, selectedIds, targetOverrides);
   }
 
   function isDryRun() {
@@ -209,12 +291,94 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
     const n = selectedIds ? selectedIds.size : 0;
     pickerCount.textContent = total ? `${n} of ${total} selected` : '';
     const partial = selectedIds ? partialChains(loadedEntities, selectedIds) : [];
-    pickerWarn.textContent = partial.length
-      ? `Warning: MultiTable chain(s) partly selected: ${partial.join(', ')}. `
-        + 'Chains should be selected or deselected together.'
-      : '';
+    const bits = [];
+    if (partial.length) {
+      bits.push(`Warning: MultiTable chain(s) partly selected: ${partial.join(', ')}. `
+        + 'Chains should be selected or deselected together.');
+    }
+    if (!discoveryOk) {
+      bits.push('Target discovery unavailable — enter schema/table (or collection) as free text.');
+    }
+    pickerWarn.textContent = bits.join(' ');
   }
 
+  function setOverride(entityId, patch) {
+    const prev = targetOverrides.get(entityId) || {};
+    const next = { ...prev, ...patch };
+    targetOverrides.set(entityId, next);
+  }
+
+  async function ensureTargetSchemas(pipelineId) {
+    if (targetSchemas.length) return targetSchemas;
+    try {
+      const res = await fetch(`/api/bulk/target-schemas?pipelineId=${encodeURIComponent(pipelineId)}`);
+      const body = await jsonOrThrow(res, 'Could not list target schemas');
+      targetSchemas = body.schemas || [];
+      discoveryOk = true;
+    } catch (err) {
+      discoveryOk = false;
+      targetSchemas = [];
+      log?.('Config', `Target schema discovery failed: ${err.message}`);
+    }
+    return targetSchemas;
+  }
+
+  async function ensureTargetTables(pipelineId, schema) {
+    const key = schema || '';
+    if (tablesBySchema.has(key)) return tablesBySchema.get(key);
+    try {
+      const qs = new URLSearchParams({ pipelineId, schema: key });
+      const res = await fetch(`/api/bulk/target-tables?${qs}`);
+      const body = await jsonOrThrow(res, 'Could not list target tables');
+      const tables = body.tables || [];
+      tablesBySchema.set(key, tables);
+      return tables;
+    } catch (err) {
+      log?.('Config', `Target table discovery failed for ${key}: ${err.message}`);
+      tablesBySchema.set(key, []);
+      return [];
+    }
+  }
+
+  async function refreshColumnWarn(entity) {
+    const resolved = resolveTarget(entity, targetOverrides);
+    if (resolved.mode !== 'existing' || !resolved.targetTable) {
+      columnWarnById.delete(entity.id);
+      return;
+    }
+    const ctx = getContext() || {};
+    if (!ctx.pipelineId) return;
+    const src = sourceTableParts(entity);
+    let sourceCols = null;
+    let targetCols = null;
+    try {
+      const qs = new URLSearchParams({
+        pipelineId: ctx.pipelineId, schema: src.schema, table: src.table,
+      });
+      const res = await fetch(`/api/bulk/columns?${qs}`);
+      const body = await jsonOrThrow(res, 'source columns');
+      sourceCols = body.columns || [];
+    } catch (_err) {
+      sourceCols = null;
+    }
+    try {
+      const qs = new URLSearchParams({
+        pipelineId: ctx.pipelineId,
+        schema: resolved.targetSchema,
+        table: resolved.targetTable,
+      });
+      const res = await fetch(`/api/bulk/target-columns?${qs}`);
+      const body = await jsonOrThrow(res, 'target columns');
+      targetCols = body.columns || [];
+    } catch (_err) {
+      targetCols = null;
+    }
+    const note = columnMismatchNote(sourceCols, targetCols);
+    if (note) columnWarnById.set(entity.id, note);
+    else columnWarnById.delete(entity.id);
+    const warnEl = panel.querySelector(`[data-col-warn="${CSS.escape(entity.id)}"]`);
+    if (warnEl) warnEl.textContent = note || '';
+  }
 
   function onBoxChange(entity, checked) {
     if (!selectedIds) selectedIds = new Set();
@@ -230,6 +394,128 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
     updateCount();
   }
 
+  function buildTargetControls(entity) {
+    const resolved = resolveTarget(entity, targetOverrides);
+    const wrap = el('div', { className: 'entity-target-cell' });
+    const schemaInput = el('input', {
+      type: 'text',
+      className: 'entity-target-schema',
+      value: resolved.targetSchema,
+      list: 'entity-target-schema-list',
+      placeholder: 'schema',
+      dataset: { targetSchemaFor: entity.id },
+      title: 'Target schema (or NoSQL database)',
+    });
+    const modeSelect = el('select', {
+      className: 'entity-target-mode',
+      dataset: { targetModeFor: entity.id },
+      title: 'New table name, or pick an existing target table/collection',
+    },
+      el('option', { value: 'new', selected: resolved.mode === 'new' }, 'New'),
+      el('option', { value: 'existing', selected: resolved.mode === 'existing' }, 'Existing'),
+    );
+    const tableInput = el('input', {
+      type: 'text',
+      className: 'entity-target-table',
+      value: resolved.targetTable,
+      placeholder: 'table / collection',
+      dataset: { targetTableFor: entity.id },
+      title: 'Target table or collection name',
+    });
+    const tableSelect = el('select', {
+      className: 'entity-target-table-select',
+      dataset: { targetTableSelectFor: entity.id },
+      title: 'Existing target tables/collections from discovery',
+    });
+    const warn = el('div', {
+      className: 'entity-target-col-warn',
+      dataset: { colWarn: entity.id },
+    }, columnWarnById.get(entity.id) || '');
+
+    const showMode = () => {
+      const mode = modeSelect.value === 'existing' ? 'existing' : 'new';
+      tableInput.hidden = mode === 'existing' && discoveryOk;
+      tableSelect.hidden = mode !== 'existing' || !discoveryOk;
+      if (mode === 'existing' && !discoveryOk) {
+        tableInput.hidden = false;
+        tableSelect.hidden = true;
+      }
+    };
+    showMode();
+
+    const persist = () => {
+      const mode = modeSelect.value === 'existing' ? 'existing' : 'new';
+      const tableVal = mode === 'existing' && !tableSelect.hidden
+        ? (tableSelect.value || '')
+        : (tableInput.value || '');
+      setOverride(entity.id, {
+        mode,
+        targetSchema: schemaInput.value || '',
+        targetTable: tableVal,
+      });
+      refreshColumnWarn(entity);
+    };
+
+    schemaInput.addEventListener('change', () => {
+      persist();
+      const ctx = getContext() || {};
+      if (modeSelect.value === 'existing' && ctx.pipelineId) {
+        ensureTargetTables(ctx.pipelineId, schemaInput.value || '').then((tables) => {
+          fillTableSelect(tableSelect, tables, resolveTarget(entity, targetOverrides).targetTable);
+          persist();
+        });
+      }
+    });
+    schemaInput.addEventListener('input', persist);
+    modeSelect.addEventListener('change', () => {
+      showMode();
+      persist();
+      const ctx = getContext() || {};
+      if (modeSelect.value === 'existing' && ctx.pipelineId) {
+        ensureTargetTables(ctx.pipelineId, schemaInput.value || '').then((tables) => {
+          fillTableSelect(tableSelect, tables, resolveTarget(entity, targetOverrides).targetTable);
+          persist();
+        });
+      }
+    });
+    tableInput.addEventListener('input', persist);
+    tableSelect.addEventListener('change', persist);
+
+    if (resolved.mode === 'existing') {
+      const ctx = getContext() || {};
+      if (ctx.pipelineId) {
+        ensureTargetTables(ctx.pipelineId, resolved.targetSchema).then((tables) => {
+          fillTableSelect(tableSelect, tables, resolved.targetTable);
+        });
+      }
+    }
+
+    wrap.append(
+      el('div', { className: 'entity-target-row' },
+        el('span', { className: 'entity-target-arrow' }, `${entity.source || ''} → `),
+        schemaInput,
+        el('span', {}, '.'),
+        modeSelect,
+        tableInput,
+        tableSelect,
+      ),
+      warn,
+    );
+    return wrap;
+  }
+
+  function fillTableSelect(select, tables, selected) {
+    select.innerHTML = '';
+    select.append(el('option', { value: '' }, tables.length ? '— pick table —' : '— none found —'));
+    tables.forEach((name) => {
+      select.append(el('option', {
+        value: name,
+        selected: name === selected,
+      }, name));
+    });
+    if (selected && tables.includes(selected)) select.value = selected;
+  }
+
   function renderPicker() {
     pickerBody.innerHTML = '';
     const filter = (pickerFilter.value || '').trim().toLowerCase();
@@ -242,6 +528,16 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
     pickerStatus.textContent = filter
       ? `Showing ${visible.length} of ${loadedEntities.length} entities.`
       : `${loadedEntities.length} entities loaded from the export file.`;
+
+    // Shared datalist for target schemas
+    let schemaList = panel.querySelector('#entity-target-schema-list');
+    if (!schemaList) {
+      schemaList = el('datalist', { id: 'entity-target-schema-list' });
+      panel.append(schemaList);
+    }
+    schemaList.innerHTML = '';
+    targetSchemas.forEach((s) => schemaList.append(el('option', { value: s })));
+
     const table = el('table', { className: 'entity-picker-table' });
     table.append(el('thead', {}, el('tr', {},
       el('th', {}, ''),
@@ -272,7 +568,7 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
           el('td', {}, box),
           el('td', {}, nameLabel + chainNote),
           el('td', { className: 'mono' }, entity.id),
-          el('td', {}, `${entity.source} → ${entity.targetSchema}.${entity.targetTable}`),
+          el('td', {}, buildTargetControls(entity)),
           el('td', {}, typeLabel),
           el('td', {}, exists),
         ));
@@ -298,6 +594,8 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
     if (!ctx.pipelineId || !ctx.yamlFileId) {
       loadedEntities = [];
       selectedIds = null;
+      targetOverrides.clear();
+      columnWarnById.clear();
       renderPicker();
       return;
     }
@@ -310,6 +608,11 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
       const preview = await jsonOrThrow(res, 'Could not load entities');
       loadedEntities = preview.entities || [];
       selectedIds = new Set(loadedEntities.map((e) => e.id));
+      targetOverrides.clear();
+      columnWarnById.clear();
+      tablesBySchema.clear();
+      targetSchemas = [];
+      await ensureTargetSchemas(ctx.pipelineId);
       renderPicker();
       log?.('Config', `Loaded ${loadedEntities.length} entities for picker`);
     } catch (err) {
@@ -328,7 +631,7 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
       setMessage?.('Select a pipeline and upload a YAML first', 'error');
       return;
     }
-    const err = selectionError(panel, loadedEntities, selectedIds);
+    const err = selectionError(panel, loadedEntities, selectedIds, targetOverrides);
     if (err) {
       setMessage?.(err, 'error');
       return;
@@ -350,7 +653,7 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
       setMessage?.('Select a pipeline and upload a YAML first', 'error');
       return;
     }
-    const err = selectionError(panel, loadedEntities, selectedIds);
+    const err = selectionError(panel, loadedEntities, selectedIds, targetOverrides);
     if (err) {
       setMessage?.(err, 'error');
       return;
@@ -376,6 +679,11 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
       });
       if (preview.conflicts?.length) lines.push(`Already in pipeline: ${preview.conflicts.join(', ')}`);
       (preview.notes || []).forEach((n) => lines.push(n));
+      const colNotes = [...columnWarnById.entries()].map(([id, note]) => `  ${id}: ${note}`);
+      if (colNotes.length) {
+        lines.push('Column checks:');
+        colNotes.forEach((n) => lines.push(n));
+      }
       previewOut.textContent = lines.join('\n');
       log?.('Config', `Entity plan preview: ${preview.entityCount} entities`);
     } catch (previewErr) {
@@ -388,9 +696,9 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
     currentPlan,
     isDryRun,
     reloadEntities,
-    selectionError: () => selectionError(panel, loadedEntities, selectedIds),
+    selectionError: () => selectionError(panel, loadedEntities, selectedIds, targetOverrides),
     planPayload() {
-      const err = selectionError(panel, loadedEntities, selectedIds);
+      const err = selectionError(panel, loadedEntities, selectedIds, targetOverrides);
       if (err) throw new Error(err);
       const plan = currentPlan();
       if (planIsEmpty(plan) && !isDryRun()) return {};

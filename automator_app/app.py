@@ -458,6 +458,10 @@ class BulkTablesResponse(BaseModel):
     tables: list[str]
 
 
+class BulkColumnsResponse(BaseModel):
+    columns: list[str]
+
+
 class BulkCreateRequest(BaseModel):
     model_config = ConfigDict(validate_by_name=True)
 
@@ -1093,6 +1097,96 @@ def _bulk_list_tables(pipeline_id: str, schema: str) -> BulkTablesResponse:
     return BulkTablesResponse(tables=tables)
 
 
+def _bulk_list_target_schemas(pipeline_id: str) -> BulkSchemasResponse:
+    _require_session()
+
+    try:
+        schemas = corehub.list_target_schemas(
+            token=state.token,
+            base_url=state.base_url,
+            pipeline_id=pipeline_id,
+            use_ssl=state.use_ssl,
+            skip_verify=state.skip_verify,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Failed to list target schemas for pipeline %s", pipeline_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    source_type, target_type = corehub.infer_agent_schema_types(
+        token=state.token,
+        base_url=state.base_url,
+        pipeline_id=pipeline_id,
+        use_ssl=state.use_ssl,
+        skip_verify=state.skip_verify,
+    )
+    return BulkSchemasResponse(schemas=schemas, source_type=source_type, target_type=target_type)
+
+
+def _bulk_list_target_tables(pipeline_id: str, schema: str) -> BulkTablesResponse:
+    _require_session()
+
+    try:
+        tables = corehub.list_target_tables(
+            token=state.token,
+            base_url=state.base_url,
+            pipeline_id=pipeline_id,
+            schema=schema,
+            use_ssl=state.use_ssl,
+            skip_verify=state.skip_verify,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception(
+            "Failed to list target tables for pipeline %s schema %s", pipeline_id, schema
+        )
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return BulkTablesResponse(tables=tables)
+
+
+def _bulk_list_target_columns(pipeline_id: str, schema: str, table: str) -> BulkColumnsResponse:
+    _require_session()
+
+    try:
+        columns = corehub.list_target_columns(
+            token=state.token,
+            base_url=state.base_url,
+            pipeline_id=pipeline_id,
+            schema=schema,
+            table_name=table,
+            use_ssl=state.use_ssl,
+            skip_verify=state.skip_verify,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception(
+            "Failed to list target columns for pipeline %s %s.%s", pipeline_id, schema, table
+        )
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return BulkColumnsResponse(columns=columns)
+
+
+def _bulk_list_source_columns(pipeline_id: str, schema: str, table: str) -> BulkColumnsResponse:
+    _require_session()
+
+    try:
+        columns = corehub.list_source_columns(
+            token=state.token,
+            base_url=state.base_url,
+            pipeline_id=pipeline_id,
+            schema=schema,
+            table_name=table,
+            use_ssl=state.use_ssl,
+            skip_verify=state.skip_verify,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception(
+            "Failed to list source columns for pipeline %s %s.%s", pipeline_id, schema, table
+        )
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return BulkColumnsResponse(columns=columns)
+
+
 def _schema_types_from_pipeline_agents(pipeline_id: str, source_type: str, target_type: str) -> tuple[str, str]:
     """Fill the empty source/target type from the pipeline's agents, as the bulk schemas and template routes do."""
     try:
@@ -1358,6 +1452,34 @@ def _register_bulk_routes(app: FastAPI) -> None:
         pipeline_id: Annotated[str, Query(alias="pipelineId")], schema: str
     ) -> BulkTablesResponse:
         return _bulk_list_tables(pipeline_id, schema)
+
+    @app.get("/api/bulk/target-schemas", responses=_COREHUB_CALL_RESPONSES)
+    async def bulk_list_target_schemas(
+        pipeline_id: Annotated[str, Query(alias="pipelineId")],
+    ) -> BulkSchemasResponse:
+        return _bulk_list_target_schemas(pipeline_id)
+
+    @app.get("/api/bulk/target-tables", responses=_COREHUB_CALL_RESPONSES)
+    async def bulk_list_target_tables(
+        pipeline_id: Annotated[str, Query(alias="pipelineId")], schema: str
+    ) -> BulkTablesResponse:
+        return _bulk_list_target_tables(pipeline_id, schema)
+
+    @app.get("/api/bulk/target-columns", responses=_COREHUB_CALL_RESPONSES)
+    async def bulk_list_target_columns(
+        pipeline_id: Annotated[str, Query(alias="pipelineId")],
+        schema: str,
+        table: str,
+    ) -> BulkColumnsResponse:
+        return _bulk_list_target_columns(pipeline_id, schema, table)
+
+    @app.get("/api/bulk/columns", responses=_COREHUB_CALL_RESPONSES)
+    async def bulk_list_source_columns(
+        pipeline_id: Annotated[str, Query(alias="pipelineId")],
+        schema: str,
+        table: str,
+    ) -> BulkColumnsResponse:
+        return _bulk_list_source_columns(pipeline_id, schema, table)
 
     @app.post("/api/bulk/create", responses=_COREHUB_CALL_RESPONSES)
     async def bulk_create_entities(request: BulkCreateRequest) -> ApiMessage:

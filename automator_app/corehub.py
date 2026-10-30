@@ -752,6 +752,25 @@ def _get_source_agent(token: str, pipeline_id: str) -> Dict[str, Any]:
     raise RuntimeError(f"No SOURCE agent found for pipeline {pipeline_id!r}")
 
 
+def _get_target_agent(token: str, pipeline_id: str) -> Dict[str, Any]:
+    """Return the TARGET agent definition for a pipeline.
+
+    Raises RuntimeError if a suitable agent cannot be found.
+    """
+
+    agents = get_pipeline_agents(token, pipeline_id)
+    if not isinstance(agents, list):
+        raise RuntimeError(f"Unexpected agents payload for pipeline {pipeline_id!r}: {agents!r}")
+
+    for agent in agents:
+        if not isinstance(agent, dict):
+            continue
+        if agent.get("agentType") == "TARGET":
+            return agent
+
+    raise RuntimeError(f"No TARGET agent found for pipeline {pipeline_id!r}")
+
+
 def list_source_schemas(
     *,
     token: str,
@@ -835,6 +854,182 @@ def list_source_tables(
         logger.warning("Unexpected tables discovery response for pipeline %s schema %s: %r", pipeline_id, schema, tables)
 
     return sorted(names)
+
+
+def _parse_schema_names(response: Any, pipeline_id: str) -> list[str]:
+    """Normalize a discovery/schemas payload into a list of schema name strings."""
+    items: list[Any]
+    if isinstance(response, dict):
+        items = response.get("schemas") or response.get("items") or []
+    elif isinstance(response, list):
+        items = response
+    else:
+        logger.warning("Unexpected schemas discovery response for pipeline %s: %r", pipeline_id, response)
+        return []
+
+    schemas: list[str] = []
+    for item in items:
+        name: Optional[str] = None
+        if isinstance(item, str):
+            name = item
+        elif isinstance(item, dict):
+            name = (
+                item.get("schema")
+                or item.get("schemaName")
+                or item.get("name")
+            )
+        if name:
+            schemas.append(str(name))
+    return schemas
+
+
+def _parse_table_names(tables: Any, pipeline_id: str, schema: str) -> list[str]:
+    """Normalize a discovery/tables payload into sorted table name strings."""
+    names: list[str] = []
+    if isinstance(tables, list):
+        for tbl in tables:
+            if isinstance(tbl, str):
+                name = tbl
+            elif isinstance(tbl, dict):
+                name = tbl.get("name") or tbl.get("tableName")
+            else:
+                continue
+            if name:
+                names.append(str(name))
+    else:
+        logger.warning(
+            "Unexpected tables discovery response for pipeline %s schema %s: %r",
+            pipeline_id,
+            schema,
+            tables,
+        )
+    return sorted(names)
+
+
+def _parse_column_names(columns: Any, pipeline_id: str, schema: str, table_name: str) -> list[str]:
+    """Normalize a discovery/columns payload into ordered column name strings."""
+    if not isinstance(columns, dict):
+        logger.warning(
+            "Unexpected columns discovery response for pipeline %s schema %s table %s: %r",
+            pipeline_id,
+            schema,
+            table_name,
+            columns,
+        )
+        return []
+    raw_cols = columns.get("columns")
+    if not isinstance(raw_cols, list):
+        logger.warning(
+            "Columns discovery payload missing 'columns' list for pipeline %s schema %s table %s: %r",
+            pipeline_id,
+            schema,
+            table_name,
+            columns,
+        )
+        return []
+    names: list[str] = []
+    for col in raw_cols:
+        if isinstance(col, dict):
+            name = col.get("name")
+        elif isinstance(col, str):
+            name = col
+        else:
+            continue
+        if name:
+            names.append(str(name))
+    return names
+
+
+def list_target_schemas(
+    *,
+    token: str,
+    base_url: str,
+    pipeline_id: str,
+    use_ssl: Optional[bool],
+    skip_verify: Optional[bool],
+) -> list[str]:
+    """List available schemas (or NoSQL databases) from the TARGET agent for a pipeline."""
+
+    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+
+    target_agent = _get_target_agent(token, pipeline_id)
+    raw_agent_id = target_agent.get("agentId") or target_agent.get("id")
+    if not raw_agent_id:
+        raise RuntimeError(f"TARGET agent for pipeline {pipeline_id!r} is missing an ID")
+
+    response = fetch_core_hub(
+        f"/pipelines/{pipeline_id}/agents/{raw_agent_id}/discovery/schemas",
+        token=token,
+    )
+    return _parse_schema_names(response, pipeline_id)
+
+
+def list_target_tables(
+    *,
+    token: str,
+    base_url: str,
+    pipeline_id: str,
+    schema: str,
+    use_ssl: Optional[bool],
+    skip_verify: Optional[bool],
+) -> list[str]:
+    """List available tables (or collections) from the TARGET agent for a given schema."""
+
+    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+
+    target_agent = _get_target_agent(token, pipeline_id)
+    raw_agent_id = target_agent.get("agentId") or target_agent.get("id")
+    if not raw_agent_id:
+        raise RuntimeError(f"TARGET agent for pipeline {pipeline_id!r} is missing an ID")
+
+    tables = get_agent_tables(token, pipeline_id, raw_agent_id, schema)
+    return _parse_table_names(tables, pipeline_id, schema)
+
+
+def list_target_columns(
+    *,
+    token: str,
+    base_url: str,
+    pipeline_id: str,
+    schema: str,
+    table_name: str,
+    use_ssl: Optional[bool],
+    skip_verify: Optional[bool],
+) -> list[str]:
+    """List column (or field) names from the TARGET agent for schema.table."""
+
+    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+
+    target_agent = _get_target_agent(token, pipeline_id)
+    raw_agent_id = target_agent.get("agentId") or target_agent.get("id")
+    if not raw_agent_id:
+        raise RuntimeError(f"TARGET agent for pipeline {pipeline_id!r} is missing an ID")
+
+    columns = get_table_columns(token, pipeline_id, raw_agent_id, schema, table_name)
+    return _parse_column_names(columns, pipeline_id, schema, table_name)
+
+
+def list_source_columns(
+    *,
+    token: str,
+    base_url: str,
+    pipeline_id: str,
+    schema: str,
+    table_name: str,
+    use_ssl: Optional[bool],
+    skip_verify: Optional[bool],
+) -> list[str]:
+    """List column names from the SOURCE agent for schema.table (column-mismatch checks)."""
+
+    configure_core_hub(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
+
+    source_agent = _get_source_agent(token, pipeline_id)
+    raw_agent_id = source_agent.get("agentId") or source_agent.get("id")
+    if not raw_agent_id:
+        raise RuntimeError(f"SOURCE agent for pipeline {pipeline_id!r} is missing an ID")
+
+    columns = get_table_columns(token, pipeline_id, raw_agent_id, schema, table_name)
+    return _parse_column_names(columns, pipeline_id, schema, table_name)
 
 
 def _discovered(col: Dict[str, Any], name: str, legacy_name: str, default: Any = None) -> Any:

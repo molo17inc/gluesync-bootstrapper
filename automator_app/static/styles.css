@@ -838,6 +838,16 @@ body.is-authenticated #auth-card {
 .entity-picker-table th, .entity-picker-table td { padding: 2px 6px; text-align: left; vertical-align: top; }
 .entity-picker-table .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.8rem; }
 .entity-picker-schema td { font-weight: 600; background: var(--surface-2, #f6f8fa); padding-top: 0.4rem; }
+
+.entity-create-hint { font-size: 0.8rem; margin: 0 0 0.5rem; }
+.entity-target-cell { display: grid; gap: 0.2rem; min-width: 16rem; }
+.entity-target-row { display: flex; flex-wrap: wrap; gap: 0.25rem; align-items: center; }
+.entity-target-arrow { font-size: 0.8rem; color: var(--muted); }
+.entity-target-schema { width: 6.5rem; font-size: 0.8rem; }
+.entity-target-table { width: 7.5rem; font-size: 0.8rem; }
+.entity-target-table-select { max-width: 10rem; font-size: 0.8rem; }
+.entity-target-mode { font-size: 0.75rem; }
+.entity-target-col-warn { font-size: 0.72rem; color: #9a6700; max-width: 22rem; }
 .entity-advanced { border: 1px solid var(--border, #d0d7de); border-radius: 6px; padding: 0.35rem 0.75rem; }
 .entity-advanced > summary { cursor: pointer; font-weight: 600; }
 .entity-plan-preview { white-space: pre-wrap; max-height: 16rem; overflow: auto; font-size: 0.8rem; }
