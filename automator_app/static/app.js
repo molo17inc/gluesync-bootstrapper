@@ -1044,6 +1044,40 @@ function updateImportButtonsVisibility() {
 }
 
 /**
+ * Apply bulk-create API response to the UI. Module-scoped so Sonar S7721 does not flag a nested helper.
+ * @param {object|null|undefined} res
+ */
+function applyBulkCreateResult(res) {
+  if (Array.isArray(res?.logs) && res.logs.length) {
+    ui.renderLogs(res.logs);
+  }
+  if (typeof res?.message === 'string') {
+    ui.setBulkMessage(res.message, res.success === false ? 'error' : 'success');
+    logActivity('Bulk', res.message);
+    return;
+  }
+  ui.setBulkMessage('Bulk entity creation completed', 'success');
+  logActivity('Bulk', 'Bulk entity creation completed');
+}
+
+/**
+ * Cancel an in-flight pipeline duplicate. Module-scoped (Sonar S7721); controller passed in.
+ * @param {AbortController} controller
+ */
+async function cancelInFlightDuplicate(controller) {
+  try {
+    const response = await api.cancelDuplicate();
+    ui.setDuplicateMessage(response.message || 'Cancelling duplicate request…', 'warning');
+    logActivity('duplicate', response.message || 'Cancellation requested by user');
+  } catch (err) {
+    ui.setDuplicateMessage(err.message || 'Failed to request cancellation', 'error');
+    logActivity('duplicate', `Failed to request cancellation: ${err.message}`);
+  } finally {
+    controller?.abort();
+  }
+}
+
+/**
  * Reload the entity Customize picker. reloadEntities already surfaces errors via setMessage;
  * still attach .catch so floating promises are never unhandled (javascript:S9383).
  */
@@ -1114,7 +1148,7 @@ function bindEvents() {
 
   function bulkSummaryText(total, selected, displayed) {
     if (!total) {
-      return bulkSchemaSelect && bulkSchemaSelect.value
+      return bulkSchemaSelect?.value
         ? `No tables found for schema ${bulkSchemaSelect.value}.`
         : 'Select a schema to load tables.';
     }
@@ -1248,23 +1282,10 @@ function bindEvents() {
       targetType: bulkTargetType || 'SQL',
       tableNames: selectedTables,
       chunkSize: Number(chunkSizeInput?.value || 50),
-      skipErrors: !!(skipErrorsInput && skipErrorsInput.checked),
-      enableScheduling: !!(enableSchedulingInput && enableSchedulingInput.checked),
-      createTables: !!(createTablesInput && createTablesInput.checked),
+      skipErrors: !!skipErrorsInput?.checked,
+      enableScheduling: !!enableSchedulingInput?.checked,
+      createTables: !!createTablesInput?.checked,
     };
-  }
-
-  function applyBulkCreateResult(res) {
-    if (res && Array.isArray(res.logs) && res.logs.length) {
-      ui.renderLogs(res.logs);
-    }
-    if (res && typeof res.message === 'string') {
-      ui.setBulkMessage(res.message, res.success === false ? 'error' : 'success');
-      logActivity('Bulk', res.message);
-      return;
-    }
-    ui.setBulkMessage('Bulk entity creation completed', 'success');
-    logActivity('Bulk', 'Bulk entity creation completed');
   }
 
   async function runBulkCreate() {
@@ -1308,9 +1329,9 @@ function bindEvents() {
     }
 
     if (bulkLoadSchemasBtn && bulkSchemaSelect) {
-      bulkLoadSchemasBtn.disabled = !(bulkPipelineSelect && bulkPipelineSelect.value);
+      bulkLoadSchemasBtn.disabled = !bulkPipelineSelect?.value;
       bulkLoadSchemasBtn.addEventListener('click', async () => {
-        if (!bulkPipelineSelect || !bulkPipelineSelect.value) {
+        if (!bulkPipelineSelect?.value) {
           ui.setBulkMessage('Please select a pipeline first', 'error');
           return;
         }
@@ -1348,7 +1369,7 @@ function bindEvents() {
           logActivity('Bulk', `Failed to load schemas: ${err.message}`);
         } finally {
           if (bulkLoadSchemasBtn) {
-            bulkLoadSchemasBtn.disabled = !(bulkPipelineSelect && bulkPipelineSelect.value);
+            bulkLoadSchemasBtn.disabled = !bulkPipelineSelect?.value;
           }
         }
       });
@@ -1356,7 +1377,7 @@ function bindEvents() {
 
     if (bulkDownloadYamlBtn) {
       bulkDownloadYamlBtn.addEventListener('click', async () => {
-        if (!bulkPipelineSelect || !bulkPipelineSelect.value) {
+        if (!bulkPipelineSelect?.value) {
           ui.setBulkMessage('Please select a pipeline first', 'error');
           return;
         }
@@ -1371,9 +1392,7 @@ function bindEvents() {
           return;
         }
 
-        const targetSchema = (bulkTargetSchemaInput && bulkTargetSchemaInput.value)
-          ? bulkTargetSchemaInput.value.trim()
-          : '';
+        const targetSchema = bulkTargetSchemaInput?.value?.trim() || ;
 
         if (!targetSchema) {
           ui.setBulkMessage('Please enter a target schema name', 'error');
@@ -1416,7 +1435,7 @@ function bindEvents() {
           return;
         }
 
-        if (!bulkPipelineSelect || !bulkPipelineSelect.value) {
+        if (!bulkPipelineSelect?.value) {
           ui.setBulkMessage('Please select a pipeline first', 'error');
           resetBulkState();
           return;
@@ -1913,6 +1932,9 @@ function bindEvents() {
       });
     }
 
+  }
+
+  function wireDuplicatePipeline() {
     const duplicateForm = document.getElementById('duplicate-form');
     const duplicatePipelineSelect = document.getElementById('duplicate-pipeline-id');
     const duplicateBtn = document.getElementById('duplicate-btn');
@@ -1922,9 +1944,6 @@ function bindEvents() {
 
     let duplicateRequestController = null;
 
-  }
-
-  function wireDuplicatePipeline() {
     function setDuplicateControlsDisabled(disabled) {
       const controlIds = [
         'duplicate-pipeline-id',
@@ -1978,19 +1997,6 @@ function bindEvents() {
     }
 
 
-    async function cancelInFlightDuplicate() {
-      try {
-        const response = await api.cancelDuplicate();
-        ui.setDuplicateMessage(response.message || 'Cancelling duplicate request…', 'warning');
-        logActivity('duplicate', response.message || 'Cancellation requested by user');
-      } catch (err) {
-        ui.setDuplicateMessage(err.message || 'Failed to request cancellation', 'error');
-        logActivity('duplicate', `Failed to request cancellation: ${err.message}`);
-      } finally {
-        duplicateRequestController.abort();
-      }
-    }
-
     function readDuplicateAgentTags(customizeAgentsEnabled) {
       const fallbackSourceTag = duplicateForm.dataset.currentSourceTag || '';
       const fallbackTargetTag = duplicateForm.dataset.currentTargetTag || '';
@@ -2029,7 +2035,7 @@ function bindEvents() {
 
     function applyDuplicateSchemaOverrides(payload) {
       const customizeSchemasToggle = document.getElementById('customize-schemas');
-      if (!(customizeSchemasToggle && customizeSchemasToggle.checked)) return;
+      if (!customizeSchemasToggle?.checked) return;
       const sourceSchemaValue = document.getElementById('duplicate-source-schema')?.value?.trim() || '';
       const targetSchemaValue = document.getElementById('duplicate-target-schema')?.value?.trim() || '';
       if (!(sourceSchemaValue || targetSchemaValue)) return;
@@ -2111,7 +2117,7 @@ function bindEvents() {
     async function handleDuplicateSubmit(event) {
       event.preventDefault();
       if (duplicateRequestController) {
-        await cancelInFlightDuplicate();
+        await cancelInFlightDuplicate(duplicateRequestController);
         return;
       }
       const payload = buildDuplicatePayload();
