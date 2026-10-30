@@ -1392,7 +1392,7 @@ function bindEvents() {
           return;
         }
 
-        const targetSchema = bulkTargetSchemaInput?.value?.trim() || ;
+        const targetSchema = bulkTargetSchemaInput?.value?.trim() || '';
 
         if (!targetSchema) {
           ui.setBulkMessage('Please enter a target schema name', 'error');
