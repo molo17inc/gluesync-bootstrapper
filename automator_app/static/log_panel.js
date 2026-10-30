@@ -27,11 +27,15 @@ const HINT_RULES = [
 ];
 
 function parseLinkedIds(message) {
-  const entity = String(message).match(/\b(?:entity|Entity)\s+["']?([A-Za-z0-9_.@:-]{2,80})/);
-  const pipeline = String(message).match(/\b(?:pipeline|Pipeline)\s+["']?([A-Za-z0-9_.@:-]{2,80})/);
-  const schemaTable = String(message).match(/\b([A-Za-z_][\w]*)\.(?:[A-Za-z_][\w@]*)\b/);
+  const text = String(message);
+  const entity = /\b(?:entity|Entity)\s+["']?([A-Za-z0-9_.@:-]{2,80})/.exec(text);
+  const pipeline = /\b(?:pipeline|Pipeline)\s+["']?([A-Za-z0-9_.@:-]{2,80})/.exec(text);
+  const schemaTable = /\b([A-Za-z_]\w*)\.(?:[A-Za-z_][\w@]*)\b/.exec(text);
+  let entityId = null;
+  if (entity) entityId = entity[1];
+  else if (schemaTable) entityId = schemaTable[0];
   return {
-    entityId: entity ? entity[1] : (schemaTable ? schemaTable[0] : null),
+    entityId,
     pipelineId: pipeline ? pipeline[1] : null,
   };
 }

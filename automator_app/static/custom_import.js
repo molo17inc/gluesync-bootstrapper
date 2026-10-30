@@ -295,10 +295,15 @@ export function initCustomImport({ fileInput, root, setMessage, log }) {
       dataset: { importStepper: '1' },
       'aria-label': 'Import steps',
     },
-      ...['Analyze', 'Customize', 'Preview', 'Import'].map((label, i) => el('li', {
-        dataset: { step: String(i) },
-        className: i === 1 ? 'is-current' : (i === 0 ? 'is-done' : ''),
-      }, el('span', { className: 'import-stepper-index' }, String(i + 1)), el('span', {}, label))));
+      ...['Analyze', 'Customize', 'Preview', 'Import'].map((label, i) => {
+        let stepClass = '';
+        if (i === 1) stepClass = 'is-current';
+        else if (i === 0) stepClass = 'is-done';
+        return el('li', {
+          dataset: { step: String(i) },
+          className: stepClass,
+        }, el('span', { className: 'import-stepper-index' }, String(i + 1)), el('span', {}, label));
+      }));
     const gate = createPreviewGate();
     const planKey = () => JSON.stringify(buildPlan());
     const setStep = (idx) => {
