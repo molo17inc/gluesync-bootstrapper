@@ -8,7 +8,10 @@ from pathlib import Path
 JS = Path(__file__).resolve().parents[1] / "automator_app" / "static" / "entity_import.js"
 
 SCRIPT = r"""
-import { buildEntityPlan, planIsEmpty, selectionError, resolveTarget, targetDiffersFromDefault, columnMismatchNote } from './entity_import.mjs';
+import {
+  buildEntityPlan, planIsEmpty, selectionError, resolveTarget, targetDiffersFromDefault,
+  columnMismatchNote, inferTargetMode, entityIdSubtitle, groupPickerRows,
+} from './entity_import.mjs';
 
 class FakeEl {
   constructor(attrs = {}) {
@@ -105,6 +108,11 @@ assert(r.targetTable === 'T1_RENAMED', 'resolve rename');
 assert(targetDiffersFromDefault(loaded[0], r), 'differs');
 assert(!targetDiffersFromDefault(loaded[2], resolveTarget(loaded[2], ov)), 'same default');
 
+// inferTargetMode: typed name vs discovery list
+assert(inferTargetMode('cust_primary', ['cust_primary', 'other']) === 'existing', 'infer existing');
+assert(inferTargetMode('CUST_PRIMARY', ['cust_primary']) === 'existing', 'infer casefold');
+assert(inferTargetMode('brand_new_table', ['cust_primary']) === 'new', 'infer new');
+assert(inferTargetMode('', ['cust_primary']) === 'new', 'infer empty');
 
 // columnMismatchNote
 assert(columnMismatchNote(null, ['a']) === 'Column check unverified (discovery unavailable).', 'unverif null');
@@ -114,6 +122,22 @@ const mm = columnMismatchNote(['ID', 'NAME', 'EMAIL'], ['ID', 'OTHER']);
 assert(mm.includes('Column mismatch'), 'mismatch prefix: ' + mm);
 assert(mm.includes('missing on target'), 'missing: ' + mm);
 assert(mm.includes('extra on target'), 'extra: ' + mm);
+
+// entityIdSubtitle: @@2 adds info; plain matching name does not
+assert(entityIdSubtitle({ id: 'dbo.CUSTOMERS@@2', entityName: 'Cust' }) === 'dbo.CUSTOMERS@@2', '@@2 subtitle');
+assert(entityIdSubtitle({ id: 'dbo.ORDERS', entityName: 'ORDERS' }) === '', 'matching name no subtitle');
+assert(entityIdSubtitle({ id: 'dbo.ORDERS', entityName: 'OrdersHeaders' }) === 'dbo.ORDERS', 'differing name subtitle');
+
+// groupPickerRows: MultiTable chain collapses to one block
+const chained = [
+  { id: 'dbo.H', schema: 'dbo', chainId: 'multitable_ORDERS', entityName: 'OrdersChain' },
+  { id: 'dbo.I', schema: 'dbo', chainId: 'multitable_ORDERS', entityName: 'OrdersChain' },
+  { id: 'dbo.C', schema: 'dbo', entityName: 'Cust' },
+];
+const grouped = groupPickerRows(chained);
+assert(grouped[0].kind === 'schema' && grouped[0].schema === 'dbo', 'schema header');
+assert(grouped[1].kind === 'chain' && grouped[1].members.length === 2, 'chain block');
+assert(grouped[2].kind === 'entity' && grouped[2].entity.id === 'dbo.C', 'single after chain');
 
 // UI emits exact ids including @@2 — override keys must be exact, not bare
 const loadedAt = [
@@ -131,6 +155,14 @@ assert(selectionError(allPanel, loadedAt, new Set(['dbo.CUSTOMERS', 'dbo.CUSTOME
   ['dbo.CUSTOMERS', { mode: 'existing', targetSchema: 'gb75_tgt', targetTable: 'same' }],
   ['dbo.CUSTOMERS@@2', { mode: 'existing', targetSchema: 'gb75_tgt', targetTable: 'same' }],
 ])) !== null, 'dup exact ids blocked in UI');
+
+// Existing pick must surface as mode=existing in resolveTarget (preview action uses this)
+const existingResolved = resolveTarget(
+  { id: 'dbo.ORDERS_HEADERS', targetSchema: 'gb75_tgt', targetTable: 'ORDERS_HEADERS' },
+  new Map([['dbo.ORDERS_HEADERS', { mode: 'existing', targetSchema: 'gb75_tgt', targetTable: 'cust_primary' }]]),
+);
+assert(existingResolved.mode === 'existing', 'existing mode preserved');
+assert(existingResolved.targetTable === 'cust_primary', 'existing table preserved');
 
 console.log('ok');
 """

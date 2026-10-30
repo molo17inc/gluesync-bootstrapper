@@ -1,6 +1,6 @@
 // Entity Customize (single-pipeline plan subset): picker, include/exclude, parts, onExisting, dryRun.
 // Reuses the same plan JSON as backup Customize minus agents/globals/resumeInto/name. No passwords.
-// Per-entity target schema/table: New (editable) or Existing (discovery dropdown).
+// Per-entity target: inline schema.table combobox; new/existing badge from discovery match.
 
 const PARTS = [
   ['udfs', 'UDFs'],
@@ -42,6 +42,15 @@ function advancedIncludeExclude(panel) {
   const include = splitLines(panel.querySelector('[data-include]')?.value);
   const exclude = splitLines(panel.querySelector('[data-exclude]')?.value);
   return { include, exclude, used: include.length > 0 || exclude.length > 0 };
+}
+
+/** Infer new vs existing from a typed table name against discovered target tables. */
+export function inferTargetMode(targetTable, existingTables) {
+  const name = String(targetTable || '').trim();
+  if (!name) return 'new';
+  const lower = name.toLowerCase();
+  const hit = (existingTables || []).some((t) => String(t).toLowerCase() === lower);
+  return hit ? 'existing' : 'new';
 }
 
 /** Resolve effective target for an entity from overrides Map/object or YAML defaults. */
@@ -164,14 +173,53 @@ function rowMatchesFilter(entity, filter) {
   return hay.includes(filter);
 }
 
-function groupBySchema(entities) {
+/** Muted id under the name only when it adds information (@@n or name ≠ table key). */
+export function entityIdSubtitle(entity) {
+  const id = String(entity?.id || '');
+  if (!id) return '';
+  if (id.includes('@@')) return id;
+  const tableKey = id.includes('.') ? id.slice(id.indexOf('.') + 1) : id;
+  const name = String(entity?.entityName || '').trim();
+  if (name && name.toLowerCase() !== tableKey.toLowerCase()) return id;
+  return '';
+}
+
+function sourceDisplay(entity) {
+  return entity.source || `${entity.schema || ''}.${(entity.id || '').split('@@')[0].split('.').slice(1).join('.')}` || entity.id || '';
+}
+
+function chainDisplayName(members) {
+  const named = members.find((m) => m.entityName)?.entityName;
+  if (named) return named;
+  const chainId = members[0]?.chainId || '';
+  return String(chainId).replace(/^multitable_/i, '') || 'MultiTable chain';
+}
+
+/** Group visible entities: schema headers, then chain blocks or singles (order preserved). */
+export function groupPickerRows(entities) {
   const groups = new Map();
   entities.forEach((e) => {
     const key = e.schema || '(no schema)';
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(e);
   });
-  return groups;
+  const rows = [];
+  groups.forEach((list, schema) => {
+    rows.push({ kind: 'schema', schema });
+    const seenChain = new Set();
+    list.forEach((entity) => {
+      if (!entity.chainId) {
+        rows.push({ kind: 'entity', entity });
+        return;
+      }
+      const cid = String(entity.chainId);
+      if (seenChain.has(cid)) return;
+      seenChain.add(cid);
+      const members = list.filter((e) => String(e.chainId) === cid);
+      rows.push({ kind: 'chain', chainId: cid, members });
+    });
+  });
+  return rows;
 }
 
 function sourceTableParts(entity) {
@@ -197,6 +245,18 @@ export function columnMismatchNote(sourceCols, targetCols) {
   return `Column mismatch — ${bits.join('; ')}`;
 }
 
+function onExistingPolicyLabel(panel) {
+  const raw = panel.querySelector('[data-on-existing]')?.value || '';
+  if (raw === 'skip') return 'skip';
+  if (raw === 'update') return 'update';
+  if (raw === 'fail') return 'fail';
+  return 'as today (send as before)';
+}
+
+function badge(text, kind) {
+  return el('span', { className: `entity-badge entity-badge--${kind}` }, text);
+}
+
 export function initEntityImport({ root, getContext, setMessage, log }) {
   if (!root) return { currentPlan() { return null; }, isDryRun() { return false; } };
 
@@ -219,15 +279,18 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
 
   const createTablesHint = el('p', { className: 'hint-text entity-create-hint' },
     'Create missing tables is global (CREATE IF NOT EXISTS). '
-    + 'Picking an existing target for an entity routes data there; that entity does not need a new table. '
+    + 'An existing target (badge) routes data there — that entity does not create a table. '
     + 'New names still respect the global checkbox.');
 
-  const onExisting = el('label', {}, 'On existing entity ',
+  const onExisting = el('label', { className: 'entity-on-existing' },
+    'On existing entity (already in the pipeline) ',
     el('select', { dataset: { onExisting: '1' } },
-      el('option', { value: '' }, 'default'),
+      el('option', { value: '' }, 'as today (default)'),
       el('option', { value: 'skip' }, 'skip'),
       el('option', { value: 'update' }, 'update'),
-      el('option', { value: 'fail' }, 'fail')));
+      el('option', { value: 'fail' }, 'fail')),
+    el('span', { className: 'hint-text' },
+      'Default = omit from the plan: keep current behaviour (GS_IMPORT_ON_EXISTING if set, otherwise send as before).'));
 
   const pickerStatus = el('p', { className: 'hint-text', id: 'entity-picker-status' },
     'Upload a YAML and select a pipeline to load entities.');
@@ -260,7 +323,7 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
     el('input', { type: 'checkbox', id: 'entity-plan-dry-run' }),
     ' Dry run (preview writes only; nothing created)');
 
-  const previewOut = el('pre', { className: 'entity-plan-preview', id: 'entity-plan-preview-out' });
+  const previewOut = el('div', { className: 'entity-plan-preview', id: 'entity-plan-preview-out' });
   const btnRow = el('div', { className: 'button-group' },
     el('button', { type: 'button', className: 'secondary', id: 'entity-plan-draft-btn' }, 'Download plan JSON'),
     el('button', { type: 'button', className: 'secondary', id: 'entity-plan-preview-btn' }, 'Preview'),
@@ -272,7 +335,7 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
     el('p', { className: 'hint-text' },
       'Optional plan for this run only. Empty choices keep current behaviour. '
       + 'Pick entities below after upload; Agents, globals, resumeInto and pipeline rename are backup Customize only. '
-      + 'Per row you can rename the target (New) or pick an existing target table/collection (Existing).'),
+      + 'Per row, set the target schema and table (or collection). A name that matches an existing target shows the existing badge.'),
     partsRow, createTablesHint, onExisting, picker, advanced, dryRun, btnRow, previewOut,
   );
 
@@ -285,10 +348,14 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
     return Boolean(panel.querySelector('#entity-plan-dry-run')?.checked);
   }
 
+  function clearPreview() {
+    previewOut.replaceChildren();
+  }
+
   function updateCount() {
     const total = loadedEntities.length;
     const n = selectedIds ? selectedIds.size : 0;
-    pickerCount.textContent = total ? `${n} of ${total} selected` : '';
+    pickerCount.textContent = total ? `(${n} of ${total} selected)` : '';
     const partial = selectedIds ? partialChains(loadedEntities, selectedIds) : [];
     const bits = [];
     if (partial.length) {
@@ -303,8 +370,8 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
 
   function setOverride(entityId, patch) {
     const prev = targetOverrides.get(entityId) || {};
-    const next = { ...prev, ...patch };
-    targetOverrides.set(entityId, next);
+    targetOverrides.set(entityId, { ...prev, ...patch });
+    clearPreview();
   }
 
   async function ensureTargetSchemas(pipelineId) {
@@ -351,10 +418,27 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
     }
   }
 
+  function updateMismatchUi(entityId, note) {
+    const host = panel.querySelector(`[data-col-warn-host="${CSS.escape(entityId)}"]`);
+    if (!host) return;
+    host.replaceChildren();
+    if (!note) return;
+    const isUnverified = note.startsWith('Column check unverified');
+    const tip = el('details', { className: 'entity-mismatch' },
+      el('summary', {
+        className: `entity-mismatch-summary${isUnverified ? ' entity-mismatch-summary--muted' : ''}`,
+        title: note,
+      }, isUnverified ? '⚠︎ unverified' : '⚠︎ mismatch'),
+      el('p', { className: 'entity-mismatch-detail' }, note),
+    );
+    host.append(tip);
+  }
+
   async function refreshColumnWarn(entity) {
     const resolved = resolveTarget(entity, targetOverrides);
     if (resolved.mode !== 'existing' || !resolved.targetTable) {
       columnWarnById.delete(entity.id);
+      updateMismatchUi(entity.id, '');
       return;
     }
     const ctx = getContext() || {};
@@ -379,26 +463,32 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
     const note = columnMismatchNote(sourceCols, targetCols);
     if (note) columnWarnById.set(entity.id, note);
     else columnWarnById.delete(entity.id);
-    const warnEl = panel.querySelector(`[data-col-warn="${CSS.escape(entity.id)}"]`);
-    if (warnEl) warnEl.textContent = note || '';
+    updateMismatchUi(entity.id, note || '');
   }
 
-  function onBoxChange(entity, checked) {
+  function onBoxChange(entityOrMembers, checked) {
     if (!selectedIds) selectedIds = new Set();
-    const targets = entity.chainId
-      ? chainMembers(loadedEntities, entity.chainId)
-      : [entity];
+    const targets = Array.isArray(entityOrMembers) ? entityOrMembers : (
+      entityOrMembers.chainId
+        ? chainMembers(loadedEntities, entityOrMembers.chainId)
+        : [entityOrMembers]
+    );
     targets.forEach((member) => {
       if (checked) selectedIds.add(member.id);
       else selectedIds.delete(member.id);
-      const box = panel.querySelector(`[data-entity-id="${CSS.escape(member.id)}"]`);
-      if (box) box.checked = checked;
     });
-    updateCount();
+    clearPreview();
+    renderPicker();
+  }
+
+  function fillDatalist(listEl, values) {
+    listEl.innerHTML = '';
+    (values || []).forEach((name) => listEl.append(el('option', { value: name })));
   }
 
   function buildTargetControls(entity) {
     const resolved = resolveTarget(entity, targetOverrides);
+    const listId = `entity-target-tables-${String(entity.id).replace(/[^a-zA-Z0-9_-]/g, '_')}`;
     const wrap = el('div', { className: 'entity-target-cell' });
     const schemaInput = el('input', {
       type: 'text',
@@ -408,125 +498,149 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
       placeholder: 'schema',
       dataset: { targetSchemaFor: entity.id },
       title: 'Target schema (or NoSQL database)',
+      autocomplete: 'off',
     });
-    const modeSelect = el('select', {
-      className: 'entity-target-mode',
-      dataset: { targetModeFor: entity.id },
-      title: 'New table name, or pick an existing target table/collection',
-    },
-      el('option', { value: 'new', selected: resolved.mode === 'new' }, 'New'),
-      el('option', { value: 'existing', selected: resolved.mode === 'existing' }, 'Existing'),
-    );
+    const tableList = el('datalist', { id: listId });
     const tableInput = el('input', {
       type: 'text',
       className: 'entity-target-table',
       value: resolved.targetTable,
-      placeholder: 'table / collection',
+      list: listId,
+      placeholder: 'table',
       dataset: { targetTableFor: entity.id },
-      title: 'Target table or collection name',
+      title: 'Target table or collection — pick from the list or type a new name',
+      autocomplete: 'off',
     });
-    const tableSelect = el('select', {
-      className: 'entity-target-table-select',
-      dataset: { targetTableSelectFor: entity.id },
-      title: 'Existing target tables/collections from discovery',
-    });
-    const warn = el('div', {
-      className: 'entity-target-col-warn',
-      dataset: { colWarn: entity.id },
-    }, columnWarnById.get(entity.id) || '');
+    const modeBadge = el('span', { className: 'entity-target-mode-badge', dataset: { modeBadgeFor: entity.id } });
+    const mismatchHost = el('span', { dataset: { colWarnHost: entity.id } });
 
-    const showMode = (tablesForSchema) => {
-      const mode = modeSelect.value === 'existing' ? 'existing' : 'new';
-      const tables = tablesForSchema !== undefined
-        ? tablesForSchema
-        : (tablesBySchema.get(schemaInput.value || '') || []);
-      // Free-text when discovery failed OR returned no collections/tables.
-      const useSelect = mode === 'existing' && discoveryOk && tables.length > 0;
-      tableInput.hidden = useSelect;
-      tableSelect.hidden = !useSelect;
-    };
-    showMode();
-
-    const persist = () => {
-      const mode = modeSelect.value === 'existing' ? 'existing' : 'new';
-      const tableVal = mode === 'existing' && !tableSelect.hidden
-        ? (tableSelect.value || '')
-        : (tableInput.value || '');
+    const syncBadge = (tables) => {
+      const mode = inferTargetMode(tableInput.value, tables);
+      modeBadge.replaceChildren(badge(mode, mode === 'existing' ? 'existing' : 'new'));
       setOverride(entity.id, {
         mode,
         targetSchema: schemaInput.value || '',
-        targetTable: tableVal,
+        targetTable: tableInput.value || '',
       });
       void refreshColumnWarn(entity).catch((err) => {
         log?.('Config', `Column mismatch check failed: ${err.message}`);
       });
     };
 
-    const loadExistingTables = (schema, preferredTable, { persistAfter = false } = {}) => {
+    const loadTables = (preferred) => {
       const ctx = getContext() || {};
-      if (!ctx.pipelineId) return;
-      ensureTargetTables(ctx.pipelineId, schema || '')
+      if (!ctx.pipelineId) {
+        syncBadge([]);
+        return;
+      }
+      ensureTargetTables(ctx.pipelineId, schemaInput.value || '')
         .then((tables) => {
-          fillTableSelect(tableSelect, tables, preferredTable);
-          showMode(tables);
-          if (persistAfter) persist();
+          fillDatalist(tableList, tables);
+          syncBadge(tables);
+          if (preferred && !tableInput.value) tableInput.value = preferred;
         })
         .catch((err) => {
           log?.('Config', `Target table discovery failed: ${err.message}`);
-          showMode([]);
+          syncBadge([]);
         });
     };
 
-    const refreshExistingFromInputs = () => {
-      if (modeSelect.value === 'existing') {
-        loadExistingTables(
-          schemaInput.value || '',
-          resolveTarget(entity, targetOverrides).targetTable,
-          { persistAfter: true },
-        );
-      }
-    };
-    schemaInput.addEventListener('change', () => {
-      persist();
-      refreshExistingFromInputs();
+    schemaInput.addEventListener('change', () => loadTables());
+    schemaInput.addEventListener('input', () => {
+      const tables = tablesBySchema.get(schemaInput.value || '') || [];
+      syncBadge(tables);
     });
-    schemaInput.addEventListener('input', persist);
-    modeSelect.addEventListener('change', () => {
-      showMode();
-      persist();
-      refreshExistingFromInputs();
+    tableInput.addEventListener('input', () => {
+      const tables = tablesBySchema.get(schemaInput.value || '') || [];
+      syncBadge(tables);
     });
-    tableInput.addEventListener('input', persist);
-    tableSelect.addEventListener('change', persist);
+    tableInput.addEventListener('change', () => {
+      const tables = tablesBySchema.get(schemaInput.value || '') || [];
+      syncBadge(tables);
+    });
 
-    if (resolved.mode === 'existing') {
-      loadExistingTables(resolved.targetSchema, resolved.targetTable);
-    }
+    loadTables(resolved.targetTable);
 
     wrap.append(
       el('div', { className: 'entity-target-row' },
-        el('span', { className: 'entity-target-arrow' }, `${entity.source || ''} → `),
         schemaInput,
-        el('span', {}, '.'),
-        modeSelect,
+        el('span', { className: 'entity-target-dot' }, '.'),
         tableInput,
-        tableSelect,
+        modeBadge,
+        mismatchHost,
       ),
-      warn,
+      tableList,
     );
+    if (columnWarnById.has(entity.id)) {
+      updateMismatchUi(entity.id, columnWarnById.get(entity.id));
+    }
     return wrap;
   }
 
-  function fillTableSelect(select, tables, selected) {
-    select.innerHTML = '';
-    select.append(el('option', { value: '' }, tables.length ? '— pick table —' : '— none found —'));
-    tables.forEach((name) => {
-      select.append(el('option', {
-        value: name,
-        selected: name === selected,
-      }, name));
+  function entityNameCell(entity, { indent = false } = {}) {
+    const sub = entityIdSubtitle(entity);
+    const name = entity.entityName || sourceDisplay(entity).split('.').pop() || entity.id || '—';
+    return el('td', { className: indent ? 'entity-picker-indent' : '' },
+      el('div', { className: 'entity-name-cell' },
+        el('span', { className: 'entity-name' }, name),
+        sub ? el('span', { className: 'entity-id-sub muted' }, sub) : null,
+      ),
+    );
+  }
+
+  function statusCell(entity) {
+    if (!entity.alreadyExists) return el('td', {});
+    const policy = onExistingPolicyLabel(panel);
+    return el('td', {},
+      badge('already in pipeline', 'warn'),
+      el('span', { className: 'entity-status-policy muted' }, ` → ${policy}`),
+    );
+  }
+
+  function appendEntityRow(tbody, entity, { indent = false, showCheckbox = true } = {}) {
+    const isChecked = !selectedIds || selectedIds.has(entity.id);
+    const box = showCheckbox
+      ? el('input', {
+        type: 'checkbox',
+        checked: isChecked,
+        dataset: { entityId: entity.id, chainId: entity.chainId || '' },
+      })
+      : el('span', { className: 'entity-picker-check-spacer' }, '');
+    if (showCheckbox) {
+      box.addEventListener('change', () => onBoxChange(entity, box.checked));
+    }
+    tbody.append(el('tr', { className: indent ? 'entity-picker-child' : '' },
+      el('td', {}, box),
+      entityNameCell(entity, { indent }),
+      el('td', { className: 'mono entity-source' }, sourceDisplay(entity)),
+      el('td', {}, buildTargetControls(entity)),
+      el('td', {}, entity.type || ''),
+      statusCell(entity),
+    ));
+  }
+
+  function appendChainBlock(tbody, members) {
+    const allChecked = members.every((m) => !selectedIds || selectedIds.has(m.id));
+    const someChecked = members.some((m) => selectedIds?.has(m.id));
+    const box = el('input', {
+      type: 'checkbox',
+      checked: allChecked,
+      dataset: { chainId: members[0].chainId, entityId: members[0].id },
     });
-    if (selected && tables.includes(selected)) select.value = selected;
+    box.indeterminate = someChecked && !allChecked;
+    box.addEventListener('change', () => onBoxChange(members, box.checked));
+    const title = chainDisplayName(members);
+    tbody.append(el('tr', { className: 'entity-picker-chain' },
+      el('td', {}, box),
+      el('td', { colSpan: 5 },
+        el('div', { className: 'entity-name-cell' },
+          el('span', { className: 'entity-name' }, title),
+          badge('MultiTable', 'chain'),
+          el('span', { className: 'muted entity-chain-count' }, ` ${members.length} tables`),
+        ),
+      ),
+    ));
+    members.forEach((entity) => appendEntityRow(tbody, entity, { indent: true, showCheckbox: false }));
   }
 
   function renderPicker() {
@@ -542,50 +656,34 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
       ? `Showing ${visible.length} of ${loadedEntities.length} entities.`
       : `${loadedEntities.length} entities loaded from the export file.`;
 
-    // Shared datalist for target schemas
     let schemaList = panel.querySelector('#entity-target-schema-list');
     if (!schemaList) {
       schemaList = el('datalist', { id: 'entity-target-schema-list' });
       panel.append(schemaList);
     }
-    schemaList.innerHTML = '';
-    targetSchemas.forEach((s) => schemaList.append(el('option', { value: s })));
+    fillDatalist(schemaList, targetSchemas);
 
-    const table = el('table', { className: 'entity-picker-table' });
+    const table = el('table', { className: 'entity-picker-table custom-import-tables' });
     table.append(el('thead', {}, el('tr', {},
-      el('th', {}, ''),
-      el('th', {}, 'entityName'),
-      el('th', {}, 'Id'),
-      el('th', {}, 'Source → target'),
+      el('th', { className: 'entity-picker-check-col' }, ''),
+      el('th', {}, 'Entity'),
+      el('th', {}, 'Source'),
+      el('th', {}, 'Target'),
       el('th', {}, 'Type'),
-      el('th', {}, 'Exists'),
+      el('th', {}, 'Status'),
     )));
     const tbody = el('tbody');
-    const groups = groupBySchema(visible);
-    groups.forEach((rows, schema) => {
-      tbody.append(el('tr', { className: 'entity-picker-schema' },
-        el('td', { colSpan: 6 }, schema)));
-      rows.forEach((entity) => {
-        const isChecked = !selectedIds || selectedIds.has(entity.id);
-        const box = el('input', {
-          type: 'checkbox',
-          checked: isChecked,
-          dataset: { entityId: entity.id, chainId: entity.chainId || '' },
-        });
-        box.addEventListener('change', () => onBoxChange(entity, box.checked));
-        const exists = entity.alreadyExists ? 'yes' : '';
-        const typeLabel = entity.type || '';
-        const nameLabel = entity.entityName || '—';
-        const chainNote = entity.chainId ? ` [chain ${entity.chainId}]` : '';
-        tbody.append(el('tr', {},
-          el('td', {}, box),
-          el('td', {}, nameLabel + chainNote),
-          el('td', { className: 'mono' }, entity.id),
-          el('td', {}, buildTargetControls(entity)),
-          el('td', {}, typeLabel),
-          el('td', {}, exists),
-        ));
-      });
+    groupPickerRows(visible).forEach((row) => {
+      if (row.kind === 'schema') {
+        tbody.append(el('tr', { className: 'entity-picker-schema' },
+          el('td', { colSpan: 6 }, row.schema)));
+        return;
+      }
+      if (row.kind === 'chain') {
+        appendChainBlock(tbody, row.members);
+        return;
+      }
+      appendEntityRow(tbody, row.entity);
     });
     table.append(tbody);
     pickerBody.append(table);
@@ -594,13 +692,19 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
 
   pickerToolbar.querySelector('[data-select-all]').addEventListener('click', () => {
     selectedIds = new Set(loadedEntities.map((e) => e.id));
+    clearPreview();
     renderPicker();
   });
   pickerToolbar.querySelector('[data-select-none]').addEventListener('click', () => {
     selectedIds = new Set();
+    clearPreview();
     renderPicker();
   });
   pickerFilter.addEventListener('input', () => renderPicker());
+  onExisting.querySelector('select')?.addEventListener('change', () => {
+    clearPreview();
+    renderPicker();
+  });
 
   async function reloadEntities() {
     const ctx = getContext() || {};
@@ -609,6 +713,7 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
       selectedIds = null;
       targetOverrides.clear();
       columnWarnById.clear();
+      clearPreview();
       renderPicker();
       return;
     }
@@ -626,11 +731,13 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
       tablesBySchema.clear();
       targetSchemas = [];
       await ensureTargetSchemas(ctx.pipelineId);
+      clearPreview();
       renderPicker();
       log?.('Config', `Loaded ${loadedEntities.length} entities for picker`);
     } catch (err) {
       loadedEntities = [];
       selectedIds = null;
+      clearPreview();
       renderPicker();
       setMessage?.(err.message, 'error');
     }
@@ -666,6 +773,55 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
     }
   });
 
+  function actionForEntity(entity) {
+    const resolved = resolveTarget(entity, targetOverrides);
+    if (resolved.mode === 'existing') return 'use existing (no create)';
+    const createOn = panel.querySelector('[data-part="createTables"]')?.checked !== false;
+    return createOn ? 'create if missing' : 'map only (create off)';
+  }
+
+  function renderPreviewTable(preview) {
+    previewOut.replaceChildren();
+    const summary = el('p', { className: 'hint-text' },
+      `Pipeline ${preview.pipelineId}: ${preview.entityCount} entities · `
+      + `onExistingEntity: ${preview.onExistingEntity || 'as today (default)'}`);
+    const table = el('table', { className: 'entity-preview-table custom-import-tables' });
+    table.append(el('thead', {}, el('tr', {},
+      el('th', {}, 'Entity'),
+      el('th', {}, 'Source'),
+      el('th', {}, 'Target'),
+      el('th', {}, 'New / existing'),
+      el('th', {}, 'Action'),
+    )));
+    const tbody = el('tbody');
+    (preview.entities || []).forEach((e) => {
+      const local = loadedEntities.find((x) => x.id === e.id) || e;
+      const resolved = resolveTarget(local, targetOverrides);
+      const mode = resolved.mode === 'existing' ? 'existing' : 'new';
+      tbody.append(el('tr', {},
+        el('td', {}, e.entityName || e.id),
+        el('td', { className: 'mono' }, e.source || ''),
+        el('td', { className: 'mono' }, `${e.targetSchema}.${e.targetTable}`),
+        el('td', {}, badge(mode, mode === 'existing' ? 'existing' : 'new')),
+        el('td', {}, actionForEntity(local)),
+      ));
+    });
+    table.append(tbody);
+    const partsDetails = el('details', { className: 'entity-preview-parts' },
+      el('summary', {}, 'Parts / plan JSON'),
+      el('pre', { className: 'entity-preview-parts-pre' },
+        `parts: ${JSON.stringify(preview.parts)}\n`
+        + (preview.conflicts?.length ? `Already in pipeline: ${preview.conflicts.join(', ')}\n` : '')
+        + ((preview.notes || []).join('\n') || '')),
+    );
+    const colNotes = [...columnWarnById.entries()];
+    if (colNotes.length) {
+      partsDetails.append(el('pre', { className: 'entity-preview-parts-pre' },
+        `Column checks:\n${colNotes.map(([id, note]) => `  ${id}: ${note}`).join('\n')}`));
+    }
+    previewOut.append(summary, table, partsDetails);
+  }
+
   btnRow.querySelector('#entity-plan-preview-btn').addEventListener('click', async () => {
     const ctx = requireImportReady();
     if (!ctx) return;
@@ -677,28 +833,10 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
         body: JSON.stringify({ pipelineId: ctx.pipelineId, yamlFileId: ctx.yamlFileId, plan }),
       });
       const preview = await jsonOrThrow(res, 'Preview failed');
-      const lines = [
-        `Pipeline ${preview.pipelineId}: ${preview.entityCount} entities`,
-        `onExistingEntity: ${preview.onExistingEntity}`,
-        `parts: ${JSON.stringify(preview.parts)}`,
-      ];
-      (preview.entities || []).forEach((e) => {
-        lines.push(`  ${e.source} -> ${e.targetSchema}.${e.targetTable}`
-          + (e.entityName ? ` (${e.entityName})` : '')
-          + (e.alreadyExists ? ' [exists]' : '')
-          + (e.chainId ? ` chain=${e.chainId}` : ''));
-      });
-      if (preview.conflicts?.length) lines.push(`Already in pipeline: ${preview.conflicts.join(', ')}`);
-      (preview.notes || []).forEach((n) => lines.push(n));
-      const colNotes = [...columnWarnById.entries()].map(([id, note]) => `  ${id}: ${note}`);
-      if (colNotes.length) {
-        lines.push('Column checks:');
-        colNotes.forEach((n) => lines.push(n));
-      }
-      previewOut.textContent = lines.join('\n');
+      renderPreviewTable(preview);
       log?.('Config', `Entity plan preview: ${preview.entityCount} entities`);
     } catch (previewErr) {
-      previewOut.textContent = '';
+      clearPreview();
       setMessage?.(previewErr.message, 'error');
     }
   });
