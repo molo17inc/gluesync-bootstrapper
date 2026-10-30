@@ -91,10 +91,14 @@ export function buildEntityPlan(panel, pipelineId, loadedEntities, selectedIds, 
     entry.entities = {};
     if (advanced.include.length) entry.entities.include = advanced.include;
     if (advanced.exclude.length) entry.entities.exclude = advanced.exclude;
-  } else if (loadedEntities?.length && selectedIds) {
-    if (selectedIds.size < loadedEntities.length) {
-      entry.entities = { include: loadedEntities.map((e) => e.id).filter((id) => selectedIds.has(id)) };
-    }
+  } else if (
+    loadedEntities?.length
+    && selectedIds
+    && selectedIds.size < loadedEntities.length
+  ) {
+    entry.entities = {
+      include: loadedEntities.map((e) => e.id).filter((id) => selectedIds.has(id)),
+    };
   }
 
   const overrideMap = {};
@@ -173,15 +177,15 @@ function rowMatchesFilter(entity, filter) {
   return hay.includes(filter);
 }
 
-/** Muted id under the name only when it adds information (@@n or name ≠ table key). */
+/** Muted id under the name only when it differs from the Source column (e.g. @@2). */
 export function entityIdSubtitle(entity) {
   const id = String(entity?.id || '');
   if (!id) return '';
-  if (id.includes('@@')) return id;
-  const tableKey = id.includes('.') ? id.slice(id.indexOf('.') + 1) : id;
-  const name = String(entity?.entityName || '').trim();
-  if (name && name.toLowerCase() !== tableKey.toLowerCase()) return id;
-  return '';
+  const source = String(entity?.source || '').trim();
+  if (source && id.toLowerCase() === source.toLowerCase()) return '';
+  // @@n (or any other id that is not the same as source) is useful; matching source is noise.
+  if (!source) return id.includes('@@') ? id : '';
+  return id;
 }
 
 function sourceDisplay(entity) {
@@ -247,10 +251,10 @@ export function columnMismatchNote(sourceCols, targetCols) {
 
 function onExistingPolicyLabel(panel) {
   const raw = panel.querySelector('[data-on-existing]')?.value || '';
-  if (raw === 'skip') return 'skip';
-  if (raw === 'update') return 'update';
-  if (raw === 'fail') return 'fail';
-  return 'as today (send as before)';
+  if (raw === 'skip') return 'will be skipped';
+  if (raw === 'update') return 'will be updated';
+  if (raw === 'fail') return 'import will fail';
+  return 'will use default on-existing behaviour';
 }
 
 function badge(text, kind) {
@@ -285,12 +289,12 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
   const onExisting = el('label', { className: 'entity-on-existing' },
     'On existing entity (already in the pipeline) ',
     el('select', { dataset: { onExisting: '1' } },
-      el('option', { value: '' }, 'as today (default)'),
+      el('option', { value: '' }, 'default on-existing behaviour'),
       el('option', { value: 'skip' }, 'skip'),
       el('option', { value: 'update' }, 'update'),
       el('option', { value: 'fail' }, 'fail')),
     el('span', { className: 'hint-text' },
-      'Default = omit from the plan: keep current behaviour (GS_IMPORT_ON_EXISTING if set, otherwise send as before).'));
+      'Default = omit from the plan: keep current behaviour (GS_IMPORT_ON_EXISTING if set, otherwise send the entity as before).'));
 
   const pickerStatus = el('p', { className: 'hint-text', id: 'entity-picker-status' },
     'Upload a YAML and select a pipeline to load entities.');
@@ -466,13 +470,15 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
     updateMismatchUi(entity.id, note || '');
   }
 
+  function resolveBoxTargets(entityOrMembers) {
+    if (Array.isArray(entityOrMembers)) return entityOrMembers;
+    if (entityOrMembers.chainId) return chainMembers(loadedEntities, entityOrMembers.chainId);
+    return [entityOrMembers];
+  }
+
   function onBoxChange(entityOrMembers, checked) {
     if (!selectedIds) selectedIds = new Set();
-    const targets = Array.isArray(entityOrMembers) ? entityOrMembers : (
-      entityOrMembers.chainId
-        ? chainMembers(loadedEntities, entityOrMembers.chainId)
-        : [entityOrMembers]
-    );
+    const targets = resolveBoxTargets(entityOrMembers);
     targets.forEach((member) => {
       if (checked) selectedIds.add(member.id);
       else selectedIds.delete(member.id);
@@ -497,7 +503,7 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
       list: 'entity-target-schema-list',
       placeholder: 'schema',
       dataset: { targetSchemaFor: entity.id },
-      title: 'Target schema (or NoSQL database)',
+      title: resolved.targetSchema || 'Target schema (or NoSQL database)',
       autocomplete: 'off',
     });
     const tableList = el('datalist', { id: listId });
@@ -508,7 +514,7 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
       list: listId,
       placeholder: 'table',
       dataset: { targetTableFor: entity.id },
-      title: 'Target table or collection — pick from the list or type a new name',
+      title: resolved.targetTable || 'Target table or collection',
       autocomplete: 'off',
     });
     const modeBadge = el('span', { className: 'entity-target-mode-badge', dataset: { modeBadgeFor: entity.id } });
@@ -517,12 +523,14 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
     const syncBadge = (tables) => {
       const mode = inferTargetMode(tableInput.value, tables);
       modeBadge.replaceChildren(badge(mode, mode === 'existing' ? 'existing' : 'new'));
+      schemaInput.title = schemaInput.value || 'Target schema (or NoSQL database)';
+      tableInput.title = tableInput.value || 'Target table or collection';
       setOverride(entity.id, {
         mode,
         targetSchema: schemaInput.value || '',
         targetTable: tableInput.value || '',
       });
-      void refreshColumnWarn(entity).catch((err) => {
+      refreshColumnWarn(entity).catch((err) => {
         log?.('Config', `Column mismatch check failed: ${err.message}`);
       });
     };
@@ -593,7 +601,7 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
     const policy = onExistingPolicyLabel(panel);
     return el('td', {},
       badge('already in pipeline', 'warn'),
-      el('span', { className: 'entity-status-policy muted' }, ` → ${policy}`),
+      el('span', { className: 'entity-status-policy muted' }, ` ${policy}`),
     );
   }
 
@@ -784,7 +792,7 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
     previewOut.replaceChildren();
     const summary = el('p', { className: 'hint-text' },
       `Pipeline ${preview.pipelineId}: ${preview.entityCount} entities · `
-      + `onExistingEntity: ${preview.onExistingEntity || 'as today (default)'}`);
+      + `onExistingEntity: ${preview.onExistingEntity || 'default'}`);
     const table = el('table', { className: 'entity-preview-table custom-import-tables' });
     table.append(el('thead', {}, el('tr', {},
       el('th', {}, 'Entity'),
@@ -816,8 +824,9 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
     );
     const colNotes = [...columnWarnById.entries()];
     if (colNotes.length) {
+      const colBody = colNotes.map(([id, note]) => `  ${id}: ${note}`).join('\n');
       partsDetails.append(el('pre', { className: 'entity-preview-parts-pre' },
-        `Column checks:\n${colNotes.map(([id, note]) => `  ${id}: ${note}`).join('\n')}`));
+        `Column checks:\n${colBody}`));
     }
     previewOut.append(summary, table, partsDetails);
   }

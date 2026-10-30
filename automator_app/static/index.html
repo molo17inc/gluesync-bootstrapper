@@ -874,8 +874,29 @@
       </div>
 
       <section class="card log-card requires-auth">
-        <h2>Execution log</h2>
-        <div id="log-output" class="log-output"></div>
+        <div class="log-card-header">
+          <h2>Execution log</h2>
+          <div class="log-toolbar" role="toolbar" aria-label="Log controls">
+            <label class="log-follow-label">
+              <input type="checkbox" id="log-follow" checked />
+              Follow
+            </label>
+            <label class="log-filter-label">
+              Level
+              <select id="log-level-filter" aria-label="Filter by level">
+                <option value="all">All</option>
+                <option value="debug">Debug+</option>
+                <option value="info">Info+</option>
+                <option value="warning">Warning+</option>
+                <option value="error">Error</option>
+              </select>
+            </label>
+            <input type="search" id="log-search" class="log-search" placeholder="Search log…" aria-label="Search log" />
+            <button type="button" id="log-copy-btn" class="secondary">Copy</button>
+            <button type="button" id="log-download-btn" class="secondary">Download</button>
+          </div>
+        </div>
+        <div id="log-output" class="log-output" tabindex="0"></div>
       </section>
     </main>
 
@@ -884,7 +905,12 @@
     </footer>
 
     <template id="log-line-template">
-      <div class="log-line"></div>
+      <div class="log-line">
+        <span class="log-line-ts"></span>
+        <span class="log-line-level"></span>
+        <span class="log-line-scope"></span>
+        <span class="log-line-msg"></span>
+      </div>
     </template>
 
     <script src="/static/app.js" type="module"></script>
