@@ -5723,6 +5723,11 @@ def build_arg_parser():
                              "Empty {} keeps current behaviour. Refuses agents/globals/resumeInto/name/password.")
     parser.add_argument('--write-plan', default=None, metavar='PATH',
                         help="Write a draft entity plan JSON for --yaml-file and exit (offline; no Core Hub)")
+    parser.add_argument('--include', action='append', default=None, metavar='SCHEMA.KEY',
+                        help="Repeatable. Exact SCHEMA.KEY (@@n included) or unique entityName to import. "
+                             "Builds a one-pipeline plan (merged into --plan when both are set).")
+    parser.add_argument('--exclude', action='append', default=None, metavar='SCHEMA.KEY',
+                        help="Repeatable. Exact SCHEMA.KEY or unique entityName to skip (merged like --include).")
     import_options.add_cli_arguments(parser)
     return parser
 
@@ -5739,12 +5744,61 @@ def _cli_write_plan(args) -> int:
     return 0
 
 
+def _cli_selection_overlay(args) -> dict:
+    """Plan fragment from repeatable ``--include`` / ``--exclude`` (empty dict when neither is set)."""
+    if not args.include and not args.exclude:
+        return {}
+    entities = {}
+    if args.include:
+        entities["include"] = list(args.include)
+    if args.exclude:
+        entities["exclude"] = list(args.exclude)
+    return {"version": 1, "pipelines": {str(args.pipeline): {"entities": entities}}}
+
+
+def _cli_merge_selection_plan(base: dict, overlay: dict) -> dict:
+    """Merge CLI ``--include``/``--exclude`` into a loaded plan dict (overlay wins per list).
+
+    Uses the plan's existing pipeline key when present so ``load_entity`` still sees one entry.
+    """
+    if not overlay:
+        return base
+    if not base:
+        return overlay
+    merged = json.loads(json.dumps(base))  # deep copy via JSON (plan is JSON-safe)
+    over_pipe = next(iter(overlay["pipelines"]))
+    over_ent = overlay["pipelines"][over_pipe]["entities"]
+    pipes = merged.setdefault("pipelines", {})
+    pipe_id = next(iter(pipes), over_pipe)
+    entry = pipes.setdefault(pipe_id, {})
+    entities = entry.setdefault("entities", {})
+    if "include" in over_ent:
+        entities["include"] = list(over_ent["include"])
+    if "exclude" in over_ent:
+        entities["exclude"] = list(over_ent["exclude"])
+    return merged
+
+
+def _cli_load_plan(args) -> "import_plan.ImportPlan":
+    """``--plan`` file plus optional ``--include``/``--exclude`` overlay."""
+    raw: dict = {}
+    if args.plan:
+        raw = json.loads(Path(args.plan).read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            raise ValueError("Entity import plan: plan file must be a JSON object")
+    raw = _cli_merge_selection_plan(raw, _cli_selection_overlay(args))
+    return import_plan.load_entity(raw)
+
+
 def _cli_apply_plan(args, options):
-    """Load ``--plan``, apply YAML selection/overrides, merge ImportOptions. Returns (yaml_file, options, restore_fc)."""
-    if not args.plan:
+    """Load ``--plan`` / ``--include`` / ``--exclude``, apply YAML selection, merge ImportOptions.
+
+    Returns ``(yaml_file, options, restore_fc)``.
+    """
+    if not args.plan and not args.include and not args.exclude:
         return args.yaml_file, options, True
     try:
-        plan = import_plan.load_entity(Path(args.plan).read_text(encoding="utf-8"))
+        plan = _cli_load_plan(args)
     except import_plan.PlanError as exc:
         raise ValueError(f"Entity import plan: {exc}") from exc
     if plan.empty:

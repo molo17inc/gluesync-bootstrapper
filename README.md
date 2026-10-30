@@ -877,11 +877,12 @@ Entities are named `SOURCESCHEMA.TABLE`, using the backup's own names. A name wi
 
 ### Customize entity creation (Automator Create / Bulk / `create_all_entities --plan`)
 
-Create entities (`/api/run`), Bulk create (`/api/bulk/create`) and the CLI share one **entity Customize** plan: a single-pipeline subset of the backup Customize plan JSON (`import_plan.load_entity` / `apply_entity`). Use **Customize entity creation** on the Automator Create Entities page (or pass `--plan` on the CLI).
+Create entities (`/api/run`), Bulk create (`/api/bulk/create`) and the CLI share one **entity Customize** plan: a single-pipeline subset of the backup Customize plan JSON (`import_plan.load_entity` / `apply_entity`). Use **Customize entity creation** on the Automator Create Entities page (or pass `--plan` / `--include` on the CLI).
 
 What the plan can do:
 
-- **include / exclude** tables (`SCHEMA.TABLE`)
+- **include / exclude** tables (`SCHEMA.KEY`, `@@n` included). A bare `SCHEMA.TABLE` still expands to every `@@n` variant (unchanged). Include/exclude may also name an exact **entityName** when that name is unique in the YAML; ambiguous names must use `SCHEMA.KEY`.
+- **Automator entity picker**: after upload + pipeline selection, the UI loads the entity list from the existing preview endpoint into a checkbox table (entityName, exact id, source→target, SQL/NoSQL type, already-exists). Select all/none, search filter, selected count, grouping by schema. MultiTable chains (same `chainId`) select/deselect together; a partial chain shows a warning. All checked omits `entities.include`; none checked blocks Start. Free-text include/exclude remain under **Advanced** and override the picker when filled.
 - **overrides**: `targetSchema`, `targetTable`, `entityName` per table; `tableTargetSchema` map
 - **remap**: schemas / tables / groups (applied through `ImportOptions`, same as backup)
 - **onExistingEntity**: `skip` | `update` | `fail`
@@ -890,13 +891,18 @@ What the plan can do:
 
 What it refuses (use backup Customize instead): `agents`, `globals`, `resumeInto`, `name`, `import`, `onExistingPipeline`, and any password / secret key. At most one `pipelines` entry. An empty plan (`{}` / omit) keeps current behaviour exactly.
 
-Preview and draft are GET-only against Core Hub (`POST /api/entities/plan/preview` and `/api/entities/plan/draft`). *Download plan JSON* saves the draft of the uploaded YAML.
+Preview uses `POST /api/entities/plan/preview` (also powers the picker inventory). *Download plan JSON* saves the **current selection** (picker or advanced). No new Core Hub APIs (works with Core Hub &lt;2.3).
 
 ```bash
 # draft a plan offline from a YAML, then edit and apply
 python create_all_entities.py --pipeline PIPE --yaml-file tables.yaml --write-plan plan.json
 python create_all_entities.py --pipeline PIPE --source-schema S --target-schema T \
   --source-type SQL --target-type SQL --token "$TOKEN" --yaml-file tables.yaml --plan plan.json
+
+# one-pipeline selection without a plan file (repeatable; merge into --plan when both are set)
+python create_all_entities.py --pipeline PIPE --source-schema S --target-schema T \
+  --source-type SQL --target-type SQL --token "$TOKEN" --yaml-file tables.yaml \
+  --include SCH.TAB1 --include SCH.TAB2@@2 --exclude SCH.TAB3
 ```
 
 Object-store / streaming / NoSQL targets still skip create-table (same as Import All). Core Hub &lt;2.3 needs no new APIs.

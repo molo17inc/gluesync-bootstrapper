@@ -378,26 +378,81 @@ def _matches(name: str, entity_id: str) -> bool:
     return entity_id == name or ("@@" not in name and entity_id.split("@@")[0] == name)
 
 
+def _yaml_entity_name(yaml_config, entity: Dict[str, Any]) -> Optional[str]:
+    """The custom ``entityName`` of one :func:`entity_ids` row, if any."""
+    entry = _dict_or_empty(_schemas_root(yaml_config).get(entity["schema"]))
+    custom = _dict_or_empty(_dict_or_empty(entry.get("tables")).get("custom"))
+    cfg = _dict_or_empty(custom.get(entity["key"]))
+    name = cfg.get("entityName")
+    return str(name) if name else None
+
+
+def resolve_selection(yaml_config, name: str, *, where: str = "entities.include") -> List[str]:
+    """Ids that ``name`` selects for include/exclude.
+
+    ``SCHEMA.KEY`` uses :func:`_matches` (bare name still expands to every ``@@n``). When that hits nothing,
+    an exact ``entityName`` (casefolded) is accepted if it names exactly one table; several matches are
+    refused so hand-written plans stay unambiguous. Overrides and ``tableTargetSchema`` stay id-only.
+    """
+    entities = entity_ids(yaml_config)
+    ids = [e["id"] for e in entities]
+    hit = [i for i in ids if _matches(name, i)]
+    if hit:
+        return hit
+    folded = str(name).casefold()
+    by_name: Dict[str, List[str]] = {}
+    for entity in entities:
+        ename = _yaml_entity_name(yaml_config, entity)
+        if ename and ename.casefold() == folded:
+            by_name.setdefault(folded, []).append(entity["id"])
+    found = by_name.get(folded) or []
+    if len(found) > 1:
+        raise PlanError(
+            f"{where}: entityName {name!r} matches {len(found)} tables "
+            f"({', '.join(found)}); use an exact SCHEMA.KEY (@@n included) instead"
+        )
+    return found
+
+
+def _resolved_id_set(yaml_config, names: Optional[Iterable[str]], where: str) -> Optional[set]:
+    """Casefolded ids selected by ``names``, or None when ``names`` is None (meaning "all")."""
+    if names is None:
+        return None
+    out: set = set()
+    for name in names:
+        out.update(i.casefold() for i in resolve_selection(yaml_config, name, where=where))
+    return out
+
+
 def check_names(yaml_config, pipeline: PipelinePlan) -> None:
     """PlanError for a selection, override or tableTargetSchema name the backup pipeline does not have."""
     ids = [e["id"] for e in entity_ids(yaml_config)]
-    named = [("entities.include", n) for n in pipeline.include or []] + \
-            [("entities.exclude", n) for n in pipeline.exclude] + \
-            [("entities.overrides", n) for n in pipeline.overrides] + \
-            [("tableTargetSchema", n) for n in pipeline.table_target_schema]
-    for where, name in named:
+    where_prefix = f"pipelines.{pipeline.old_id}"
+    for name in pipeline.include or []:
+        if not resolve_selection(yaml_config, name, where=f"{where_prefix}.entities.include"):
+            raise PlanError(f"{where_prefix}.entities.include: no table {name!r} in the backup"
+                            f"{import_options.suggest(name, ids)}")
+    for name in pipeline.exclude:
+        if not resolve_selection(yaml_config, name, where=f"{where_prefix}.entities.exclude"):
+            raise PlanError(f"{where_prefix}.entities.exclude: no table {name!r} in the backup"
+                            f"{import_options.suggest(name, ids)}")
+    for where, name in [("entities.overrides", n) for n in pipeline.overrides] +                        [("tableTargetSchema", n) for n in pipeline.table_target_schema]:
         if not any(_matches(name, i) for i in ids):
-            raise PlanError(f"pipelines.{pipeline.old_id}.{where}: no table {name!r} in the backup"
+            raise PlanError(f"{where_prefix}.{where}: no table {name!r} in the backup"
                             f"{import_options.suggest(name, ids)}")
 
 
 def selected_ids(yaml_config, pipeline: PipelinePlan) -> List[str]:
     """The entity ids of the backup pipeline the plan imports."""
+    where = f"pipelines.{pipeline.old_id}"
+    include = _resolved_id_set(yaml_config, pipeline.include, f"{where}.entities.include")
+    exclude = _resolved_id_set(yaml_config, pipeline.exclude, f"{where}.entities.exclude") or set()
     out = []
     for entity in entity_ids(yaml_config):
-        if pipeline.include is not None and not any(_matches(n, entity["id"]) for n in pipeline.include):
+        eid = entity["id"].casefold()
+        if include is not None and eid not in include:
             continue
-        if any(_matches(n, entity["id"]) for n in pipeline.exclude):
+        if eid in exclude:
             continue
         out.append(entity["id"])
     return out
