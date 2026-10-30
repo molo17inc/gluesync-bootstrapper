@@ -8,7 +8,7 @@ from pathlib import Path
 JS = Path(__file__).resolve().parents[1] / "automator_app" / "static" / "entity_import.js"
 
 SCRIPT = r"""
-import { buildEntityPlan, planIsEmpty, selectionError } from './entity_import.mjs';
+import { buildEntityPlan, planIsEmpty, selectionError, resolveTarget, targetDiffersFromDefault } from './entity_import.mjs';
 
 class FakeEl {
   constructor(attrs = {}) {
@@ -38,9 +38,9 @@ function basePanel({ include = '', exclude = '', onExisting = 'skip' } = {}) {
 const assert = (c, m) => { if (!c) { throw new Error(m); } };
 
 const loaded = [
-  { id: 'SCH.T1', schema: 'SCH' },
-  { id: 'SCH.T2', schema: 'SCH' },
-  { id: 'SCH.T3', schema: 'SCH' },
+  { id: 'SCH.T1', schema: 'SCH', targetSchema: 'TGT', targetTable: 'T1' },
+  { id: 'SCH.T2', schema: 'SCH', targetSchema: 'TGT', targetTable: 'T2' },
+  { id: 'SCH.T3', schema: 'SCH', targetSchema: 'TGT', targetTable: 'T3' },
 ];
 
 // Advanced free-text still works
@@ -77,6 +77,34 @@ assert(Object.keys(empty.defaults).length === 0, 'empty defaults');
 assert(Object.keys(empty.pipelines).length === 0, 'empty pipelines');
 assert(planIsEmpty(empty), 'planIsEmpty empty');
 assert(!planIsEmpty(planAdv), 'planIsEmpty filled');
+
+// Target overrides emit when renamed
+const ov = new Map([
+  ['SCH.T1', { mode: 'new', targetSchema: 'TGT', targetTable: 'T1_RENAMED' }],
+  ['SCH.T2', { mode: 'existing', targetSchema: 'TGT', targetTable: 'EXISTING_T2' }],
+]);
+const planOv = buildEntityPlan(allPanel, 'pipe-1', loaded, new Set(['SCH.T1','SCH.T2','SCH.T3']), ov);
+assert(planOv.pipelines['pipe-1'].entities.overrides['SCH.T1'].targetTable === 'T1_RENAMED', 'rename override');
+assert(planOv.pipelines['pipe-1'].entities.overrides['SCH.T2'].targetTable === 'EXISTING_T2', 'existing override');
+assert(!planOv.pipelines['pipe-1'].entities.overrides['SCH.T3'], 'default omits override');
+
+// Empty target table → error
+const emptyTarget = new Map([['SCH.T1', { mode: 'new', targetSchema: 'TGT', targetTable: '' }]]);
+assert(selectionError(allPanel, loaded, new Set(['SCH.T1']), emptyTarget) !== null, 'empty target error');
+
+// Duplicate targets → error
+const dup = new Map([
+  ['SCH.T1', { mode: 'new', targetSchema: 'TGT', targetTable: 'SAME' }],
+  ['SCH.T2', { mode: 'new', targetSchema: 'TGT', targetTable: 'SAME' }],
+]);
+assert(selectionError(allPanel, loaded, new Set(['SCH.T1','SCH.T2']), dup) !== null, 'dup target error');
+
+// resolveTarget / differs helpers
+const r = resolveTarget(loaded[0], ov);
+assert(r.targetTable === 'T1_RENAMED', 'resolve rename');
+assert(targetDiffersFromDefault(loaded[0], r), 'differs');
+assert(!targetDiffersFromDefault(loaded[2], resolveTarget(loaded[2], ov)), 'same default');
+
 console.log('ok');
 """
 
