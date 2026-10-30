@@ -26,6 +26,7 @@ import re
 import time
 import traceback
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -1567,3 +1568,82 @@ def create_group(token, pipeline_id, group_name, description: Optional[str] = No
         logger.warning(f"Error in create_group for '{group_name}': {str(e)}")
         logger.debug(f"Error details: {traceback.format_exc()}")
         return "_default"
+
+
+# ---------------------------------------------------------------------------
+# Connections that need a user to sign in after a restore
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class SignInRule:
+    """A custom host credential that makes a restored connection wait for an interactive sign-in.
+
+    ``agent_tag_prefix`` limits the rule to the agents whose tag starts with it; None applies it to any agent.
+    """
+
+    agent_tag_prefix: Optional[str]
+    credential_key: str
+    value: str
+    provider: str
+
+
+# U2M OAuth refresh tokens never leave Core Hub, so a restored connection starts signed out. Add a row for
+# every other connector that signs in through OAuth.
+SIGN_IN_RULES: Tuple[SignInRule, ...] = (
+    SignInRule(agent_tag_prefix="databricks", credential_key="authMode", value="U2M", provider="Databricks"),
+)
+
+
+def _agent_tags(agent: Dict[str, Any]) -> List[str]:
+    """Lowercase tags an agent config goes by: the catalog tag and the name the user gave it."""
+    return [
+        str(agent[key]).strip().lower()
+        for key in ("agentInternalName", "agentTag", "agentUserTag")
+        if agent.get(key)
+    ]
+
+
+def _rule_applies(rule: SignInRule, tags: List[str], custom: Dict[str, Any]) -> bool:
+    if rule.agent_tag_prefix is not None and not any(tag.startswith(rule.agent_tag_prefix.lower()) for tag in tags):
+        return False
+    value = custom.get(rule.credential_key)
+    return isinstance(value, str) and value.strip().upper() == rule.value.upper()
+
+
+def agent_sign_in_provider(agent: Any, rules: Tuple[SignInRule, ...] = SIGN_IN_RULES) -> Optional[str]:
+    """Provider an agent config must sign in to after a restore, or None when it needs no sign-in."""
+    if not isinstance(agent, dict):
+        return None
+    custom = agent.get("customHostCredentials") or agent.get("hostCredentialsCustomProperties")
+    if not isinstance(custom, dict):
+        return None
+    tags = _agent_tags(agent)
+    for rule in rules:
+        if _rule_applies(rule, tags, custom):
+            return rule.provider
+    return None
+
+
+def _agent_display_name(agent: Dict[str, Any]) -> str:
+    host = agent.get("hostCredentials")
+    connection_name = host.get("connectionName") if isinstance(host, dict) else None
+    return str(connection_name or agent.get("agentUserTag") or agent.get("agentTag") or "(unnamed)")
+
+
+def sign_in_required_warnings(agents: Any, rules: Tuple[SignInRule, ...] = SIGN_IN_RULES) -> List[str]:
+    """One warning per restored agent or connection that a user must sign in to before its pipelines can run.
+
+    Never a failure: the restore succeeded, the connection just has no sign-in yet. The same text is listed once.
+    """
+    warnings: List[str] = []
+    for agent in agents if isinstance(agents, list) else []:
+        provider = agent_sign_in_provider(agent, rules)
+        if provider is None:
+            continue
+        warning = (
+            f"Sign-in required: {_agent_display_name(agent)} ({provider}). "
+            "Open the connection in Gluesync and sign in."
+        )
+        if warning not in warnings:
+            warnings.append(warning)
+    return warnings

@@ -1783,6 +1783,11 @@ function bindEvents() {
         if (result.logs && Array.isArray(result.logs)) {
           result.logs.forEach(log => logActivity('Config', log));
         }
+
+        // Warnings do not fail the restore: they are what is left to do, such as signing in to a connection
+        if (result.warnings && Array.isArray(result.warnings)) {
+          result.warnings.forEach(warning => logActivity('Config', warning));
+        }
         
         if (result.success === false) {
           ui.setConfigMessage(result.message || 'Import failed', 'error');

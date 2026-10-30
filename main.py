@@ -44,6 +44,7 @@ from utils.gluesync_sdk_client import initialize_gluesync_sdk, get_token, get_gl
 from utils.core_hub_client import CoreHubClient
 from utils.transactions_audit_client import TransactionsAuditClient
 from commons import extract_schemas_from_yaml, extract_all_schemas_from_yaml, extract_schema_types_from_yaml, configure_core_hub, catalog_type_for_agent_tag
+from commons import sign_in_required_warnings
 from commons import admin_credentials_path, admin_password_problem, load_admin_password, login_password_candidates, save_admin_credentials
 from utils.redact import redact
 
@@ -1286,6 +1287,12 @@ def _apply_agent_credentials(token, pipeline_id, agents_to_conf):
         _upload_agent_credentials(token, pipeline_id, agent)
 
 
+def _warn_sign_in_required(agents_to_conf):
+    """Warn about the connections a user must sign in to; a warning, never a failure."""
+    for warning in sign_in_required_warnings(agents_to_conf):
+        logger.warning(warning)
+
+
 def _apply_agent_specific_configuration(token, pipeline_id, agents_to_conf):
     """Apply agent specific configuration."""
     for agent in agents_to_conf:
@@ -1479,6 +1486,7 @@ def main():
 
     agents_to_conf = _provision_agents(token, pipeline_id, conf_test)
     _apply_agent_credentials(token, pipeline_id, agents_to_conf)
+    _warn_sign_in_required(agents_to_conf)
     _apply_agent_specific_configuration(token, pipeline_id, agents_to_conf)
 
     configure_entities(agents_to_conf, pipeline_id, token)
