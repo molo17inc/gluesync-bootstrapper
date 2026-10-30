@@ -1,5 +1,6 @@
 import { initCustomImport } from './custom_import.js';
 import { initEntityImport } from './entity_import.js';
+import { createLogPanel } from './log_panel.js';
 const api = {
   async getState() {
     const res = await fetch('/api/state');
@@ -390,29 +391,20 @@ const ui = (() => {
     }
   }
 
-  function makeLogNode(text) {
-    if (logTemplate && logTemplate.content && logTemplate.content.firstElementChild) {
-      const node = logTemplate.content.firstElementChild.cloneNode(true);
-      node.textContent = text;
-      return node;
-    }
-    const fallback = document.createElement('div');
-    fallback.className = 'log-line';
-    fallback.textContent = text;
-    return fallback;
-  }
-
-  function appendLogLine(text) {
-    if (!logOutput || typeof text !== 'string' || !text.trim()) return;
-    logOutput.appendChild(makeLogNode(text));
-    logOutput.scrollTop = logOutput.scrollHeight;
-  }
-
-  function renderLogs(logs = []) {
-    if (!logOutput) return;
-    logOutput.innerHTML = '';
-    logs.forEach((line) => appendLogLine(line));
-  }
+  const logPanel = createLogPanel({
+    logOutput,
+    logTemplate,
+    logFollowEl: document.getElementById('log-follow'),
+    logLevelEl: document.getElementById('log-level-filter'),
+    logSearchEl: document.getElementById('log-search'),
+    logCopyBtn: document.getElementById('log-copy-btn'),
+    logDownloadBtn: document.getElementById('log-download-btn'),
+  });
+  const renderLogs = (...args) => logPanel.renderLogs(...args);
+  const appendLogLine = (...args) => logPanel.appendLogLine(...args);
+  const syncServerLogs = (...args) => logPanel.syncServerLogs(...args);
+  const clearLogPanel = (...args) => logPanel.clearLogPanel(...args);
+  const formatLogTs = logPanel.formatLogTs;
 
   return {
     setStatus,
@@ -424,6 +416,9 @@ const ui = (() => {
     setAuthEnabled,
     renderLogs,
     appendLogLine,
+    syncServerLogs,
+    clearLogPanel,
+    formatLogTs,
     lockAuthFields: setAuthFieldsLocked,
     setVersion: setVersionLabel,
     setConnectionInfo,
@@ -669,11 +664,9 @@ function initTabs() {
   activateTab(initialTab);
 }
 
-function logActivity(scope, message) {
+function logActivity(scope, message, level = 'info') {
   if (!message) return;
-  const timestamp = new Date().toLocaleTimeString();
-  const prefix = scope ? `[${scope}]` : '';
-  ui.appendLogLine(`${timestamp} ${prefix} ${message}`.trim());
+  ui.appendLogLine(message, { scope: scope || '', level, origin: 'client' });
 }
 
 let isRefreshingCorehub = false;
@@ -778,7 +771,7 @@ const stateManager = {
 
   handleRunUpdate(run) {
     if (!run) return;
-    ui.renderLogs(run.logs);
+    ui.syncServerLogs(run);
     ui.setStatus(run.status, run.status.toUpperCase());
     this.lastStatus = run.status;
     if (run.corehubOverview) {

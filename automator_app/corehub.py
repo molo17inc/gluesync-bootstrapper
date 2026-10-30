@@ -303,17 +303,28 @@ def authenticate(
     return token
 
 
+def _invoke_log_callback(callback: Callable[..., None], message: str, *, level: str = "info", scope: str = "") -> None:
+    """Call ``callback`` with structured kwargs when supported, else plain message."""
+    try:
+        callback(message, level=level, scope=scope)
+    except TypeError:
+        callback(message)
+
+
 class _CallbackLogHandler(logging.Handler):
     """Logging handler that forwards every non-empty log message to a callback."""
 
-    def __init__(self, callback: Callable[[str], None], level: int = logging.NOTSET) -> None:
+    def __init__(self, callback: Callable[..., None], level: int = logging.NOTSET) -> None:
         super().__init__(level=level)
         self._callback = callback
 
     def emit(self, record: logging.LogRecord) -> None:  # type: ignore[override]
         message = record.getMessage()
-        if message:
-            self._callback(message)
+        if not message:
+            return
+        level = (record.levelname or "INFO").lower()
+        scope = record.name or ""
+        _invoke_log_callback(self._callback, message, level=level, scope=scope)
 
 
 def _is_nosql_target(target_type: Optional[str]) -> bool:
@@ -336,11 +347,12 @@ def _restore_create_tables_setting(prev_env_value: Optional[str], prev_flag_valu
     set_create_table_if_not_exists(prev_flag_value)
 
 
-def _replay_logs(log_callback: Optional[Callable[[str], None]], logs: list) -> None:
+def _replay_logs(log_callback: Optional[Callable[..., None]], logs: list) -> None:
     """Send each captured stdout line to ``log_callback``, when there is one."""
     if log_callback is not None:
         for line in logs:
-            log_callback(line)
+            if line:
+                _invoke_log_callback(log_callback, line, level="info", scope="stdout")
 
 
 def _create_entities_outcome(result_payload: Dict[str, Any], logs: list) -> Dict[str, Any]:

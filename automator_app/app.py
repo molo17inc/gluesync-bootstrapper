@@ -402,12 +402,22 @@ class StateResponse(BaseModel):
     corehub_overview: Optional[dict] = Field(None, alias="corehubOverview")
 
 
+class LogEntryModel(BaseModel):
+    """Structured execution-log row (additive; ``logs`` strings stay for compatibility)."""
+
+    ts: str
+    level: str = "info"
+    scope: str = ""
+    message: str
+
+
 class RunSnapshot(BaseModel):
     id: str
     status: str
     log_count: int = Field(..., alias="logCount")
     error: Optional[str] = None
     logs: Optional[list[str]] = None
+    log_entries: Optional[list[LogEntryModel]] = Field(None, alias="logEntries")
 
 
 class ApiMessage(BaseModel):
@@ -1013,6 +1023,10 @@ def _current_run(include_logs: bool = False):
     if include_logs:
         logs = state.get_logs(response.id)
         response.logs = logs or []
+        entries = state.get_log_entries(response.id)
+        response.log_entries = [
+            LogEntryModel(**row) for row in (entries or [])
+        ]
     return response
 
 
@@ -4778,8 +4792,8 @@ async def _execute_run(run_id: str, request: RunRequest) -> None:
 
     import_opts = _entity_run_import_options(plan, pipeline, dry_run=bool(request.dry_run))
 
-    def _log_callback(message: str) -> None:
-        state.append_log(run_id, message)
+    def _log_callback(message: str, *, level: str = "info", scope: str = "") -> None:
+        state.append_log(run_id, message, level=level, scope=scope)
 
     for note in notes:
         _log_callback(f"[plan] {note}")
