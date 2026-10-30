@@ -9,6 +9,8 @@ const PARTS = [
   ['groups', 'Groups'],
   ['createTables', 'Create missing tables'],
 ];
+const AS_IN_BACKUP = '(as in backup)';
+
 const GLOBALS = [
   ['notifications', 'Notifications (SMTP)'],
   ['users', 'Users, OIDC and user groups'],
@@ -65,7 +67,7 @@ function renderPreview(preview, target) {
     `Globals: ${Object.entries(preview.globals).filter(([, v]) => v).map(([k]) => k).join(', ') || 'none'}`,
     `Total: ${preview.totals.pipelines} pipeline(s), ${preview.totals.entities} entities`,
   );
-  preview.errors.forEach((e) => lines.push(`PROBLEM: ${e}`));
+  preview.errors.forEach((e) => lines.push(`PROBLEM: ${paraphrasePreviewError(e)}`));
   target.textContent = lines.join('\n');
 }
 
@@ -74,6 +76,51 @@ async function jsonOrThrow(res, fallback) {
   if (!res.ok) throw new Error(body.detail || fallback);
   return body;
 }
+
+
+function paraphrasePreviewError(raw) {
+  const text = String(raw || '');
+  if (/empty include|include.*empty|no entities/i.test(text)) {
+    return 'No entities selected. Tick at least one table, or turn the pipeline off.';
+  }
+  if (/pipeline.*off|import.*false|not selected/i.test(text)) {
+    return 'This pipeline is switched off in the plan. Enable it or remove it from the selection.';
+  }
+  if (/masked|password|\*{3,}/i.test(text)) {
+    return 'A masked password is still present. Fill the SOURCE/TARGET password fields, then Preview again.';
+  }
+  if (/already exists|onExisting|conflict/i.test(text)) {
+    return 'Something already exists on the target. Adjust Existing entities (skip / update / fail) and Preview again.';
+  }
+  if (/uploadId|expired|not found/i.test(text)) {
+    return 'The analysed backup expired. Choose the ZIP again and press Customize.';
+  }
+  return text.length > 220 ? `${text.slice(0, 217)}…` : text;
+}
+
+function countCreateTables(plan, analysis) {
+  let n = 0;
+  const createDefault = plan.defaults?.createTables !== false;
+  (analysis.pipelines || []).forEach((pipeline) => {
+    const entry = plan.pipelines?.[pipeline.oldId];
+    if (entry?.import === false) return;
+    const partsCreate = entry?.parts?.createTables;
+    const createOn = partsCreate === undefined ? createDefault : partsCreate;
+    if (!createOn) return;
+    const include = entry?.entities?.include;
+    const selected = include || (pipeline.entities || []).map((e) => e.id);
+    n += selected.length;
+  });
+  return n;
+}
+
+let sharedPasswords = {};
+
+/** Passwords collected in the Customize panel (in-memory only). */
+export function getCustomImportPasswords() {
+  return sharedPasswords;
+}
+
 
 export function initCustomImport({ fileInput, root, setMessage, log }) {
   if (!fileInput || !root) return;
@@ -87,6 +134,7 @@ export function initCustomImport({ fileInput, root, setMessage, log }) {
   function reset() {
     session = null;
     passwords = {};
+    sharedPasswords = {};
     panel.replaceChildren();
     panel.hidden = true;
   }
@@ -111,8 +159,9 @@ export function initCustomImport({ fileInput, root, setMessage, log }) {
     session.analysis.pipelines.forEach((pipeline) => {
       const box = panel.querySelector(`[data-pipeline="${CSS.escape(pipeline.oldId)}"]`);
       if (!box) return;
-      const entry = {};
-      entry.import = box.querySelector('[data-field="import"]').checked;
+      const entry = {
+        import: box.querySelector('[data-field="import"]').checked,
+      };
       const name = box.querySelector('[data-field="name"]').value.trim();
       if (name && name !== pipeline.name) entry.name = name;
       const resume = box.querySelector('[data-field="resumeInto"]').value.trim();
@@ -169,15 +218,16 @@ export function initCustomImport({ fileInput, root, setMessage, log }) {
       passwords[pid] = passwords[pid] || {};
       passwords[pid][ref] = input.value;
     });
+    sharedPasswords = passwords;
     return passwords;
   }
 
   function onExistingSelect(attrs, label) {
     return el('label', {}, label, el('select', attrs,
-      el('option', { value: '' }, 'as today (default)'),
-      el('option', { value: 'skip' }, 'skip existing entities'),
-      el('option', { value: 'update' }, 'update existing entities'),
-      el('option', { value: 'fail' }, 'fail on an existing entity')));
+      el('option', { value: '' }, 'keep current behaviour'),
+      el('option', { value: 'skip' }, 'skip (leave as-is)'),
+      el('option', { value: 'update' }, 'update in place'),
+      el('option', { value: 'fail' }, 'fail if it already exists')));
   }
 
   function renderPipeline(pipeline) {
@@ -187,9 +237,9 @@ export function initCustomImport({ fileInput, root, setMessage, log }) {
       el('tbody', {}, pipeline.entities.map((entity) => el('tr', { dataset: { entity: entity.id } },
         el('td', {}, el('input', { type: 'checkbox', checked: true, dataset: { field: 'selected' } })),
         el('td', {}, entity.id),
-        el('td', {}, el('input', { type: 'text', placeholder: '(as in backup)', dataset: { field: 'targetSchema' } })),
-        el('td', {}, el('input', { type: 'text', placeholder: '(as in backup)', dataset: { field: 'targetTable' } })),
-        el('td', {}, el('input', { type: 'text', placeholder: '(as in backup)', dataset: { field: 'entityName' } }))))));
+        el('td', {}, el('input', { type: 'text', placeholder: AS_IN_BACKUP, dataset: { field: 'targetSchema' } })),
+        el('td', {}, el('input', { type: 'text', placeholder: AS_IN_BACKUP, dataset: { field: 'targetTable' } })),
+        el('td', {}, el('input', { type: 'text', placeholder: AS_IN_BACKUP, dataset: { field: 'entityName' } }))))));
     const toggleAll = el('button', { type: 'button', className: 'secondary small' }, 'Select none / all');
     toggleAll.addEventListener('click', () => {
       const boxes = [...tables.querySelectorAll('[data-field="selected"]')];
@@ -200,11 +250,19 @@ export function initCustomImport({ fileInput, root, setMessage, log }) {
     });
     const agents = el('div', { className: 'custom-import-agents' }, pipeline.agents.map((agent) => {
       const ref = String(agent.agentTag || agent.agentId);
+      const role = String(agent.agentType || '').toUpperCase();
+      const badge = (role === 'SOURCE' || role === 'TARGET')
+        ? el('span', { className: `agent-role-badge agent-role-badge--${role.toLowerCase()}` }, role)
+        : null;
+      const pwdCaption = el('span', { className: 'custom-import-password-caption' },
+        badge ? badge.cloneNode(true) : null,
+        ` Password (${agent.password}; leave empty to keep)`);
       return el('div', { className: 'custom-import-agent', dataset: { agent: ref } },
-        el('strong', {}, `${agent.agentType} agent ${ref}`),
+        el('div', { className: 'custom-import-agent-title' },
+          badge, el('strong', {}, `${agent.agentType} agent ${ref}`)),
         ['host', 'port', 'database', 'username'].map((field) => el('label', {}, field,
           el('input', { type: 'text', value: agent[field] ?? '', dataset: { field } }))),
-        el('label', {}, `password (${agent.password}; leave empty to keep)`,
+        el('label', { className: 'custom-import-password-label' }, pwdCaption,
           el('input', { type: 'password', autocomplete: 'new-password',
             dataset: { agentPassword: ref, pipelineId: pipeline.oldId } })));
     }));
@@ -231,11 +289,43 @@ export function initCustomImport({ fileInput, root, setMessage, log }) {
     const previewBtn = el('button', { type: 'button', className: 'secondary' }, 'Preview');
     const importBtn = el('button', { type: 'button', className: 'primary', disabled: true }, 'Import selected');
     const downloadBtn = el('button', { type: 'button', className: 'secondary' }, 'Download plan JSON');
+    const summaryChip = el('span', { className: 'import-summary-chip', hidden: true }, '');
+    const stepper = el('ol', {
+      className: 'import-stepper',
+      dataset: { importStepper: '1' },
+      'aria-label': 'Import steps',
+    },
+      ...['Analyze', 'Customize', 'Preview', 'Import'].map((label, i) => el('li', {
+        dataset: { step: String(i) },
+        className: i === 1 ? 'is-current' : (i === 0 ? 'is-done' : ''),
+      }, el('span', { className: 'import-stepper-index' }, String(i + 1)), el('span', {}, label))));
     const gate = createPreviewGate();
     const planKey = () => JSON.stringify(buildPlan());
-    const invalidate = () => { gate.invalidate(); importBtn.disabled = true; };
+    const setStep = (idx) => {
+      stepper.querySelectorAll('[data-step]').forEach((node) => {
+        const n = Number(node.dataset.step);
+        node.classList.toggle('is-current', n === idx);
+        node.classList.toggle('is-done', n < idx);
+      });
+    };
+    const refreshChip = () => {
+      const n = countCreateTables(buildPlan(), analysis);
+      summaryChip.textContent = n === 1 ? '1 table will be created' : `${n} tables will be created`;
+      summaryChip.hidden = false;
+    };
+    const invalidate = () => {
+      gate.invalidate();
+      importBtn.disabled = true;
+      setStep(1);
+      refreshChip();
+    };
+    const actionBar = el('div', { className: 'custom-import-actions sticky-action-bar' },
+      summaryChip, previewBtn, importBtn, downloadBtn);
     panel.replaceChildren(
+      stepper,
       el('h3', {}, 'Customize the import'),
+      el('p', { className: 'hint-text' },
+        'Enter SOURCE and TARGET passwords when the backup shows masked values, then Preview before Import selected.'),
       el('fieldset', { className: 'fieldset' }, el('legend', {}, 'Global settings'),
         GLOBALS.map(([key, label]) => el('label', { className: 'checkbox' },
           el('input', { type: 'checkbox', checked: true, disabled: !analysis.globals[key], dataset: { global: key } }),
@@ -243,14 +333,17 @@ export function initCustomImport({ fileInput, root, setMessage, log }) {
       el('fieldset', { className: 'fieldset' }, el('legend', {}, 'Defaults for every pipeline'),
         PARTS.map(([key, label]) => el('label', { className: 'checkbox' },
           el('input', { type: 'checkbox', checked: true, dataset: { defaultPart: key } }), ` ${label}`)),
-        onExistingSelect({ dataset: { default: 'onExistingEntity' } }, 'Existing entities'),
+        onExistingSelect({ dataset: { default: 'onExistingEntity' } }, 'If an entity already exists'),
         el('label', {}, 'Pipeline name already taken', el('select', { dataset: { default: 'onExistingPipeline' } },
           el('option', { value: '' }, 'add "(restored)" (default)'), el('option', { value: 'fail' }, 'fail')))),
       ...analysis.pipelines.map(renderPipeline),
-      analysis.errors?.length ? el('p', { className: 'message error' }, analysis.errors.join('\n')) : null,
-      el('div', { className: 'button-group' }, previewBtn, importBtn, downloadBtn),
+      analysis.errors?.length
+        ? el('p', { className: 'message error' }, analysis.errors.map(paraphrasePreviewError).join('\n'))
+        : null,
+      actionBar,
       previewOut);
     panel.hidden = false;
+    refreshChip();
     panel.addEventListener('input', invalidate);
     panel.addEventListener('change', invalidate);
 
@@ -269,10 +362,15 @@ export function initCustomImport({ fileInput, root, setMessage, log }) {
         if (!gate.accept(ticket, planKey(), preview.ok)) return; // stale: the plan changed meanwhile
         renderPreview(preview, previewOut);
         importBtn.disabled = !gate.canImport(planKey());
-        setMessage(preview.ok ? 'Preview OK: review it, then Import selected' : 'The preview found problems',
-          preview.ok ? 'success' : 'error');
+        setStep(2);
+        if (preview.ok) {
+          setMessage('Preview OK: review it, then Import selected', 'success');
+        } else {
+          const problems = (preview.errors || []).map(paraphrasePreviewError).join(' · ');
+          setMessage(problems || 'The preview found problems', 'error');
+        }
       } catch (err) {
-        if (gate.isCurrent(ticket, planKey())) setMessage(err.message, 'error');
+        if (gate.isCurrent(ticket, planKey())) setMessage(paraphrasePreviewError(err.message), 'error');
       }
     });
 
@@ -283,6 +381,7 @@ export function initCustomImport({ fileInput, root, setMessage, log }) {
       form.append('plan', JSON.stringify(buildPlan()));
       form.append('agent_passwords', JSON.stringify(collectPasswords()));
       importBtn.disabled = true;
+      setStep(3);
       setMessage('Importing the selected pipelines…');
       log('Config', 'Importing the customized backup…');
       try {
@@ -293,9 +392,10 @@ export function initCustomImport({ fileInput, root, setMessage, log }) {
         log('Config', result.message || 'Customized import finished');
         if (res.status !== 409) reset(); // the stored upload is deleted after the import
       } catch (err) {
-        setMessage(err.message, 'error');
+        setMessage(paraphrasePreviewError(err.message), 'error');
         log('Config', `Customized import failed: ${err.message}`);
         importBtn.disabled = !gate.canImport(planKey());
+        setStep(2);
       }
     });
 
@@ -322,7 +422,7 @@ export function initCustomImport({ fileInput, root, setMessage, log }) {
         const analysis = await jsonOrThrow(res, 'Analysis failed');
         session = { uploadId: analysis.uploadId, analysis };
         render(analysis);
-        setMessage('Choose what to import, then Preview', 'success');
+        setMessage('Enter agent passwords if needed, then Preview', 'success');
       } catch (err) {
         setMessage(err.message, 'error');
       }

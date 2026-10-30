@@ -256,9 +256,11 @@
                 <fieldset class="fieldset">
                   <legend>Export all</legend>
                   <div class="button-group">
-                    <label>
-                      Export includes pipelines, agents, entities, schedules and
-                      UDFs
+                    <div class="export-all-actions">
+                      <span class="hint-text">
+                        Export includes pipelines, agents, entities, schedules and
+                        UDFs
+                      </span>
                       <button
                         type="button"
                         class="secondary"
@@ -267,7 +269,7 @@
                       >
                         Full backup
                       </button>
-                    </label>
+                    </div>
                   </div>
                 </fieldset>
               </form>
@@ -346,8 +348,13 @@
             <section class="card requires-auth" id="config-card">
               <h2>Import pipelines, agents and entities</h2>
               <form id="config-form" class="form-grid">
-                <fieldset class="fieldset">
+                <fieldset class="fieldset" id="entity-yaml-fieldset">
                   <legend>Create entities from YAML (single pipeline)</legend>
+                  <ol class="entity-stepper" id="entity-stepper" aria-label="Entity import steps">
+                    <li data-entity-step="0" class="is-current"><span class="import-stepper-index">1</span><span>Pipeline &amp; file</span></li>
+                    <li data-entity-step="1"><span class="import-stepper-index">2</span><span>Customize</span></li>
+                    <li data-entity-step="2"><span class="import-stepper-index">3</span><span>Run</span></li>
+                  </ol>
                   <label>
                     Pipeline
                     <select id="pipeline-id" name="pipelineId" required>
@@ -403,9 +410,11 @@
                     />
                   </label>
                   <div id="entity-customize-root"></div>
-                  <button type="submit" class="primary" disabled id="run-btn">
-                    Start entity creation
-                  </button>
+                  <div class="entity-run-bar sticky-action-bar" id="entity-run-bar">
+                    <button type="submit" class="primary" disabled id="run-btn">
+                      Start import
+                    </button>
+                  </div>
                 </fieldset>
 
                 <fieldset class="fieldset">
@@ -440,29 +449,38 @@
                   <div class="button-group">
                     <button
                       type="button"
-                      class="secondary"
-                      id="validate-all-btn"
-                      disabled
-                    >
-                      Validate
-                    </button>
-                    <button
-                      type="button"
-                      class="secondary"
-                      id="import-all-btn"
-                      disabled
-                    >
-                      Import All
-                    </button>
-                    <button
-                      type="button"
-                      class="secondary"
+                      class="primary"
                       id="import-analyze-btn"
                       disabled
                     >
                       Customize…
                     </button>
                   </div>
+                  <details class="import-advanced-actions" id="import-advanced-actions">
+                    <summary>Advanced: Validate / Import All without Customize</summary>
+                    <p class="hint-text">
+                      Backups with masked passwords need Customize to enter SOURCE/TARGET passwords.
+                      Validate and Import All stay available for archives that already have real secrets.
+                    </p>
+                    <div class="button-group">
+                      <button
+                        type="button"
+                        class="secondary"
+                        id="validate-all-btn"
+                        disabled
+                      >
+                        Validate
+                      </button>
+                      <button
+                        type="button"
+                        class="secondary"
+                        id="import-all-btn"
+                        disabled
+                      >
+                        Import All
+                      </button>
+                    </div>
+                  </details>
                   <div id="custom-import-root"></div>
                 </fieldset>
               </form>
@@ -873,7 +891,7 @@
         </div>
       </div>
 
-      <section class="card log-card requires-auth">
+      <section class="card log-card requires-auth" id="log-card">
         <div class="log-card-header">
           <h2>Execution log</h2>
           <div class="log-toolbar" role="toolbar" aria-label="Log controls">
@@ -892,11 +910,22 @@
               </select>
             </label>
             <input type="search" id="log-search" class="log-search" placeholder="Search log…" aria-label="Search log" />
+            <label class="log-history-label" id="log-history-label">
+              History
+              <select id="log-history" aria-label="Previous runs" hidden>
+                <option value="">Current run</option>
+              </select>
+            </label>
             <button type="button" id="log-copy-btn" class="secondary">Copy</button>
             <button type="button" id="log-download-btn" class="secondary">Download</button>
+            <button type="button" id="log-collapse-btn" class="secondary" aria-expanded="true" aria-controls="log-panel-body">Collapse</button>
           </div>
         </div>
-        <div id="log-output" class="log-output" role="log" aria-label="Import log" aria-live="polite"></div>
+        <div id="log-panel-body" class="log-panel-body">
+          <div id="log-summary" class="log-summary" hidden></div>
+          <ul id="log-hints" class="log-hints" hidden></ul>
+          <div id="log-output" class="log-output" role="log" aria-label="Import log" aria-live="polite"></div>
+        </div>
       </section>
     </main>
 
