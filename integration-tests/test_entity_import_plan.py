@@ -375,3 +375,150 @@ class CaseInsensitiveAndParity(unittest.TestCase):
         pipeline = import_plan.entity_pipeline(plan, "live-pipe")
         self.assertEqual(pipeline.old_id, "live-pipe")
         self.assertEqual(pipeline.include, ["SCH01.TAB001"])
+
+
+class EntityNameInclude(unittest.TestCase):
+    def test_include_by_unique_entity_name(self):
+        plan = _plan(pipelines={"pipe": {"entities": {"include": ["E2"]}}})
+        planned, _n, _p = import_plan.apply_entity(copy.deepcopy(SYNTH), plan, "pipe")
+        ids = [e["id"] for e in import_plan.entity_ids(planned)]
+        self.assertEqual(ids, ["SCH01.TAB002"])
+
+    def test_include_bare_schema_key_still_expands_at_at(self):
+        yaml_cfg = {
+            "SCH01": {
+                "tables": {
+                    "custom": {
+                        "TABX": {"entityName": "KeepMe"},
+                        "TABX@@2": {"entityName": "Other"},
+                    }
+                }
+            }
+        }
+        plan = _plan(pipelines={"pipe": {"entities": {"include": ["SCH01.TABX"]}}})
+        planned, _n, _p = import_plan.apply_entity(copy.deepcopy(yaml_cfg), plan, "pipe")
+        ids = sorted(e["id"] for e in import_plan.entity_ids(planned))
+        self.assertEqual(ids, ["SCH01.TABX", "SCH01.TABX@@2"])
+
+    def test_ambiguous_entity_name_refused(self):
+        yaml_cfg = {
+            "SCH01": {
+                "tables": {
+                    "custom": {
+                        "A": {"entityName": "Dup"},
+                        "B": {"entityName": "Dup"},
+                    }
+                }
+            }
+        }
+        plan = _plan(pipelines={"pipe": {"entities": {"include": ["Dup"]}}})
+        with self.assertRaises(import_plan.PlanError) as ctx:
+            import_plan.apply_entity(copy.deepcopy(yaml_cfg), plan, "pipe")
+        self.assertIn("entityName", str(ctx.exception))
+        self.assertIn("Dup", str(ctx.exception))
+
+    def test_entity_name_does_not_override_id_match(self):
+        """When SCHEMA.KEY matches, entityName is not considered (bare→@@n wins)."""
+        yaml_cfg = {
+            "SCH01": {
+                "tables": {
+                    "custom": {
+                        "TAB001": {"entityName": "SCH01.TAB002"},
+                        "TAB002": {},
+                    }
+                }
+            }
+        }
+        plan = _plan(pipelines={"pipe": {"entities": {"include": ["SCH01.TAB002"]}}})
+        planned, _n, _p = import_plan.apply_entity(copy.deepcopy(yaml_cfg), plan, "pipe")
+        ids = [e["id"] for e in import_plan.entity_ids(planned)]
+        self.assertEqual(ids, ["SCH01.TAB002"])
+
+
+class CliIncludeExclude(unittest.TestCase):
+    def test_include_builds_one_pipeline_plan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            yaml_path = Path(tmp) / "e.yaml"
+            yaml_path.write_text(yaml.safe_dump(SYNTH), encoding="utf-8")
+            args = create_all_entities.build_arg_parser().parse_args([
+                "--pipeline", "pipe-1",
+                "--source-schema", "SCH01",
+                "--target-schema", "TGT01",
+                "--source-type", "SQL",
+                "--target-type", "SQL",
+                "--token", "t",
+                "--yaml-file", str(yaml_path),
+                "--include", "SCH01.TAB001",
+                "--include", "E2",
+            ])
+            options = create_all_entities._cli_merged_options(args)
+            planned_path, options, _fc = create_all_entities._cli_apply_plan(args, options)
+            try:
+                planned = yaml.safe_load(Path(planned_path).read_text(encoding="utf-8"))
+                ids = sorted(e["id"] for e in import_plan.entity_ids(planned))
+                self.assertEqual(ids, ["SCH01.TAB001", "SCH01.TAB002"])
+            finally:
+                if planned_path != str(yaml_path):
+                    Path(planned_path).unlink(missing_ok=True)
+
+    def test_include_merges_into_plan_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            yaml_path = Path(tmp) / "e.yaml"
+            plan_path = Path(tmp) / "plan.json"
+            yaml_path.write_text(yaml.safe_dump(SYNTH), encoding="utf-8")
+            plan_path.write_text(json.dumps({
+                "version": 1,
+                "pipelines": {"pipe-1": {"onExistingEntity": "skip"}},
+            }), encoding="utf-8")
+            args = create_all_entities.build_arg_parser().parse_args([
+                "--pipeline", "pipe-1",
+                "--source-schema", "SCH01",
+                "--target-schema", "TGT01",
+                "--source-type", "SQL",
+                "--target-type", "SQL",
+                "--token", "t",
+                "--yaml-file", str(yaml_path),
+                "--plan", str(plan_path),
+                "--include", "SCH01.TAB001",
+            ])
+            options = create_all_entities._cli_merged_options(args)
+            planned_path, options, _fc = create_all_entities._cli_apply_plan(args, options)
+            try:
+                planned = yaml.safe_load(Path(planned_path).read_text(encoding="utf-8"))
+                ids = [e["id"] for e in import_plan.entity_ids(planned)]
+                self.assertEqual(ids, ["SCH01.TAB001"])
+                self.assertEqual(options.on_existing, "skip")
+            finally:
+                if planned_path != str(yaml_path):
+                    Path(planned_path).unlink(missing_ok=True)
+
+
+class PreviewPickerFields(unittest.TestCase):
+    def test_preview_exposes_picker_columns(self):
+        yaml_cfg = copy.deepcopy(SYNTH)
+        yaml_cfg["SCH01"]["sourceType"] = "SQL"
+        yaml_cfg["SCH01"]["tables"]["custom"]["TAB001"]["chainId"] = "chain-a"
+        yaml_cfg["SCH01"]["tables"]["custom"]["TAB002"]["chainId"] = "chain-a"
+        payload = entity_plan_runtime.preview_payload(
+            yaml_config=yaml_cfg,
+            plan=import_plan.ImportPlan(),
+            pipeline_id="p",
+            existing_sources={("sch01", "tab001")},
+        )
+        by_id = {e["id"]: e for e in payload["entities"]}
+        self.assertEqual(by_id["SCH01.TAB001"]["type"], "SQL")
+        self.assertEqual(by_id["SCH01.TAB001"]["chainId"], "chain-a")
+        self.assertTrue(by_id["SCH01.TAB001"]["alreadyExists"])
+        self.assertFalse(by_id["SCH01.TAB002"]["alreadyExists"])
+        self.assertEqual(by_id["SCH01.TAB002"]["entityName"], "E2")
+        self.assertEqual(by_id["SCH01.TAB001"]["schema"], "SCH01")
+
+    def test_partial_chain_note(self):
+        yaml_cfg = copy.deepcopy(SYNTH)
+        yaml_cfg["SCH01"]["tables"]["custom"]["TAB001"]["chainId"] = "c1"
+        yaml_cfg["SCH01"]["tables"]["custom"]["TAB002"]["chainId"] = "c1"
+        plan = _plan(pipelines={"p": {"entities": {"include": ["SCH01.TAB001"]}}})
+        payload = entity_plan_runtime.preview_payload(
+            yaml_config=yaml_cfg, plan=plan, pipeline_id="p",
+        )
+        self.assertTrue(any("partly selected" in n for n in payload["notes"]))
