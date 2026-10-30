@@ -182,7 +182,7 @@ export function entityIdSubtitle(entity) {
   const id = String(entity?.id || '');
   if (!id) return '';
   const source = String(entity?.source || '').trim();
-  if (source && id.toLowerCase() === source.toLowerCase()) return '';
+  if (source?.toLowerCase() === id.toLowerCase()) return '';
   // @@n (or any other id that is not the same as source) is useful; matching source is noise.
   if (!source) return id.includes('@@') ? id : '';
   return id;

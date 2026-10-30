@@ -65,6 +65,13 @@ function entryPlain(entry) {
  *   logDownloadBtn?: HTMLElement | null,
  * }} els
  */
+function pickServerRows(run) {
+  if (Array.isArray(run.logEntries)) return run.logEntries;
+  if (Array.isArray(run.log_entries)) return run.log_entries;
+  if (Array.isArray(run.logs)) return run.logs;
+  return [];
+}
+
 export function createLogPanel(els) {
   const {
     logOutput,
@@ -100,7 +107,7 @@ export function createLogPanel(els) {
 
   function makeLogNode(entry) {
     let node;
-    if (logTemplate && logTemplate.content && logTemplate.content.firstElementChild) {
+    if (logTemplate?.content?.firstElementChild) {
       node = logTemplate.content.firstElementChild.cloneNode(true);
     } else {
       node = document.createElement('div');
@@ -129,7 +136,7 @@ export function createLogPanel(els) {
   }
 
   function appendLogEntry(entry) {
-    if (!logOutput || !entry || !entry.message) return;
+    if (!logOutput || !entry?.message) return;
     logState.entries.push(entry);
     logOutput.appendChild(makeLogNode(entry));
     scrollLogToBottom();
@@ -171,13 +178,6 @@ export function createLogPanel(els) {
       if (entry) appendLogEntry(entry);
     });
     logState.serverCount = logState.entries.length;
-  }
-
-  function pickServerRows(run) {
-    if (Array.isArray(run.logEntries)) return run.logEntries;
-    if (Array.isArray(run.log_entries)) return run.log_entries;
-    if (Array.isArray(run.logs)) return run.logs;
-    return [];
   }
 
   function appendServerRows(rows, fromIdx) {

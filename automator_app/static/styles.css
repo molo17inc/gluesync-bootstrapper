@@ -774,7 +774,7 @@ body.is-authenticated #auth-card {
   letter-spacing: 0.02em;
 }
 .log-line-scope { color: rgba(180, 210, 255, 0.85); overflow: hidden; text-overflow: ellipsis; }
-.log-line-msg { color: var(--bg); min-width: 0; word-break: break-word; }
+.log-line-msg { color: var(--bg); min-width: 0; overflow-wrap: anywhere; }
 .log-line--debug .log-line-level { color: #9aa7b8; }
 .log-line--info .log-line-level { color: #7dd3fc; }
 .log-line--warning .log-line-level { color: #fbbf24; }
