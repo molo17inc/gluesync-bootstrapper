@@ -483,8 +483,8 @@ class CreateEntitiesForCourierTargetTests(unittest.TestCase):
         # `full_name` into the `name` binding: source column id -> discovered binding id.
         matrix = target_entity["entityType"]["columnsMappingMatrix"]
         self.assertEqual(
-            sorted((m["sourceColumnId"], m["targetColumnId"]) for m in matrix),
-            [(1, 3355), (2, 3373707), (3, 96619420)],
+            sorted((m["sourceColumnIds"], m["targetColumnIds"]) for m in matrix),
+            [([1], [3355]), ([2], [3373707]), ([3], [96619420])],
         )
         self.assertTrue(all(m["sourceTableObjectId"] == 101 and m["targetTableObjectId"] == 777 for m in matrix))
         self.assertEqual(target_entity["entityType"]["tablesWithUnlockedSchema"], [])
