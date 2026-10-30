@@ -93,6 +93,10 @@ def inbound_config(token_file=None):
     return config
 
 
+
+class CoreHubFailure(Exception):
+    """A CoreHub call that fails with an HTTP status the provisioning does not handle."""
+
 class FakeCoreHub:
     """Records every call of ``provision_inbound`` and answers the GETs and the token creation."""
 
@@ -237,8 +241,9 @@ class InboundPlanTests(unittest.TestCase):
         self.assertIn("collection 'c' declares no endpoint", message)
         with self.assertRaises(CourierConfigError):
             plan_inbound_definitions({"collections": []}, PIPELINE, AGENT)
+        config = inbound_config()
         with self.assertRaises(CourierConfigError):
-            plan_inbound_definitions(inbound_config(), "", AGENT)
+            plan_inbound_definitions(config, "", AGENT)
 
     def test_token_rules(self):
         config = inbound_config()
@@ -352,20 +357,22 @@ class ProvisionInboundTests(unittest.TestCase):
             endpoints_by_collection={"stored-shop": [{"id": "stored-orders", "name": "orders"}]},
             refuse_put_with=conflict,
         )
+        config = inbound_config()
         with self.assertRaises(CourierConfigError) as raised:
-            provision_inbound("jwt", inbound_config(), PIPELINE, AGENT, fetch=hub)
+            provision_inbound("jwt", config, PIPELINE, AGENT, fetch=hub)
         self.assertIn('"force": true', str(raised.exception))
 
     def test_other_errors_propagate_unchanged(self):
-        failure = Exception("500")
+        failure = CoreHubFailure("500")
         failure.response = mock.Mock(status_code=500)
         hub = FakeCoreHub(
             collections=[{"id": "stored-shop", "name": "shop"}],
             endpoints_by_collection={"stored-shop": [{"id": "stored-orders", "name": "orders"}]},
             refuse_put_with=failure,
         )
-        with self.assertRaises(Exception) as raised:
-            provision_inbound("jwt", inbound_config(), PIPELINE, AGENT, fetch=hub)
+        config = inbound_config()
+        with self.assertRaises(CoreHubFailure) as raised:
+            provision_inbound("jwt", config, PIPELINE, AGENT, fetch=hub)
         self.assertIs(raised.exception, failure)
 
     def test_without_tokens_no_token_call_is_made(self):
@@ -383,8 +390,9 @@ class ProvisionInboundTests(unittest.TestCase):
                 return {"id": "token-new"}
             return result
 
+        config = inbound_config(self.token_file)
         with self.assertRaises(RuntimeError):
-            provision_inbound("jwt", inbound_config(self.token_file), PIPELINE, AGENT, fetch=no_plaintext)
+            provision_inbound("jwt", config, PIPELINE, AGENT, fetch=no_plaintext)
 
     def test_invalid_configuration_sends_nothing_but_the_read(self):
         hub = FakeCoreHub()

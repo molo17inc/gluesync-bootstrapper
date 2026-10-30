@@ -180,10 +180,14 @@ def normalize_inbound_endpoint(endpoint: Any, collection_id: str, pipeline_id: s
 # Validation (mirrors InboundEndpointValidator for pipeline endpoints)
 # ---------------------------------------------------------------------------
 
+# Validation message shared by the collection, endpoint and token entries.
+NAME_REQUIRED = "name is required"
+
+
 def validate_inbound_collection(collection: Dict[str, Any]) -> List[str]:
     errors: List[str] = []
     if not collection.get("name"):
-        errors.append("name is required")
+        errors.append(NAME_REQUIRED)
     if not BASE_PATH_PATTERN.match(collection.get("basePath") or ""):
         errors.append(
             f"basePath {collection.get('basePath')!r} is not valid: use letters, digits, '.', '_', '~', '-' separated by '/'"
@@ -307,7 +311,7 @@ def _verb_errors(endpoint: Dict[str, Any]) -> List[str]:
 def validate_inbound_endpoint(endpoint: Dict[str, Any]) -> List[str]:
     errors: List[str] = []
     if not endpoint.get("name"):
-        errors.append("name is required")
+        errors.append(NAME_REQUIRED)
     errors.extend(_verb_errors(endpoint))
     if endpoint.get("bodyType") not in INBOUND_BODY_TYPES:
         errors.append(f"bodyType {endpoint.get('bodyType')!r} is not one of {list(INBOUND_BODY_TYPES)}")
@@ -343,7 +347,7 @@ def normalize_token(token: Any, collection_names: List[str]) -> Dict[str, Any]:
 def validate_token(token: Dict[str, Any], collection_names: List[str]) -> List[str]:
     errors: List[str] = []
     if not token.get("name"):
-        errors.append("name is required")
+        errors.append(NAME_REQUIRED)
     if not token.get("outputFile"):
         errors.append("outputFile is required: CoreHub shows a token's plaintext only once")
     if token.get("expiresInDays") is not None and token["expiresInDays"] <= 0:
@@ -506,6 +510,36 @@ def _upsert_endpoint(call: FetchFn, auth: str, item: Dict[str, Any], force: bool
         raise
 
 
+def _rotate_tokens(call: FetchFn, token: str, token_defs: List[Dict[str, Any]], pipeline_id: str, agent_id: str,
+                   log: logging.Logger) -> Dict[str, List[str]]:
+    """Rotates the configured tokens and returns their ids by the name of each collection they are for."""
+    token_ids_by_collection: Dict[str, List[str]] = {}
+    if not token_defs:
+        return token_ids_by_collection
+    existing_tokens = call(API_TOKENS_PATH, method="GET", token=token)
+    for token_def in token_defs:
+        token_id = _rotate_token(call, token, token_def, existing_tokens, pipeline_id, agent_id, log)
+        for name in token_def["collections"]:
+            token_ids_by_collection.setdefault(name, []).append(token_id)
+    return token_ids_by_collection
+
+
+def _upsert_collection(call: FetchFn, token: str, item: Dict[str, Any], token_ids_by_collection: Dict[str, List[str]],
+                       log: logging.Logger) -> str:
+    """Creates or updates one planned inbound collection, its allowlist joined by the tokens for it; returns its name."""
+    collection = dict(item["collection"])
+    collection["allowedTokenIds"] = collection["allowedTokenIds"] + token_ids_by_collection.get(collection["name"], [])
+    if item["exists"]:
+        log.info("Updating inbound collection '%s' (basePath=%s)", collection["name"], collection["basePath"])
+        call(f"{INBOUND_COLLECTIONS_PATH}/{collection['id']}", method="PUT", token=token, body=collection)
+    else:
+        log.info("Creating inbound collection '%s' (basePath=%s)", collection["name"], collection["basePath"])
+        call(INBOUND_COLLECTIONS_PATH, method="POST", token=token, body=collection)
+    if collection["allowlistEnabled"] and not collection["allowedTokenIds"]:
+        log.warning("Inbound collection '%s' has its allowlist on and no token on it: every request is refused", collection["name"])
+    return collection["name"]
+
+
 def provision_inbound(token: str, courier_cfg: Dict[str, Any], pipeline_id: str, agent_id: str,
                       fetch: Optional[FetchFn] = None, logger: Optional[logging.Logger] = None) -> List[str]:
     """Creates or updates the inbound collections, endpoints and tokens of an HTTP Source in CoreHub.
@@ -524,27 +558,11 @@ def provision_inbound(token: str, courier_cfg: Dict[str, Any], pipeline_id: str,
 
     plan = plan_inbound_definitions(courier_cfg, pipeline_id, agent_id, existing_collections, existing_endpoints_for)
 
-    token_ids_by_collection: Dict[str, List[str]] = {}
-    if plan["tokens"]:
-        existing_tokens = call(API_TOKENS_PATH, method="GET", token=token)
-        for token_def in plan["tokens"]:
-            token_id = _rotate_token(call, token, token_def, existing_tokens, pipeline_id, agent_id, log)
-            for name in token_def["collections"]:
-                token_ids_by_collection.setdefault(name, []).append(token_id)
+    token_ids_by_collection = _rotate_tokens(call, token, plan["tokens"], pipeline_id, agent_id, log)
 
     names: List[str] = []
     for item in plan["collections"]:
-        collection = dict(item["collection"])
-        collection["allowedTokenIds"] = collection["allowedTokenIds"] + token_ids_by_collection.get(collection["name"], [])
-        if item["exists"]:
-            log.info("Updating inbound collection '%s' (basePath=%s)", collection["name"], collection["basePath"])
-            call(f"{INBOUND_COLLECTIONS_PATH}/{collection['id']}", method="PUT", token=token, body=collection)
-        else:
-            log.info("Creating inbound collection '%s' (basePath=%s)", collection["name"], collection["basePath"])
-            call(INBOUND_COLLECTIONS_PATH, method="POST", token=token, body=collection)
-        if collection["allowlistEnabled"] and not collection["allowedTokenIds"]:
-            log.warning("Inbound collection '%s' has its allowlist on and no token on it: every request is refused", collection["name"])
-        names.append(collection["name"])
+        names.append(_upsert_collection(call, token, item, token_ids_by_collection, log))
         for endpoint_item in item["endpoints"]:
             _upsert_endpoint(call, token, endpoint_item, plan["force"], log)
     return names
