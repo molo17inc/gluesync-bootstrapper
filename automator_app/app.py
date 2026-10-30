@@ -4059,10 +4059,9 @@ def _existing_sources(pipeline_id: str, errors: list[str]) -> set:
         return set()
     sources = set()
     for item in listing if isinstance(listing, list) else []:
-        source = create_all_entities._source_table_of(  # pylint: disable=protected-access
-            create_all_entities._listing_entity(item))  # pylint: disable=protected-access
-        if source:
-            sources.add(tuple(str(p).casefold() for p in source))
+        sources.update(
+            create_all_entities._all_source_tables_of(  # pylint: disable=protected-access
+                create_all_entities._listing_entity(item)))  # pylint: disable=protected-access
     return sources
 
 
@@ -4771,7 +4770,13 @@ async def upload_certificate(
 
 
 def _existing_entity_sources(pipeline_id: str) -> set:
-    """``{(schema, table)}`` already in the pipeline. GET-only; empty set when listing fails."""
+    """``{(schema, table)}`` already in the pipeline. GET-only; empty set when listing fails.
+
+    Core Hub lists entities as ``{"entity": {...}}`` with source tables under
+    ``agentEntities`` (and ``tables`` for MultiTable). Match the backup-import
+    path: unwrap via create_all_entities helpers so alreadyExists is correct.
+    """
+    import create_all_entities  # pylint: disable=import-outside-toplevel
     try:
         listing = corehub.fetch_core_hub(
             f"/pipelines/{pipeline_id}/entities", token=state.token,
@@ -4780,13 +4785,11 @@ def _existing_entity_sources(pipeline_id: str) -> set:
         logger.info("Entity preview: could not list existing entities: %s", exc)
         return set()
     sources = set()
-    for entity in listing if isinstance(listing, list) else []:
-        if not isinstance(entity, dict):
-            continue
-        schema = entity.get("sourceSchema") or entity.get("schema") or ""
-        table = entity.get("sourceTable") or entity.get("table") or entity.get("name") or ""
-        if schema and table:
-            sources.add((str(schema).casefold(), str(table).casefold()))
+    for item in listing if isinstance(listing, list) else []:
+        entity = create_all_entities._listing_entity(item)  # pylint: disable=protected-access
+        sources.update(
+            create_all_entities._all_source_tables_of(entity)  # pylint: disable=protected-access
+        )
     return sources
 
 

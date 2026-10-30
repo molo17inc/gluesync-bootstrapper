@@ -5243,6 +5243,34 @@ def _source_table_of(entity):
     return (str(schema or '').casefold(), str(name).casefold()) if name else None
 
 
+def _all_source_tables_of(entity):
+    """Every source ``(schema, table)`` of an entity (casefolded), including each MultiTable member.
+
+    ``_source_table_of`` returns only the first table of a MultiTable entity; the entity-import
+    picker needs every member so alreadyExists lights up for each selected chain table.
+    """
+    source = next((agent_entity for agent_entity in (entity or {}).get('agentEntities') or []
+                   if _is_source_agent_entity(agent_entity)), None)
+    if source is None:
+        return set()
+    out = set()
+    tables = source.get('tables') or []
+    if tables:
+        for entry in tables:
+            table = entry.get('table', entry) if isinstance(entry, dict) else {}
+            if not isinstance(table, dict):
+                continue
+            name = table.get('name')
+            if not name:
+                continue
+            out.add((str(table.get('schema') or '').casefold(), str(name).casefold()))
+        return out
+    schema, name = _agent_entity_table(source)
+    if name:
+        out.add((str(schema or '').casefold(), str(name).casefold()))
+    return out
+
+
 def _is_source_agent_entity(agent_entity):
     return isinstance(agent_entity, dict) and (agent_entity.get('entityType') or {}).get('type') in (None, 'Source')
 

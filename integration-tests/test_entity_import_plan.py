@@ -522,3 +522,65 @@ class PreviewPickerFields(unittest.TestCase):
             yaml_config=yaml_cfg, plan=plan, pipeline_id="p",
         )
         self.assertTrue(any("partly selected" in n for n in payload["notes"]))
+
+
+class ExistingEntitySources(unittest.TestCase):
+    """Core Hub wraps listings as {"entity": {...}}; MultiTable uses agentEntities[].tables."""
+
+    def test_all_source_tables_of_single_and_multi(self):
+        single = {
+            "agentEntities": [{
+                "entityType": {"type": "Source"},
+                "table": {"schema": "dbo", "name": "ARTICLES"},
+            }],
+        }
+        self.assertEqual(
+            create_all_entities._all_source_tables_of(single),
+            {("dbo", "articles")},
+        )
+        multi = {
+            "agentEntities": [{
+                "entityType": {"type": "Source"},
+                "tables": [
+                    {"schema": "dbo", "name": "ORDERS_HEADERS"},
+                    {"schema": "dbo", "name": "ORDERS_ROWS"},
+                ],
+            }],
+        }
+        self.assertEqual(
+            create_all_entities._all_source_tables_of(multi),
+            {("dbo", "orders_headers"), ("dbo", "orders_rows")},
+        )
+
+    def test_existing_entity_sources_unwraps_hub_listing(self):
+        listing = [{
+            "entity": {
+                "entityName": "ArticlesEnt",
+                "agentEntities": [{
+                    "entityType": {"type": "Source"},
+                    "table": {"schema": "dbo", "name": "ARTICLES"},
+                }],
+            }
+        }, {
+            "entity": {
+                "entityName": "OrdersChain",
+                "agentEntities": [{
+                    "entityType": {"type": "Source"},
+                    "tables": [
+                        {"schema": "dbo", "name": "ORDERS_HEADERS"},
+                        {"schema": "dbo", "name": "ORDERS_ROWS"},
+                    ],
+                }],
+            }
+        }]
+        with mock.patch.object(automator.corehub, "fetch_core_hub", return_value=listing):
+            prev = automator.state._token
+            automator.state._token = "tok"
+            try:
+                sources = automator._existing_entity_sources("pipe-1")
+            finally:
+                automator.state._token = prev
+        self.assertEqual(
+            sources,
+            {("dbo", "articles"), ("dbo", "orders_headers"), ("dbo", "orders_rows")},
+        )
