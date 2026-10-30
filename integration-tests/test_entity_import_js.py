@@ -1,4 +1,4 @@
-"""Entity Customize UI: buildEntityPlan under Node; skipped where Node is not installed."""
+"""Entity Customize UI: buildEntityPlan / selectionError under Node; skipped where Node is not installed."""
 import shutil
 import subprocess
 import tempfile
@@ -8,9 +8,8 @@ from pathlib import Path
 JS = Path(__file__).resolve().parents[1] / "automator_app" / "static" / "entity_import.js"
 
 SCRIPT = r"""
-import { buildEntityPlan, planIsEmpty } from './entity_import.mjs';
+import { buildEntityPlan, planIsEmpty, selectionError } from './entity_import.mjs';
 
-// Minimal DOM for buildEntityPlan (no full document)
 class FakeEl {
   constructor(attrs = {}) {
     this.dataset = attrs.dataset || {};
@@ -23,37 +22,61 @@ class FakeEl {
   }
 }
 
-const panel = new FakeEl();
-panel._kids['[data-on-existing]'] = { value: 'skip' };
-panel._kids['[data-part="udfs"]'] = { checked: false };
-panel._kids['[data-part="schedules"]'] = { checked: true };
-panel._kids['[data-part="functionCollection"]'] = { checked: true };
-panel._kids['[data-part="groups"]'] = { checked: true };
-panel._kids['[data-part="createTables"]'] = { checked: false };
-panel._kids['[data-include]'] = { value: 'SCH.T1\nSCH.T2' };
-panel._kids['[data-exclude]'] = { value: 'SCH.T2' };
+function basePanel({ include = '', exclude = '', onExisting = 'skip' } = {}) {
+  const panel = new FakeEl();
+  panel._kids['[data-on-existing]'] = { value: onExisting };
+  panel._kids['[data-part="udfs"]'] = { checked: false };
+  panel._kids['[data-part="schedules"]'] = { checked: true };
+  panel._kids['[data-part="functionCollection"]'] = { checked: true };
+  panel._kids['[data-part="groups"]'] = { checked: true };
+  panel._kids['[data-part="createTables"]'] = { checked: false };
+  panel._kids['[data-include]'] = { value: include };
+  panel._kids['[data-exclude]'] = { value: exclude };
+  return panel;
+}
 
-const plan = buildEntityPlan(panel, 'pipe-1');
-const assert = (c, m) => { if (!c) { console.error(m); process.exit(1); } };
-assert(plan.version === 1, 'version');
-assert(plan.defaults.onExistingEntity === 'skip', 'onExisting');
-assert(plan.pipelines['pipe-1'].parts.udfs === false, 'udfs off');
-assert(plan.pipelines['pipe-1'].parts.createTables === false, 'createTables off');
-assert(!('schedules' in (plan.pipelines['pipe-1'].parts || {})), 'schedules default omitted');
-assert(JSON.stringify(plan.pipelines['pipe-1'].entities.include) === JSON.stringify(['SCH.T1','SCH.T2']), 'include');
-assert(JSON.stringify(plan.pipelines['pipe-1'].entities.exclude) === JSON.stringify(['SCH.T2']), 'exclude');
+const assert = (c, m) => { if (!c) { throw new Error(m); } };
 
-const emptyPanel = new FakeEl();
-emptyPanel._kids['[data-on-existing]'] = { value: '' };
-const PARTS_KEYS = ['udfs','functionCollection','schedules','groups','createTables'];
-PARTS_KEYS.forEach((k) => { emptyPanel._kids[`[data-part="${k}"]`] = { checked: true }; });
-emptyPanel._kids['[data-include]'] = { value: '' };
-emptyPanel._kids['[data-exclude]'] = { value: '' };
-const empty = buildEntityPlan(emptyPanel, 'pipe-1');
+const loaded = [
+  { id: 'SCH.T1', schema: 'SCH' },
+  { id: 'SCH.T2', schema: 'SCH' },
+  { id: 'SCH.T3', schema: 'SCH' },
+];
+
+// Advanced free-text still works
+const advanced = basePanel({ include: 'SCH.T1\nSCH.T2', exclude: 'SCH.T2' });
+const planAdv = buildEntityPlan(advanced, 'pipe-1', loaded, new Set(loaded.map((e) => e.id)));
+assert(JSON.stringify(planAdv.pipelines['pipe-1'].entities.include) === JSON.stringify(['SCH.T1','SCH.T2']), 'adv include');
+assert(JSON.stringify(planAdv.pipelines['pipe-1'].entities.exclude) === JSON.stringify(['SCH.T2']), 'adv exclude');
+
+// All checked → omit include
+const allPanel = basePanel();
+const planAll = buildEntityPlan(allPanel, 'pipe-1', loaded, new Set(['SCH.T1','SCH.T2','SCH.T3']));
+assert(!planAll.pipelines['pipe-1']?.entities?.include, 'all omit include');
+assert(planAll.pipelines['pipe-1'].parts.udfs === false, 'udfs off');
+
+// Partial picker selection → exact ids
+const partPanel = basePanel();
+const planPart = buildEntityPlan(partPanel, 'pipe-1', loaded, new Set(['SCH.T1','SCH.T3']));
+assert(JSON.stringify(planPart.pipelines['pipe-1'].entities.include) === JSON.stringify(['SCH.T1','SCH.T3']), 'partial include');
+
+// None checked → selectionError
+const nonePanel = basePanel();
+assert(selectionError(nonePanel, loaded, new Set()) !== null, 'none error');
+assert(selectionError(allPanel, loaded, new Set(['SCH.T1','SCH.T2','SCH.T3'])) === null, 'all ok');
+// Advanced overrides none
+assert(selectionError(advanced, loaded, new Set()) === null, 'advanced skips picker error');
+
+// Empty panel / no loaded → empty plan
+const emptyPanel = basePanel({ onExisting: '' });
+['udfs','functionCollection','schedules','groups','createTables'].forEach((k) => {
+  emptyPanel._kids[`[data-part="${k}"]`] = { checked: true };
+});
+const empty = buildEntityPlan(emptyPanel, 'pipe-1', [], null);
 assert(Object.keys(empty.defaults).length === 0, 'empty defaults');
 assert(Object.keys(empty.pipelines).length === 0, 'empty pipelines');
 assert(planIsEmpty(empty), 'planIsEmpty empty');
-assert(!planIsEmpty(plan), 'planIsEmpty filled');
+assert(!planIsEmpty(planAdv), 'planIsEmpty filled');
 console.log('ok');
 """
 

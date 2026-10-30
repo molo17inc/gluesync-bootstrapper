@@ -1590,10 +1590,12 @@ function bindEvents() {
       stateManager.setYamlFile(response.fileId);
       ui.setConfigMessage(`Uploaded ${response.filename}`, 'success');
       logActivity('Config', `Uploaded ${response.filename}`);
+      entityImport?.reloadEntities?.();
     } catch (err) {
       ui.setConfigMessage(err.message, 'error');
       stateManager.setYamlFile(null);
       logActivity('Config', `Upload failed: ${err.message}`);
+      entityImport?.reloadEntities?.();
     }
   });
 
@@ -1607,6 +1609,20 @@ function bindEvents() {
     const customSchemasEnabled = customSchemasCheckbox ? customSchemasCheckbox.checked : false;
     const sourceSchemaValue = document.getElementById('source-schema').value;
     const targetSchemaValue = document.getElementById('target-schema').value;
+
+    const selectErr = entityImport?.selectionError?.();
+    if (selectErr) {
+      ui.setConfigMessage(selectErr, 'error');
+      return;
+    }
+
+    let planFields = {};
+    try {
+      planFields = entityImport?.planPayload !== undefined ? entityImport.planPayload() : {};
+    } catch (planErr) {
+      ui.setConfigMessage(planErr.message, 'error');
+      return;
+    }
 
     const payload = {
       pipelineId: document.getElementById('pipeline-id').value,
@@ -1622,8 +1638,7 @@ function bindEvents() {
       createTables: document.getElementById('create-tables').checked,
       useSsl: document.getElementById('use-ssl').checked,
       skipVerify: document.getElementById('skip-verify').checked,
-      ...(entityImport?.planPayload !== undefined
-        ? entityImport.planPayload() : {}),
+      ...planFields,
     };
 
     ui.setConfigMessage('Starting…');
@@ -1812,6 +1827,14 @@ function bindEvents() {
     setMessage: (msg, kind) => ui.setConfigMessage(msg, kind),
     log: logActivity,
   });
+
+  const configPipelineSelect = document.getElementById('pipeline-id');
+  if (configPipelineSelect) {
+    configPipelineSelect.addEventListener('change', () => {
+      entityImport?.reloadEntities?.();
+    });
+  }
+  entityImport?.reloadEntities?.();
 
   initCustomImport({
     fileInput: importAllInput,
