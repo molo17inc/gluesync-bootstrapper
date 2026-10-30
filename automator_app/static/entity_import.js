@@ -339,6 +339,18 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
     }
   }
 
+  async function fetchColumnNames(path, qs, label) {
+    // Discovery may be unavailable on Core Hub <2.3 or NoSQL — caller treats null as "unverified".
+    try {
+      const res = await fetch(`${path}?${qs}`);
+      const body = await jsonOrThrow(res, label);
+      return body.columns || [];
+    } catch (err) {
+      log?.('Config', `${label} discovery failed: ${err.message}`);
+      return null;
+    }
+  }
+
   async function refreshColumnWarn(entity) {
     const resolved = resolveTarget(entity, targetOverrides);
     if (resolved.mode !== 'existing' || !resolved.targetTable) {
@@ -348,34 +360,22 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
     const ctx = getContext() || {};
     if (!ctx.pipelineId) return;
     const src = sourceTableParts(entity);
-    let sourceCols = null;
-    let targetCols = null;
-    try {
-      const qs = new URLSearchParams({
+    const sourceCols = await fetchColumnNames(
+      '/api/bulk/columns',
+      new URLSearchParams({
         pipelineId: ctx.pipelineId, schema: src.schema, table: src.table,
-      });
-      const res = await fetch(`/api/bulk/columns?${qs}`);
-      const body = await jsonOrThrow(res, 'source columns');
-      sourceCols = body.columns || [];
-    } catch (err) {
-      // Discovery may be unavailable on Core Hub <2.3 or NoSQL — warn stays "unverified".
-      log?.('Config', `Source column discovery failed: ${err.message}`);
-      sourceCols = null;
-    }
-    try {
-      const qs = new URLSearchParams({
+      }),
+      'Source column',
+    );
+    const targetCols = await fetchColumnNames(
+      '/api/bulk/target-columns',
+      new URLSearchParams({
         pipelineId: ctx.pipelineId,
         schema: resolved.targetSchema,
         table: resolved.targetTable,
-      });
-      const res = await fetch(`/api/bulk/target-columns?${qs}`);
-      const body = await jsonOrThrow(res, 'target columns');
-      targetCols = body.columns || [];
-    } catch (err) {
-      // Same as source: missing columns endpoint → unverified, not a hard failure.
-      log?.('Config', `Target column discovery failed: ${err.message}`);
-      targetCols = null;
-    }
+      }),
+      'Target column',
+    );
     const note = columnMismatchNote(sourceCols, targetCols);
     if (note) columnWarnById.set(entity.id, note);
     else columnWarnById.delete(entity.id);
@@ -462,56 +462,45 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
       });
     };
 
+    const loadExistingTables = (schema, preferredTable, { persistAfter = false } = {}) => {
+      const ctx = getContext() || {};
+      if (!ctx.pipelineId) return;
+      ensureTargetTables(ctx.pipelineId, schema || '')
+        .then((tables) => {
+          fillTableSelect(tableSelect, tables, preferredTable);
+          showMode(tables);
+          if (persistAfter) persist();
+        })
+        .catch((err) => {
+          log?.('Config', `Target table discovery failed: ${err.message}`);
+          showMode([]);
+        });
+    };
+
+    const refreshExistingFromInputs = () => {
+      if (modeSelect.value === 'existing') {
+        loadExistingTables(
+          schemaInput.value || '',
+          resolveTarget(entity, targetOverrides).targetTable,
+          { persistAfter: true },
+        );
+      }
+    };
     schemaInput.addEventListener('change', () => {
       persist();
-      const ctx = getContext() || {};
-      if (modeSelect.value === 'existing' && ctx.pipelineId) {
-        ensureTargetTables(ctx.pipelineId, schemaInput.value || '')
-          .then((tables) => {
-            fillTableSelect(tableSelect, tables, resolveTarget(entity, targetOverrides).targetTable);
-            showMode(tables);
-            persist();
-          })
-          .catch((err) => {
-            log?.('Config', `Target table discovery failed: ${err.message}`);
-            showMode([]);
-          });
-      }
+      refreshExistingFromInputs();
     });
     schemaInput.addEventListener('input', persist);
     modeSelect.addEventListener('change', () => {
       showMode();
       persist();
-      const ctx = getContext() || {};
-      if (modeSelect.value === 'existing' && ctx.pipelineId) {
-        ensureTargetTables(ctx.pipelineId, schemaInput.value || '')
-          .then((tables) => {
-            fillTableSelect(tableSelect, tables, resolveTarget(entity, targetOverrides).targetTable);
-            showMode(tables);
-            persist();
-          })
-          .catch((err) => {
-            log?.('Config', `Target table discovery failed: ${err.message}`);
-            showMode([]);
-          });
-      }
+      refreshExistingFromInputs();
     });
     tableInput.addEventListener('input', persist);
     tableSelect.addEventListener('change', persist);
 
     if (resolved.mode === 'existing') {
-      const ctx = getContext() || {};
-      if (ctx.pipelineId) {
-        ensureTargetTables(ctx.pipelineId, resolved.targetSchema)
-          .then((tables) => {
-            fillTableSelect(tableSelect, tables, resolved.targetTable);
-            showMode(tables);
-          })
-          .catch((err) => {
-            log?.('Config', `Target table discovery failed: ${err.message}`);
-            showMode([]);
-          });
-      }
+      loadExistingTables(resolved.targetSchema, resolved.targetTable);
     }
 
     wrap.append(
@@ -649,17 +638,23 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
 
   btnRow.querySelector('#entity-plan-reload-btn').addEventListener('click', () => reloadEntities());
 
-  btnRow.querySelector('#entity-plan-draft-btn').addEventListener('click', async () => {
+  const requireImportReady = () => {
     const ctx = getContext() || {};
     if (!ctx.pipelineId || !ctx.yamlFileId) {
       setMessage?.('Select a pipeline and upload a YAML first', 'error');
-      return;
+      return null;
     }
     const err = selectionError(panel, loadedEntities, selectedIds, targetOverrides);
     if (err) {
       setMessage?.(err, 'error');
-      return;
+      return null;
     }
+    return ctx;
+  };
+
+  btnRow.querySelector('#entity-plan-draft-btn').addEventListener('click', async () => {
+    const ctx = requireImportReady();
+    if (!ctx) return;
     try {
       const plan = currentPlan();
       const blob = new Blob([JSON.stringify(plan, null, 2)], { type: 'application/json' });
@@ -672,16 +667,8 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
   });
 
   btnRow.querySelector('#entity-plan-preview-btn').addEventListener('click', async () => {
-    const ctx = getContext() || {};
-    if (!ctx.pipelineId || !ctx.yamlFileId) {
-      setMessage?.('Select a pipeline and upload a YAML first', 'error');
-      return;
-    }
-    const err = selectionError(panel, loadedEntities, selectedIds, targetOverrides);
-    if (err) {
-      setMessage?.(err, 'error');
-      return;
-    }
+    const ctx = requireImportReady();
+    if (!ctx) return;
     const plan = currentPlan();
     try {
       const res = await fetch('/api/entities/plan/preview', {

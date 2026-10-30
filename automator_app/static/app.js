@@ -1411,14 +1411,7 @@ function bindEvents() {
 
         try {
           const { blob, filename } = await api.bulkTemplate(payload);
-          const url = window.URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = filename;
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-          window.URL.revokeObjectURL(url);
+          downloadBlob(blob, filename);
           ui.setBulkMessage(`Downloaded ${filename}`, 'success');
           logActivity('Bulk', `Downloaded YAML template ${filename}`);
         } catch (err) {
@@ -1726,14 +1719,7 @@ function bindEvents() {
         try {
           const includeSecrets = includeSecretsCheckbox?.checked || false;
           const { blob, filename } = await api.exportPipeline(pipelineId, includeSecrets);
-          const url = window.URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = filename;
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-          window.URL.revokeObjectURL(url);
+          downloadBlob(blob, filename);
           ui.setExportMessage(`Exported ${filename}`, 'success');
           logActivity('Export', `Metadata export completed: ${filename}`);
         } catch (err) {
@@ -1756,14 +1742,7 @@ function bindEvents() {
         try {
           const includeSecrets = includeSecretsCheckbox?.checked || false;
           const { blob, filename } = await api.exportPipelineFull(pipelineId, includeSecrets);
-          const url = window.URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = filename;
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-          window.URL.revokeObjectURL(url);
+          downloadBlob(blob, filename);
           ui.setExportMessage(`Exported ${filename}`, 'success');
           logActivity('Export', `Full backup completed: ${filename}`);
         } catch (err) {
@@ -1783,14 +1762,7 @@ function bindEvents() {
           const includeSecrets = includeSecretsCheckbox?.checked || false;
           const { blob, filename } = await api.exportAllPipelines(includeSecrets);
           console.log('Export All API call successful, filename:', filename);
-          const url = window.URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = filename;
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-          window.URL.revokeObjectURL(url);
+          downloadBlob(blob, filename);
           ui.setExportMessage(`Exported ${filename}`, 'success');
           logActivity('Export', `All pipelines export completed: ${filename}`);
         } catch (err) {

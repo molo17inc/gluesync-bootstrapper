@@ -915,8 +915,10 @@ _COLUMNS_PAYLOAD_MISSING_LIST = (
 )
 
 
-def _parse_column_names(columns: Any, pipeline_id: str, schema: str, table_name: str) -> list[str]:
-    """Normalize a discovery/columns payload into ordered column name strings."""
+def _raw_columns_list(
+    columns: Any, pipeline_id: str, schema: str, table_name: str,
+) -> list[Any]:
+    """Return the discovery payload's ``columns`` list, or ``[]`` after warning."""
     if not isinstance(columns, dict):
         logger.warning(
             _UNEXPECTED_COLUMNS_DISCOVERY,
@@ -936,8 +938,13 @@ def _parse_column_names(columns: Any, pipeline_id: str, schema: str, table_name:
             columns,
         )
         return []
+    return raw_cols
+
+
+def _parse_column_names(columns: Any, pipeline_id: str, schema: str, table_name: str) -> list[str]:
+    """Normalize a discovery/columns payload into ordered column name strings."""
     names: list[str] = []
-    for col in raw_cols:
+    for col in _raw_columns_list(columns, pipeline_id, schema, table_name):
         if isinstance(col, dict):
             name = col.get("name")
         elif isinstance(col, str):
@@ -1074,27 +1081,7 @@ def discover_primary_key_names(
         raise RuntimeError(f"SOURCE agent for pipeline {pipeline_id!r} is missing an ID")
 
     columns = get_table_columns(token, pipeline_id, raw_agent_id, schema, table_name)
-
-    if not isinstance(columns, dict):
-        logger.warning(
-            _UNEXPECTED_COLUMNS_DISCOVERY,
-            pipeline_id,
-            schema,
-            table_name,
-            columns,
-        )
-        return []
-
-    raw_cols = columns.get("columns")
-    if not isinstance(raw_cols, list):
-        logger.warning(
-            _COLUMNS_PAYLOAD_MISSING_LIST,
-            pipeline_id,
-            schema,
-            table_name,
-            columns,
-        )
-        return []
+    raw_cols = _raw_columns_list(columns, pipeline_id, schema, table_name)
 
     seen: set[str] = set()
     pk_names: list[str] = []
@@ -1142,27 +1129,7 @@ def discover_column_metadata_for_table(
         raise RuntimeError(f"SOURCE agent for pipeline {pipeline_id!r} is missing an ID")
 
     columns = get_table_columns(token, pipeline_id, raw_agent_id, schema, table_name)
-
-    if not isinstance(columns, dict):
-        logger.warning(
-            _UNEXPECTED_COLUMNS_DISCOVERY,
-            pipeline_id,
-            schema,
-            table_name,
-            columns,
-        )
-        return []
-
-    raw_cols = columns.get("columns")
-    if not isinstance(raw_cols, list):
-        logger.warning(
-            _COLUMNS_PAYLOAD_MISSING_LIST,
-            pipeline_id,
-            schema,
-            table_name,
-            columns,
-        )
-        return []
+    raw_cols = _raw_columns_list(columns, pipeline_id, schema, table_name)
 
     metadata: list[Dict[str, Any]] = []
     for idx, col in enumerate(raw_cols, 1):

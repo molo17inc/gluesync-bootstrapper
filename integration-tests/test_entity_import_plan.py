@@ -54,6 +54,24 @@ def _plan(**kwargs):
     return import_plan.load_entity(body)
 
 
+
+def _cli_args(yaml_path, plan_path=None, *extra):
+    """Shared CLI argv for create_all_entities plan-apply / include tests."""
+    argv = [
+        "--pipeline", "pipe-1",
+        "--source-schema", "SCH01",
+        "--target-schema", "TGT01",
+        "--source-type", "SQL",
+        "--target-type", "SQL",
+        "--token", "t",
+        "--yaml-file", str(yaml_path),
+    ]
+    if plan_path is not None:
+        argv.extend(["--plan", str(plan_path)])
+    argv.extend(extra)
+    return argv
+
+
 class LoadEntityRefusals(unittest.TestCase):
     def test_empty_plan_parity(self):
         self.assertTrue(import_plan.load_entity(None).empty)
@@ -254,16 +272,7 @@ class CliPlanArgs(unittest.TestCase):
                     "onExistingEntity": "skip",
                 }},
             }), encoding="utf-8")
-            args = create_all_entities.build_arg_parser().parse_args([
-                "--pipeline", "pipe-1",
-                "--source-schema", "SCH01",
-                "--target-schema", "TGT01",
-                "--source-type", "SQL",
-                "--target-type", "SQL",
-                "--token", "t",
-                "--yaml-file", str(yaml_path),
-                "--plan", str(plan_path),
-            ])
+            args = create_all_entities.build_arg_parser().parse_args(_cli_args(yaml_path, plan_path))
             options = create_all_entities._cli_merged_options(args)
             planned_path, options, restore_fc = create_all_entities._cli_apply_plan(args, options)
             try:
@@ -293,16 +302,7 @@ class CliPlanArgs(unittest.TestCase):
                     "onExistingEntity": "skip",
                 }},
             }), encoding="utf-8")
-            args = create_all_entities.build_arg_parser().parse_args([
-                "--pipeline", "pipe-1",
-                "--source-schema", "SCH01",
-                "--target-schema", "TGT01",
-                "--source-type", "SQL",
-                "--target-type", "SQL",
-                "--token", "t",
-                "--yaml-file", str(yaml_path),
-                "--plan", str(plan_path),
-            ])
+            args = create_all_entities.build_arg_parser().parse_args(_cli_args(yaml_path, plan_path))
             options = create_all_entities._cli_merged_options(args)
             with mock.patch("create_all_entities.set_scheduling_enabled") as sched:
                 planned_path, options, restore_fc = create_all_entities._cli_apply_plan(args, options)
@@ -440,17 +440,7 @@ class CliIncludeExclude(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             yaml_path = Path(tmp) / "e.yaml"
             yaml_path.write_text(yaml.safe_dump(SYNTH), encoding="utf-8")
-            args = create_all_entities.build_arg_parser().parse_args([
-                "--pipeline", "pipe-1",
-                "--source-schema", "SCH01",
-                "--target-schema", "TGT01",
-                "--source-type", "SQL",
-                "--target-type", "SQL",
-                "--token", "t",
-                "--yaml-file", str(yaml_path),
-                "--include", "SCH01.TAB001",
-                "--include", "E2",
-            ])
+            args = create_all_entities.build_arg_parser().parse_args(_cli_args(yaml_path, None, "--include", "SCH01.TAB001", "--include", "E2"))
             options = create_all_entities._cli_merged_options(args)
             planned_path, options, _fc = create_all_entities._cli_apply_plan(args, options)
             try:
@@ -470,17 +460,7 @@ class CliIncludeExclude(unittest.TestCase):
                 "version": 1,
                 "pipelines": {"pipe-1": {"onExistingEntity": "skip"}},
             }), encoding="utf-8")
-            args = create_all_entities.build_arg_parser().parse_args([
-                "--pipeline", "pipe-1",
-                "--source-schema", "SCH01",
-                "--target-schema", "TGT01",
-                "--source-type", "SQL",
-                "--target-type", "SQL",
-                "--token", "t",
-                "--yaml-file", str(yaml_path),
-                "--plan", str(plan_path),
-                "--include", "SCH01.TAB001",
-            ])
+            args = create_all_entities.build_arg_parser().parse_args(_cli_args(yaml_path, plan_path, "--include", "SCH01.TAB001"))
             options = create_all_entities._cli_merged_options(args)
             planned_path, options, _fc = create_all_entities._cli_apply_plan(args, options)
             try:
