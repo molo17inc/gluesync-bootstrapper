@@ -123,10 +123,11 @@ assert(mm.includes('Column mismatch'), 'mismatch prefix: ' + mm);
 assert(mm.includes('missing on target'), 'missing: ' + mm);
 assert(mm.includes('extra on target'), 'extra: ' + mm);
 
-// entityIdSubtitle: @@2 adds info; plain matching name does not
-assert(entityIdSubtitle({ id: 'dbo.CUSTOMERS@@2', entityName: 'Cust' }) === 'dbo.CUSTOMERS@@2', '@@2 subtitle');
-assert(entityIdSubtitle({ id: 'dbo.ORDERS', entityName: 'ORDERS' }) === '', 'matching name no subtitle');
-assert(entityIdSubtitle({ id: 'dbo.ORDERS', entityName: 'OrdersHeaders' }) === 'dbo.ORDERS', 'differing name subtitle');
+// entityIdSubtitle: only when id differs from source (e.g. @@2); do not duplicate Source column
+assert(entityIdSubtitle({ id: 'dbo.CUSTOMERS@@2', source: 'dbo.CUSTOMERS', entityName: 'Cust' }) === 'dbo.CUSTOMERS@@2', '@@2 subtitle');
+assert(entityIdSubtitle({ id: 'dbo.ORDERS', source: 'dbo.ORDERS', entityName: 'ORDERS' }) === '', 'same as source no subtitle');
+assert(entityIdSubtitle({ id: 'dbo.ORDERS', source: 'dbo.ORDERS', entityName: 'OrdersHeaders' }) === '', 'name differs but source matches — no subtitle');
+assert(entityIdSubtitle({ id: 'dbo.CUSTOMERS@@2', source: 'dbo.CUSTOMERS@@2', entityName: 'Cust' }) === '', 'id equals source hides');
 
 // groupPickerRows: MultiTable chain collapses to one block
 const chained = [
