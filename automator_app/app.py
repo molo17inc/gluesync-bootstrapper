@@ -559,10 +559,14 @@ def _is_masked(value: Any) -> bool:
 
 
 def _has_masked_password(value: Any) -> bool:
-    """Recursively detect any password set to a masked sentinel value (asterisks only, see ``_is_masked``):
-    a ``password`` field anywhere, hostCredentials / customHostCredentials included."""
+    """Recursively detect any password or custom credential secret set to a masked value: a ``password`` field
+    anywhere (asterisks only, see ``_is_masked``), hostCredentials / customHostCredentials included, and any secret of
+    the custom host credentials holding ``*******`` or Core Hub's ``<hidden>`` placeholder."""
     if isinstance(value, dict):
         if _is_masked(value.get("password")):
+            return True
+        # Any secret of the custom host credentials, which Core Hub names by key (apiKey, ...Secret, ...)
+        if corehub.has_masked_custom_secret(value.get("customHostCredentials")):
             return True
         return any(_has_masked_password(v) for v in value.values())
     if isinstance(value, (list, tuple, set)):
@@ -571,8 +575,8 @@ def _has_masked_password(value: Any) -> bool:
 
 
 NO_PIPELINES_IMPORTED = "No pipelines were imported from the archive."
-MASKED_PASSWORDS = ("Config contains masked passwords (*******). "
-                    "Please replace them with real passwords before importing.")
+MASKED_PASSWORDS = ("Config contains masked passwords or secrets (*******). "
+                    "Please replace them with the real values before importing.")
 
 
 _NOT_LOGGED_IN_RESPONSE: Dict[str, Any] = {"description": LOGIN_REQUIRED}

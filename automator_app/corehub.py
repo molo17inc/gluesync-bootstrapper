@@ -84,6 +84,13 @@ _USERS_PATH = "/users"
 # Placeholder written instead of a secret when secrets are not exported.
 _MASKED_SECRET = "*******"
 
+# Placeholder Core Hub returns instead of a secret it does not reveal (AgentExtensions.kt).
+_COREHUB_HIDDEN_SECRET = "<hidden>"
+
+# Custom host credentials whose name carries a secret; the same pattern Core Hub obfuscates on the way out
+# (AgentExtensions.kt SECRET_KEY_REGEX), the untyped map has nothing but the key name to match on.
+_SECRET_KEY_PATTERN = re.compile(r"pass(word)?|secret|token|private_?key|credential|api_?key|access_?key", re.IGNORECASE)
+
 _UDF_ENTITIES_FETCH_FAILED_LOG = "Failed to fetch entities for UDF export in pipeline %s: %s"
 
 # Files of the full CoreHub backup ZIP, one per configuration domain.
@@ -1818,8 +1825,57 @@ def _backup_agent_key(agent_type: Any, agent_tag: Any, host_credentials: Any, ra
     )
 
 
+def _is_masked_secret(value: Any) -> bool:
+    """True for the placeholder of a secret that was not exported: ours or the one Core Hub returns."""
+    return isinstance(value, str) and value in (_MASKED_SECRET, _COREHUB_HIDDEN_SECRET)
+
+
+def _mask_custom_credentials(custom: Dict[str, Any], include_secrets: bool) -> Dict[str, Any]:
+    """Copy of the custom host credentials of an agent, safe to write to a backup.
+
+    A ``<hidden>`` placeholder (Core Hub does not reveal secrets to everyone, even with include_secrets) is always
+    written as the masked sentinel the restore detects. Unless ``include_secrets``, every non-empty string whose key
+    looks like a secret is masked too; nested maps are walked as Core Hub does.
+    """
+    masked: Dict[str, Any] = {}
+    for key, value in custom.items():
+        if isinstance(value, dict):
+            masked[key] = _mask_custom_credentials(value, include_secrets)
+        elif value == _COREHUB_HIDDEN_SECRET or (
+            not include_secrets and isinstance(value, str) and value and _SECRET_KEY_PATTERN.search(str(key))
+        ):
+            masked[key] = _MASKED_SECRET
+        else:
+            masked[key] = value
+    return masked
+
+
+def has_masked_custom_secret(custom: Any) -> bool:
+    """True when custom host credentials hold a masked secret (``*******`` or ``<hidden>``) at any depth."""
+    if isinstance(custom, dict):
+        return any(has_masked_custom_secret(value) for value in custom.values())
+    return _is_masked_secret(custom)
+
+
+def drop_masked_custom_secrets(custom: Any) -> Dict[str, Any]:
+    """Custom host credentials without their masked secrets, which are never a real value to send to Core Hub."""
+    if not isinstance(custom, dict):
+        return {}
+    return {
+        key: drop_masked_custom_secrets(value) if isinstance(value, dict) else value
+        for key, value in custom.items()
+        if not _is_masked_secret(value)
+    }
+
+
+def _agent_custom_credentials(agent: Dict[str, Any]) -> Dict[str, Any]:
+    """Custom host credentials of an agent as Core Hub reports them (``hostCredentialsCustomProperties``) or as a config names them."""
+    custom = agent.get("customHostCredentials") or agent.get("hostCredentialsCustomProperties")
+    return custom if isinstance(custom, dict) else {}
+
+
 def _backup_agent_entry(agent: Dict[str, Any], identity: Tuple[Any, Any, Any, Any], include_secrets: bool) -> Dict[str, Any]:
-    """agents-config.yaml entry of an agent; its password is masked unless ``include_secrets``."""
+    """agents-config.yaml entry of an agent; its password and custom secrets are masked unless ``include_secrets``."""
     agent_type, agent_tag, host_credentials, raw_agent_id = identity
     export_host_credentials = dict(host_credentials)
     if not include_secrets and "password" in export_host_credentials and export_host_credentials["password"]:
@@ -1830,7 +1886,7 @@ def _backup_agent_entry(agent: Dict[str, Any], identity: Tuple[Any, Any, Any, An
         "agentTag": agent_tag,
         "hostCredentials": export_host_credentials,
         # Keep the same naming as config.json/example-config.json
-        "customHostCredentials": agent.get("customHostCredentials") or {},
+        "customHostCredentials": _mask_custom_credentials(_agent_custom_credentials(agent), include_secrets),
         "specificConfiguration": agent.get("specificConfiguration") or {},
     }
     if raw_agent_id is not None:
@@ -3819,11 +3875,7 @@ def _fetch_agent_credentials(
     """Retrieve host/custom credentials for a specific agent, falling back to config."""
 
     fallback_host = (agent.get("hostCredentials") or {}).copy()
-    fallback_custom = (
-        agent.get("customHostCredentials")
-        or agent.get("hostCredentialsCustomProperties")
-        or {}
-    ).copy()
+    fallback_custom = _agent_custom_credentials(agent).copy()
 
     agent_id = agent.get("agentId") or agent.get("id")
     if not agent_id:
@@ -4038,7 +4090,8 @@ def _bind_config_agent(
 
     # Extract certificate info before processing credentials
     host_credentials = dict(conf_agent.get("hostCredentials") or {})
-    custom_host_credentials = conf_agent.get("customHostCredentials") or {}
+    # A masked secret of the backup is no value: Core Hub would store the placeholder as the secret
+    custom_host_credentials = drop_masked_custom_secrets(conf_agent.get("customHostCredentials"))
 
     # Extract certificate path and type (will be handled separately)
     certificate_path = host_credentials.pop("certificatePath", None)
