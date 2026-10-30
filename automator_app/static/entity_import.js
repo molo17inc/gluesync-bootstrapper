@@ -64,7 +64,7 @@ export function buildEntityPlan(panel, pipelineId, loadedEntities, selectedIds) 
     entry.entities = {};
     if (advanced.include.length) entry.entities.include = advanced.include;
     if (advanced.exclude.length) entry.entities.exclude = advanced.exclude;
-  } else if (loadedEntities && loadedEntities.length && selectedIds) {
+  } else if (loadedEntities?.length && selectedIds) {
     if (selectedIds.size < loadedEntities.length) {
       entry.entities = { include: loadedEntities.map((e) => e.id).filter((id) => selectedIds.has(id)) };
     }
@@ -81,8 +81,8 @@ export function planIsEmpty(plan) {
 export function selectionError(panel, loadedEntities, selectedIds) {
   const advanced = advancedIncludeExclude(panel);
   if (advanced.used) return null;
-  if (!loadedEntities || !loadedEntities.length) return null;
-  if (!selectedIds || selectedIds.size === 0) {
+  if (!loadedEntities?.length) return null;
+  if (!selectedIds?.size) {
     return 'Select at least one entity (or use Advanced include), or Select all to import every table';
   }
   return null;
@@ -91,6 +91,21 @@ export function selectionError(panel, loadedEntities, selectedIds) {
 function chainMembers(loaded, chainId) {
   if (!chainId) return [];
   return loaded.filter((e) => e.chainId && String(e.chainId) === String(chainId));
+}
+
+function partialChains(loaded, checkedSet) {
+  const byChain = new Map();
+  loaded.forEach((e) => {
+    if (!e.chainId) return;
+    if (!byChain.has(e.chainId)) byChain.set(e.chainId, []);
+    byChain.get(e.chainId).push(e.id);
+  });
+  const out = [];
+  byChain.forEach((members, chainId) => {
+    const n = members.filter((id) => checkedSet.has(id)).length;
+    if (n > 0 && n < members.length) out.push(String(chainId));
+  });
+  return out;
 }
 
 
@@ -200,20 +215,6 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
       : '';
   }
 
-  function partialChains(loaded, checkedSet) {
-    const byChain = new Map();
-    loaded.forEach((e) => {
-      if (!e.chainId) return;
-      if (!byChain.has(e.chainId)) byChain.set(e.chainId, []);
-      byChain.get(e.chainId).push(e.id);
-    });
-    const out = [];
-    byChain.forEach((members, chainId) => {
-      const n = members.filter((id) => checkedSet.has(id)).length;
-      if (n > 0 && n < members.length) out.push(String(chainId));
-    });
-    return out;
-  }
 
   function onBoxChange(entity, checked) {
     if (!selectedIds) selectedIds = new Set();

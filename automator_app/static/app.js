@@ -1043,6 +1043,20 @@ function updateImportButtonsVisibility() {
   }
 }
 
+/**
+ * Reload the entity Customize picker. reloadEntities already surfaces errors via setMessage;
+ * still attach .catch so floating promises are never unhandled (javascript:S9383).
+ */
+function refreshEntityImportPicker(entityImport) {
+  const pending = entityImport?.reloadEntities?.();
+  if (pending && typeof pending.then === 'function') {
+    pending.catch((err) => {
+      ui.setConfigMessage(err?.message || String(err), 'error');
+      logActivity('Config', `Entity reload failed: ${err?.message || err}`);
+    });
+  }
+}
+
 function bindEvents() {
   const loginForm = document.getElementById('login-form');
   const configForm = document.getElementById('config-form');
@@ -1073,6 +1087,8 @@ function bindEvents() {
   const targetTypeSelect = document.getElementById('target-type');
   const corehubRefreshBtn = document.getElementById('corehub-refresh-btn');
 
+  let entityImport;
+
   let bulkTablesState = [];
   let bulkSourceType = 'SQL';
   let bulkTargetType = 'SQL';
@@ -1096,24 +1112,43 @@ function bindEvents() {
     if (targetTypeSelect) targetTypeSelect.disabled = !enabled;
   }
 
+  function bulkSummaryText(total, selected, displayed) {
+    if (!total) {
+      return bulkSchemaSelect && bulkSchemaSelect.value
+        ? `No tables found for schema ${bulkSchemaSelect.value}.`
+        : 'Select a schema to load tables.';
+    }
+    const hiddenCount = total - displayed;
+    if (hiddenCount > 0 && !bulkShowingAllTables) {
+      return `${total} table(s) available, ${selected} selected. Showing first ${displayed} (${hiddenCount} hidden).`;
+    }
+    return `${total} table(s) available, ${selected} selected.`;
+  }
+
+  function updateBulkShowAllButton(total) {
+    if (!bulkShowAllBtn) {
+      console.log('bulkShowAllBtn element not found!');
+      return;
+    }
+    console.log('Show all button check:', { total, limit: BULK_TABLE_DISPLAY_LIMIT, shouldShow: total > BULK_TABLE_DISPLAY_LIMIT });
+    if (total <= BULK_TABLE_DISPLAY_LIMIT) {
+      bulkShowAllBtn.style.display = 'none';
+      console.log('Button hidden');
+      return;
+    }
+    bulkShowAllBtn.style.display = 'block';
+    bulkShowAllBtn.textContent = bulkShowingAllTables
+      ? `Show less (top ${BULK_TABLE_DISPLAY_LIMIT})`
+      : `Show all tables (${total})`;
+    console.log('Button shown with text:', bulkShowAllBtn.textContent);
+  }
+
   function updateBulkSelectionSummary() {
     if (!bulkTablesSummary) return;
     const total = bulkTablesState.length;
     const selected = bulkTablesState.filter((t) => t.selected).length;
     const displayed = bulkShowingAllTables ? total : Math.min(total, BULK_TABLE_DISPLAY_LIMIT);
-    
-    if (!total) {
-      bulkTablesSummary.textContent = bulkSchemaSelect && bulkSchemaSelect.value
-        ? `No tables found for schema ${bulkSchemaSelect.value}.`
-        : 'Select a schema to load tables.';
-    } else {
-      const hiddenCount = total - displayed;
-      if (hiddenCount > 0 && !bulkShowingAllTables) {
-        bulkTablesSummary.textContent = `${total} table(s) available, ${selected} selected. Showing first ${displayed} (${hiddenCount} hidden).`;
-      } else {
-        bulkTablesSummary.textContent = `${total} table(s) available, ${selected} selected.`;
-      }
-    }
+    bulkTablesSummary.textContent = bulkSummaryText(total, selected, displayed);
     if (bulkCreateBtn) {
       bulkCreateBtn.textContent = `Create all entities (${selected})`;
       bulkCreateBtn.disabled = !selected;
@@ -1121,23 +1156,7 @@ function bindEvents() {
     if (bulkToggleAllBtn) {
       bulkToggleAllBtn.disabled = !total;
     }
-    
-    // Update show all button visibility and text
-    if (bulkShowAllBtn) {
-      console.log('Show all button check:', { total, limit: BULK_TABLE_DISPLAY_LIMIT, shouldShow: total > BULK_TABLE_DISPLAY_LIMIT });
-      if (total > BULK_TABLE_DISPLAY_LIMIT) {
-        bulkShowAllBtn.style.display = 'block';
-        bulkShowAllBtn.textContent = bulkShowingAllTables 
-          ? `Show less (top ${BULK_TABLE_DISPLAY_LIMIT})` 
-          : `Show all tables (${total})`;
-        console.log('Button shown with text:', bulkShowAllBtn.textContent);
-      } else {
-        bulkShowAllBtn.style.display = 'none';
-        console.log('Button hidden');
-      }
-    } else {
-      console.log('bulkShowAllBtn element not found!');
-    }
+    updateBulkShowAllButton(total);
   }
 
   function renderBulkTablesList() {
@@ -1196,814 +1215,798 @@ function bindEvents() {
     updateBulkSelectionSummary();
   }
 
-  if (customSchemasCheckbox && schemaFields) {
-    updateSchemaVisibility();
-    customSchemasCheckbox.addEventListener('change', updateSchemaVisibility);
+
+
+  function buildBulkCreatePayload() {
+    if (!bulkPipelineSelect?.value) {
+      ui.setBulkMessage('Please select a pipeline first', 'error');
+      return null;
+    }
+    if (!bulkSchemaSelect?.value) {
+      ui.setBulkMessage('Please select a source schema first', 'error');
+      return null;
+    }
+    const selectedTables = bulkTablesState.filter((t) => t.selected).map((t) => t.name);
+    if (!selectedTables.length) {
+      ui.setBulkMessage('Please select at least one table', 'error');
+      return null;
+    }
+    const targetSchema = bulkTargetSchemaInput?.value?.trim() || '';
+    if (!targetSchema) {
+      ui.setBulkMessage('Please enter a target schema name', 'error');
+      return null;
+    }
+    const chunkSizeInput = document.getElementById('chunk-size');
+    const skipErrorsInput = document.getElementById('skip-errors');
+    const enableSchedulingInput = document.getElementById('enable-scheduling');
+    const createTablesInput = document.getElementById('create-tables');
+    return {
+      pipelineId: bulkPipelineSelect.value,
+      sourceSchema: bulkSchemaSelect.value,
+      targetSchema,
+      sourceType: bulkSourceType || 'SQL',
+      targetType: bulkTargetType || 'SQL',
+      tableNames: selectedTables,
+      chunkSize: Number(chunkSizeInput?.value || 50),
+      skipErrors: !!(skipErrorsInput && skipErrorsInput.checked),
+      enableScheduling: !!(enableSchedulingInput && enableSchedulingInput.checked),
+      createTables: !!(createTablesInput && createTablesInput.checked),
+    };
   }
 
-  if (corehubRefreshBtn) {
-    corehubRefreshBtn.addEventListener('click', () => {
-      refreshCorehubOverview();
-    });
+  function applyBulkCreateResult(res) {
+    if (res && Array.isArray(res.logs) && res.logs.length) {
+      ui.renderLogs(res.logs);
+    }
+    if (res && typeof res.message === 'string') {
+      ui.setBulkMessage(res.message, res.success === false ? 'error' : 'success');
+      logActivity('Bulk', res.message);
+      return;
+    }
+    ui.setBulkMessage('Bulk entity creation completed', 'success');
+    logActivity('Bulk', 'Bulk entity creation completed');
   }
 
-  if (bulkPipelineSelect) {
-    resetBulkState();
-    bulkPipelineSelect.addEventListener('change', () => {
+  async function runBulkCreate() {
+    const payload = buildBulkCreatePayload();
+    if (!payload) return;
+    ui.setBulkMessage('Starting bulk entity creation…');
+    logActivity('Bulk', `Starting bulk entity creation for ${payload.tableNames.length} table(s) from schema ${payload.sourceSchema}`);
+    ui.renderLogs();
+    try {
+      applyBulkCreateResult(await api.bulkCreate(payload));
+    } catch (err) {
+      ui.setBulkMessage(err.message, 'error');
+      logActivity('Bulk', `Bulk entity creation failed: ${err.message}`);
+    }
+  }
+
+  function wireBulkCreateEvents() {
+    if (customSchemasCheckbox && schemaFields) {
+      updateSchemaVisibility();
+      customSchemasCheckbox.addEventListener('change', updateSchemaVisibility);
+    }
+
+    if (corehubRefreshBtn) {
+      corehubRefreshBtn.addEventListener('click', () => {
+        refreshCorehubOverview();
+      });
+    }
+
+    if (bulkPipelineSelect) {
       resetBulkState();
-      if (bulkLoadSchemasBtn) {
-        bulkLoadSchemasBtn.disabled = !bulkPipelineSelect.value;
-      }
-      if (bulkDownloadYamlBtn) {
-        bulkDownloadYamlBtn.disabled = !bulkPipelineSelect.value;
-      }
-      ui.setBulkMessage('', '');
-    });
-  }
-
-  if (bulkLoadSchemasBtn && bulkSchemaSelect) {
-    bulkLoadSchemasBtn.disabled = !(bulkPipelineSelect && bulkPipelineSelect.value);
-    bulkLoadSchemasBtn.addEventListener('click', async () => {
-      if (!bulkPipelineSelect || !bulkPipelineSelect.value) {
-        ui.setBulkMessage('Please select a pipeline first', 'error');
-        return;
-      }
-
-      bulkLoadSchemasBtn.disabled = true;
-      resetBulkState();
-      ui.setBulkMessage('Loading source schemas…');
-      logActivity('Bulk', `Loading source schemas for pipeline ${bulkPipelineSelect.value}`);
-
-      try {
-        const res = await api.bulkListSchemas(bulkPipelineSelect.value);
-        const schemas = (res && res.schemas) || [];
-
-        bulkSourceType = (res && res.sourceType) || 'SQL';
-        bulkTargetType = (res && res.targetType) || 'SQL';
-
-        bulkSchemaSelect.innerHTML = '<option value="">Select a schema…</option>';
-        schemas.forEach((schema) => {
-          const opt = document.createElement('option');
-          opt.value = schema;
-          opt.textContent = schema;
-          bulkSchemaSelect.appendChild(opt);
-        });
-        bulkSchemaSelect.disabled = !schemas.length;
-
-        if (!schemas.length) {
-          ui.setBulkMessage('No source schemas found for this pipeline', 'error');
-          logActivity('Bulk', `No schemas returned for pipeline ${bulkPipelineSelect.value}`);
-        } else {
-          ui.setBulkMessage(`Loaded ${schemas.length} schema(s). Select a schema to load tables.`, 'success');
-          logActivity('Bulk', `Loaded ${schemas.length} schema(s) for pipeline ${bulkPipelineSelect.value}`);
-        }
-      } catch (err) {
-        ui.setBulkMessage(err.message, 'error');
-        logActivity('Bulk', `Failed to load schemas: ${err.message}`);
-      } finally {
+      bulkPipelineSelect.addEventListener('change', () => {
+        resetBulkState();
         if (bulkLoadSchemasBtn) {
-          bulkLoadSchemasBtn.disabled = !(bulkPipelineSelect && bulkPipelineSelect.value);
+          bulkLoadSchemasBtn.disabled = !bulkPipelineSelect.value;
         }
-      }
-    });
-  }
-
-  if (bulkDownloadYamlBtn) {
-    bulkDownloadYamlBtn.addEventListener('click', async () => {
-      if (!bulkPipelineSelect || !bulkPipelineSelect.value) {
-        ui.setBulkMessage('Please select a pipeline first', 'error');
-        return;
-      }
-      if (!bulkSchemaSelect || !bulkSchemaSelect.value) {
-        ui.setBulkMessage('Please select a source schema first', 'error');
-        return;
-      }
-
-      const selectedTables = bulkTablesState.filter((t) => t.selected).map((t) => t.name);
-      if (!selectedTables.length) {
-        ui.setBulkMessage('Please select at least one table', 'error');
-        return;
-      }
-
-      const targetSchema = (bulkTargetSchemaInput && bulkTargetSchemaInput.value)
-        ? bulkTargetSchemaInput.value.trim()
-        : '';
-      
-      if (!targetSchema) {
-        ui.setBulkMessage('Please enter a target schema name', 'error');
-        return;
-      }
-
-      const payload = {
-        pipelineId: bulkPipelineSelect.value,
-        sourceSchema: bulkSchemaSelect.value,
-        targetSchema: targetSchema,
-        tableNames: selectedTables,
-      };
-
-      ui.setBulkMessage('Preparing YAML template…');
-      logActivity('Bulk', `Generating YAML template for ${selectedTables.length} table(s) in schema ${bulkSchemaSelect.value}`);
-
-      try {
-        const { blob, filename } = await api.bulkTemplate(payload);
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        window.URL.revokeObjectURL(url);
-        ui.setBulkMessage(`Downloaded ${filename}`, 'success');
-        logActivity('Bulk', `Downloaded YAML template ${filename}`);
-      } catch (err) {
-        ui.setBulkMessage(err.message, 'error');
-        logActivity('Bulk', `Failed to generate YAML template: ${err.message}`);
-      }
-    });
-  }
-
-  if (bulkSchemaSelect) {
-    bulkSchemaSelect.addEventListener('change', async () => {
-      if (!bulkSchemaSelect.value) {
-        resetBulkState();
-        return;
-      }
-
-      if (!bulkPipelineSelect || !bulkPipelineSelect.value) {
-        ui.setBulkMessage('Please select a pipeline first', 'error');
-        resetBulkState();
-        return;
-      }
-
-      if (bulkTablesSummary) {
-        bulkTablesSummary.textContent = 'Loading tables…';
-      }
-      if (bulkTablesList) {
-        bulkTablesList.innerHTML = '';
-      }
-      bulkTablesState = [];
-      if (bulkCreateBtn) {
-        bulkCreateBtn.textContent = 'Create all entities (0)';
-        bulkCreateBtn.disabled = true;
-      }
-      if (bulkToggleAllBtn) {
-        bulkToggleAllBtn.disabled = true;
-      }
-
-      try {
-        const res = await api.bulkListTables(bulkPipelineSelect.value, bulkSchemaSelect.value);
-        const tables = (res && res.tables) || [];
-
-        bulkTablesState = tables.map((name) => ({ name, selected: true }));
-        bulkShowingAllTables = false;
-        renderBulkTablesList();
-
-        updateBulkSelectionSummary();
-
-        if (!tables.length) {
-          ui.setBulkMessage(`No tables found for schema ${bulkSchemaSelect.value}`, 'error');
-          logActivity('Bulk', `No tables found for schema ${bulkSchemaSelect.value}`);
-        } else {
-          ui.setBulkMessage('', '');
-          logActivity('Bulk', `Loaded ${tables.length} table(s) for schema ${bulkSchemaSelect.value}`);
+        if (bulkDownloadYamlBtn) {
+          bulkDownloadYamlBtn.disabled = !bulkPipelineSelect.value;
         }
-      } catch (err) {
-        ui.setBulkMessage(err.message, 'error');
-        logActivity('Bulk', `Failed to load tables: ${err.message}`);
-        bulkTablesState = [];
+        ui.setBulkMessage('', '');
+      });
+    }
+
+    if (bulkLoadSchemasBtn && bulkSchemaSelect) {
+      bulkLoadSchemasBtn.disabled = !(bulkPipelineSelect && bulkPipelineSelect.value);
+      bulkLoadSchemasBtn.addEventListener('click', async () => {
+        if (!bulkPipelineSelect || !bulkPipelineSelect.value) {
+          ui.setBulkMessage('Please select a pipeline first', 'error');
+          return;
+        }
+
+        bulkLoadSchemasBtn.disabled = true;
+        resetBulkState();
+        ui.setBulkMessage('Loading source schemas…');
+        logActivity('Bulk', `Loading source schemas for pipeline ${bulkPipelineSelect.value}`);
+
+        try {
+          const res = await api.bulkListSchemas(bulkPipelineSelect.value);
+          const schemas = (res && res.schemas) || [];
+
+          bulkSourceType = (res && res.sourceType) || 'SQL';
+          bulkTargetType = (res && res.targetType) || 'SQL';
+
+          bulkSchemaSelect.innerHTML = '<option value="">Select a schema…</option>';
+          schemas.forEach((schema) => {
+            const opt = document.createElement('option');
+            opt.value = schema;
+            opt.textContent = schema;
+            bulkSchemaSelect.appendChild(opt);
+          });
+          bulkSchemaSelect.disabled = !schemas.length;
+
+          if (!schemas.length) {
+            ui.setBulkMessage('No source schemas found for this pipeline', 'error');
+            logActivity('Bulk', `No schemas returned for pipeline ${bulkPipelineSelect.value}`);
+          } else {
+            ui.setBulkMessage(`Loaded ${schemas.length} schema(s). Select a schema to load tables.`, 'success');
+            logActivity('Bulk', `Loaded ${schemas.length} schema(s) for pipeline ${bulkPipelineSelect.value}`);
+          }
+        } catch (err) {
+          ui.setBulkMessage(err.message, 'error');
+          logActivity('Bulk', `Failed to load schemas: ${err.message}`);
+        } finally {
+          if (bulkLoadSchemasBtn) {
+            bulkLoadSchemasBtn.disabled = !(bulkPipelineSelect && bulkPipelineSelect.value);
+          }
+        }
+      });
+    }
+
+    if (bulkDownloadYamlBtn) {
+      bulkDownloadYamlBtn.addEventListener('click', async () => {
+        if (!bulkPipelineSelect || !bulkPipelineSelect.value) {
+          ui.setBulkMessage('Please select a pipeline first', 'error');
+          return;
+        }
+        if (!bulkSchemaSelect || !bulkSchemaSelect.value) {
+          ui.setBulkMessage('Please select a source schema first', 'error');
+          return;
+        }
+
+        const selectedTables = bulkTablesState.filter((t) => t.selected).map((t) => t.name);
+        if (!selectedTables.length) {
+          ui.setBulkMessage('Please select at least one table', 'error');
+          return;
+        }
+
+        const targetSchema = (bulkTargetSchemaInput && bulkTargetSchemaInput.value)
+          ? bulkTargetSchemaInput.value.trim()
+          : '';
+
+        if (!targetSchema) {
+          ui.setBulkMessage('Please enter a target schema name', 'error');
+          return;
+        }
+
+        const payload = {
+          pipelineId: bulkPipelineSelect.value,
+          sourceSchema: bulkSchemaSelect.value,
+          targetSchema: targetSchema,
+          tableNames: selectedTables,
+        };
+
+        ui.setBulkMessage('Preparing YAML template…');
+        logActivity('Bulk', `Generating YAML template for ${selectedTables.length} table(s) in schema ${bulkSchemaSelect.value}`);
+
+        try {
+          const { blob, filename } = await api.bulkTemplate(payload);
+          const url = window.URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          window.URL.revokeObjectURL(url);
+          ui.setBulkMessage(`Downloaded ${filename}`, 'success');
+          logActivity('Bulk', `Downloaded YAML template ${filename}`);
+        } catch (err) {
+          ui.setBulkMessage(err.message, 'error');
+          logActivity('Bulk', `Failed to generate YAML template: ${err.message}`);
+        }
+      });
+    }
+
+    if (bulkSchemaSelect) {
+      bulkSchemaSelect.addEventListener('change', async () => {
+        if (!bulkSchemaSelect.value) {
+          resetBulkState();
+          return;
+        }
+
+        if (!bulkPipelineSelect || !bulkPipelineSelect.value) {
+          ui.setBulkMessage('Please select a pipeline first', 'error');
+          resetBulkState();
+          return;
+        }
+
+        if (bulkTablesSummary) {
+          bulkTablesSummary.textContent = 'Loading tables…';
+        }
         if (bulkTablesList) {
           bulkTablesList.innerHTML = '';
         }
-        updateBulkSelectionSummary();
-      }
-    });
-  }
+        bulkTablesState = [];
+        if (bulkCreateBtn) {
+          bulkCreateBtn.textContent = 'Create all entities (0)';
+          bulkCreateBtn.disabled = true;
+        }
+        if (bulkToggleAllBtn) {
+          bulkToggleAllBtn.disabled = true;
+        }
 
-  if (bulkShowAllBtn) {
-    bulkShowAllBtn.addEventListener('click', () => {
-      bulkShowingAllTables = !bulkShowingAllTables;
-      renderBulkTablesList();
-    });
-  }
+        try {
+          const res = await api.bulkListTables(bulkPipelineSelect.value, bulkSchemaSelect.value);
+          const tables = (res && res.tables) || [];
 
-  if (bulkToggleAllBtn) {
-    bulkToggleAllBtn.addEventListener('click', () => {
-      if (!bulkTablesState.length) return;
-      const allSelected = bulkTablesState.every((t) => t.selected);
-      const next = !allSelected;
-      bulkTablesState.forEach((t) => {
-        t.selected = next;
+          bulkTablesState = tables.map((name) => ({ name, selected: true }));
+          bulkShowingAllTables = false;
+          renderBulkTablesList();
+
+          updateBulkSelectionSummary();
+
+          if (!tables.length) {
+            ui.setBulkMessage(`No tables found for schema ${bulkSchemaSelect.value}`, 'error');
+            logActivity('Bulk', `No tables found for schema ${bulkSchemaSelect.value}`);
+          } else {
+            ui.setBulkMessage('', '');
+            logActivity('Bulk', `Loaded ${tables.length} table(s) for schema ${bulkSchemaSelect.value}`);
+          }
+        } catch (err) {
+          ui.setBulkMessage(err.message, 'error');
+          logActivity('Bulk', `Failed to load tables: ${err.message}`);
+          bulkTablesState = [];
+          if (bulkTablesList) {
+            bulkTablesList.innerHTML = '';
+          }
+          updateBulkSelectionSummary();
+        }
       });
-      if (bulkTablesList) {
-        const inputs = bulkTablesList.querySelectorAll('input[type="checkbox"]');
-        inputs.forEach((input) => {
-          input.checked = next;
+    }
+
+    if (bulkShowAllBtn) {
+      bulkShowAllBtn.addEventListener('click', () => {
+        bulkShowingAllTables = !bulkShowingAllTables;
+        renderBulkTablesList();
+      });
+    }
+
+    if (bulkToggleAllBtn) {
+      bulkToggleAllBtn.addEventListener('click', () => {
+        if (!bulkTablesState.length) return;
+        const allSelected = bulkTablesState.every((t) => t.selected);
+        const next = !allSelected;
+        bulkTablesState.forEach((t) => {
+          t.selected = next;
         });
-      }
-      updateBulkSelectionSummary();
-    });
+        if (bulkTablesList) {
+          const inputs = bulkTablesList.querySelectorAll('input[type="checkbox"]');
+          inputs.forEach((input) => {
+            input.checked = next;
+          });
+        }
+        updateBulkSelectionSummary();
+      });
+    }
+
+    if (bulkCreateBtn) {
+      bulkCreateBtn.addEventListener('click', () => {
+        void runBulkCreate();
+      });
+    }
+
   }
 
-  if (bulkCreateBtn) {
-    bulkCreateBtn.addEventListener('click', async () => {
-      if (!bulkPipelineSelect || !bulkPipelineSelect.value) {
-        ui.setBulkMessage('Please select a pipeline first', 'error');
-        return;
-      }
-      if (!bulkSchemaSelect || !bulkSchemaSelect.value) {
-        ui.setBulkMessage('Please select a source schema first', 'error');
-        return;
-      }
-
-      const selectedTables = bulkTablesState.filter((t) => t.selected).map((t) => t.name);
-      if (!selectedTables.length) {
-        ui.setBulkMessage('Please select at least one table', 'error');
-        return;
-      }
-
-      const sourceSchema = bulkSchemaSelect.value;
-      const targetSchema = (bulkTargetSchemaInput && bulkTargetSchemaInput.value)
-        ? bulkTargetSchemaInput.value.trim()
-        : '';
-      
-      if (!targetSchema) {
-        ui.setBulkMessage('Please enter a target schema name', 'error');
-        return;
-      }
-
-      const chunkSizeInput = document.getElementById('chunk-size');
-      const skipErrorsInput = document.getElementById('skip-errors');
-      const enableSchedulingInput = document.getElementById('enable-scheduling');
-      const createTablesInput = document.getElementById('create-tables');
+  function wireAuthEvents() {
+    loginForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      ui.setAuthMessage('Signing in…');
+      logActivity('Auth', 'Authenticating with CoreHub…');
 
       const payload = {
-        pipelineId: bulkPipelineSelect.value,
-        sourceSchema,
-        targetSchema,
-        sourceType: bulkSourceType || 'SQL',
-        targetType: bulkTargetType || 'SQL',
-        tableNames: selectedTables,
-        chunkSize: Number((chunkSizeInput && chunkSizeInput.value) || 50),
-        skipErrors: !!(skipErrorsInput && skipErrorsInput.checked),
-        enableScheduling: !!(enableSchedulingInput && enableSchedulingInput.checked),
-        createTables: !!(createTablesInput && createTablesInput.checked),
+        baseUrl: document.getElementById('corehub-url').value,
+        username: document.getElementById('username').value,
+        password: document.getElementById('password').value,
+        useSsl: document.getElementById('use-ssl').checked,
+        skipVerify: document.getElementById('skip-verify').checked,
+        enableScheduling: document.getElementById('enable-scheduling').checked,
+        createTables: document.getElementById('create-tables').checked,
       };
 
-      ui.setBulkMessage('Starting bulk entity creation…');
-      logActivity('Bulk', `Starting bulk entity creation for ${selectedTables.length} table(s) from schema ${sourceSchema}`);
+      // Retry logic for transient network errors
+      const maxRetries = 2;
+      let lastError = null;
 
-      ui.renderLogs();
-      try {
-        const res = await api.bulkCreate(payload);
-        if (res && Array.isArray(res.logs) && res.logs.length) {
-          ui.renderLogs(res.logs);
-        }
-        if (res && typeof res.message === 'string') {
-          ui.setBulkMessage(res.message, res.success === false ? 'error' : 'success');
-          logActivity('Bulk', res.message);
-        } else {
-          ui.setBulkMessage('Bulk entity creation completed', 'success');
-          logActivity('Bulk', 'Bulk entity creation completed');
-        }
-      } catch (err) {
-        ui.setBulkMessage(err.message, 'error');
-        logActivity('Bulk', `Bulk entity creation failed: ${err.message}`);
-      }
-    });
-  }
-
-  loginForm.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    ui.setAuthMessage('Signing in…');
-    logActivity('Auth', 'Authenticating with CoreHub…');
-
-    const payload = {
-      baseUrl: document.getElementById('corehub-url').value,
-      username: document.getElementById('username').value,
-      password: document.getElementById('password').value,
-      useSsl: document.getElementById('use-ssl').checked,
-      skipVerify: document.getElementById('skip-verify').checked,
-      enableScheduling: document.getElementById('enable-scheduling').checked,
-      createTables: document.getElementById('create-tables').checked,
-    };
-
-    // Retry logic for transient network errors
-    const maxRetries = 2;
-    let lastError = null;
-    
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        if (attempt > 1) {
-          // Add a small delay before retry
-          await new Promise(resolve => setTimeout(resolve, 1000));
-          ui.setAuthMessage(`Retrying authentication (attempt ${attempt}/${maxRetries})…`);
-          logActivity('Auth', `Retrying authentication (attempt ${attempt}/${maxRetries})…`);
-        }
-        
-        await api.login(payload);
-        ui.setAuthMessage('Authentication successful', 'success');
-        logActivity('Auth', 'Authentication successful');
-        const snapshot = await api.getState();
-        stateManager.updateFromState(snapshot);
-        ui.lockAuthFields(true);
-        await Promise.all([
-          loadPipelines(),
-          refreshCorehubOverview(),
-        ]);
-        return; // Success, exit
-      } catch (err) {
-        lastError = err;
-        // Only retry on network errors, not on authentication failures
-        const isNetworkError = err.message.includes('Failed to fetch') || 
-                               err.message.includes('No route to host') ||
-                               err.message.includes('Connection') ||
-                               err.message.includes('Network');
-        
-        if (!isNetworkError || attempt === maxRetries) {
-          // Don't retry - either it's an auth error or we're out of retries
-          break;
-        }
-        
-        logActivity('Auth', `Network error on attempt ${attempt}, will retry...`);
-      }
-    }
-    
-    // All retries failed
-    ui.setAuthMessage(lastError.message, 'error');
-    ui.setAuthEnabled(false);
-    logActivity('Auth', `Authentication failed: ${lastError.message}`);
-  });
-
-  ui.logoutBtn.addEventListener('click', async () => {
-    logActivity('Auth', 'Logging out…');
-    try {
-      await api.logout();
-      ui.setAuthMessage('Logged out', 'success');
-      logActivity('Auth', 'Logged out successfully');
-      ui.setAuthEnabled(false);
-      ui.setStatus('idle', 'Not authenticated');
-      ui.setConnectionInfo(null, null);
-      ui.lockAuthFields(false);
-      document.body.classList.remove('is-authenticated');
-      const authCard = document.getElementById('auth-card');
-      if (authCard) {
-        authCard.classList.remove('auth-card--collapsed');
-      }
-      stateManager.stopPolling();
-      ui.renderLogs();
-      if (exportPipelineSelect) {
-        exportPipelineSelect.innerHTML = '<option value="">Select a pipeline…</option>';
-      }
-      const configPipelineSelect = document.getElementById('pipeline-id');
-      if (configPipelineSelect && configPipelineSelect.tagName === 'SELECT') {
-        configPipelineSelect.innerHTML = '<option value="">Select a pipeline…</option>';
-      }
-      const duplicatePipelineSelect = document.getElementById('duplicate-pipeline-id');
-      if (duplicatePipelineSelect && duplicatePipelineSelect.tagName === 'SELECT') {
-        duplicatePipelineSelect.innerHTML = '<option value="">Select a pipeline to duplicate…</option>';
-      }
-      // Clear any selected import files and hide related buttons again
-      if (importConfigInput) {
-        importConfigInput.value = '';
-      }
-      if (importAllInput) {
-        importAllInput.value = '';
-      }
-      if (typeof updateImportButtonsVisibility === 'function') {
-        updateImportButtonsVisibility();
-      }
-      stateManager.setYamlFile(null);
-    } catch (err) {
-      ui.setAuthMessage(err.message, 'error');
-      logActivity('Auth', `Logout failed: ${err.message}`);
-    }
-  });
-
-  yamlInput.addEventListener('change', async (event) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    ui.setConfigMessage('Uploading…');
-    logActivity('Config', `Uploading ${file.name}…`);
-    try {
-      const response = await api.uploadYaml(file);
-      stateManager.setYamlFile(response.fileId);
-      ui.setConfigMessage(`Uploaded ${response.filename}`, 'success');
-      logActivity('Config', `Uploaded ${response.filename}`);
-      entityImport?.reloadEntities?.();
-    } catch (err) {
-      ui.setConfigMessage(err.message, 'error');
-      stateManager.setYamlFile(null);
-      logActivity('Config', `Upload failed: ${err.message}`);
-      entityImport?.reloadEntities?.();
-    }
-  });
-
-  configForm.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    if (!stateManager.yamlFileId) {
-      ui.setConfigMessage('Please upload a YAML or pipeline backup ZIP file first', 'error');
-      return;
-    }
-
-    const customSchemasEnabled = customSchemasCheckbox ? customSchemasCheckbox.checked : false;
-    const sourceSchemaValue = document.getElementById('source-schema').value;
-    const targetSchemaValue = document.getElementById('target-schema').value;
-
-    const selectErr = entityImport?.selectionError?.();
-    if (selectErr) {
-      ui.setConfigMessage(selectErr, 'error');
-      return;
-    }
-
-    let planFields = {};
-    try {
-      planFields = entityImport?.planPayload !== undefined ? entityImport.planPayload() : {};
-    } catch (planErr) {
-      ui.setConfigMessage(planErr.message, 'error');
-      return;
-    }
-
-    const payload = {
-      pipelineId: document.getElementById('pipeline-id').value,
-      sourceSchema: customSchemasEnabled ? sourceSchemaValue : '',
-      targetSchema: customSchemasEnabled ? targetSchemaValue : '',
-      autoSchemas: !customSchemasEnabled,
-      sourceType: document.getElementById('source-type').value,
-      targetType: document.getElementById('target-type').value,
-      chunkSize: Number(document.getElementById('chunk-size').value || 50),
-      yamlFileId: stateManager.yamlFileId,
-      skipErrors: document.getElementById('skip-errors').checked,
-      enableScheduling: document.getElementById('enable-scheduling').checked,
-      createTables: document.getElementById('create-tables').checked,
-      useSsl: document.getElementById('use-ssl').checked,
-      skipVerify: document.getElementById('skip-verify').checked,
-      ...planFields,
-    };
-
-    ui.setConfigMessage('Starting…');
-    ui.setAuthEnabled(false);
-    ui.renderLogs();
-    ui.setStatus('running', 'Running');
-    logActivity('Config', `Starting entity creation for pipeline ${payload.pipelineId || '(none)'}…`);
-
-    try {
-      await api.startRun(payload);
-      stateManager.startPolling();
-      ui.setConfigMessage('Entity creation started', 'success');
-      logActivity('Config', 'Entity creation started');
-    } catch (err) {
-      ui.setConfigMessage(err.message, 'error');
-      ui.setAuthEnabled(true);
-      ui.setStatus('failed', 'Failed to start');
-      logActivity('Config', `Failed to start entity creation: ${err.message}`);
-    }
-  });
-
-  if (exportForm && exportPipelineSelect) {
-    exportForm.addEventListener('submit', async (event) => {
-      event.preventDefault();
-      const pipelineId = exportPipelineSelect.value;
-      if (!pipelineId) {
-        ui.setExportMessage('Please select a pipeline to export metadata for', 'error');
-        return;
-      }
-
-      ui.setExportMessage('Exporting metadata…');
-       logActivity('Export', `Exporting metadata for pipeline ${pipelineId}…`);
-      try {
-        const includeSecrets = includeSecretsCheckbox?.checked || false;
-        const { blob, filename } = await api.exportPipeline(pipelineId, includeSecrets);
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        window.URL.revokeObjectURL(url);
-        ui.setExportMessage(`Exported ${filename}`, 'success');
-        logActivity('Export', `Metadata export completed: ${filename}`);
-      } catch (err) {
-        ui.setExportMessage(err.message, 'error');
-        logActivity('Export', `Metadata export failed: ${err.message}`);
-      }
-    });
-  }
-
-  if (ui.exportPipelineFullBtn && exportPipelineSelect) {
-    ui.exportPipelineFullBtn.addEventListener('click', async () => {
-      const pipelineId = exportPipelineSelect.value;
-      if (!pipelineId) {
-        ui.setExportMessage('Please select a pipeline to export a full backup for', 'error');
-        return;
-      }
-
-      ui.setExportMessage('Exporting full backup…');
-      logActivity('Export', `Exporting full backup for pipeline ${pipelineId}…`);
-      try {
-        const includeSecrets = includeSecretsCheckbox?.checked || false;
-        const { blob, filename } = await api.exportPipelineFull(pipelineId, includeSecrets);
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        window.URL.revokeObjectURL(url);
-        ui.setExportMessage(`Exported ${filename}`, 'success');
-        logActivity('Export', `Full backup completed: ${filename}`);
-      } catch (err) {
-        ui.setExportMessage(err.message, 'error');
-        logActivity('Export', `Full backup failed: ${err.message}`);
-      }
-    });
-  }
-
-  if (ui.exportAllBtn) {
-    console.log('Export All button found, adding event listener');
-    ui.exportAllBtn.addEventListener('click', async () => {
-      console.log('Export All button clicked');
-      ui.setExportMessage('Exporting all pipelines…');
-      logActivity('Export', 'Exporting all pipelines…');
-      try {
-        const includeSecrets = includeSecretsCheckbox?.checked || false;
-        const { blob, filename } = await api.exportAllPipelines(includeSecrets);
-        console.log('Export All API call successful, filename:', filename);
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        window.URL.revokeObjectURL(url);
-        ui.setExportMessage(`Exported ${filename}`, 'success');
-        logActivity('Export', `All pipelines export completed: ${filename}`);
-      } catch (err) {
-        console.error('Export All failed:', err);
-        ui.setExportMessage(err.message, 'error');
-        logActivity('Export', `Export all failed: ${err.message}`);
-      }
-    });
-  } else {
-    console.error('Export All button not found!');
-  }
-
-  if (importConfigInput) {
-    importConfigInput.addEventListener('change', updateImportButtonsVisibility);
-  }
-
-  if (importAllInput) {
-    importAllInput.addEventListener('change', updateImportButtonsVisibility);
-  }
-
-  if (importConfigBtnEl && importConfigInput) {
-    importConfigBtnEl.addEventListener('click', async () => {
-      const file = importConfigInput.files?.[0];
-      if (!file) {
-        ui.setConfigMessage('Please choose a config file to import', 'error');
-        return;
-      }
-
-      ui.setConfigMessage('Importing config…');
-      logActivity('Config', `Importing config file ${file.name}…`);
-      try {
-        const result = await api.importConfig(file);
-        ui.setConfigMessage(result.message || 'Config imported successfully', 'success');
-        logActivity('Config', result.message || 'Config import completed');
-      } catch (err) {
-        ui.setConfigMessage(err.message, 'error');
-        logActivity('Config', `Config import failed: ${err.message}`);
-      }
-    });
-  }
-
-  if (importAllBtnEl && importAllInput) {
-    importAllBtnEl.addEventListener('click', async () => {
-      const file = importAllInput.files?.[0];
-      if (!file) {
-        ui.setConfigMessage('Please choose a backup ZIP to import', 'error');
-        return;
-      }
-
-
-      ui.setConfigMessage('Importing full backup…');
-      logActivity('Config', `Importing full backup ${file.name}…`);
-      try {
-        const result = await api.importAll(file, true);
-        
-        // Display logs if present
-        if (result.logs && Array.isArray(result.logs)) {
-          result.logs.forEach(log => logActivity('Config', log));
-        }
-
-        // Warnings do not fail the restore: they are what is left to do, such as signing in to a connection
-        if (result.warnings && Array.isArray(result.warnings)) {
-          result.warnings.forEach(warning => logActivity('Config', warning));
-        }
-        
-        if (result.success === false) {
-          ui.setConfigMessage(result.message || 'Import failed', 'error');
-          logActivity('Config', `Full backup import failed: ${result.message}`);
-        } else {
-          ui.setConfigMessage(result.message || 'Backup imported successfully', 'success');
-          logActivity('Config', result.message || 'Full backup import completed');
-        }
-      } catch (err) {
-        ui.setConfigMessage(err.message, 'error');
-        logActivity('Config', `Full backup import failed: ${err.message}`);
-      }
-    });
-  }
-
-  const entityImport = initEntityImport({
-    root: document.getElementById('entity-customize-root'),
-    getContext: () => ({
-      pipelineId: document.getElementById('pipeline-id')?.value,
-      yamlFileId: stateManager.yamlFileId,
-    }),
-    setMessage: (msg, kind) => ui.setConfigMessage(msg, kind),
-    log: logActivity,
-  });
-
-  const configPipelineSelect = document.getElementById('pipeline-id');
-  if (configPipelineSelect) {
-    configPipelineSelect.addEventListener('change', () => {
-      entityImport?.reloadEntities?.();
-    });
-  }
-  entityImport?.reloadEntities?.();
-
-  initCustomImport({
-    fileInput: importAllInput,
-    root: document.getElementById('custom-import-root'),
-    setMessage: (text, kind) => ui.setConfigMessage(text, kind),
-    log: logActivity,
-  });
-
-  if (validateAllBtnEl && importAllInput) {
-    validateAllBtnEl.addEventListener('click', async () => {
-      const file = importAllInput.files?.[0];
-      if (!file) {
-        ui.setConfigMessage('Please choose a backup ZIP to validate', 'error');
-        return;
-      }
-
-      ui.setConfigMessage('Validating backup…');
-      logActivity('Config', `Validating backup ${file.name}…`);
-      try {
-        const result = await api.validateAll(file);
-        const ok = result.success !== false;
-        const text = result.message || '';
-        if (text) {
-          const lines = text.split('\n');
-          ui.renderLogs(lines);
-          logActivity('Config', 'Validation output displayed in log');
-        }
-        ui.setConfigMessage(ok ? 'Validation OK' : 'Validation failed', ok ? 'success' : 'error');
-        logActivity('Config', ok ? 'Backup validation OK' : 'Backup validation failed');
-      } catch (err) {
-        ui.setConfigMessage(err.message, 'error');
-        logActivity('Config', `Backup validation failed: ${err.message}`);
-      }
-    });
-  }
-
-  const duplicateForm = document.getElementById('duplicate-form');
-  const duplicatePipelineSelect = document.getElementById('duplicate-pipeline-id');
-  const duplicateBtn = document.getElementById('duplicate-btn');
-  if (duplicateBtn && !duplicateBtn.dataset.defaultLabel) {
-    duplicateBtn.dataset.defaultLabel = duplicateBtn.textContent;
-  }
-
-  let duplicateRequestController = null;
-
-  function setDuplicateControlsDisabled(disabled) {
-    const controlIds = [
-      'duplicate-pipeline-id',
-      'duplicate-new-name',
-      'customize-agents',
-      'duplicate-source-tag',
-      'duplicate-target-tag',
-      'duplicate-source-host',
-      'duplicate-target-host',
-      'customize-schemas',
-      'duplicate-source-schema',
-      'duplicate-target-schema',
-    ];
-    controlIds.forEach((id) => {
-      const el = document.getElementById(id);
-      if (!el || el === duplicateBtn) return;
-      if (disabled) {
-        el.setAttribute('data-prev-disabled', el.disabled ? 'true' : 'false');
-        el.disabled = true;
-      } else if (el.hasAttribute('data-prev-disabled')) {
-        const wasDisabled = el.getAttribute('data-prev-disabled') === 'true';
-        el.disabled = wasDisabled;
-        el.removeAttribute('data-prev-disabled');
-      } else {
-        el.disabled = false;
-      }
-    });
-  }
-
-  function setDuplicateBusy(isBusy, label) {
-    if (!duplicateBtn) return;
-    const defaultLabel = duplicateBtn.dataset.defaultLabel || 'Duplicate Pipeline';
-    duplicateBtn.textContent = isBusy ? (label || 'Stop duplication') : defaultLabel;
-    if (isBusy) {
-      duplicateBtn.classList.add('danger');
-    } else {
-      duplicateBtn.classList.remove('danger');
-    }
-    if (!duplicatePipelineSelect) return;
-    if (!isBusy) {
-      duplicateBtn.disabled = !duplicatePipelineSelect.value;
-    }
-  }
-
-  function resetDuplicateState() {
-    if (duplicateRequestController) {
-      duplicateRequestController = null;
-    }
-    setDuplicateBusy(false);
-    setDuplicateControlsDisabled(false);
-  }
-
-  if (duplicateForm) {
-    duplicateForm.addEventListener('submit', async (event) => {
-      event.preventDefault();
-      if (duplicateRequestController) {
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
-          const response = await api.cancelDuplicate();
-          ui.setDuplicateMessage(response.message || 'Cancelling duplicate request…', 'warning');
-          logActivity('duplicate', response.message || 'Cancellation requested by user');
+          if (attempt > 1) {
+            // Add a small delay before retry
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            ui.setAuthMessage(`Retrying authentication (attempt ${attempt}/${maxRetries})…`);
+            logActivity('Auth', `Retrying authentication (attempt ${attempt}/${maxRetries})…`);
+          }
+
+          await api.login(payload);
+          ui.setAuthMessage('Authentication successful', 'success');
+          logActivity('Auth', 'Authentication successful');
+          const snapshot = await api.getState();
+          stateManager.updateFromState(snapshot);
+          ui.lockAuthFields(true);
+          await Promise.all([
+            loadPipelines(),
+            refreshCorehubOverview(),
+          ]);
+          return; // Success, exit
         } catch (err) {
-          ui.setDuplicateMessage(err.message || 'Failed to request cancellation', 'error');
-          logActivity('duplicate', `Failed to request cancellation: ${err.message}`);
-        } finally {
-          duplicateRequestController.abort();
+          lastError = err;
+          // Only retry on network errors, not on authentication failures
+          const isNetworkError = err.message.includes('Failed to fetch') || 
+                                 err.message.includes('No route to host') ||
+                                 err.message.includes('Connection') ||
+                                 err.message.includes('Network');
+
+          if (!isNetworkError || attempt === maxRetries) {
+            // Don't retry - either it's an auth error or we're out of retries
+            break;
+          }
+
+          logActivity('Auth', `Network error on attempt ${attempt}, will retry...`);
         }
-        return;
-      }
-      const pipelineId = document.getElementById('duplicate-pipeline-id').value;
-      if (!pipelineId) {
-        ui.setDuplicateMessage('Please select a pipeline to duplicate', 'error');
-        return;
-      }
-      logActivity('duplicate', `Starting duplication for pipeline ${pipelineId}`);
-
-      const sourcePasswordInput = document.getElementById('duplicate-source-password');
-      const targetPasswordInput = document.getElementById('duplicate-target-password');
-      const sourcePassword = sourcePasswordInput ? sourcePasswordInput.value.trim() : '';
-      const targetPassword = targetPasswordInput ? targetPasswordInput.value.trim() : '';
-
-      if (!sourcePassword || !targetPassword) {
-        ui.setDuplicateMessage('Both source and target agent passwords are required.', 'error');
-        return;
       }
 
-      const customizeAgentsEnabled = !!(document.getElementById('customize-agents') && document.getElementById('customize-agents').checked);
+      // All retries failed
+      ui.setAuthMessage(lastError.message, 'error');
+      ui.setAuthEnabled(false);
+      logActivity('Auth', `Authentication failed: ${lastError.message}`);
+    });
+
+    ui.logoutBtn.addEventListener('click', async () => {
+      logActivity('Auth', 'Logging out…');
+      try {
+        await api.logout();
+        ui.setAuthMessage('Logged out', 'success');
+        logActivity('Auth', 'Logged out successfully');
+        ui.setAuthEnabled(false);
+        ui.setStatus('idle', 'Not authenticated');
+        ui.setConnectionInfo(null, null);
+        ui.lockAuthFields(false);
+        document.body.classList.remove('is-authenticated');
+        const authCard = document.getElementById('auth-card');
+        if (authCard) {
+          authCard.classList.remove('auth-card--collapsed');
+        }
+        stateManager.stopPolling();
+        ui.renderLogs();
+        if (exportPipelineSelect) {
+          exportPipelineSelect.innerHTML = '<option value="">Select a pipeline…</option>';
+        }
+        const configPipelineSelect = document.getElementById('pipeline-id');
+        if (configPipelineSelect && configPipelineSelect.tagName === 'SELECT') {
+          configPipelineSelect.innerHTML = '<option value="">Select a pipeline…</option>';
+        }
+        const duplicatePipelineSelect = document.getElementById('duplicate-pipeline-id');
+        if (duplicatePipelineSelect && duplicatePipelineSelect.tagName === 'SELECT') {
+          duplicatePipelineSelect.innerHTML = '<option value="">Select a pipeline to duplicate…</option>';
+        }
+        // Clear any selected import files and hide related buttons again
+        if (importConfigInput) {
+          importConfigInput.value = '';
+        }
+        if (importAllInput) {
+          importAllInput.value = '';
+        }
+        if (typeof updateImportButtonsVisibility === 'function') {
+          updateImportButtonsVisibility();
+        }
+        stateManager.setYamlFile(null);
+      } catch (err) {
+        ui.setAuthMessage(err.message, 'error');
+        logActivity('Auth', `Logout failed: ${err.message}`);
+      }
+    });
+
+  }
+
+  function wireConfigAndEntityPlanEvents() {
+    yamlInput.addEventListener('change', async (event) => {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      ui.setConfigMessage('Uploading…');
+      logActivity('Config', `Uploading ${file.name}…`);
+      try {
+        const response = await api.uploadYaml(file);
+        stateManager.setYamlFile(response.fileId);
+        ui.setConfigMessage(`Uploaded ${response.filename}`, 'success');
+        logActivity('Config', `Uploaded ${response.filename}`);
+        refreshEntityImportPicker(entityImport);
+      } catch (err) {
+        ui.setConfigMessage(err.message, 'error');
+        stateManager.setYamlFile(null);
+        logActivity('Config', `Upload failed: ${err.message}`);
+        refreshEntityImportPicker(entityImport);
+      }
+    });
+
+    configForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (!stateManager.yamlFileId) {
+        ui.setConfigMessage('Please upload a YAML or pipeline backup ZIP file first', 'error');
+        return;
+      }
+
+      const customSchemasEnabled = customSchemasCheckbox ? customSchemasCheckbox.checked : false;
+      const sourceSchemaValue = document.getElementById('source-schema').value;
+      const targetSchemaValue = document.getElementById('target-schema').value;
+
+      const selectErr = entityImport?.selectionError?.();
+      if (selectErr) {
+        ui.setConfigMessage(selectErr, 'error');
+        return;
+      }
+
+      let planFields = {};
+      try {
+        planFields = entityImport?.planPayload !== undefined ? entityImport.planPayload() : {};
+      } catch (planErr) {
+        ui.setConfigMessage(planErr.message, 'error');
+        return;
+      }
+
+      const payload = {
+        pipelineId: document.getElementById('pipeline-id').value,
+        sourceSchema: customSchemasEnabled ? sourceSchemaValue : '',
+        targetSchema: customSchemasEnabled ? targetSchemaValue : '',
+        autoSchemas: !customSchemasEnabled,
+        sourceType: document.getElementById('source-type').value,
+        targetType: document.getElementById('target-type').value,
+        chunkSize: Number(document.getElementById('chunk-size').value || 50),
+        yamlFileId: stateManager.yamlFileId,
+        skipErrors: document.getElementById('skip-errors').checked,
+        enableScheduling: document.getElementById('enable-scheduling').checked,
+        createTables: document.getElementById('create-tables').checked,
+        useSsl: document.getElementById('use-ssl').checked,
+        skipVerify: document.getElementById('skip-verify').checked,
+        ...planFields,
+      };
+
+      ui.setConfigMessage('Starting…');
+      ui.setAuthEnabled(false);
+      ui.renderLogs();
+      ui.setStatus('running', 'Running');
+      logActivity('Config', `Starting entity creation for pipeline ${payload.pipelineId || '(none)'}…`);
+
+      try {
+        await api.startRun(payload);
+        stateManager.startPolling();
+        ui.setConfigMessage('Entity creation started', 'success');
+        logActivity('Config', 'Entity creation started');
+      } catch (err) {
+        ui.setConfigMessage(err.message, 'error');
+        ui.setAuthEnabled(true);
+        ui.setStatus('failed', 'Failed to start');
+        logActivity('Config', `Failed to start entity creation: ${err.message}`);
+      }
+    });
+
+  }
+
+  function wireExportEvents() {
+    if (exportForm && exportPipelineSelect) {
+      exportForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const pipelineId = exportPipelineSelect.value;
+        if (!pipelineId) {
+          ui.setExportMessage('Please select a pipeline to export metadata for', 'error');
+          return;
+        }
+
+        ui.setExportMessage('Exporting metadata…');
+         logActivity('Export', `Exporting metadata for pipeline ${pipelineId}…`);
+        try {
+          const includeSecrets = includeSecretsCheckbox?.checked || false;
+          const { blob, filename } = await api.exportPipeline(pipelineId, includeSecrets);
+          const url = window.URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          window.URL.revokeObjectURL(url);
+          ui.setExportMessage(`Exported ${filename}`, 'success');
+          logActivity('Export', `Metadata export completed: ${filename}`);
+        } catch (err) {
+          ui.setExportMessage(err.message, 'error');
+          logActivity('Export', `Metadata export failed: ${err.message}`);
+        }
+      });
+    }
+
+    if (ui.exportPipelineFullBtn && exportPipelineSelect) {
+      ui.exportPipelineFullBtn.addEventListener('click', async () => {
+        const pipelineId = exportPipelineSelect.value;
+        if (!pipelineId) {
+          ui.setExportMessage('Please select a pipeline to export a full backup for', 'error');
+          return;
+        }
+
+        ui.setExportMessage('Exporting full backup…');
+        logActivity('Export', `Exporting full backup for pipeline ${pipelineId}…`);
+        try {
+          const includeSecrets = includeSecretsCheckbox?.checked || false;
+          const { blob, filename } = await api.exportPipelineFull(pipelineId, includeSecrets);
+          const url = window.URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          window.URL.revokeObjectURL(url);
+          ui.setExportMessage(`Exported ${filename}`, 'success');
+          logActivity('Export', `Full backup completed: ${filename}`);
+        } catch (err) {
+          ui.setExportMessage(err.message, 'error');
+          logActivity('Export', `Full backup failed: ${err.message}`);
+        }
+      });
+    }
+
+    if (ui.exportAllBtn) {
+      console.log('Export All button found, adding event listener');
+      ui.exportAllBtn.addEventListener('click', async () => {
+        console.log('Export All button clicked');
+        ui.setExportMessage('Exporting all pipelines…');
+        logActivity('Export', 'Exporting all pipelines…');
+        try {
+          const includeSecrets = includeSecretsCheckbox?.checked || false;
+          const { blob, filename } = await api.exportAllPipelines(includeSecrets);
+          console.log('Export All API call successful, filename:', filename);
+          const url = window.URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          window.URL.revokeObjectURL(url);
+          ui.setExportMessage(`Exported ${filename}`, 'success');
+          logActivity('Export', `All pipelines export completed: ${filename}`);
+        } catch (err) {
+          console.error('Export All failed:', err);
+          ui.setExportMessage(err.message, 'error');
+          logActivity('Export', `Export all failed: ${err.message}`);
+        }
+      });
+    } else {
+      console.error('Export All button not found!');
+    }
+
+  }
+
+  function wireBackupImportButtons() {
+    if (importConfigInput) {
+      importConfigInput.addEventListener('change', updateImportButtonsVisibility);
+    }
+
+    if (importAllInput) {
+      importAllInput.addEventListener('change', updateImportButtonsVisibility);
+    }
+
+    if (importConfigBtnEl && importConfigInput) {
+      importConfigBtnEl.addEventListener('click', async () => {
+        const file = importConfigInput.files?.[0];
+        if (!file) {
+          ui.setConfigMessage('Please choose a config file to import', 'error');
+          return;
+        }
+
+        ui.setConfigMessage('Importing config…');
+        logActivity('Config', `Importing config file ${file.name}…`);
+        try {
+          const result = await api.importConfig(file);
+          ui.setConfigMessage(result.message || 'Config imported successfully', 'success');
+          logActivity('Config', result.message || 'Config import completed');
+        } catch (err) {
+          ui.setConfigMessage(err.message, 'error');
+          logActivity('Config', `Config import failed: ${err.message}`);
+        }
+      });
+    }
+
+    if (importAllBtnEl && importAllInput) {
+      importAllBtnEl.addEventListener('click', async () => {
+        const file = importAllInput.files?.[0];
+        if (!file) {
+          ui.setConfigMessage('Please choose a backup ZIP to import', 'error');
+          return;
+        }
+
+
+        ui.setConfigMessage('Importing full backup…');
+        logActivity('Config', `Importing full backup ${file.name}…`);
+        try {
+          const result = await api.importAll(file, true);
+
+          // Display logs if present
+          if (result.logs && Array.isArray(result.logs)) {
+            result.logs.forEach(log => logActivity('Config', log));
+          }
+
+          // Warnings do not fail the restore: they are what is left to do, such as signing in to a connection
+          if (result.warnings && Array.isArray(result.warnings)) {
+            result.warnings.forEach(warning => logActivity('Config', warning));
+          }
+
+          if (result.success === false) {
+            ui.setConfigMessage(result.message || 'Import failed', 'error');
+            logActivity('Config', `Full backup import failed: ${result.message}`);
+          } else {
+            ui.setConfigMessage(result.message || 'Backup imported successfully', 'success');
+            logActivity('Config', result.message || 'Full backup import completed');
+          }
+        } catch (err) {
+          ui.setConfigMessage(err.message, 'error');
+          logActivity('Config', `Full backup import failed: ${err.message}`);
+        }
+      });
+    }
+
+  }
+
+  function wireEntityImportPicker() {
+    entityImport = initEntityImport({
+      root: document.getElementById('entity-customize-root'),
+      getContext: () => ({
+        pipelineId: document.getElementById('pipeline-id')?.value,
+        yamlFileId: stateManager.yamlFileId,
+      }),
+      setMessage: (msg, kind) => ui.setConfigMessage(msg, kind),
+      log: logActivity,
+    });
+
+    const configPipelineSelect = document.getElementById('pipeline-id');
+    if (configPipelineSelect) {
+      configPipelineSelect.addEventListener('change', () => {
+        refreshEntityImportPicker(entityImport);
+      });
+    }
+    refreshEntityImportPicker(entityImport);
+
+    initCustomImport({
+      fileInput: importAllInput,
+      root: document.getElementById('custom-import-root'),
+      setMessage: (text, kind) => ui.setConfigMessage(text, kind),
+      log: logActivity,
+    });
+
+  }
+
+  function wireValidateAllBackup() {
+    if (validateAllBtnEl && importAllInput) {
+      validateAllBtnEl.addEventListener('click', async () => {
+        const file = importAllInput.files?.[0];
+        if (!file) {
+          ui.setConfigMessage('Please choose a backup ZIP to validate', 'error');
+          return;
+        }
+
+        ui.setConfigMessage('Validating backup…');
+        logActivity('Config', `Validating backup ${file.name}…`);
+        try {
+          const result = await api.validateAll(file);
+          const ok = result.success !== false;
+          const text = result.message || '';
+          if (text) {
+            const lines = text.split('\n');
+            ui.renderLogs(lines);
+            logActivity('Config', 'Validation output displayed in log');
+          }
+          ui.setConfigMessage(ok ? 'Validation OK' : 'Validation failed', ok ? 'success' : 'error');
+          logActivity('Config', ok ? 'Backup validation OK' : 'Backup validation failed');
+        } catch (err) {
+          ui.setConfigMessage(err.message, 'error');
+          logActivity('Config', `Backup validation failed: ${err.message}`);
+        }
+      });
+    }
+
+    const duplicateForm = document.getElementById('duplicate-form');
+    const duplicatePipelineSelect = document.getElementById('duplicate-pipeline-id');
+    const duplicateBtn = document.getElementById('duplicate-btn');
+    if (duplicateBtn && !duplicateBtn.dataset.defaultLabel) {
+      duplicateBtn.dataset.defaultLabel = duplicateBtn.textContent;
+    }
+
+    let duplicateRequestController = null;
+
+  }
+
+  function wireDuplicatePipeline() {
+    function setDuplicateControlsDisabled(disabled) {
+      const controlIds = [
+        'duplicate-pipeline-id',
+        'duplicate-new-name',
+        'customize-agents',
+        'duplicate-source-tag',
+        'duplicate-target-tag',
+        'duplicate-source-host',
+        'duplicate-target-host',
+        'customize-schemas',
+        'duplicate-source-schema',
+        'duplicate-target-schema',
+      ];
+      controlIds.forEach((id) => {
+        const el = document.getElementById(id);
+        if (!el || el === duplicateBtn) return;
+        if (disabled) {
+          el.setAttribute('data-prev-disabled', el.disabled ? 'true' : 'false');
+          el.disabled = true;
+        } else if (el.hasAttribute('data-prev-disabled')) {
+          const wasDisabled = el.getAttribute('data-prev-disabled') === 'true';
+          el.disabled = wasDisabled;
+          el.removeAttribute('data-prev-disabled');
+        } else {
+          el.disabled = false;
+        }
+      });
+    }
+
+    function setDuplicateBusy(isBusy, label) {
+      if (!duplicateBtn) return;
+      const defaultLabel = duplicateBtn.dataset.defaultLabel || 'Duplicate Pipeline';
+      duplicateBtn.textContent = isBusy ? (label || 'Stop duplication') : defaultLabel;
+      if (isBusy) {
+        duplicateBtn.classList.add('danger');
+      } else {
+        duplicateBtn.classList.remove('danger');
+      }
+      if (!duplicatePipelineSelect) return;
+      if (!isBusy) {
+        duplicateBtn.disabled = !duplicatePipelineSelect.value;
+      }
+    }
+
+    function resetDuplicateState() {
+      if (duplicateRequestController) {
+        duplicateRequestController = null;
+      }
+      setDuplicateBusy(false);
+      setDuplicateControlsDisabled(false);
+    }
+
+
+    async function cancelInFlightDuplicate() {
+      try {
+        const response = await api.cancelDuplicate();
+        ui.setDuplicateMessage(response.message || 'Cancelling duplicate request…', 'warning');
+        logActivity('duplicate', response.message || 'Cancellation requested by user');
+      } catch (err) {
+        ui.setDuplicateMessage(err.message || 'Failed to request cancellation', 'error');
+        logActivity('duplicate', `Failed to request cancellation: ${err.message}`);
+      } finally {
+        duplicateRequestController.abort();
+      }
+    }
+
+    function readDuplicateAgentTags(customizeAgentsEnabled) {
       const fallbackSourceTag = duplicateForm.dataset.currentSourceTag || '';
       const fallbackTargetTag = duplicateForm.dataset.currentTargetTag || '';
-
-      const sourceAgentTagValue = customizeAgentsEnabled
-        ? document.getElementById('duplicate-source-tag').value
-        : fallbackSourceTag;
-      const targetAgentTagValue = customizeAgentsEnabled
-        ? document.getElementById('duplicate-target-tag').value
-        : fallbackTargetTag;
-
-      if (!sourceAgentTagValue || !targetAgentTagValue) {
-        ui.setDuplicateMessage('Current agent tags are unavailable. Please fetch pipeline details or enable customization.', 'error');
-        return;
-      }
-      logActivity(
-        'duplicate',
-        `Cloning with SOURCE tag "${sourceAgentTagValue}" and TARGET tag "${targetAgentTagValue}"`
-      );
-
-      const newPipelineNameInput = document.getElementById('duplicate-new-name');
-      const newPipelineNameValue = newPipelineNameInput ? newPipelineNameInput.value.trim() : '';
-      const cloneEntitiesToggle = document.getElementById('duplicate-clone-entities');
-      const cloneEntitiesValue = cloneEntitiesToggle ? cloneEntitiesToggle.checked : true;
-
-      const payload = {
-        pipelineId: pipelineId,
-        newPipelineName: newPipelineNameValue || undefined,
-        sourceAgentTag: sourceAgentTagValue,
-        targetAgentTag: targetAgentTagValue,
-        sourceAgentPassword: sourcePassword,
-        targetAgentPassword: targetPassword,
-        cloneEntities: cloneEntitiesValue,
+      return {
+        sourceAgentTag: customizeAgentsEnabled
+          ? document.getElementById('duplicate-source-tag').value
+          : fallbackSourceTag,
+        targetAgentTag: customizeAgentsEnabled
+          ? document.getElementById('duplicate-target-tag').value
+          : fallbackTargetTag,
       };
+    }
 
-      const sourceHostInput = document.getElementById('duplicate-source-host');
-      const targetHostInput = document.getElementById('duplicate-target-host');
-      const sourceHostValue = sourceHostInput ? sourceHostInput.value.trim() : '';
-      const targetHostValue = targetHostInput ? targetHostInput.value.trim() : '';
+    function applyDuplicateHostPortOverrides(payload) {
+      const sourceHostValue = document.getElementById('duplicate-source-host')?.value?.trim() || '';
+      const targetHostValue = document.getElementById('duplicate-target-host')?.value?.trim() || '';
       if (sourceHostValue) {
         payload.sourceHost = sourceHostValue;
         logActivity('duplicate', `Overriding source host to ${sourceHostValue}`);
@@ -2012,11 +2015,8 @@ function bindEvents() {
         payload.targetHost = targetHostValue;
         logActivity('duplicate', `Overriding target host to ${targetHostValue}`);
       }
-
-      const sourcePortInput = document.getElementById('duplicate-source-port');
-      const targetPortInput = document.getElementById('duplicate-target-port');
-      const sourcePortValue = sourcePortInput ? sourcePortInput.value.trim() : '';
-      const targetPortValue = targetPortInput ? targetPortInput.value.trim() : '';
+      const sourcePortValue = document.getElementById('duplicate-source-port')?.value?.trim() || '';
+      const targetPortValue = document.getElementById('duplicate-target-port')?.value?.trim() || '';
       if (sourcePortValue) {
         payload.sourcePort = parseInt(sourcePortValue, 10);
         logActivity('duplicate', `Overriding source port to ${sourcePortValue}`);
@@ -2025,31 +2025,64 @@ function bindEvents() {
         payload.targetPort = parseInt(targetPortValue, 10);
         logActivity('duplicate', `Overriding target port to ${targetPortValue}`);
       }
+    }
 
+    function applyDuplicateSchemaOverrides(payload) {
       const customizeSchemasToggle = document.getElementById('customize-schemas');
-      if (customizeSchemasToggle && customizeSchemasToggle.checked) {
-        const sourceSchemaInput = document.getElementById('duplicate-source-schema');
-        const targetSchemaInput = document.getElementById('duplicate-target-schema');
-        const sourceSchemaValue = sourceSchemaInput ? sourceSchemaInput.value.trim() : '';
-        const targetSchemaValue = targetSchemaInput ? targetSchemaInput.value.trim() : '';
-        
-        // Allow overriding either or both schemas independently
-        if (sourceSchemaValue || targetSchemaValue) {
-          payload.overrideSchemas = true;
-          if (sourceSchemaValue) {
-            payload.overrideSourceSchema = sourceSchemaValue;
-          }
-          if (targetSchemaValue) {
-            payload.overrideTargetSchema = targetSchemaValue;
-          }
-          const overrideMsg = [
-            sourceSchemaValue ? `source: ${sourceSchemaValue}` : null,
-            targetSchemaValue ? `target: ${targetSchemaValue}` : null
-          ].filter(Boolean).join(', ');
-          logActivity('duplicate', `Overriding schemas (${overrideMsg})`);
-        }
-      }
+      if (!(customizeSchemasToggle && customizeSchemasToggle.checked)) return;
+      const sourceSchemaValue = document.getElementById('duplicate-source-schema')?.value?.trim() || '';
+      const targetSchemaValue = document.getElementById('duplicate-target-schema')?.value?.trim() || '';
+      if (!(sourceSchemaValue || targetSchemaValue)) return;
+      payload.overrideSchemas = true;
+      if (sourceSchemaValue) payload.overrideSourceSchema = sourceSchemaValue;
+      if (targetSchemaValue) payload.overrideTargetSchema = targetSchemaValue;
+      const overrideMsg = [
+        sourceSchemaValue ? `source: ${sourceSchemaValue}` : null,
+        targetSchemaValue ? `target: ${targetSchemaValue}` : null,
+      ].filter(Boolean).join(', ');
+      logActivity('duplicate', `Overriding schemas (${overrideMsg})`);
+    }
 
+    function buildDuplicatePayload() {
+      const pipelineId = document.getElementById('duplicate-pipeline-id').value;
+      if (!pipelineId) {
+        ui.setDuplicateMessage('Please select a pipeline to duplicate', 'error');
+        return null;
+      }
+      logActivity('duplicate', `Starting duplication for pipeline ${pipelineId}`);
+      const sourcePassword = document.getElementById('duplicate-source-password')?.value?.trim() || '';
+      const targetPassword = document.getElementById('duplicate-target-password')?.value?.trim() || '';
+      if (!sourcePassword || !targetPassword) {
+        ui.setDuplicateMessage('Both source and target agent passwords are required.', 'error');
+        return null;
+      }
+      const customizeAgentsEnabled = !!(document.getElementById('customize-agents')?.checked);
+      const { sourceAgentTag, targetAgentTag } = readDuplicateAgentTags(customizeAgentsEnabled);
+      if (!sourceAgentTag || !targetAgentTag) {
+        ui.setDuplicateMessage('Current agent tags are unavailable. Please fetch pipeline details or enable customization.', 'error');
+        return null;
+      }
+      logActivity(
+        'duplicate',
+        `Cloning with SOURCE tag "${sourceAgentTag}" and TARGET tag "${targetAgentTag}"`
+      );
+      const newPipelineNameValue = document.getElementById('duplicate-new-name')?.value?.trim() || '';
+      const cloneEntitiesToggle = document.getElementById('duplicate-clone-entities');
+      const payload = {
+        pipelineId,
+        newPipelineName: newPipelineNameValue || undefined,
+        sourceAgentTag,
+        targetAgentTag,
+        sourceAgentPassword: sourcePassword,
+        targetAgentPassword: targetPassword,
+        cloneEntities: cloneEntitiesToggle ? cloneEntitiesToggle.checked : true,
+      };
+      applyDuplicateHostPortOverrides(payload);
+      applyDuplicateSchemaOverrides(payload);
+      return payload;
+    }
+
+    async function executeDuplicateRequest(payload) {
       duplicateRequestController = new AbortController();
       setDuplicateControlsDisabled(true);
       setDuplicateBusy(true);
@@ -2061,7 +2094,6 @@ function bindEvents() {
         const duplicatedId = result.newPipelineId || result.pipelineId || '(unknown id)';
         ui.setDuplicateMessage(`Pipeline duplicated successfully: ${duplicatedName} (${duplicatedId})`, 'success');
         logActivity('duplicate', `Duplicate succeeded: ${duplicatedName} (${duplicatedId})`);
-        // Refresh pipeline list to include the new pipeline
         await loadPipelines();
       } catch (err) {
         if (err.name === 'AbortError') {
@@ -2074,123 +2106,148 @@ function bindEvents() {
       }
       logActivity('duplicate', 'Duplicate flow finished. Resetting UI state.');
       resetDuplicateState();
-    });
-  }
+    }
 
-  // Update duplicate button state when pipeline selection changes
-  if (duplicatePipelineSelect) {
-    const setCurrentTags = (sourceTag = '', targetTag = '') => {
-      const currentSourceTagInput = document.getElementById('duplicate-current-source-tag');
-      const currentTargetTagInput = document.getElementById('duplicate-current-target-tag');
-      if (currentSourceTagInput) currentSourceTagInput.value = sourceTag || '';
-      if (currentTargetTagInput) currentTargetTagInput.value = targetTag || '';
-    };
-
-    const clearNewTags = () => {
-      const sourceTagInput = document.getElementById('duplicate-source-tag');
-      const targetTagInput = document.getElementById('duplicate-target-tag');
-      if (sourceTagInput) sourceTagInput.value = '';
-      if (targetTagInput) targetTagInput.value = '';
-    };
-
-    duplicatePipelineSelect.addEventListener('change', async () => {
-      const pipelineId = duplicatePipelineSelect.value;
-      const duplicateBtn = document.getElementById('duplicate-btn');
-      if (duplicateBtn && !duplicateRequestController) {
-        duplicateBtn.disabled = !pipelineId;
-      }
-
-      setCurrentTags('', '');
-      clearNewTags();
-
-      if (!pipelineId) {
-        ui.setDuplicateMessage('', '');
+    async function handleDuplicateSubmit(event) {
+      event.preventDefault();
+      if (duplicateRequestController) {
+        await cancelInFlightDuplicate();
         return;
       }
-
-      ui.setDuplicateMessage('Loading current agent tags…');
-      try {
-        const response = await fetch(`/api/pipeline/${encodeURIComponent(pipelineId)}/agents`);
-        const data = await response.json().catch(() => ({}));
-        if (!response.ok) {
-          throw new Error(data.detail || 'Failed to load pipeline agents');
-        }
-
-        if (duplicateForm) {
-          duplicateForm.dataset.currentSourceTag = data.sourceAgentTag || '';
-          duplicateForm.dataset.currentTargetTag = data.targetAgentTag || '';
-        }
-
-        setCurrentTags(data.sourceAgentTag, data.targetAgentTag);
-        if (customizeAgentsCheckbox && !customizeAgentsCheckbox.checked) {
-          clearNewTags();
-        }
-        ui.setDuplicateMessage('', '');
-      } catch (err) {
-        console.error('Failed to fetch pipeline agents for auto-population:', err);
-        ui.setDuplicateMessage(err.message || 'Failed to fetch pipeline agents', 'error');
-      }
-    });
-  }
-
-  const customizeAgentsCheckbox = document.getElementById('customize-agents');
-  const agentCustomizationFields = document.getElementById('agent-customization-fields');
-  const customizeSchemasCheckbox = document.getElementById('customize-schemas');
-  const schemaOverrideFields = document.getElementById('schema-override-fields');
-
-  function updateAgentCustomizationVisibility() {
-    if (!customizeAgentsCheckbox || !agentCustomizationFields) return;
-    const enabled = customizeAgentsCheckbox.checked;
-    agentCustomizationFields.style.display = enabled ? '' : 'none';
-    const editableInputs = [
-      document.getElementById('duplicate-source-tag'),
-      document.getElementById('duplicate-target-tag'),
-    ];
-    editableInputs.forEach((input) => {
-      if (!input) return;
-      input.disabled = !enabled;
-      if (enabled) {
-        input.setAttribute('required', 'required');
-      } else {
-        input.removeAttribute('required');
-        input.value = '';
-      }
-    });
-  }
-
-
-  function updateSchemaOverrideVisibility() {
-    if (!customizeSchemasCheckbox || !schemaOverrideFields) return;
-    const enabled = customizeSchemasCheckbox.checked;
-    schemaOverrideFields.style.display = enabled ? '' : 'none';
-    if (enabled) {
-      schemaOverrideFields.removeAttribute('hidden');
-    } else if (!schemaOverrideFields.hasAttribute('hidden')) {
-      schemaOverrideFields.setAttribute('hidden', '');
+      const payload = buildDuplicatePayload();
+      if (!payload) return;
+      await executeDuplicateRequest(payload);
     }
-    const inputs = [
-      document.getElementById('duplicate-source-schema'),
-      document.getElementById('duplicate-target-schema'),
-    ];
-    inputs.forEach((input) => {
-      if (!input) return;
-      input.disabled = !enabled;
-      if (!enabled) {
-        input.value = '';
+
+    if (duplicateForm) {
+      duplicateForm.addEventListener('submit', (event) => {
+        void handleDuplicateSubmit(event);
+      });
+    }
+
+    // Update duplicate button state when pipeline selection changes
+    if (duplicatePipelineSelect) {
+      const setCurrentTags = (sourceTag = '', targetTag = '') => {
+        const currentSourceTagInput = document.getElementById('duplicate-current-source-tag');
+        const currentTargetTagInput = document.getElementById('duplicate-current-target-tag');
+        if (currentSourceTagInput) currentSourceTagInput.value = sourceTag || '';
+        if (currentTargetTagInput) currentTargetTagInput.value = targetTag || '';
+      };
+
+      const clearNewTags = () => {
+        const sourceTagInput = document.getElementById('duplicate-source-tag');
+        const targetTagInput = document.getElementById('duplicate-target-tag');
+        if (sourceTagInput) sourceTagInput.value = '';
+        if (targetTagInput) targetTagInput.value = '';
+      };
+
+      duplicatePipelineSelect.addEventListener('change', async () => {
+        const pipelineId = duplicatePipelineSelect.value;
+        const duplicateBtn = document.getElementById('duplicate-btn');
+        if (duplicateBtn && !duplicateRequestController) {
+          duplicateBtn.disabled = !pipelineId;
+        }
+
+        setCurrentTags('', '');
+        clearNewTags();
+
+        if (!pipelineId) {
+          ui.setDuplicateMessage('', '');
+          return;
+        }
+
+        ui.setDuplicateMessage('Loading current agent tags…');
+        try {
+          const response = await fetch(`/api/pipeline/${encodeURIComponent(pipelineId)}/agents`);
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            throw new Error(data.detail || 'Failed to load pipeline agents');
+          }
+
+          if (duplicateForm) {
+            duplicateForm.dataset.currentSourceTag = data.sourceAgentTag || '';
+            duplicateForm.dataset.currentTargetTag = data.targetAgentTag || '';
+          }
+
+          setCurrentTags(data.sourceAgentTag, data.targetAgentTag);
+          if (customizeAgentsCheckbox && !customizeAgentsCheckbox.checked) {
+            clearNewTags();
+          }
+          ui.setDuplicateMessage('', '');
+        } catch (err) {
+          console.error('Failed to fetch pipeline agents for auto-population:', err);
+          ui.setDuplicateMessage(err.message || 'Failed to fetch pipeline agents', 'error');
+        }
+      });
+    }
+
+    const customizeAgentsCheckbox = document.getElementById('customize-agents');
+    const agentCustomizationFields = document.getElementById('agent-customization-fields');
+    const customizeSchemasCheckbox = document.getElementById('customize-schemas');
+    const schemaOverrideFields = document.getElementById('schema-override-fields');
+
+    function updateAgentCustomizationVisibility() {
+      if (!customizeAgentsCheckbox || !agentCustomizationFields) return;
+      const enabled = customizeAgentsCheckbox.checked;
+      agentCustomizationFields.style.display = enabled ? '' : 'none';
+      const editableInputs = [
+        document.getElementById('duplicate-source-tag'),
+        document.getElementById('duplicate-target-tag'),
+      ];
+      editableInputs.forEach((input) => {
+        if (!input) return;
+        input.disabled = !enabled;
+        if (enabled) {
+          input.setAttribute('required', 'required');
+        } else {
+          input.removeAttribute('required');
+          input.value = '';
+        }
+      });
+    }
+
+
+    function updateSchemaOverrideVisibility() {
+      if (!customizeSchemasCheckbox || !schemaOverrideFields) return;
+      const enabled = customizeSchemasCheckbox.checked;
+      schemaOverrideFields.style.display = enabled ? '' : 'none';
+      if (enabled) {
+        schemaOverrideFields.removeAttribute('hidden');
+      } else if (!schemaOverrideFields.hasAttribute('hidden')) {
+        schemaOverrideFields.setAttribute('hidden', '');
       }
-    });
+      const inputs = [
+        document.getElementById('duplicate-source-schema'),
+        document.getElementById('duplicate-target-schema'),
+      ];
+      inputs.forEach((input) => {
+        if (!input) return;
+        input.disabled = !enabled;
+        if (!enabled) {
+          input.value = '';
+        }
+      });
+    }
+
+    if (customizeAgentsCheckbox) {
+      updateAgentCustomizationVisibility();
+      customizeAgentsCheckbox.addEventListener('change', updateAgentCustomizationVisibility);
+    }
+    if (customizeSchemasCheckbox) {
+      updateSchemaOverrideVisibility();
+      customizeSchemasCheckbox.addEventListener('change', updateSchemaOverrideVisibility);
+    }
   }
 
-  if (customizeAgentsCheckbox) {
-    updateAgentCustomizationVisibility();
-    customizeAgentsCheckbox.addEventListener('change', updateAgentCustomizationVisibility);
-  }
-  if (customizeSchemasCheckbox) {
-    updateSchemaOverrideVisibility();
-    customizeSchemasCheckbox.addEventListener('change', updateSchemaOverrideVisibility);
-  }
+  wireBulkCreateEvents();
+  wireAuthEvents();
+  wireConfigAndEntityPlanEvents();
+  wireExportEvents();
+  wireBackupImportButtons();
+  wireEntityImportPicker();
+  wireValidateAllBackup();
+  wireDuplicatePipeline();
 }
-
 async function loadPipelines() {
   const exportSelect = document.getElementById('export-pipeline-id');
   const configSelect = document.getElementById('pipeline-id');

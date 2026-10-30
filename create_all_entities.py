@@ -5233,14 +5233,39 @@ def _listing_entity(item):
     return item.get('entity') if isinstance(item, dict) and isinstance(item.get('entity'), dict) else item
 
 
+def _source_agent_entity(entity):
+    """The Source ``agentEntities`` entry of an entity payload or listing, if any."""
+    return next((agent_entity for agent_entity in (entity or {}).get('agentEntities') or []
+                 if _is_source_agent_entity(agent_entity)), None)
+
+
 def _source_table_of(entity):
     """``(schema, table)`` of the source side of an entity payload or listing, casefolded; None when unknown."""
-    source = next((agent_entity for agent_entity in (entity or {}).get('agentEntities') or []
-                   if _is_source_agent_entity(agent_entity)), None)
+    source = _source_agent_entity(entity)
     if source is None:
         return None
     schema, name = _agent_entity_table(source)
     return (str(schema or '').casefold(), str(name).casefold()) if name else None
+
+
+def _casefolded_table_pair(schema, name):
+    """``(schema, table)`` both casefolded when ``name`` is set; else None."""
+    if not name:
+        return None
+    return (str(schema or '').casefold(), str(name).casefold())
+
+
+def _pairs_from_multi_tables(tables):
+    """Casefolded ``(schema, table)`` pairs from a MultiTable ``tables`` list."""
+    out = set()
+    for entry in tables:
+        table = entry.get('table', entry) if isinstance(entry, dict) else {}
+        if not isinstance(table, dict):
+            continue
+        pair = _casefolded_table_pair(table.get('schema'), table.get('name'))
+        if pair:
+            out.add(pair)
+    return out
 
 
 def _all_source_tables_of(entity):
@@ -5249,26 +5274,14 @@ def _all_source_tables_of(entity):
     ``_source_table_of`` returns only the first table of a MultiTable entity; the entity-import
     picker needs every member so alreadyExists lights up for each selected chain table.
     """
-    source = next((agent_entity for agent_entity in (entity or {}).get('agentEntities') or []
-                   if _is_source_agent_entity(agent_entity)), None)
+    source = _source_agent_entity(entity)
     if source is None:
         return set()
-    out = set()
     tables = source.get('tables') or []
     if tables:
-        for entry in tables:
-            table = entry.get('table', entry) if isinstance(entry, dict) else {}
-            if not isinstance(table, dict):
-                continue
-            name = table.get('name')
-            if not name:
-                continue
-            out.add((str(table.get('schema') or '').casefold(), str(name).casefold()))
-        return out
-    schema, name = _agent_entity_table(source)
-    if name:
-        out.add((str(schema or '').casefold(), str(name).casefold()))
-    return out
+        return _pairs_from_multi_tables(tables)
+    pair = _casefolded_table_pair(*_agent_entity_table(source))
+    return {pair} if pair else set()
 
 
 def _is_source_agent_entity(agent_entity):
