@@ -120,8 +120,7 @@ export function selectionError(panel, loadedEntities, selectedIds, targetOverrid
     return 'Select at least one entity (or use Advanced include), or Select all to import every table';
   }
   const seen = new Map();
-  for (let i = 0; i < loadedEntities.length; i += 1) {
-    const entity = loadedEntities[i];
+  for (const entity of loadedEntities) {
     if (!selectedIds.has(entity.id)) continue;
     const resolved = resolveTarget(entity, targetOverrides);
     if (!resolved.targetTable) {
@@ -182,7 +181,7 @@ function sourceTableParts(entity) {
   return { schema: source.slice(0, dot), table: source.slice(dot + 1) };
 }
 
-function columnMismatchNote(sourceCols, targetCols) {
+export function columnMismatchNote(sourceCols, targetCols) {
   if (!sourceCols || !targetCols) return 'Column check unverified (discovery unavailable).';
   if (!sourceCols.length && !targetCols.length) {
     return 'Column check unverified (no columns returned).';
@@ -323,7 +322,7 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
     return targetSchemas;
   }
 
-  async function ensureTargetTables(pipelineId, schema) {
+  async function ensureTargetTables(pipelineId, schema = '') {
     const key = schema || '';
     if (tablesBySchema.has(key)) return tablesBySchema.get(key);
     try {
@@ -358,7 +357,9 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
       const res = await fetch(`/api/bulk/columns?${qs}`);
       const body = await jsonOrThrow(res, 'source columns');
       sourceCols = body.columns || [];
-    } catch (_err) {
+    } catch (err) {
+      // Discovery may be unavailable on Core Hub <2.3 or NoSQL — warn stays "unverified".
+      log?.('Config', `Source column discovery failed: ${err.message}`);
       sourceCols = null;
     }
     try {
@@ -370,7 +371,9 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
       const res = await fetch(`/api/bulk/target-columns?${qs}`);
       const body = await jsonOrThrow(res, 'target columns');
       targetCols = body.columns || [];
-    } catch (_err) {
+    } catch (err) {
+      // Same as source: missing columns endpoint → unverified, not a hard failure.
+      log?.('Config', `Target column discovery failed: ${err.message}`);
       targetCols = null;
     }
     const note = columnMismatchNote(sourceCols, targetCols);
@@ -432,14 +435,15 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
       dataset: { colWarn: entity.id },
     }, columnWarnById.get(entity.id) || '');
 
-    const showMode = () => {
+    const showMode = (tablesForSchema) => {
       const mode = modeSelect.value === 'existing' ? 'existing' : 'new';
-      tableInput.hidden = mode === 'existing' && discoveryOk;
-      tableSelect.hidden = mode !== 'existing' || !discoveryOk;
-      if (mode === 'existing' && !discoveryOk) {
-        tableInput.hidden = false;
-        tableSelect.hidden = true;
-      }
+      const tables = tablesForSchema !== undefined
+        ? tablesForSchema
+        : (tablesBySchema.get(schemaInput.value || '') || []);
+      // Free-text when discovery failed OR returned no collections/tables.
+      const useSelect = mode === 'existing' && discoveryOk && tables.length > 0;
+      tableInput.hidden = useSelect;
+      tableSelect.hidden = !useSelect;
     };
     showMode();
 
@@ -453,17 +457,25 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
         targetSchema: schemaInput.value || '',
         targetTable: tableVal,
       });
-      refreshColumnWarn(entity);
+      void refreshColumnWarn(entity).catch((err) => {
+        log?.('Config', `Column mismatch check failed: ${err.message}`);
+      });
     };
 
     schemaInput.addEventListener('change', () => {
       persist();
       const ctx = getContext() || {};
       if (modeSelect.value === 'existing' && ctx.pipelineId) {
-        ensureTargetTables(ctx.pipelineId, schemaInput.value || '').then((tables) => {
-          fillTableSelect(tableSelect, tables, resolveTarget(entity, targetOverrides).targetTable);
-          persist();
-        });
+        ensureTargetTables(ctx.pipelineId, schemaInput.value || '')
+          .then((tables) => {
+            fillTableSelect(tableSelect, tables, resolveTarget(entity, targetOverrides).targetTable);
+            showMode(tables);
+            persist();
+          })
+          .catch((err) => {
+            log?.('Config', `Target table discovery failed: ${err.message}`);
+            showMode([]);
+          });
       }
     });
     schemaInput.addEventListener('input', persist);
@@ -472,10 +484,16 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
       persist();
       const ctx = getContext() || {};
       if (modeSelect.value === 'existing' && ctx.pipelineId) {
-        ensureTargetTables(ctx.pipelineId, schemaInput.value || '').then((tables) => {
-          fillTableSelect(tableSelect, tables, resolveTarget(entity, targetOverrides).targetTable);
-          persist();
-        });
+        ensureTargetTables(ctx.pipelineId, schemaInput.value || '')
+          .then((tables) => {
+            fillTableSelect(tableSelect, tables, resolveTarget(entity, targetOverrides).targetTable);
+            showMode(tables);
+            persist();
+          })
+          .catch((err) => {
+            log?.('Config', `Target table discovery failed: ${err.message}`);
+            showMode([]);
+          });
       }
     });
     tableInput.addEventListener('input', persist);
@@ -484,9 +502,15 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
     if (resolved.mode === 'existing') {
       const ctx = getContext() || {};
       if (ctx.pipelineId) {
-        ensureTargetTables(ctx.pipelineId, resolved.targetSchema).then((tables) => {
-          fillTableSelect(tableSelect, tables, resolved.targetTable);
-        });
+        ensureTargetTables(ctx.pipelineId, resolved.targetSchema)
+          .then((tables) => {
+            fillTableSelect(tableSelect, tables, resolved.targetTable);
+            showMode(tables);
+          })
+          .catch((err) => {
+            log?.('Config', `Target table discovery failed: ${err.message}`);
+            showMode([]);
+          });
       }
     }
 

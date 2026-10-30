@@ -8,7 +8,7 @@ from pathlib import Path
 JS = Path(__file__).resolve().parents[1] / "automator_app" / "static" / "entity_import.js"
 
 SCRIPT = r"""
-import { buildEntityPlan, planIsEmpty, selectionError, resolveTarget, targetDiffersFromDefault } from './entity_import.mjs';
+import { buildEntityPlan, planIsEmpty, selectionError, resolveTarget, targetDiffersFromDefault, columnMismatchNote } from './entity_import.mjs';
 
 class FakeEl {
   constructor(attrs = {}) {
@@ -104,6 +104,33 @@ const r = resolveTarget(loaded[0], ov);
 assert(r.targetTable === 'T1_RENAMED', 'resolve rename');
 assert(targetDiffersFromDefault(loaded[0], r), 'differs');
 assert(!targetDiffersFromDefault(loaded[2], resolveTarget(loaded[2], ov)), 'same default');
+
+
+// columnMismatchNote
+assert(columnMismatchNote(null, ['a']) === 'Column check unverified (discovery unavailable).', 'unverif null');
+assert(columnMismatchNote([], []) === 'Column check unverified (no columns returned).', 'unverif empty');
+assert(columnMismatchNote(['ID', 'NAME'], ['ID', 'NAME']) === '', 'match ok');
+const mm = columnMismatchNote(['ID', 'NAME', 'EMAIL'], ['ID', 'OTHER']);
+assert(mm.includes('Column mismatch'), 'mismatch prefix: ' + mm);
+assert(mm.includes('missing on target'), 'missing: ' + mm);
+assert(mm.includes('extra on target'), 'extra: ' + mm);
+
+// UI emits exact ids including @@2 — override keys must be exact, not bare
+const loadedAt = [
+  { id: 'dbo.CUSTOMERS', schema: 'dbo', source: 'dbo.CUSTOMERS', targetSchema: 'gb75_tgt', targetTable: 'cust_primary', entityName: 'CustPrimary' },
+  { id: 'dbo.CUSTOMERS@@2', schema: 'dbo', source: 'dbo.CUSTOMERS', targetSchema: 'gb75_tgt', targetTable: 'cust_secondary', entityName: 'CustSecondary' },
+];
+const ovAt = new Map([
+  ['dbo.CUSTOMERS@@2', { mode: 'existing', targetSchema: 'gb75_tgt', targetTable: 'cust_primary' }],
+]);
+const planAt = buildEntityPlan(allPanel, 'pipe1', loadedAt, new Set(['dbo.CUSTOMERS@@2']), ovAt);
+const keysAt = Object.keys(planAt.pipelines.pipe1.entities.overrides || {});
+assert(keysAt.length === 1 && keysAt[0] === 'dbo.CUSTOMERS@@2', 'exact @@2 override key: ' + keysAt);
+assert(planAt.pipelines.pipe1.entities.overrides['dbo.CUSTOMERS@@2'].targetTable === 'cust_primary', '@@2 target');
+assert(selectionError(allPanel, loadedAt, new Set(['dbo.CUSTOMERS', 'dbo.CUSTOMERS@@2']), new Map([
+  ['dbo.CUSTOMERS', { mode: 'existing', targetSchema: 'gb75_tgt', targetTable: 'same' }],
+  ['dbo.CUSTOMERS@@2', { mode: 'existing', targetSchema: 'gb75_tgt', targetTable: 'same' }],
+])) !== null, 'dup exact ids blocked in UI');
 
 console.log('ok');
 """

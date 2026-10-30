@@ -906,11 +906,20 @@ def _parse_table_names(tables: Any, pipeline_id: str, schema: str) -> list[str]:
     return sorted(names)
 
 
+
+_UNEXPECTED_COLUMNS_DISCOVERY = (
+    "Unexpected columns discovery response for pipeline %s schema %s table %s: %r"
+)
+_COLUMNS_PAYLOAD_MISSING_LIST = (
+    "Columns discovery payload missing 'columns' list for pipeline %s schema %s table %s: %r"
+)
+
+
 def _parse_column_names(columns: Any, pipeline_id: str, schema: str, table_name: str) -> list[str]:
     """Normalize a discovery/columns payload into ordered column name strings."""
     if not isinstance(columns, dict):
         logger.warning(
-            "Unexpected columns discovery response for pipeline %s schema %s table %s: %r",
+            _UNEXPECTED_COLUMNS_DISCOVERY,
             pipeline_id,
             schema,
             table_name,
@@ -920,7 +929,7 @@ def _parse_column_names(columns: Any, pipeline_id: str, schema: str, table_name:
     raw_cols = columns.get("columns")
     if not isinstance(raw_cols, list):
         logger.warning(
-            "Columns discovery payload missing 'columns' list for pipeline %s schema %s table %s: %r",
+            _COLUMNS_PAYLOAD_MISSING_LIST,
             pipeline_id,
             schema,
             table_name,
@@ -1068,7 +1077,7 @@ def discover_primary_key_names(
 
     if not isinstance(columns, dict):
         logger.warning(
-            "Unexpected columns discovery response for pipeline %s schema %s table %s: %r",
+            _UNEXPECTED_COLUMNS_DISCOVERY,
             pipeline_id,
             schema,
             table_name,
@@ -1079,7 +1088,7 @@ def discover_primary_key_names(
     raw_cols = columns.get("columns")
     if not isinstance(raw_cols, list):
         logger.warning(
-            "Columns discovery payload missing 'columns' list for pipeline %s schema %s table %s: %r",
+            _COLUMNS_PAYLOAD_MISSING_LIST,
             pipeline_id,
             schema,
             table_name,
@@ -1136,7 +1145,7 @@ def discover_column_metadata_for_table(
 
     if not isinstance(columns, dict):
         logger.warning(
-            "Unexpected columns discovery response for pipeline %s schema %s table %s: %r",
+            _UNEXPECTED_COLUMNS_DISCOVERY,
             pipeline_id,
             schema,
             table_name,
@@ -1147,7 +1156,7 @@ def discover_column_metadata_for_table(
     raw_cols = columns.get("columns")
     if not isinstance(raw_cols, list):
         logger.warning(
-            "Columns discovery payload missing 'columns' list for pipeline %s schema %s table %s: %r",
+            _COLUMNS_PAYLOAD_MISSING_LIST,
             pipeline_id,
             schema,
             table_name,
