@@ -402,12 +402,22 @@ class StateResponse(BaseModel):
     corehub_overview: Optional[dict] = Field(None, alias="corehubOverview")
 
 
+class LogEntryModel(BaseModel):
+    """Structured execution-log row (additive; ``logs`` strings stay for compatibility)."""
+
+    ts: str
+    level: str = "info"
+    scope: str = ""
+    message: str
+
+
 class RunSnapshot(BaseModel):
     id: str
     status: str
     log_count: int = Field(..., alias="logCount")
     error: Optional[str] = None
     logs: Optional[list[str]] = None
+    log_entries: Optional[list[LogEntryModel]] = Field(None, alias="logEntries")
 
 
 class ApiMessage(BaseModel):
@@ -456,6 +466,10 @@ class BulkSchemasResponse(BaseModel):
 
 class BulkTablesResponse(BaseModel):
     tables: list[str]
+
+
+class BulkColumnsResponse(BaseModel):
+    columns: list[str]
 
 
 class BulkCreateRequest(BaseModel):
@@ -1009,6 +1023,10 @@ def _current_run(include_logs: bool = False):
     if include_logs:
         logs = state.get_logs(response.id)
         response.logs = logs or []
+        entries = state.get_log_entries(response.id)
+        response.log_entries = [
+            LogEntryModel(**row) for row in (entries or [])
+        ]
     return response
 
 
@@ -1091,6 +1109,96 @@ def _bulk_list_tables(pipeline_id: str, schema: str) -> BulkTablesResponse:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     return BulkTablesResponse(tables=tables)
+
+
+def _bulk_list_target_schemas(pipeline_id: str) -> BulkSchemasResponse:
+    _require_session()
+
+    try:
+        schemas = corehub.list_target_schemas(
+            token=state.token,
+            base_url=state.base_url,
+            pipeline_id=pipeline_id,
+            use_ssl=state.use_ssl,
+            skip_verify=state.skip_verify,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Failed to list target schemas for pipeline %s", pipeline_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    source_type, target_type = corehub.infer_agent_schema_types(
+        token=state.token,
+        base_url=state.base_url,
+        pipeline_id=pipeline_id,
+        use_ssl=state.use_ssl,
+        skip_verify=state.skip_verify,
+    )
+    return BulkSchemasResponse(schemas=schemas, source_type=source_type, target_type=target_type)
+
+
+def _bulk_list_target_tables(pipeline_id: str, schema: str) -> BulkTablesResponse:
+    _require_session()
+
+    try:
+        tables = corehub.list_target_tables(
+            token=state.token,
+            base_url=state.base_url,
+            pipeline_id=pipeline_id,
+            schema=schema,
+            use_ssl=state.use_ssl,
+            skip_verify=state.skip_verify,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception(
+            "Failed to list target tables for pipeline %s schema %s", pipeline_id, schema
+        )
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return BulkTablesResponse(tables=tables)
+
+
+def _bulk_list_target_columns(pipeline_id: str, schema: str, table: str) -> BulkColumnsResponse:
+    _require_session()
+
+    try:
+        columns = corehub.list_target_columns(
+            token=state.token,
+            base_url=state.base_url,
+            pipeline_id=pipeline_id,
+            schema=schema,
+            table_name=table,
+            use_ssl=state.use_ssl,
+            skip_verify=state.skip_verify,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception(
+            "Failed to list target columns for pipeline %s %s.%s", pipeline_id, schema, table
+        )
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return BulkColumnsResponse(columns=columns)
+
+
+def _bulk_list_source_columns(pipeline_id: str, schema: str, table: str) -> BulkColumnsResponse:
+    _require_session()
+
+    try:
+        columns = corehub.list_source_columns(
+            token=state.token,
+            base_url=state.base_url,
+            pipeline_id=pipeline_id,
+            schema=schema,
+            table_name=table,
+            use_ssl=state.use_ssl,
+            skip_verify=state.skip_verify,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception(
+            "Failed to list source columns for pipeline %s %s.%s", pipeline_id, schema, table
+        )
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return BulkColumnsResponse(columns=columns)
 
 
 def _schema_types_from_pipeline_agents(pipeline_id: str, source_type: str, target_type: str) -> tuple[str, str]:
@@ -1358,6 +1466,34 @@ def _register_bulk_routes(app: FastAPI) -> None:
         pipeline_id: Annotated[str, Query(alias="pipelineId")], schema: str
     ) -> BulkTablesResponse:
         return _bulk_list_tables(pipeline_id, schema)
+
+    @app.get("/api/bulk/target-schemas", responses=_COREHUB_CALL_RESPONSES)
+    async def bulk_list_target_schemas(
+        pipeline_id: Annotated[str, Query(alias="pipelineId")],
+    ) -> BulkSchemasResponse:
+        return _bulk_list_target_schemas(pipeline_id)
+
+    @app.get("/api/bulk/target-tables", responses=_COREHUB_CALL_RESPONSES)
+    async def bulk_list_target_tables(
+        pipeline_id: Annotated[str, Query(alias="pipelineId")], schema: str
+    ) -> BulkTablesResponse:
+        return _bulk_list_target_tables(pipeline_id, schema)
+
+    @app.get("/api/bulk/target-columns", responses=_COREHUB_CALL_RESPONSES)
+    async def bulk_list_target_columns(
+        pipeline_id: Annotated[str, Query(alias="pipelineId")],
+        schema: str,
+        table: str,
+    ) -> BulkColumnsResponse:
+        return _bulk_list_target_columns(pipeline_id, schema, table)
+
+    @app.get("/api/bulk/columns", responses=_COREHUB_CALL_RESPONSES)
+    async def bulk_list_source_columns(
+        pipeline_id: Annotated[str, Query(alias="pipelineId")],
+        schema: str,
+        table: str,
+    ) -> BulkColumnsResponse:
+        return _bulk_list_source_columns(pipeline_id, schema, table)
 
     @app.post("/api/bulk/create", responses=_COREHUB_CALL_RESPONSES)
     async def bulk_create_entities(request: BulkCreateRequest) -> ApiMessage:
@@ -4059,10 +4195,9 @@ def _existing_sources(pipeline_id: str, errors: list[str]) -> set:
         return set()
     sources = set()
     for item in listing if isinstance(listing, list) else []:
-        source = create_all_entities._source_table_of(  # pylint: disable=protected-access
-            create_all_entities._listing_entity(item))  # pylint: disable=protected-access
-        if source:
-            sources.add(tuple(str(p).casefold() for p in source))
+        sources.update(
+            create_all_entities._all_source_tables_of(  # pylint: disable=protected-access
+                create_all_entities._listing_entity(item)))  # pylint: disable=protected-access
     return sources
 
 
@@ -4657,8 +4792,8 @@ async def _execute_run(run_id: str, request: RunRequest) -> None:
 
     import_opts = _entity_run_import_options(plan, pipeline, dry_run=bool(request.dry_run))
 
-    def _log_callback(message: str) -> None:
-        state.append_log(run_id, message)
+    def _log_callback(message: str, *, level: str = "info", scope: str = "") -> None:
+        state.append_log(run_id, message, level=level, scope=scope)
 
     for note in notes:
         _log_callback(f"[plan] {note}")
@@ -4771,7 +4906,13 @@ async def upload_certificate(
 
 
 def _existing_entity_sources(pipeline_id: str) -> set:
-    """``{(schema, table)}`` already in the pipeline. GET-only; empty set when listing fails."""
+    """``{(schema, table)}`` already in the pipeline. GET-only; empty set when listing fails.
+
+    Core Hub lists entities as ``{"entity": {...}}`` with source tables under
+    ``agentEntities`` (and ``tables`` for MultiTable). Match the backup-import
+    path: unwrap via create_all_entities helpers so alreadyExists is correct.
+    """
+    import create_all_entities  # pylint: disable=import-outside-toplevel
     try:
         listing = corehub.fetch_core_hub(
             f"/pipelines/{pipeline_id}/entities", token=state.token,
@@ -4780,13 +4921,11 @@ def _existing_entity_sources(pipeline_id: str) -> set:
         logger.info("Entity preview: could not list existing entities: %s", exc)
         return set()
     sources = set()
-    for entity in listing if isinstance(listing, list) else []:
-        if not isinstance(entity, dict):
-            continue
-        schema = entity.get("sourceSchema") or entity.get("schema") or ""
-        table = entity.get("sourceTable") or entity.get("table") or entity.get("name") or ""
-        if schema and table:
-            sources.add((str(schema).casefold(), str(table).casefold()))
+    for item in listing if isinstance(listing, list) else []:
+        entity = create_all_entities._listing_entity(item)  # pylint: disable=protected-access
+        sources.update(
+            create_all_entities._all_source_tables_of(entity)  # pylint: disable=protected-access
+        )
     return sources
 
 

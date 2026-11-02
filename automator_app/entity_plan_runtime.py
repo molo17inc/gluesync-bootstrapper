@@ -95,28 +95,18 @@ def preview_payload(
     existing_sources: Optional[set] = None,
 ) -> Dict[str, Any]:
     """Read-only preview dict: selected entities, parts, conflicts, notes. No secrets."""
-    planned, notes, pipeline = import_plan.apply_entity(copy.deepcopy(yaml_config), plan, pipeline_id)
+    source = copy.deepcopy(yaml_config)
+    planned, notes, pipeline = import_plan.apply_entity(source, plan, pipeline_id)
     entities = import_plan.entity_ids(planned)
     parts = import_plan.entity_part_flags(plan, pipeline)
-    conflicts: List[str] = []
-    if existing_sources:
-        for entity in entities:
-            key = (str(entity["schema"]).casefold(), str(entity["table"]).casefold())
-            if key in existing_sources:
-                conflicts.append(entity["id"])
+    conflicts = _conflict_ids(entities, existing_sources)
+    conflict_set = set(conflicts)
+    rows = [_entity_preview_row(planned, e, conflict_set) for e in entities]
+    notes = list(notes) + _partial_chain_notes(yaml_config, {e["id"] for e in entities})
     return {
         "pipelineId": str(pipeline_id),
         "entityCount": len(entities),
-        "entities": [
-            {
-                "id": e["id"],
-                "source": f'{e["schema"]}.{e["table"]}',
-                "targetSchema": _target_schema(planned, e),
-                "targetTable": _target_table(planned, e),
-                "entityName": _entity_name(planned, e),
-            }
-            for e in entities
-        ],
+        "entities": rows,
         "parts": parts,
         "onExistingEntity": plan.on_existing_entity(pipeline) or "default",
         "conflicts": conflicts,
@@ -124,6 +114,51 @@ def preview_payload(
         "plan": plan.to_dict(),
         "dryRunSafe": True,
     }
+
+
+
+def _conflict_ids(entities: List[Dict[str, Any]], existing_sources: Optional[set]) -> List[str]:
+    if not existing_sources:
+        return []
+    out = []
+    for entity in entities:
+        key = (str(entity["schema"]).casefold(), str(entity["table"]).casefold())
+        if key in existing_sources:
+            out.append(entity["id"])
+    return out
+
+
+def _entity_preview_row(planned: Any, entity: Dict[str, Any], conflict_set: set) -> Dict[str, Any]:
+    return {
+        "id": entity["id"],
+        "schema": entity["schema"],
+        "source": f'{entity["schema"]}.{entity["table"]}',
+        "targetSchema": _target_schema(planned, entity),
+        "targetTable": _target_table(planned, entity),
+        "entityName": _entity_name(planned, entity),
+        "type": _source_type(planned, entity),
+        "chainId": _chain_id(planned, entity),
+        "alreadyExists": entity["id"] in conflict_set,
+    }
+
+
+def _partial_chain_notes(yaml_config: Any, selected_ids: set) -> List[str]:
+    """Warn when a MultiTable chain is only partly selected (advanced free-text can do that)."""
+    full_by_chain: Dict[str, List[str]] = {}
+    for entity in import_plan.entity_ids(yaml_config):
+        chain = _chain_id(yaml_config, entity)
+        if chain:
+            full_by_chain.setdefault(chain, []).append(entity["id"])
+    selected_folded = {i.casefold() for i in selected_ids}
+    notes = []
+    for chain, members in full_by_chain.items():
+        picked = [m for m in members if m.casefold() in selected_folded]
+        if picked and len(picked) < len(members):
+            notes.append(
+                f"MultiTable chain {chain!r} is only partly selected "
+                f"({len(picked)}/{len(members)}); prefer selecting the whole chain"
+            )
+    return notes
 
 
 def _schema_entry(planned: Any, entity: Dict[str, Any]) -> Dict[str, Any]:
@@ -154,3 +189,14 @@ def _entity_name(planned: Any, entity: Dict[str, Any]) -> Optional[str]:
     cfg = _custom_cfg(planned, entity)
     name = cfg.get("entityName")
     return str(name) if name else None
+
+
+def _source_type(planned: Any, entity: Dict[str, Any]) -> str:
+    entry = _schema_entry(planned, entity)
+    return str(entry.get("sourceType") or "")
+
+
+def _chain_id(planned: Any, entity: Dict[str, Any]) -> Optional[str]:
+    cfg = _custom_cfg(planned, entity)
+    chain = cfg.get("chainId")
+    return str(chain) if chain not in (None, "") else None

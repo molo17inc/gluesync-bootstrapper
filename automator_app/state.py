@@ -27,6 +27,8 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import Dict, List, Optional, Any
 
 
@@ -41,8 +43,47 @@ class UploadedFile:
 class RunStatus:
     run_id: str
     status: str = "idle"  # idle | running | completed | failed
-    logs: List[str] = field(default_factory=list)
+    logs: List[str] = field(default_factory=list)  # plain strings (backward compatible)
+    log_entries: List[Dict[str, Any]] = field(default_factory=list)  # structured {ts, level, scope, message}
     error: Optional[str] = None
+
+_LOG_TZ = ZoneInfo("Europe/Rome")
+_LOG_LEVELS = {"debug", "info", "warning", "error", "critical"}
+
+
+def _normalize_log_level(level: Optional[str]) -> str:
+    name = (level or "info").strip().lower()
+    if name == "warn":
+        return "warning"
+    if name in _LOG_LEVELS:
+        return name
+    return "info"
+
+
+def format_log_timestamp(when: Optional[datetime] = None) -> str:
+    """Wall clock in Europe/Rome with an explicit zone label."""
+    moment = when or datetime.now(_LOG_TZ)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=_LOG_TZ)
+    else:
+        moment = moment.astimezone(_LOG_TZ)
+    return moment.strftime("%Y-%m-%d %H:%M:%S") + " Europe/Rome"
+
+
+def make_log_entry(
+    message: str,
+    *,
+    level: str = "info",
+    scope: str = "",
+    ts: Optional[str] = None,
+) -> Dict[str, Any]:
+    return {
+        "ts": ts or format_log_timestamp(),
+        "level": _normalize_log_level(level),
+        "scope": scope or "",
+        "message": message,
+    }
+
 
 
 class AutomatorState:
@@ -181,10 +222,21 @@ class AutomatorState:
             self.current_run = run
             return run
 
-    def append_log(self, run_id: str, message: str) -> None:
+    def append_log(
+        self,
+        run_id: str,
+        message: str,
+        *,
+        level: str = "info",
+        scope: str = "",
+        ts: Optional[str] = None,
+    ) -> None:
+        """Append a plain log string (compat) and a structured logEntries row."""
         with self._lock:
             if not self.current_run or self.current_run.run_id != run_id:
                 return
+            entry = make_log_entry(message, level=level, scope=scope, ts=ts)
+            self.current_run.log_entries.append(entry)
             self.current_run.logs.append(message)
 
     def finalize_run(self, run_id: str, status: str, error: Optional[str] = None) -> None:
@@ -202,6 +254,7 @@ class AutomatorState:
                 "id": self.current_run.run_id,
                 "status": self.current_run.status,
                 "logs": list(self.current_run.logs),
+                "logEntries": list(self.current_run.log_entries),
                 "error": self.current_run.error,
             }
 
@@ -221,6 +274,12 @@ class AutomatorState:
             if not self.current_run or self.current_run.run_id != run_id:
                 return None
             return list(self.current_run.logs)
+
+    def get_log_entries(self, run_id: str) -> Optional[List[Dict[str, Any]]]:
+        with self._lock:
+            if not self.current_run or self.current_run.run_id != run_id:
+                return None
+            return list(self.current_run.log_entries)
 
     def set_preferences(self, *, enable_scheduling: bool, create_tables: bool) -> None:
         with self._lock:
@@ -308,6 +367,7 @@ class AutomatorState:
                     "id": self.current_run.run_id,
                     "status": self.current_run.status,
                     "logs": list(self.current_run.logs),
+                    "logEntries": list(self.current_run.log_entries),
                     "error": self.current_run.error,
                 }
 

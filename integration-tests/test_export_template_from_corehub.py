@@ -428,5 +428,47 @@ class PipelineTypesTests(unittest.TestCase):
                 mock.patch.object(export_mod, "_load_agent_type_catalog", return_value=self.CATALOG):
             self.assertEqual(export_mod.infer_pipeline_schema_types_from_agents("t", "p1"), ("SQL", None))
 
+
+class NoSqlSourceEntityObjectExportTests(unittest.TestCase):
+    """NoSQL sources expose scope/collection on entityObject, not table — export must still emit them."""
+
+    def test_source_scope_and_collection_come_from_entity_object(self):
+        import export_template_from_corehub as export_mod
+
+        entity = {
+            "entityId": "e1",
+            "entityName": "Ent_democollection",  # no schema.table prefix
+            "agentEntities": [
+                {
+                    "agentId": "src",
+                    "type": "NoSqlEntity",
+                    "entityType": {"type": "Source"},
+                    "entityObject": {"scope": "demo", "collection": "democollection", "id": 1},
+                    "columns": [{"id": 1, "name": "_id", "alias": "_id", "dataType": "OBJECT_ID", "isPK": True}],
+                    "keys": [{"name": "_id"}],
+                    "customProperties": {},
+                },
+                {
+                    "agentId": "tgt",
+                    "type": "SingleTable",
+                    "entityType": {"type": "Target"},
+                    "table": {"schema": "public", "name": "democollection", "id": 2, "type": "TABLE"},
+                    "columns": [
+                        {"id": 1, "name": "_id", "alias": "_id", "dataType": "VARCHAR", "isPK": True},
+                    ],
+                    "keys": [{"name": "_id"}],
+                    "customProperties": {},
+                },
+            ],
+        }
+        schemas = export_mod.build_schemas_from_entities([entity], {})
+        self.assertIn("demo", schemas)
+        custom = schemas["demo"]["tables"]["custom"]
+        self.assertIn("democollection", custom)
+        self.assertEqual(schemas["demo"]["sourceType"], "NoSQL")
+        self.assertEqual(schemas["demo"]["targetType"], "SQL")
+        self.assertEqual(custom["democollection"]["entityName"], "Ent_democollection")
+
+
 if __name__ == "__main__":
     unittest.main()
