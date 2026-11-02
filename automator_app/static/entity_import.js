@@ -254,7 +254,7 @@ function onExistingPolicyLabel(panel) {
   if (raw === 'skip') return 'will be skipped';
   if (raw === 'update') return 'will be updated';
   if (raw === 'fail') return 'import will fail';
-  return 'will use default on-existing behaviour';
+  return 'will keep current behaviour';
 }
 
 function badge(text, kind) {
@@ -282,19 +282,19 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
       ` ${label}`)));
 
   const createTablesHint = el('p', { className: 'hint-text entity-create-hint' },
-    'Create missing tables is global (CREATE IF NOT EXISTS). '
-    + 'An existing target (badge) routes data there — that entity does not create a table. '
-    + 'New names still respect the global checkbox.');
+    'Create missing tables is global. '
+    + 'A “table exists” badge means data is routed there (no create). '
+    + 'A “new table” badge still follows the Create missing tables checkbox.');
 
   const onExisting = el('label', { className: 'entity-on-existing' },
-    'On existing entity (already in the pipeline) ',
+    'If the entity is already in the pipeline ',
     el('select', { dataset: { onExisting: '1' } },
-      el('option', { value: '' }, 'default on-existing behaviour'),
-      el('option', { value: 'skip' }, 'skip'),
-      el('option', { value: 'update' }, 'update'),
-      el('option', { value: 'fail' }, 'fail')),
-    el('span', { className: 'hint-text' },
-      'Default = omit from the plan: keep current behaviour (GS_IMPORT_ON_EXISTING if set, otherwise send the entity as before).'));
+      el('option', { value: '' }, 'keep current behaviour'),
+      el('option', { value: 'skip' }, 'skip (leave as-is)'),
+      el('option', { value: 'update' }, 'update in place'),
+      el('option', { value: 'fail' }, 'fail if it already exists')),
+    el('span', { className: 'hint-text entity-on-existing-help', title: 'Advanced: omit from the plan to keep current behaviour (including GS_IMPORT_ON_EXISTING when set).' },
+      'Default keeps current behaviour. Hover for advanced detail.'));
 
   const pickerStatus = el('p', { className: 'hint-text', id: 'entity-picker-status' },
     'Upload a YAML and select a pipeline to load entities.');
@@ -328,8 +328,10 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
     ' Dry run (preview writes only; nothing created)');
 
   const previewOut = el('div', { className: 'entity-plan-preview', id: 'entity-plan-preview-out' });
-  const btnRow = el('div', { className: 'button-group' },
-    el('button', { type: 'button', className: 'secondary', id: 'entity-plan-draft-btn' }, 'Download plan JSON'),
+  const selectedCount = el('span', { className: 'entity-selected-count', id: 'entity-selected-count' }, '');
+  const btnRow = el('div', { className: 'button-group entity-sticky-actions sticky-action-bar', id: 'entity-sticky-actions' },
+    selectedCount,
+    el('button', { type: 'button', className: 'secondary', id: 'entity-plan-draft-btn' }, 'Download plan'),
     el('button', { type: 'button', className: 'secondary', id: 'entity-plan-preview-btn' }, 'Preview'),
     el('button', { type: 'button', className: 'secondary', id: 'entity-plan-reload-btn' }, 'Reload entities'),
   );
@@ -360,6 +362,10 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
     const total = loadedEntities.length;
     const n = selectedIds ? selectedIds.size : 0;
     pickerCount.textContent = total ? `(${n} of ${total} selected)` : '';
+    if (selectedCount) {
+      selectedCount.textContent = total ? `${n} selected` : '';
+      selectedCount.hidden = !total;
+    }
     const partial = selectedIds ? partialChains(loadedEntities, selectedIds) : [];
     const bits = [];
     if (partial.length) {
@@ -512,7 +518,7 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
       className: 'entity-target-table',
       value: resolved.targetTable,
       list: listId,
-      placeholder: 'table',
+      placeholder: 'table or collection',
       dataset: { targetTableFor: entity.id },
       title: resolved.targetTable || 'Target table or collection',
       autocomplete: 'off',
@@ -522,7 +528,10 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
 
     const syncBadge = (tables) => {
       const mode = inferTargetMode(tableInput.value, tables);
-      modeBadge.replaceChildren(badge(mode, mode === 'existing' ? 'existing' : 'new'));
+      modeBadge.replaceChildren(badge(
+        mode === 'existing' ? 'table exists' : 'new table',
+        mode === 'existing' ? 'existing' : 'new',
+      ));
       schemaInput.title = schemaInput.value || 'Target schema (or NoSQL database)';
       tableInput.title = tableInput.value || 'Target table or collection';
       setOverride(entity.id, {
@@ -798,7 +807,7 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
       el('th', {}, 'Entity'),
       el('th', {}, 'Source'),
       el('th', {}, 'Target'),
-      el('th', {}, 'New / existing'),
+      el('th', {}, 'Target table'),
       el('th', {}, 'Action'),
     )));
     const tbody = el('tbody');
@@ -810,7 +819,7 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
         el('td', {}, e.entityName || e.id),
         el('td', { className: 'mono' }, e.source || ''),
         el('td', { className: 'mono' }, `${e.targetSchema}.${e.targetTable}`),
-        el('td', {}, badge(mode, mode === 'existing' ? 'existing' : 'new')),
+        el('td', {}, badge(mode === 'existing' ? 'table exists' : 'new table', mode === 'existing' ? 'existing' : 'new')),
         el('td', {}, actionForEntity(local)),
       ));
     });

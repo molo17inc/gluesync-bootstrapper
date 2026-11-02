@@ -388,6 +388,8 @@ class RunRequest(BaseModel):
 class UploadResponse(BaseModel):
     file_id: str = Field(..., alias="fileId")
     filename: str
+    source_type: Optional[str] = Field(None, alias="sourceType")
+    target_type: Optional[str] = Field(None, alias="targetType")
 
 
 class StateResponse(BaseModel):
@@ -1012,7 +1014,20 @@ async def upload_yaml(file: UploadFile = File(...)) -> UploadResponse:
         temp_path = _store_uploaded_yaml(file.filename, contents)
 
     file_id = state.register_upload(temp_path, file.filename)
-    return UploadResponse(fileId=file_id, filename=file.filename)
+    source_type = None
+    target_type = None
+    try:
+        yaml_path = state.get_upload_path(file_id)
+        if yaml_path is not None and yaml_path.is_file():
+            source_type, target_type = extract_schema_types_from_yaml(str(yaml_path))
+    except Exception:  # pylint: disable=broad-except
+        logger.exception("Could not infer schema types from upload %s", file.filename)
+    return UploadResponse(
+        fileId=file_id,
+        filename=file.filename,
+        sourceType=source_type,
+        targetType=target_type,
+    )
 
 
 def _current_run(include_logs: bool = False):

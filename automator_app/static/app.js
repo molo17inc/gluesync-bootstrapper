@@ -1,4 +1,4 @@
-import { initCustomImport } from './custom_import.js';
+import { initCustomImport, getCustomImportPasswords } from './custom_import.js';
 import { initEntityImport } from './entity_import.js';
 import { createLogPanel } from './log_panel.js';
 const api = {
@@ -195,10 +195,12 @@ const api = {
     }
     return res.json();
   },
-  async importAll(file, autoDeployAgents = true) {
+  async importAll(file, autoDeployAgents = true, agentPasswords = null) {
     const form = new FormData();
     form.append('file', file);
-    
+    if (agentPasswords && Object.keys(agentPasswords).length) {
+      form.append('agent_passwords', JSON.stringify(agentPasswords));
+    }
     const res = await fetch('/api/import/all', {
       method: 'POST',
       body: form,
@@ -399,6 +401,11 @@ const ui = (() => {
     logSearchEl: document.getElementById('log-search'),
     logCopyBtn: document.getElementById('log-copy-btn'),
     logDownloadBtn: document.getElementById('log-download-btn'),
+    logSummaryEl: document.getElementById('log-summary'),
+    logHintsEl: document.getElementById('log-hints'),
+    logHistoryEl: document.getElementById('log-history'),
+    logCollapseBtn: document.getElementById('log-collapse-btn'),
+    logCardEl: document.getElementById('log-card'),
   });
   const renderLogs = (...args) => logPanel.renderLogs(...args);
   const appendLogLine = (...args) => logPanel.appendLogLine(...args);
@@ -999,6 +1006,25 @@ async function checkAutomatorVersion() {
   } catch (err) {
     console.error('Failed to check for latest Automator version', err);
   }
+}
+
+
+function paraphraseImportError(raw) {
+  const text = String(raw || '');
+  if (/masked|password|\*{3,}|agent_passwords/i.test(text)) {
+    return 'This backup has masked passwords. Use Customize to enter SOURCE/TARGET passwords, then Preview and Import selected.';
+  }
+  return text;
+}
+
+function updateEntityStepper(stepIdx) {
+  const root = document.getElementById('entity-stepper');
+  if (!root) return;
+  root.querySelectorAll('[data-entity-step]').forEach((node) => {
+    const n = Number(node.dataset.entityStep);
+    node.classList.toggle('is-current', n === stepIdx);
+    node.classList.toggle('is-done', n < stepIdx);
+  });
 }
 
 function updateImportButtonsVisibility() {
@@ -1623,7 +1649,17 @@ function bindEvents() {
       try {
         const response = await api.uploadYaml(file);
         stateManager.setYamlFile(response.fileId);
-        ui.setConfigMessage(`Uploaded ${response.filename}`, 'success');
+        const srcSel = document.getElementById('source-type');
+        const tgtSel = document.getElementById('target-type');
+        if (srcSel && response.sourceType) srcSel.value = response.sourceType;
+        if (tgtSel && response.targetType) tgtSel.value = response.targetType;
+        if (typeof updateEntityStepper === 'function') updateEntityStepper(1);
+        ui.setConfigMessage(
+          response.sourceType || response.targetType
+            ? `Uploaded ${response.filename} (types filled from YAML)`
+            : `Uploaded ${response.filename}`,
+          'success',
+        );
         logActivity('Config', `Uploaded ${response.filename}`);
         refreshEntityImportPicker(entityImport);
       } catch (err) {
@@ -1676,6 +1712,7 @@ function bindEvents() {
         ...planFields,
       };
 
+      if (typeof updateEntityStepper === 'function') updateEntityStepper(2);
       ui.setConfigMessage('Starting…');
       ui.setAuthEnabled(false);
       ui.renderLogs();
@@ -1807,12 +1844,20 @@ function bindEvents() {
           ui.setConfigMessage('Please choose a backup ZIP to import', 'error');
           return;
         }
-
+        const pw = getCustomImportPasswords();
+        if (!pw || !Object.keys(pw).length) {
+          const adv = document.getElementById('import-advanced-actions');
+          if (adv) adv.open = true;
+          ui.setConfigMessage(
+            'Tip: for masked-password backups use Customize… to enter SOURCE/TARGET passwords first.',
+            'error',
+          );
+        }
 
         ui.setConfigMessage('Importing full backup…');
         logActivity('Config', `Importing full backup ${file.name}…`);
         try {
-          const result = await api.importAll(file, true);
+          const result = await api.importAll(file, true, getCustomImportPasswords());
 
           // Display logs if present
           if (result.logs && Array.isArray(result.logs)) {
@@ -1832,7 +1877,7 @@ function bindEvents() {
             logActivity('Config', result.message || 'Full backup import completed');
           }
         } catch (err) {
-          ui.setConfigMessage(err.message, 'error');
+          ui.setConfigMessage(paraphraseImportError(err.message), 'error');
           logActivity('Config', `Full backup import failed: ${err.message}`);
         }
       });
@@ -1891,7 +1936,7 @@ function bindEvents() {
           ui.setConfigMessage(ok ? 'Validation OK' : 'Validation failed', ok ? 'success' : 'error');
           logActivity('Config', ok ? 'Backup validation OK' : 'Backup validation failed');
         } catch (err) {
-          ui.setConfigMessage(err.message, 'error');
+          ui.setConfigMessage(paraphraseImportError(err.message), 'error');
           logActivity('Config', `Backup validation failed: ${err.message}`);
         }
       });
