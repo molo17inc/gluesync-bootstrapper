@@ -64,15 +64,28 @@ console.log('ok');
 """
 
 
+def _node():
+    """`node` on the PATH, else the one of the nodejs-wheel-binaries package (what the CI unit job installs)."""
+    found = shutil.which("node")
+    if found:
+        return found
+    try:
+        import nodejs_wheel
+    except ImportError:
+        return None
+    root = Path(nodejs_wheel.__file__).parent
+    return str(root / "node.exe") if os.name == "nt" else str(root / "bin" / "node")
+
+
 # In CI (CI is set) a missing node fails the test instead of skipping it: the check must never silently not run.
-@unittest.skipUnless(shutil.which("node") or os.environ.get("CI"), "node not installed")
+@unittest.skipUnless(_node() or os.environ.get("CI"), "node not installed")
 class Gs1ImportJsTests(unittest.TestCase):
     def test_report_rows_and_selection(self):
         with tempfile.TemporaryDirectory() as tmp:
             (Path(tmp) / "gs1_import.mjs").write_text(JS.read_text())
             (Path(tmp) / "t.mjs").write_text(SCRIPT)
             proc = subprocess.run(
-                ["node", "t.mjs"], cwd=tmp, capture_output=True, text=True, timeout=60, check=False,
+                [_node() or "node", "t.mjs"], cwd=tmp, capture_output=True, text=True, timeout=60, check=False,
             )
         self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
 
