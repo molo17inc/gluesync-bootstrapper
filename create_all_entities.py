@@ -5414,8 +5414,13 @@ def _apply_on_existing(run, multi_table_entities, existing):
             run.errors.append(f"{name}: {error}")
             return False
         if options.on_existing == 'update':
-            # Sent again with the existing entityId: how a live Core Hub handles it is not verified.
+            # Inject existing entityId and POST again. Live Core Hub may update, no-op, or
+            # duplicate; Automator UI warns. Prefer skip for resume after a partial run (F5).
             payload['entityId'] = match.get('entityId', '')
+            logger.warning(
+                "on-existing=update for %s (entityId %s): Core Hub update contract is unverified",
+                name, match.get('entityId'),
+            )
             options.report.updated_existing.append(name)
             flags[id(payload)] = (True, 'update')
             return True

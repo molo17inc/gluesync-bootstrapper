@@ -87,15 +87,31 @@ class TargetCollisionTests(unittest.TestCase):
 
     def test_duplicate_rename_refused(self):
         p = self.plan(overrides={"SCH01.TAB001": {"targetTable": "NEW"}, "SCH01.TAB002": {"targetTable": "new"}})
-        with self.assertRaisesRegex(import_plan.PlanError, "both renamed"):
+        with self.assertRaisesRegex(import_plan.PlanError, "both map to"):
             import_plan.check_target_collisions(YAML, p)
 
-    def test_excluded_or_single_rename_ok(self):
+    def test_schema_only_remap_collision_refused(self):
+        # F4: global Target / schema-only overrides must collide on final (schema, table)
+        p = self.plan(overrides={
+            "SCH01.TAB001": {"targetSchema": "APP"},
+            "SCH01.TAB002": {"targetSchema": "APP", "targetTable": "TAB001"},
+        })
+        with self.assertRaisesRegex(import_plan.PlanError, r"both map to APP\.TAB001"):
+            import_plan.check_target_collisions(YAML, p)
+
+    def test_excluded_or_distinct_targets_ok(self):
         p = self.plan(overrides={"SCH01.TAB001": {"targetTable": "NEW"}, "SCH01.TAB002": {"targetTable": "NEW"}},
                       exclude=["SCH01.TAB002"])
         import_plan.check_target_collisions(YAML, p)
-        # fan-in by YAML (no explicit rename on both) stays legitimate
-        import_plan.check_target_collisions(YAML, self.plan(overrides={"SCH01.TAB001": {"targetTable": "TAB003"}}))
+        # Distinct final targets are fine
+        import_plan.check_target_collisions(
+            YAML, self.plan(overrides={"SCH01.TAB001": {"targetTable": "ONLY_ONE"}}))
+        # Renaming onto another selected entity's YAML name is refused
+        with self.assertRaisesRegex(import_plan.PlanError, "both map to"):
+            import_plan.check_target_collisions(
+                YAML, self.plan(overrides={"SCH01.TAB001": {"targetTable": "TAB003"}}))
+        # YAML-only fan-in (no plan remap) stays allowed
+        import_plan.check_target_collisions(YAML, self.plan())
 
 
 class ResumeTargetTests(unittest.TestCase):

@@ -130,59 +130,50 @@ def get_gluesync_data_type(source_type: str, source_node_info) -> str:
     logger.info(f"Warning: No gluesyncDataType mapping found for source type {source_type}. Using 'STRING' as fallback.")
     return 'STRING'
 
+def _case_fold_alternates(name: str) -> list:
+    """Exact name plus lower/upper forms (deduped) for Oracle / quoted-id lookups."""
+    out = []
+    for candidate in (name, name.lower(), name.upper()):
+        if candidate not in out:
+            out.append(candidate)
+    return out
+
+
 def table_exists(pipeline_id: str, schema_name: str, table_name: str, token: str) -> bool:
     """
     Check if a table exists in the given schema.
+
+    Tries exact spelling first, then lower/upper for the table and the schema
+    (Oracle unquoted identifiers fold to uppercase; mixed-case needs both flips).
     """
     # When CREATE_TABLE_IF_NOT_EXISTS is enabled, a 404 "not found" is expected
     # during table discovery and should not be logged as an error.
     expected_statuses = {404} if CREATE_TABLE_IF_NOT_EXISTS else None
 
-    try:
-        # URL-encode schema and table names (spaces, unicode, reserved chars)
-        encoded_schema_name = urllib.parse.quote(schema_name, safe='')
-        encoded_table_name = urllib.parse.quote(table_name, safe='')
-        fetch_core_hub(
-            f"/pipelines/{pipeline_id}/config/entities/schemas/{encoded_schema_name}/tables/{encoded_table_name}",
-            method="GET",
-            token=token,
-            expected_error_statuses=expected_statuses
-        )
-        logger.info(f"Table {table_name} exists in schema {schema_name}")
-        return True
-    except (requests.exceptions.RequestException, RuntimeError) as e:
-        error_msg = str(e)
-        logger.info(f"Initial table existence check failed for {table_name}: {error_msg}")
-
-        # Try opposite casing
-        if table_name != table_name.lower():
-            # Original has uppercase, try lowercase
-            alternate_table_name = table_name.lower()
-            logger.info(f"Trying lowercase version: {alternate_table_name}")
-        elif table_name != table_name.upper():
-            # Original is lowercase, try uppercase
-            alternate_table_name = table_name.upper()
-            logger.info(f"Trying uppercase version: {alternate_table_name}")
-        else:
-            # No casing change possible, return False
-            return False
-
-        try:
-            # URL-encode the alternate table name as well (schema already encoded above)
-            encoded_alternate_table_name = urllib.parse.quote(alternate_table_name, safe='')
-            fetch_core_hub(
-                f"/pipelines/{pipeline_id}/config/entities/schemas/{encoded_schema_name}/tables/{encoded_alternate_table_name}",
-                method="GET",
-                token=token,
-                expected_error_statuses=expected_statuses
-            )
-            logger.info(f"Table {alternate_table_name} exists in schema {schema_name} (using alternate casing)")
-            return True
-        except (requests.exceptions.RequestException, RuntimeError) as e2:
-            error_msg2 = str(e2)
-            logger.info(f"Alternate casing check also failed for {alternate_table_name}: {error_msg2}")
-
-        return False
+    for schema_try in _case_fold_alternates(schema_name):
+        for table_try in _case_fold_alternates(table_name):
+            try:
+                encoded_schema_name = urllib.parse.quote(schema_try, safe='')
+                encoded_table_name = urllib.parse.quote(table_try, safe='')
+                fetch_core_hub(
+                    f"/pipelines/{pipeline_id}/config/entities/schemas/{encoded_schema_name}/tables/{encoded_table_name}",
+                    method="GET",
+                    token=token,
+                    expected_error_statuses=expected_statuses
+                )
+                if schema_try != schema_name or table_try != table_name:
+                    logger.info(
+                        f"Table {table_try} exists in schema {schema_try} "
+                        f"(alternate casing for {schema_name}.{table_name})"
+                    )
+                else:
+                    logger.info(f"Table {table_name} exists in schema {schema_name}")
+                return True
+            except (requests.exceptions.RequestException, RuntimeError) as e:
+                logger.info(
+                    f"Table existence check failed for {schema_try}.{table_try}: {e}"
+                )
+    return False
 
 def generate_create_table_statement(pipeline_id: str, schema_name: str, table_name: str, token: str,
                                     table_data: GenerateCreateTargetTableStatementRequest) -> str:

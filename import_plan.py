@@ -469,9 +469,31 @@ def _final_target(yaml_config, pipeline: PipelinePlan, entity: Dict[str, Any]) -
     return str(schema), str(table)
 
 
+def _entity_base_id(entity_id: str) -> str:
+    """``SCHEMA.key`` with ``@@n`` stripped, casefolded — @@ siblings share a base."""
+    schema, _, rest = str(entity_id).partition(".")
+    key = rest.split("@@", 1)[0]
+    return f"{schema.casefold()}.{key.casefold()}"
+
+
+def _has_plan_target_remap(pipeline: PipelinePlan, entity_id: str) -> bool:
+    """True when the plan sets targetSchema / targetTable / tableTargetSchema for this entity."""
+    override = _override_for(pipeline.overrides, entity_id) or {}
+    if override.get("targetTable") or override.get("targetSchema"):
+        return True
+    return bool(_override_for(pipeline.table_target_schema, entity_id))
+
+
 def check_target_collisions(yaml_config, pipeline: PipelinePlan, old_id: Optional[str] = None) -> None:
-    """PlanError for two overrides (or tableTargetSchema entries) differing only by case, where the first one
-    would silently win, and for two selected tables the plan renames onto the same target table."""
+    """PlanError for case-only override keys and for plan remaps that share a final target.
+
+    Final target is ``(targetSchema, targetTable)`` after overrides, tableTargetSchema, and YAML
+    defaults — including schema-only remaps (no ``targetTable`` override). Advanced include/exclude,
+    CLI ``--plan``, and backup Customize all go through this check.
+
+    YAML-only fan-in (two keys already sharing a ``name:`` with no plan remap) stays allowed.
+    ``@@n`` siblings of the same source key may share a final target even under a remap.
+    """
     where = f"pipelines.{old_id or pipeline.old_id}"
     for section, mapping in (("entities.overrides", pipeline.overrides),
                              ("tableTargetSchema", pipeline.table_target_schema)):
@@ -483,14 +505,24 @@ def check_target_collisions(yaml_config, pipeline: PipelinePlan, old_id: Optiona
     selected = {i.casefold() for i in selected_ids(yaml_config, pipeline)}
     renamed: Dict[Tuple[str, str], str] = {}
     for entity in entity_ids(yaml_config):
-        override = _override_for(pipeline.overrides, entity["id"]) or {}
-        if entity["id"].casefold() not in selected or not override.get("targetTable"):
+        if entity["id"].casefold() not in selected:
             continue
         schema, table = _final_target(yaml_config, pipeline, entity)
-        other = renamed.setdefault((schema.casefold(), table.casefold()), entity["id"])
-        if other != entity["id"]:
-            raise PlanError(f"{where}.entities.overrides: {other!r} and {entity['id']!r} are both renamed to "
-                            f"{schema}.{table}; give each its own targetTable")
+        if not str(table).strip():
+            continue
+        slot = (schema.casefold(), table.casefold())
+        other = renamed.get(slot)
+        if other is None:
+            renamed[slot] = entity["id"]
+            continue
+        if _entity_base_id(other) == _entity_base_id(entity["id"]):
+            continue
+        if not (_has_plan_target_remap(pipeline, other) or _has_plan_target_remap(pipeline, entity["id"])):
+            continue
+        raise PlanError(
+            f"{where}.entities: {other!r} and {entity['id']!r} both map to "
+            f"{schema}.{table}; give each its own targetTable (or targetSchema)"
+        )
 
 
 def _override_for(mapping: Mapping[str, Any], entity_id: str):
@@ -846,6 +878,9 @@ def entity_import_options(plan: ImportPlan, pipeline: PipelinePlan, *, dry_run: 
     # Explicit Customize / plan choice wins over GS_IMPORT_ON_EXISTING (same as Automator archive plan).
     if on_existing:
         options.on_existing = on_existing
+    elif not plan.empty:
+        # F12: a non-empty plan with the dropdown left at default must not inherit GS_IMPORT_ON_EXISTING.
+        options.on_existing = None
     if "validate" in plan.defaults:
         options.validate = plan.defaults["validate"] is not False
     if plan.defaults.get("strictValidate"):

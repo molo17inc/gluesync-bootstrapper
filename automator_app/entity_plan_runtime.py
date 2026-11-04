@@ -96,6 +96,10 @@ def preview_payload(
 ) -> Dict[str, Any]:
     """Read-only preview dict: selected entities, parts, conflicts, notes. No secrets."""
     source = copy.deepcopy(yaml_config)
+    pipeline = import_plan.entity_pipeline(plan, pipeline_id)
+    # Refuse / surface final-target collisions before apply (same as backup Customize, F1/F4).
+    import_plan.check_names(source, pipeline)
+    import_plan.check_target_collisions(source, pipeline, pipeline_id)
     planned, notes, pipeline = import_plan.apply_entity(source, plan, pipeline_id)
     entities = import_plan.entity_ids(planned)
     parts = import_plan.entity_part_flags(plan, pipeline)
@@ -103,6 +107,7 @@ def preview_payload(
     conflict_set = set(conflicts)
     rows = [_entity_preview_row(planned, e, conflict_set) for e in entities]
     notes = list(notes) + _partial_chain_notes(yaml_config, {e["id"] for e in entities})
+    notes = notes + _multi_schema_source_notes(yaml_config, planned, plan)
     return {
         "pipelineId": str(pipeline_id),
         "entityCount": len(entities),
@@ -114,6 +119,20 @@ def preview_payload(
         "plan": plan.to_dict(),
         "dryRunSafe": True,
     }
+
+
+def _multi_schema_source_notes(original: Any, planned: Any, plan: import_plan.ImportPlan) -> List[str]:
+    """F2: warn when a Customize Source would have dropped other selected schemas (now expanded)."""
+    if plan.empty:
+        return []
+    planned_schemas = sorted({e["schema"] for e in import_plan.entity_ids(planned)})
+    if len(planned_schemas) <= 1:
+        return []
+    return [
+        "Selection spans multiple source schemas "
+        f"({', '.join(planned_schemas)}). If Customize Source is set, every selected "
+        "schema is still created (remapped to Customize Target when that field is set)."
+    ]
 
 
 

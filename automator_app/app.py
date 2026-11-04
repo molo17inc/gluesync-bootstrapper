@@ -484,7 +484,7 @@ class BulkCreateRequest(BaseModel):
     target_type: str = Field("", alias="targetType")
     table_names: list[str] = Field(..., alias="tableNames")
     chunk_size: int = Field(50, alias="chunkSize", ge=1, le=500)
-    skip_errors: bool = Field(True, alias="skipErrors")
+    skip_errors: bool = Field(False, alias="skipErrors")  # align with entity Customize UI / RunRequest
     enable_scheduling: Optional[bool] = Field(None, alias="enableScheduling")
     create_tables: Optional[bool] = Field(None, alias="createTables")
     plan: Optional[Dict[str, Any]] = None
@@ -4412,12 +4412,18 @@ def _load_entity_plan_or_400(source: Any) -> import_plan.ImportPlan:
 
 def _entity_plan_flags(plan: import_plan.ImportPlan, pipeline_id: str,
                        *, enable_scheduling: bool, create_tables: bool) -> tuple[bool, bool, bool]:
-    """``(enable_scheduling, create_tables, restore_function_collection)`` after plan.parts."""
+    """``(enable_scheduling, create_tables, restore_function_collection)`` after plan.parts.
+
+    Empty plan → global Automator checkboxes only. Non-empty Customize plan → the plan's
+    ``parts`` are the single source of truth (avoids global∧part silent disable, F10).
+    """
     pipeline = import_plan.entity_pipeline(plan, pipeline_id)
     parts = import_plan.entity_part_flags(plan, pipeline)
+    if plan.empty:
+        return (bool(enable_scheduling), bool(create_tables), True)
     return (
-        bool(enable_scheduling) and parts["schedules"],
-        bool(create_tables) and parts["createTables"],
+        parts["schedules"],
+        parts["createTables"],
         parts["functionCollection"],
     )
 
@@ -4454,10 +4460,14 @@ def _prepare_entity_yaml_for_run(yaml_path: Path, plan: import_plan.ImportPlan,
     """Apply the entity plan to the uploaded YAML. Returns (path_to_use, notes, pipeline, temp_or_None).
 
     Empty plan leaves the original file untouched (parity with current behaviour).
+    Non-empty plans are refused when two selected entities share a final target (F1/F4).
     """
     if plan.empty:
         return yaml_path, [], import_plan.entity_pipeline(plan, pipeline_id), None
     yaml_config = load_yaml_config(str(yaml_path))
+    pipeline = import_plan.entity_pipeline(plan, pipeline_id)
+    import_plan.check_names(yaml_config, pipeline)
+    import_plan.check_target_collisions(yaml_config, pipeline, pipeline_id)
     planned, notes, pipeline, _parts = entity_plan_runtime.prepare_yaml(yaml_config, plan, pipeline_id)
     if planned is yaml_config and not notes:
         # apply_to_yaml returned the same object: nothing to rewrite.
@@ -4787,12 +4797,16 @@ def _run_all_schema_pairs_with_target(request: RunRequest, settings: _RunSetting
     }
 
 
-def _run_entity_creation(request: RunRequest, settings: _RunSettings, yaml_path: Path) -> dict:
+def _run_entity_creation(request: RunRequest, settings: _RunSettings, yaml_path: Path,
+                         *, plan: Optional[import_plan.ImportPlan] = None) -> dict:
     """Run the entity creation of a run, for every schema pair of its YAML or for the requested schemas.
 
     Empty Customize fields mean no override (same as Duplicate Pipeline): both empty → YAML pairs;
     source empty + target set → every YAML source with the given target; source set + target empty →
     YAML target for that source (or the source name when the YAML has no pair).
+
+    When Customize Source is set but a non-empty plan left other schemas in the YAML (picker /
+    Advanced selected them), those schemas are created too — remapped to Target when set (F2).
     """
     yaml_file_path = str(yaml_path)
     source_type, target_type = _run_schema_types(request, yaml_file_path)
@@ -4807,8 +4821,21 @@ def _run_entity_creation(request: RunRequest, settings: _RunSettings, yaml_path:
     if not source:
         return _run_all_schema_pairs_with_target(request, settings, target)
 
+    pairs = extract_all_schemas_from_yaml(yaml_file_path)
+    other_sources = [src for src, _tgt in pairs if src.casefold() != source.casefold()]
+    plan_selects_others = bool(plan is not None and not plan.empty and other_sources)
+    if plan_selects_others:
+        if settings.log_callback is not None:
+            settings.log_callback(
+                f"[plan] Customize Source {source!r} is set but the selection also includes "
+                f"{', '.join(repr(s) for s in other_sources)}; creating every selected schema"
+                + (f" → {target!r}" if target else " with its YAML target")
+            )
+        if target:
+            return _run_all_schema_pairs_with_target(request, settings, target)
+        return _run_all_schema_pairs(request, settings)
+
     if not target:
-        pairs = extract_all_schemas_from_yaml(yaml_file_path)
         match = next((tgt for src, tgt in pairs if src.casefold() == source.casefold()), source)
         return _run_create_entities(request, settings, source, match)
 
@@ -4875,7 +4902,7 @@ async def _execute_run(run_id: str, request: RunRequest) -> None:
 
     def _run_sync() -> dict:
         try:
-            return _run_entity_creation(request, settings, yaml_for_run)
+            return _run_entity_creation(request, settings, yaml_for_run, plan=plan)
         finally:
             if planned_temp is not None:
                 with contextlib.suppress(OSError):

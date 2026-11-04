@@ -10,7 +10,8 @@ JS = Path(__file__).resolve().parents[1] / "automator_app" / "static" / "entity_
 SCRIPT = r"""
 import {
   buildEntityPlan, planIsEmpty, selectionError, resolveTarget, targetDiffersFromDefault,
-  columnMismatchNote, inferTargetMode, entityIdSubtitle, groupPickerRows,
+  columnMismatchNote, inferTargetMode, preferDiscoverySpelling, entityIdSubtitle, groupPickerRows,
+  advancedMatches, effectiveSelectedIds,
 } from './entity_import.mjs';
 
 class FakeEl {
@@ -67,8 +68,22 @@ assert(JSON.stringify(planPart.pipelines['pipe-1'].entities.include) === JSON.st
 const nonePanel = basePanel();
 assert(selectionError(nonePanel, loaded, new Set()) !== null, 'none error');
 assert(selectionError(allPanel, loaded, new Set(['SCH.T1','SCH.T2','SCH.T3'])) === null, 'all ok');
-// Advanced overrides none
-assert(selectionError(advanced, loaded, new Set()) === null, 'advanced skips picker error');
+// Advanced with include still validates collisions (F1); empty picker Set is OK when Advanced used
+assert(selectionError(advanced, loaded, new Set()) === null, 'advanced include SCH.T1 only ok');
+// Advanced include of two entities that collide under global Target
+const advDup = basePanel({ include: 'SCH.T1\nSCH.T2' });
+const globalTgtAdv = { targetSchema: 'APP' };
+const loadedSame = [
+  { id: 'SCH.T1', schema: 'SCH', targetSchema: 'TGT', targetTable: 'ORDERS' },
+  { id: 'SCH.T2', schema: 'SCH', targetSchema: 'TGT', targetTable: 'ORDERS' },
+];
+assert(selectionError(advDup, loadedSame, new Set(), new Map(), globalTgtAdv) !== null,
+  'advanced detects schema-remap collision');
+assert(preferDiscoverySpelling('Orders', ['ORDERS', 'OTHER']) === 'ORDERS', 'prefer discovery spelling');
+assert(preferDiscoverySpelling('NEW', ['ORDERS']) === 'NEW', 'prefer keeps unknown');
+assert(advancedMatches('SCH.T1', loaded[0]), 'advancedMatches exact');
+assert(effectiveSelectedIds(advanced, loaded, new Set()).has('SCH.T1'), 'effective advanced include');
+assert(!effectiveSelectedIds(advanced, loaded, new Set()).has('SCH.T2'), 'effective advanced exclude');
 
 // Empty panel / no loaded → empty plan
 const emptyPanel = basePanel({ onExisting: '' });
@@ -317,6 +332,16 @@ assert(selectionError(failPanel, oneExists, new Set(['SRC_A.ORDERS','SRC_B.ORDER
 const dupMsg = selectionError(skipPanel, crossSchema, new Set(['SRC_A.ORDERS','SRC_B.ORDERS']), new Map());
 assert(dupMsg && /Duplicate target/i.test(dupMsg), 'dup message has Duplicate target');
 assert(/rename/i.test(dupMsg), 'dup message hints rename');
+
+
+// F9: resolveTarget with cleared override key inherits global (clearEmpty semantics)
+const clearedOv = new Map();
+// Simulate clearEmpty: no targetSchema key means inherit
+assert(resolveTarget(crossSchema[0], clearedOv, { targetSchema: 'GLOBAL_T' }).targetSchema === 'GLOBAL_T',
+  'no override inherits global');
+const lockedEmpty = new Map([['SRC_A.ORDERS', { targetSchema: '' }]]);
+assert(resolveTarget(crossSchema[0], lockedEmpty, { targetSchema: 'GLOBAL_T' }).targetSchema === '',
+  'explicit empty stays locked (pre-clearEmpty behaviour still testable)');
 
 console.log('ok');
 """
