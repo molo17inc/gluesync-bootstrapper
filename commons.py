@@ -23,6 +23,7 @@ import json
 import os
 import random
 import re
+import threading
 import time
 import traceback
 import uuid
@@ -31,7 +32,7 @@ from datetime import datetime
 from pathlib import Path
 
 import yaml
-from typing import Dict, List, Optional, Tuple, Union, Any
+from typing import Callable, Dict, List, Optional, Tuple, Union, Any
 from utils.log import get_logger, log_success, log_failure
 from utils.chronos_client import ChronosClient
 from utils.core_hub_client import CoreHubClient
@@ -73,6 +74,7 @@ def configure_core_hub(base_url: str, *, use_ssl: Optional[bool] = None, skip_ve
 
     client = CoreHubClient(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
     set_core_hub_client(client)
+    reset_refreshed_token()
     return client
 
 
@@ -296,14 +298,144 @@ def _describe_core_hub_failure(error, method, path, expected_error_statuses):
     return message
 
 
-def fetch_core_hub(path, method='GET', token=None, body=None, params=None, headers=None, expected_error_statuses=None):
+SESSION_EXPIRED_HINT = (
+    "Core Hub session expired (HTTP 401). "
+    "Re-login and resume with onExisting=skip so already-imported entities are kept."
+)
+
+_token_refresh_fn: Optional[Callable[[], Optional[str]]] = None
+_refreshed_token: Optional[str] = None
+_token_refresh_lock = threading.Lock()
+_token_refresh_in_progress = False
+
+
+def register_token_refresh(fn: Optional[Callable[[], Optional[str]]]) -> None:
+    """Install a one-shot re-login callback used when Core Hub returns HTTP 401 mid-run.
+
+    ``fn`` returns a fresh bearer token or None. Pass None to clear. Resets any
+    previously refreshed token so the next call uses the caller-supplied value.
+    """
+    global _token_refresh_fn, _refreshed_token
+    with _token_refresh_lock:
+        _token_refresh_fn = fn
+        _refreshed_token = None
+
+
+def clear_token_refresh() -> None:
+    """Drop the mid-run 401 refresh callback and any cached refreshed token."""
+    register_token_refresh(None)
+
+
+def reset_refreshed_token() -> None:
+    """Forget a mid-run refreshed bearer without dropping the refresh callback."""
+    global _refreshed_token
+    with _token_refresh_lock:
+        _refreshed_token = None
+
+
+def current_core_hub_token(fallback: Optional[str] = None) -> Optional[str]:
+    """Bearer token to use: last successful mid-run refresh, else ``fallback``."""
+    return _refreshed_token if _refreshed_token is not None else fallback
+
+
+def _http_status_of(error) -> Optional[int]:
+    response = getattr(error, "response", None)
+    if response is not None:
+        return getattr(response, "status_code", None)
+    cause = getattr(error, "__cause__", None) or getattr(error, "__context__", None)
+    if cause is not None and cause is not error:
+        return _http_status_of(cause)
+    return None
+
+
+def _is_unauthorized(error) -> bool:
+    if _http_status_of(error) == 401:
+        return True
+    text = str(error)
+    return "401" in text and "unauthorized" in text.lower()
+
+
+def _is_login_path(path: Optional[str]) -> bool:
+    return str(path or "").rstrip("/").endswith("/authentication/login")
+
+
+def _try_refresh_token() -> Optional[str]:
+    """Call the registered refresh once; remember the new token for later requests."""
+    global _refreshed_token, _token_refresh_in_progress
+    fn = _token_refresh_fn
+    if fn is None:
+        return None
+    with _token_refresh_lock:
+        if _token_refresh_in_progress:
+            return _refreshed_token
+        _token_refresh_in_progress = True
+        try:
+            new_token = fn()
+            if new_token:
+                _refreshed_token = new_token
+                logger.warning(
+                    "Core Hub token refreshed after HTTP 401; retrying the failed request once"
+                )
+                return new_token
+            return None
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("Core Hub token refresh after HTTP 401 failed: %s", type(exc).__name__)
+            return None
+        finally:
+            _token_refresh_in_progress = False
+
+
+def make_password_login_refresh(
+    *,
+    username: str = "admin",
+    passwords: Optional[List[Optional[str]]] = None,
+    credentials_path: Optional[str] = None,
+    extra_passwords: Optional[List[Optional[str]]] = None,
+) -> Callable[[], Optional[str]]:
+    """Build a refresh callback that POSTs /authentication/login with known admin passwords."""
+
+    def refresh() -> Optional[str]:
+        saved = load_admin_password(credentials_path) if credentials_path else None
+        extras = list(extra_passwords or [])
+        if passwords is not None:
+            candidates = [p for p in passwords if p]
+        else:
+            candidates = login_password_candidates(
+                saved,
+                extras[0] if extras else None,
+                extras[1] if len(extras) > 1 else None,
+            )
+        for password in candidates:
+            try:
+                response = fetch_core_hub(
+                    "/authentication/login",
+                    method="POST",
+                    body={"username": username, "password": password},
+                    _auth_retry=False,
+                )
+            except Exception:
+                continue
+            token = response.get("apiToken") if isinstance(response, dict) else None
+            if token:
+                return token
+        return None
+
+    return refresh
+
+
+def fetch_core_hub(path, method='GET', token=None, body=None, params=None, headers=None,
+                   expected_error_statuses=None, _auth_retry=True):
     # Log request details
+    effective_token = current_core_hub_token(token)
     _log_core_hub_request(method, path, body, params, headers)
 
     try:
         # Make the request
         start_time = time.time()
-        response = core_hub_client.request(path, method, token, body, params, headers=headers, expected_error_statuses=expected_error_statuses)
+        response = core_hub_client.request(
+            path, method, effective_token, body, params, headers=headers,
+            expected_error_statuses=expected_error_statuses,
+        )
         duration = time.time() - start_time
 
         _log_core_hub_response(method, path, response, duration)
@@ -311,6 +443,21 @@ def fetch_core_hub(path, method='GET', token=None, body=None, params=None, heade
         return response
 
     except Exception as e:
+        expect_401 = bool(expected_error_statuses and 401 in expected_error_statuses)
+        if (
+            _auth_retry
+            and not expect_401
+            and not _is_login_path(path)
+            and _is_unauthorized(e)
+        ):
+            new_token = _try_refresh_token()
+            if new_token:
+                return fetch_core_hub(
+                    path, method, new_token, body, params, headers,
+                    expected_error_statuses, _auth_retry=False,
+                )
+            message = _describe_core_hub_failure(e, method, path, expected_error_statuses)
+            raise RuntimeError(f"{SESSION_EXPIRED_HINT} ({message})") from e
         message = _describe_core_hub_failure(e, method, path, expected_error_statuses)
         raise RuntimeError(message) from e
 
@@ -472,7 +619,12 @@ def corehub_version_override():
 
 
 def _version_or_override(version, error):
-    """``version`` when readable, else the override, else None (taken as Gluesync 2.3+), with a clear warning."""
+    """``version`` when readable, else the override, else a legacy marker (pre-2.3), with a clear warning.
+
+    Unreadable ``GET /version`` without an explicit override must not assume Gluesync 2.3+
+    (README requires Core Hub before 2.3 compatibility). Pass ``--corehub-version`` /
+    ``COREHUB_VERSION`` when the hub is known to be current.
+    """
     from utils.udf_signature import parse_corehub_version
 
     if version is not None and parse_corehub_version(version) is not None:
@@ -483,21 +635,23 @@ def _version_or_override(version, error):
         logger.warning(f"GET /version {reason}; using the configured CoreHub version {override!r} "
                        f"(--corehub-version / COREHUB_VERSION)")
         return override
-    logger.warning(f"GET /version {reason}; ASSUMING A GLUESYNC 2.3+ CORE HUB (grouped column mapping matrix, "
-                   f"2.3 key rules). If the Core Hub is older, pass --corehub-version X.Y.Z or set COREHUB_VERSION.")
-    return version if error is None else None
+    logger.warning(
+        f"GET /version {reason}; ASSUMING A PRE-2.3 CORE HUB (legacy column mapping / key rules) "
+        f"for compatibility. If the Core Hub is 2.3+, pass --corehub-version X.Y.Z or set COREHUB_VERSION."
+    )
+    return "2.2.0"
 
 
 def corehub_takes_grouped_matrix(token, fetch=None):
     """Whether the CoreHub in use takes the grouped column mapping matrix of Gluesync 2.3.
 
     Older releases decode only the single pair ``sourceColumnId``/``targetColumnId``. A version that
-    cannot be read is taken as a current CoreHub, as for the UDF signature.
+    cannot be read is treated as pre-2.3 unless ``--corehub-version`` / ``COREHUB_VERSION`` says otherwise.
     """
     from utils.udf_signature import parse_corehub_version
 
     parsed = parse_corehub_version(corehub_version(token, fetch=fetch))
-    return parsed is None or parsed[:2] >= GROUPED_MATRIX_MIN_COREHUB_VERSION
+    return parsed is not None and parsed[:2] >= GROUPED_MATRIX_MIN_COREHUB_VERSION
 
 
 def normalize_columns_payload(payload):
@@ -1333,8 +1487,10 @@ def _build_filter_column(column_name, matched_column, fallback_type, table_id,
     """Build the column object of a filter clause (full Column model when discovered)."""
     if matched_column is None:
         print(f"Warning: Column '{column_name}' not found in table columns, using minimal fallback")
+        # Distinct stable synthetic ids (never a shared hardcoded 1 — multi-clause collision).
+        synthetic_id = abs(hash(column_name)) % 1_000_000_000 + 1
         filter_column = {
-            "id": 1,
+            "id": synthetic_id,
             "name": column_name,
             "dataType": fallback_type
         }
@@ -1493,61 +1649,59 @@ def assign_entities_to_group(token, pipeline_id, group_id, entity_ids):
 def create_group(token, pipeline_id, group_name, description: Optional[str] = None, color: Optional[str] = None):
     """Create a new group in the pipeline if it doesn't exist.
 
-    Returns the group ID or '_default' if group creation fails.
+    Returns the group ID. Returns ``'_default'`` only when ``group_name`` is empty or
+    literally ``_default``. On lookup/create failure raises ``RuntimeError`` — callers
+    that tolerate a soft fallback must catch it (never silently pretend the requested
+    group is ``_default``).
     """
     logger.debug(f"create_group called with name: '{group_name}' (type: {type(group_name)})")
-    
+
     if not group_name or group_name == "_default":
         logger.debug("Using default group")
         return "_default"
 
-    # Ensure group_name is a string
     group_name = str(group_name).strip()
     if not group_name:
         logger.warning("Empty group name provided, using default group")
         return "_default"
-    
-    # First, try to get existing groups
+
     try:
-        # Get all groups for the pipeline
         groups = fetch_core_hub(
             f"/pipelines/{pipeline_id}/config/groups",
             method='GET',
             token=token
         )
-        
-        # Guard: the API must return a list; if it returns a dict or None,
-        # iterating over it would silently process dict keys (strings) instead
-        # of group objects, causing every `.get('name')` call to raise
-        # AttributeError and the function to fall through to a spurious PUT.
+
         if not isinstance(groups, list):
             logger.warning(
                 f"Unexpected response type for groups endpoint: {type(groups).__name__}. "
                 "Cannot check for existing groups; will attempt to create."
             )
             groups = []
-        
-        # Check if group already exists
+
+        target_fold = group_name.casefold()
         for group in groups:
             if not isinstance(group, dict):
                 continue
-            if group.get('name') == group_name:
+            existing_name = group.get('name')
+            if existing_name is not None and str(existing_name).casefold() == target_fold:
                 group_id = group.get('groupId')
-                logger.info(f"Found existing group '{group_name}' with ID: {group_id}")
+                logger.info(
+                    f"Found existing group '{existing_name}' (matched '{group_name}' casefold) "
+                    f"with ID: {group_id}"
+                )
                 return group_id
-                
-        # If we get here, group doesn't exist yet, so create it
-        # Generate a random color in hex format (e.g., #RRGGBBAA)
+
         def random_color():
             return f"#{random.randint(0, 255):02x}{random.randint(0, 255):02x}{random.randint(0, 255):02x}ff"
-            
+
         group_data = {
-            "groupId": "",  # Will be generated by the server
+            "groupId": "",
             "name": group_name,
             "description": description if description is not None else "",
             "color": color if color is not None else random_color(),
         }
-        
+
         logger.info(f"Creating new group: {group_name}")
         response = fetch_core_hub(
             f"/pipelines/{pipeline_id}/config/groups",
@@ -1555,19 +1709,22 @@ def create_group(token, pipeline_id, group_name, description: Optional[str] = No
             token=token,
             body=group_data
         )
-        
+
         if response and 'groupId' in response:
             group_id = response['groupId']
             logger.info(f"Successfully created group '{group_name}' with ID: {group_id}")
             return group_id
-            
-        logger.warning(f"Failed to create group '{group_name}': Unexpected response format")
-        return "_default"
-        
+
+        raise RuntimeError(
+            f"Failed to create group '{group_name}': unexpected response format {response!r}"
+        )
+
+    except RuntimeError:
+        raise
     except Exception as e:
-        logger.warning(f"Error in create_group for '{group_name}': {str(e)}")
+        logger.error(f"Error in create_group for '{group_name}': {str(e)}")
         logger.debug(f"Error details: {traceback.format_exc()}")
-        return "_default"
+        raise RuntimeError(f"Failed to create or look up group '{group_name}': {e}") from e
 
 
 # ---------------------------------------------------------------------------

@@ -35,8 +35,12 @@ def prepare_yaml(
     plan: import_plan.ImportPlan,
     pipeline_id: str,
 ) -> Tuple[Any, List[str], import_plan.PipelinePlan, Dict[str, bool]]:
-    """Planned YAML, notes, pipeline plan and part flags. Empty plan leaves YAML unchanged."""
+    """Planned YAML, notes, pipeline plan and part flags. Empty plan leaves YAML unchanged.
+
+    Shared final targets are fan-in (informational notes), not PlanError.
+    """
     planned, notes, pipeline = import_plan.apply_entity(yaml_config, plan, pipeline_id)
+    notes = list(notes) + import_plan.fan_in_notes(planned, pipeline)
     return planned, notes, pipeline, import_plan.entity_part_flags(plan, pipeline)
 
 
@@ -97,16 +101,17 @@ def preview_payload(
     """Read-only preview dict: selected entities, parts, conflicts, notes. No secrets."""
     source = copy.deepcopy(yaml_config)
     pipeline = import_plan.entity_pipeline(plan, pipeline_id)
-    # Refuse / surface final-target collisions before apply (same as backup Customize, F1/F4).
+    # Case-only override accidents still refuse; shared targets are fan-in (notes, not errors).
     import_plan.check_names(source, pipeline)
     import_plan.check_target_collisions(source, pipeline, pipeline_id)
+    fan_notes = import_plan.fan_in_notes(source, pipeline)
     planned, notes, pipeline = import_plan.apply_entity(source, plan, pipeline_id)
     entities = import_plan.entity_ids(planned)
     parts = import_plan.entity_part_flags(plan, pipeline)
     conflicts = _conflict_ids(entities, existing_sources)
     conflict_set = set(conflicts)
     rows = [_entity_preview_row(planned, e, conflict_set) for e in entities]
-    notes = list(notes) + _partial_chain_notes(yaml_config, {e["id"] for e in entities})
+    notes = list(notes) + fan_notes + _partial_chain_notes(yaml_config, {e["id"] for e in entities})
     notes = notes + _multi_schema_source_notes(yaml_config, planned, plan)
     return {
         "pipelineId": str(pipeline_id),
