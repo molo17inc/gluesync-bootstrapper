@@ -2982,12 +2982,7 @@ def _table_properties(run, custom_config, label, duplicate=False):
     source_custom_properties = {**run.schema.global_source_custom_properties, **table_custom_properties.get('source', {})}
     target_custom_properties = {**run.schema.global_target_custom_properties, **table_custom_properties.get('target', {})}
 
-    # Documented place is customProperties.source.partitions (export writes it there).
-    # Also accept a top-level ``partitions:`` on the table so hand-edited YAML does not
-    # silently lose logical partitions.
     partition_config = source_custom_properties.pop('partitions', None)
-    if partition_config is None:
-        partition_config = custom_config.get('partitions')
     partition_column_name, partition_max_partitions = _parse_partition_config(partition_config)
 
     # Store UDF configuration separately (will be added to entityType, not customProperties)

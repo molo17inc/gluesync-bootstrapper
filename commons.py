@@ -1548,78 +1548,15 @@ def _build_filter_column(column_name, matched_column, fallback_type, table_id,
     return filter_column
 
 
-# SQL-ish / alias spellings customers and hand-edited YAML use → CoreHub operation types.
-_FILTER_OPERATION_ALIASES = {
-    "=": "Equal",
-    "==": "Equal",
-    "eq": "Equal",
-    "equals": "Equal",
-    "!=": "NotEqual",
-    "<>": "NotEqual",
-    "ne": "NotEqual",
-    "notequals": "NotEqual",
-    "not_equal": "NotEqual",
-    ">": "Greater",
-    "gt": "Greater",
-    "greaterthan": "Greater",
-    ">=": "GreaterEqual",
-    "gte": "GreaterEqual",
-    "greaterequals": "GreaterEqual",
-    "<": "Less",
-    "lt": "Less",
-    "lessthan": "Less",
-    "<=": "LessEqual",
-    "lte": "LessEqual",
-    "lessequals": "LessEqual",
-    "in": "In",
-    "notin": "NotIn",
-    "not_in": "NotIn",
-    "isnull": "IsNull",
-    "is_null": "IsNull",
-    "isnotnull": "IsNotNull",
-    "is_not_null": "IsNotNull",
-}
-
-
-def _normalize_filter_operation(raw):
-    """CoreHub filter operation type of a YAML ``operation`` / ``operator`` value.
-
-    Accepts the documented names (``Equal``, ``NotEqual``, …), common aliases
-    (``Equals``, ``eq``), and SQL-ish symbols (``=``, ``!=``, ``>=``). Returns
-    ``None`` when the value is empty.
-    """
-    if raw is None:
-        return None
-    text = str(raw).strip()
-    if not text:
-        return None
-    aliased = _FILTER_OPERATION_ALIASES.get(text) or _FILTER_OPERATION_ALIASES.get(text.lower())
-    if aliased:
-        return aliased
-    # Preserve CoreHub camel-case spellings (Equal, NotEqual, GreaterEqual, …).
-    return text
-
-
-def _filter_operation_from_clause(clause):
-    """The operation type of a YAML filter clause: ``operation``, else ``operator``."""
-    if not isinstance(clause, dict):
-        return None
-    if "operation" in clause and clause.get("operation") not in (None, ""):
-        return _normalize_filter_operation(clause.get("operation"))
-    if "operator" in clause and clause.get("operator") not in (None, ""):
-        return _normalize_filter_operation(clause.get("operator"))
-    return None
-
-
 def _build_filter_clause(clause, columns_info, table_id, source_node_info, target_node_info):
     """Convert one YAML filter clause; return None when the clause must be skipped."""
-    operation_type = _filter_operation_from_clause(clause)
-    # Skip invalid clauses (need a column and an operation/operator).
-    if not isinstance(clause, dict) or "column" not in clause or not operation_type:
+    # Skip invalid clauses
+    if 'column' not in clause or 'operation' not in clause:
         print(f"Warning: Skipping invalid filter clause: {clause}")
         return None
 
     column_name = clause['column']
+    operation_type = clause['operation']
 
     # Find the matching column from discovery
     matched_column = _find_discovered_column(columns_info, column_name)
