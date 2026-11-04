@@ -76,7 +76,7 @@ class BestEffortPartialImportTests(unittest.TestCase):
             {"successful": 8, "failed": 2, "total": 10},
         )
         self.assertTrue(result.get("partial"))
-        self.assertTrue(result.get("success"))  # skip_errors=True → overall OK
+        self.assertFalse(result.get("success"))  # H5: any failure → success false; Automator status is partial
         self.assertEqual(sorted(result.get("failedEntityIds") or []), expected_fail)
         self.assertEqual(len(result.get("failures") or []), 2)
         for item in result["failures"]:

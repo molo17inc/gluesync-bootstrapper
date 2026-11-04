@@ -302,6 +302,50 @@ def _add_new_jobs(
     return new_on_page
 
 
+# Cap Chronos paging when raw pages never mention this pipeline (H6).
+# Absolute page budget + consecutive zero-match streak; keep limit/offset only.
+_CHRONOS_MAX_PAGES = 50
+_CHRONOS_MAX_ZERO_MATCH_STREAK = 5
+
+
+def _chronos_stop_after_page(
+    *,
+    pipeline_id: str,
+    page_limit: int,
+    offset: int,
+    raw_count: int,
+    matched: list,
+    new_on_page: int,
+    zero_match_streak: int,
+    pages_read: int,
+    kept: int,
+) -> bool:
+    """True when paging should stop after this full-or-short page (H6 caps included)."""
+    if raw_count < page_limit:
+        return True
+    if new_on_page == 0 and matched:
+        logger.warning(
+            f"Chronos returned a full page of {page_limit} jobs for pipeline {pipeline_id} "
+            f"but offset={offset} added none (pagination unsupported or ignored); "
+            f"further jobs may be missing from the export"
+        )
+        return True
+    if zero_match_streak >= _CHRONOS_MAX_ZERO_MATCH_STREAK:
+        logger.warning(
+            f"Chronos returned {zero_match_streak} consecutive full pages with no jobs for "
+            f"pipeline {pipeline_id} (offset={offset}); stopping walk "
+            f"(kept {kept} job(s) so far)"
+        )
+        return True
+    if pages_read >= _CHRONOS_MAX_PAGES:
+        logger.warning(
+            f"Chronos page budget ({_CHRONOS_MAX_PAGES}) exhausted for pipeline {pipeline_id} "
+            f"at offset={offset}; keeping {kept} job(s) fetched so far"
+        )
+        return True
+    return False
+
+
 def _read_jobs_from_client(
     client: Any, pipeline_id: str, page_limit: int
 ) -> Tuple[List[Dict[str, Any]], bool]:
@@ -310,6 +354,8 @@ def _read_jobs_from_client(
     seen_ids: set = set()
     seen_page_fps: set = set()
     offset = 0
+    pages_read = 0
+    zero_match_streak = 0
     while True:
         jobs_response = client._request(  # type: ignore[attr-defined]
             "api/jobs/",
@@ -337,17 +383,21 @@ def _read_jobs_from_client(
         seen_page_fps.add(page_fp)
         matched = _jobs_of_pipeline(page, pipeline_id)
         new_on_page = _add_new_jobs(matched, seen_ids, all_jobs, offset)
-        if raw_count < page_limit:
+        pages_read += 1
+        zero_match_streak = zero_match_streak + 1 if not matched else 0
+        if _chronos_stop_after_page(
+            pipeline_id=pipeline_id,
+            page_limit=page_limit,
+            offset=offset,
+            raw_count=raw_count,
+            matched=matched,
+            new_on_page=new_on_page,
+            zero_match_streak=zero_match_streak,
+            pages_read=pages_read,
+            kept=len(all_jobs),
+        ):
             return all_jobs, True
-        if new_on_page == 0 and matched:
-            # Full raw page, our pipeline's jobs present but all duplicates → offset ignored.
-            logger.warning(
-                f"Chronos returned a full page of {page_limit} jobs for pipeline {pipeline_id} "
-                f"but offset={offset} added none (pagination unsupported or ignored); "
-                f"further jobs may be missing from the export"
-            )
-            return all_jobs, True
-        # Full raw page with zero matches for this pipeline: keep walking.
+        # Full raw page with zero matches for this pipeline: keep walking (bounded).
         offset += page_limit
 
 

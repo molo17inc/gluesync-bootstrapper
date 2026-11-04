@@ -2697,6 +2697,23 @@ class _SchemaSettings:
         logger.debug(f"Global target custom properties: {self.global_target_custom_properties}")
 
 
+
+def _picker_fail_id(source_schema, table_label) -> str:
+    """Normalize a refused-table label to a picker id (``SCHEMA.KEY`` when possible)."""
+    text = str(table_label or "").strip()
+    if not text:
+        return text
+    if text.lower().startswith("multitable chain "):
+        return text
+    base = text.split("@@", 1)[0]
+    if "." in base:
+        return text
+    schema = str(source_schema or "").strip()
+    if schema:
+        return f"{schema}.{text}"
+    return text
+
+
 class _EntityRun:
     """One create_entities run: its pipeline context, the YAML settings of its schema, and what it builds.
 
@@ -2720,6 +2737,8 @@ class _EntityRun:
         self.entities = []
         # Tables whose entity is refused before any request, with the reason logged; counted as failed.
         self.refused_tables = []
+        # Sibling MultiTable member picker ids for Retry (not counted as separate refusals) — H1.
+        self.extra_retry_ids = []
         # Every entity of the run that was not created, as "<entity>: <reason>", returned to the caller (BOP-18 A).
         self.errors = []
         self.pending_partition_requests = []
@@ -2746,10 +2765,14 @@ class _EntityRun:
         so the whole import looked lost (F3). Failures are collected; the run
         finishes groups/schedules for what succeeded; overall status still fails
         when skip_errors is false (see create_entities / _entity_run_result).
+
+        Labels are stored as picker ids (``SCHEMA.KEY`` / ``SCHEMA.KEY@@n``) so
+        Retry failed / Advanced include can resolve them (H1).
         """
-        logger.error(f"Entity for table {table_label} not created: {error}")
-        self.refused_tables.append(table_label)
-        self.errors.append(f"{table_label}: {error}")
+        label = _picker_fail_id(self.source_schema, table_label)
+        logger.error(f"Entity for table {label} not created: {error}")
+        self.refused_tables.append(label)
+        self.errors.append(f"{label}: {error}")
 
     def table_columns(self, table_name, custom_config=None):
         """The source discovery of a table of the schema, in the order the YAML ``custom_config`` of the table gives
@@ -4373,6 +4396,49 @@ def _chain_tables_in_whitelist(run, chain_id, tables_list):
     return filtered_tables_list
 
 
+def _log_chain_table_order(chain_id, tables_list):
+    """Log MultiTable member order (YAML order) for debugging."""
+    logger.info(
+        f"Creating MultiTable entity for chainId: {chain_id} with {len(tables_list)} tables in YAML order:"
+    )
+    for idx, (table_key, _) in enumerate(tables_list):
+        logger.info(f"  {idx+1}. Table {table_key}")
+
+
+def _multi_table_group_id(run, last_table_data):
+    """Resolve group id/name for a MultiTable entity from its last member."""
+    group_id = run.group_id_map.get(
+        last_table_data.get('groupId', _DEFAULT_GROUP),
+        last_table_data.get('groupId', _DEFAULT_GROUP),
+    )
+    group_name = next(
+        (name for name, gid in run.group_id_map.items() if gid == group_id),
+        group_id,
+    )
+    return group_id, group_name
+
+
+def _refuse_multi_table_chain(run, chain_id, tables_list, chain_refusals):
+    """One counted MultiTable refusal; siblings go to extra_retry_ids (H1)."""
+    reason = EntityMappingError("; ".join(chain_refusals))
+    if not tables_list:
+        run.refuse_table(f"MultiTable chain {chain_id}", reason)
+        return
+    primary_key = tables_list[0][0]
+    run.refuse_table(primary_key, reason)
+    refused_cf = {x.casefold() for x in run.refused_tables}
+    extra_cf = {x.casefold() for x in run.extra_retry_ids}
+    for table_key, _table_data in tables_list[1:]:
+        label = _picker_fail_id(run.source_schema, table_key)
+        if not label:
+            continue
+        cf = label.casefold()
+        if cf in refused_cf or cf in extra_cf:
+            continue
+        run.extra_retry_ids.append(label)
+        extra_cf.add(cf)
+
+
 def _build_multi_table_entity(run, chain_id, tables_list):
     """The MultiTable entity of a chain (``{"entities": [...]}``), None when the chain gets none."""
     if not tables_list:
@@ -4381,48 +4447,35 @@ def _build_multi_table_entity(run, chain_id, tables_list):
     if tables_list is None:
         return None
 
-    # Tables are processed in the order they appear in the YAML file
-    # Log table ordering for debugging
-    logger.info(f"Creating MultiTable entity for chainId: {chain_id} with {len(tables_list)} tables in YAML order:")
-    for idx, (table_key, _) in enumerate(tables_list):
-        logger.info(f"  {idx+1}. Table {table_key}")
+    _log_chain_table_order(chain_id, tables_list)
 
-    # We'll reuse the entity name captured during export if available
     first_table_key, first_table_data = tables_list[0]
     entity_name = import_options.current().remap.entity_name(
         first_table_data.get("entityName") or f"{run.source_schema}.{first_table_key}")
 
     cb = _ChainBuild(run, chain_id)
-    # Process each table in the chain (in YAML order)
     for table_key, table_data in tables_list:
         _add_chain_source_table(cb, table_key, table_data)
-    # The chain settings are read from its last table, as they always have been.
     last_table_data = tables_list[-1][1]
     source_entity = _chain_source_entity(cb, entity_name, last_table_data)
 
-    # Process each table for the target (in YAML order)
     for table_key, table_data in tables_list:
         _add_chain_target_table(cb, table_key, table_data)
     target_entity = _chain_target_entity(cb, entity_name, tables_list, last_table_data)
 
-    # Get group info for multi-table entity
-    group_id = run.group_id_map.get(last_table_data.get('groupId', _DEFAULT_GROUP), last_table_data.get('groupId', _DEFAULT_GROUP))
-    group_name = next((name for name, gid in run.group_id_map.items() if gid == group_id), group_id)
+    group_id, group_name = _multi_table_group_id(run, last_table_data)
     logger.info(f"Assigning multi-table entity '{entity_name}' to group: {group_name} (ID: {group_id})")
 
-    # Create the MultiTable entity
     entity_payload = {
         "entityId": "",
         "entityName": entity_name,
         "agentEntities": [source_entity, target_entity],
     }
-
-    # Only add groupId if it's not the default
     if group_id and group_id != _DEFAULT_GROUP:
         entity_payload["groupId"] = group_id
 
     if cb.chain_refusals:
-        run.refuse_table(f"MultiTable chain {chain_id}", EntityMappingError("; ".join(cb.chain_refusals)))
+        _refuse_multi_table_chain(run, chain_id, tables_list, cb.chain_refusals)
         return None
     return {"entities": [entity_payload]}
 
@@ -5044,7 +5097,7 @@ def _entity_failures(errors):
     return failures
 
 
-def _failed_entity_ids(failures, refused_tables):
+def _failed_entity_ids(failures, refused_tables, extra_ids=None):
     failed_ids = []
     seen = set()
     for item in failures:
@@ -5052,7 +5105,7 @@ def _failed_entity_ids(failures, refused_tables):
         if eid and eid.casefold() not in seen:
             seen.add(eid.casefold())
             failed_ids.append(eid)
-    for label in refused_tables or []:
+    for label in list(refused_tables or []) + list(extra_ids or []):
         if label and str(label).casefold() not in seen:
             seen.add(str(label).casefold())
             failed_ids.append(str(label))
@@ -5062,15 +5115,18 @@ def _failed_entity_ids(failures, refused_tables):
 def _entity_run_result(run, options, offline_names, counts, skipped_entities=None):
     """The result of create_entities from its (successful, failed, total) counts.
 
-    Always returns counts for a best-effort run. ``success`` is False when any
-    entity failed and ``skip_errors`` is false (overall job status); per-entity
-    successes are still persisted before this returns.
+    Always returns counts for a best-effort run. ``success`` is True only when
+    ``failed == 0`` (H5): ``skip_errors`` only avoids aborting mid-batch; an
+    all-failed run is never treated as completed. Per-entity successes are still
+    persisted before this returns. ``partial`` covers mixed outcomes.
     """
     successful, failed, total = counts
     skipped_entities = list(skipped_entities or [])
     skipped = len(skipped_entities) if skipped_entities else max(0, total - successful - failed)
     failures = _entity_failures(run.errors)
-    failed_ids = _failed_entity_ids(failures, run.refused_tables)
+    failed_ids = _failed_entity_ids(
+        failures, run.refused_tables, getattr(run, "extra_retry_ids", None),
+    )
     result = {
         "successful": successful,
         "failed": failed,
@@ -5081,7 +5137,8 @@ def _entity_run_result(run, options, offline_names, counts, skipped_entities=Non
         "failures": failures,
         "skippedEntities": skipped_entities,
         "failedEntityIds": failed_ids,
-        "success": failed == 0 or bool(run.ctx.skip_errors),
+        "success": failed == 0,
+        # skip_errors only avoids aborting mid-batch; all-failed is never "completed"
         "partial": successful > 0 and failed > 0,
     }
     if offline_names:

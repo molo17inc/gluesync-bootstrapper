@@ -307,6 +307,7 @@ SESSION_EXPIRED_HINT = (
 _token_refresh_fn: Optional[Callable[[], Optional[str]]] = None
 _refreshed_token: Optional[str] = None
 _token_refresh_lock = threading.Lock()
+_token_refresh_cond = threading.Condition(_token_refresh_lock)
 _token_refresh_in_progress = False
 
 
@@ -361,29 +362,37 @@ def _is_login_path(path: Optional[str]) -> bool:
 
 
 def _try_refresh_token() -> Optional[str]:
-    """Call the registered refresh once; remember the new token for later requests."""
+    """Single-flight re-login: waiters share the in-flight result (H7).
+
+    The first waiter runs ``fn``; concurrent waiters block on the condition until
+    that refresh finishes, then reuse ``_refreshed_token`` instead of logging in again.
+    """
     global _refreshed_token, _token_refresh_in_progress
     fn = _token_refresh_fn
     if fn is None:
         return None
-    with _token_refresh_lock:
+    with _token_refresh_cond:
         if _token_refresh_in_progress:
+            while _token_refresh_in_progress:
+                _token_refresh_cond.wait(timeout=60)
             return _refreshed_token
         _token_refresh_in_progress = True
-        try:
-            new_token = fn()
-            if new_token:
-                _refreshed_token = new_token
-                logger.warning(
-                    "Core Hub token refreshed after HTTP 401; retrying the failed request once"
-                )
-                return new_token
-            return None
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.warning("Core Hub token refresh after HTTP 401 failed: %s", type(exc).__name__)
-            return None
-        finally:
-            _token_refresh_in_progress = False
+    # Call fn outside the lock so waiters can enter wait(); flag stays True.
+    new_token: Optional[str] = None
+    try:
+        new_token = fn()
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("Core Hub token refresh after HTTP 401 failed: %s", type(exc).__name__)
+        new_token = None
+    with _token_refresh_cond:
+        if new_token:
+            _refreshed_token = new_token
+            logger.warning(
+                "Core Hub token refreshed after HTTP 401; retrying the failed request once"
+            )
+        _token_refresh_in_progress = False
+        _token_refresh_cond.notify_all()
+        return new_token if new_token else _refreshed_token
 
 
 def make_password_login_refresh(

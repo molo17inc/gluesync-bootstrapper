@@ -22,9 +22,7 @@ class PickerRenderPerfTests(unittest.TestCase):
 
     def test_before_after_long_task_numbers(self):
         """Synthetic 500/1000/2000: after max long-task << before; kicks 0 after."""
-        script = Path("/tmp/gb-picker-perf.mjs")
-        self.assertTrue(script.exists(), "run node /tmp/gb-picker-perf.mjs first or keep script")
-        # Inline a self-contained copy so CI does not depend on /tmp
+        # Inline self-contained harness (no /tmp script dependency — H-review harness-fail).
         harness = r'''
 import { performance } from 'node:perf_hooks';
 import fs from 'node:fs';
