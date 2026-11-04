@@ -97,8 +97,15 @@ def preview_payload(
     plan: import_plan.ImportPlan,
     pipeline_id: str,
     existing_sources: Optional[set] = None,
+    existing_columns=None,
+    listing_error: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Read-only preview dict: selected entities, parts, conflicts, notes. No secrets."""
+    """Read-only preview dict: selected entities, parts, conflicts, notes. No secrets.
+
+    ``listing_error`` (I6/F8): Core Hub entity listing failed — conflicts are unknown.
+    ``existing_columns`` (I1): optional ``(schema, table) -> column names`` for existing
+    target tables so single-feeder column drift is noted in preview.
+    """
     source = copy.deepcopy(yaml_config)
     pipeline = import_plan.entity_pipeline(plan, pipeline_id)
     # Case-only override accidents still refuse; shared targets are fan-in (notes, not errors).
@@ -113,7 +120,13 @@ def preview_payload(
     rows = [_entity_preview_row(planned, e, conflict_set) for e in entities]
     notes = list(notes) + fan_notes + _partial_chain_notes(yaml_config, {e["id"] for e in entities})
     notes = notes + _multi_schema_source_notes(planned, plan)
-    return {
+    notes = notes + _existing_target_column_notes(planned, existing_columns)
+    if listing_error:
+        notes = [
+            "Could not list existing entities on Core Hub; alreadyExists/conflicts are unknown. "
+            f"({listing_error})"
+        ] + notes
+    payload = {
         "pipelineId": str(pipeline_id),
         "entityCount": len(entities),
         "entities": rows,
@@ -124,6 +137,36 @@ def preview_payload(
         "plan": plan.to_dict(),
         "dryRunSafe": True,
     }
+    if listing_error:
+        payload["listingError"] = str(listing_error)
+        payload["conflictsUnknown"] = True
+    return payload
+
+
+def _existing_target_column_notes(planned: Any, existing_columns) -> List[str]:
+    """I1: existing-target column drift notes (incl. single-feeder) for preview."""
+    if existing_columns is None or not isinstance(planned, dict):
+        return []
+    try:
+        import fan_in  # pylint: disable=import-outside-toplevel
+    except ImportError:
+        return []
+    schemas_root = planned.get("schemas", planned)
+    if not isinstance(schemas_root, dict):
+        return []
+    notes: List[str] = []
+    seen = set()
+    for schema_name, entry in schemas_root.items():
+        if not isinstance(entry, dict) or not isinstance(entry.get("tables"), dict):
+            continue
+        default_target = entry.get("target") or schema_name
+        for warning in fan_in.fan_in_warnings(
+            planned, schema_name, default_target=default_target, existing_columns=existing_columns,
+        ):
+            if warning not in seen:
+                seen.add(warning)
+                notes.append(warning)
+    return notes
 
 
 def _multi_schema_source_notes(planned: Any, plan: import_plan.ImportPlan) -> List[str]:

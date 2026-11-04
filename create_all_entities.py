@@ -2483,24 +2483,37 @@ def _apply_logical_partitions(token, pipeline_id, partition_requests, skip_error
         _apply_partition_request(token, pipeline_id, request, entity_map, skip_errors)
 
 
+class MissingPartitionColumnError(ValueError):
+    """YAML named a partition column that discovery does not have (I7)."""
+
+
 def _build_partition_settings(column_name, table_columns, schema_name, table_name, table_id):
-    """Create PartitionSettings payload for the specified column."""
+    """Create PartitionSettings payload for the specified column.
+
+    Raises :class:`MissingPartitionColumnError` when a non-empty partition column
+    cannot be resolved so callers can refuse the entity instead of creating it
+    without partitionSettings (I7).
+    """
 
     if not column_name:
-        return None
-
-    if not table_columns:
-        logger.warning(f"Partition column '{column_name}' requested for {schema_name}.{table_name} but no columns were discovered")
         return None
 
     normalized_column = str(column_name).strip()
     if not normalized_column:
         return None
 
+    if not table_columns:
+        raise MissingPartitionColumnError(
+            f"Partition column '{normalized_column}' requested for {schema_name}.{table_name} "
+            f"but no columns were discovered"
+        )
+
     matched_column = find_by_name(table_columns, normalized_column)
     if not matched_column:
-        logger.warning(f"Partition column '{normalized_column}' not found in discovery for {schema_name}.{table_name}. Skipping partitionSettings.")
-        return None
+        raise MissingPartitionColumnError(
+            f"Partition column '{normalized_column}' not found in discovery for "
+            f"{schema_name}.{table_name}"
+        )
 
     # Use the id field from CoreHub API as the column ID
     column_id = _require_column_id(matched_column, f"{schema_name}.{table_name}", label=normalized_column)
@@ -3515,8 +3528,17 @@ def _add_discovered_table_entity(run, table, pair, props, document_key):
 
     partition_settings = None
     if props.partition_column:
-        partition_settings = _build_partition_settings(props.partition_column, pair.columns.get("columns"),
-                                                       run.source_schema, table_name, pair.source_table_id)
+        try:
+            partition_settings = _build_partition_settings(props.partition_column, pair.columns.get("columns"),
+                                                           run.source_schema, table_name, pair.source_table_id)
+        except MissingPartitionColumnError as error:
+            logger.warning(str(error))
+            try:
+                import_options.current().report.warnings.append(str(error))
+            except Exception:  # pylint: disable=broad-except
+                pass
+            run.refuse_table(table_name, error)
+            return
 
     source_entity = _source_entity(run, pair, columns_def, props.source, verbose=True)
     target_entity_type = _target_entity_type(props.target, processed_filters, processed_snapshot_delete_filters,
@@ -3669,8 +3691,17 @@ def _add_duplicate_table_entity(run, pair, props, document_key, yaml_table_key):
 
     partition_settings = None
     if props.partition_column:
-        partition_settings = _build_partition_settings(props.partition_column, pair.columns.get("columns"),
-                                                       run.source_schema, table_name, pair.source_table_id)
+        try:
+            partition_settings = _build_partition_settings(props.partition_column, pair.columns.get("columns"),
+                                                           run.source_schema, table_name, pair.source_table_id)
+        except MissingPartitionColumnError as error:
+            logger.warning(str(error))
+            try:
+                import_options.current().report.warnings.append(str(error))
+            except Exception:  # pylint: disable=broad-except
+                pass
+            run.refuse_table(yaml_table_key, error)
+            return
 
     source_entity = _source_entity(run, pair, columns_def, props.source, verbose=False)
     target_entity_type = _target_entity_type(props.target, processed_filters, processed_snapshot_delete_filters,
@@ -4571,7 +4602,10 @@ def _send_multi_table_entity(run, index, total_multi_tables, multi_entity):
         logger.debug(json.dumps(multi_entity, indent=2))
 
         _put_entities(ctx, multi_entity)
-        logger.info(f"Successfully created MultiTable entity {index+1}/{total_multi_tables}")
+        if import_options.current().dry_run:
+            logger.info(f"Dry-run: would create MultiTable entity {index+1}/{total_multi_tables}")
+        else:
+            logger.info(f"Successfully created MultiTable entity {index+1}/{total_multi_tables}")
         return True
     except Exception as e:
         error_msg = str(e)
@@ -4634,7 +4668,10 @@ def _send_entity_chunk(run, chunk, chunk_start, chunk_end, total_entities):
         logger.debug(json.dumps(chunk_data, indent=2))
 
         _put_entities(ctx, chunk_data)
-        logger.info(f"Successfully created entities {chunk_start}-{chunk_end}")
+        if import_options.current().dry_run:
+            logger.info(f"Dry-run: would create entities {chunk_start}-{chunk_end}")
+        else:
+            logger.info(f"Successfully created entities {chunk_start}-{chunk_end}")
         return len(chunk), 0
     except Exception as e:
         error_msg = str(e)

@@ -464,6 +464,10 @@ body.is-authenticated .requires-auth {
   color: var(--success);
 }
 
+.status-dry-run {
+  color: var(--warn);
+}
+
 .status-partial {
   background: #f59e0b;
   color: #111;
