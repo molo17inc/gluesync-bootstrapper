@@ -230,25 +230,36 @@ def fan_in_warnings(yaml_config, source_schema, default_target=None,
     for feeds in (f for _key, f in sorted(target_feeders(yaml_config, default_target).items())):
         if not any(s == source_schema for s, _k, _c in feeds):
             continue
-        multi = len(feeds) >= 2
-        union = union_columns(feeds)
-        # Single-feeder: only when a lookup is available AND the YAML lists columns
-        # (otherwise a large plan pays one sequential GET per table for nothing).
-        if not multi:
-            if existing_columns is None or not union:
-                continue
-        labels = ", ".join(f"{s}.{k}" for s, k, _c in feeds)
-        spelled_schema, spelled_table = _spelled_target(yaml_config, feeds, default_target)
-        if multi:
-            prefix = f"fan-in {spelled_schema}.{spelled_table} (fed by {labels})"
-        else:
-            prefix = f"existing target {spelled_schema}.{spelled_table} (from {labels})"
-        if multi:
-            warnings.extend(_type_conflict_warnings(prefix, union, type_conflicts(feeds)))
-        if existing_columns is not None and union:
-            warnings.extend(_missing_columns_warnings(prefix, union,
-                                                      existing_columns(spelled_schema, spelled_table)))
+        warnings.extend(
+            _warnings_for_target_feeds(yaml_config, feeds, default_target, existing_columns)
+        )
     return warnings
+
+
+def _warnings_for_target_feeds(yaml_config, feeds, default_target, existing_columns) -> List[str]:
+    """Type-conflict / missing-column warnings for one fan-in or single-feeder target."""
+    multi = len(feeds) >= 2
+    union = union_columns(feeds)
+    # Single-feeder: only when a lookup is available AND the YAML lists columns
+    # (otherwise a large plan pays one sequential GET per table for nothing).
+    if not multi and (existing_columns is None or not union):
+        return []
+    labels = ", ".join(f"{s}.{k}" for s, k, _c in feeds)
+    spelled_schema, spelled_table = _spelled_target(yaml_config, feeds, default_target)
+    if multi:
+        prefix = f"fan-in {spelled_schema}.{spelled_table} (fed by {labels})"
+    else:
+        prefix = f"existing target {spelled_schema}.{spelled_table} (from {labels})"
+    out: List[str] = []
+    if multi:
+        out.extend(_type_conflict_warnings(prefix, union, type_conflicts(feeds)))
+    if existing_columns is not None and union:
+        out.extend(
+            _missing_columns_warnings(
+                prefix, union, existing_columns(spelled_schema, spelled_table)
+            )
+        )
+    return out
 
 
 def _spelled_target(yaml_config, feeds, default_target) -> Tuple[Any, str]:

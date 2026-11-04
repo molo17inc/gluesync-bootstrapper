@@ -4451,47 +4451,11 @@ def _credentials_for_duplicate_agent(
     # Same-role empty → role-agnostic fallback only when no same-role agent exists at all
     # (agents without a username still count as present) and only on the source pipeline.
     if agent_type:
-        same_role_pipelines = _list_pipeline_ids_for_lookup(
-            token=token, prefer_pipeline_id=pipeline_id, source_pipeline_only=False,
+        fallback = _role_agnostic_credentials_on_source(
+            token=token, pipeline_id=pipeline_id, agent_tag=new_tag, agent_type=agent_type,
         )
-        if _agents_matching_identity_present(
-            token=token,
-            pipeline_ids=same_role_pipelines,
-            agent_tag=new_tag,
-            agent_type=agent_type,
-        ):
-            logger.warning(
-                "Same-role agent(s) for tag %s type %s exist but have no usable username; "
-                "not falling back across roles",
-                new_tag,
-                agent_type,
-            )
-            return {}, {}
-
-        fb_status, host, custom, _ = _lookup_agent_credentials_by_tag(
-            token=token,
-            agent_tag=new_tag,
-            prefer_pipeline_id=pipeline_id,
-            agent_type=None,
-            source_pipeline_only=True,
-        )
-        if fb_status == "ok" and host is not None:
-            logger.warning(
-                "Resolved hostCredentials for agent tag %s via role-agnostic fallback "
-                "on the source pipeline only (wanted type %s; using unambiguous same-tag "
-                "credentials — verify host/user before starting)",
-                new_tag,
-                agent_type,
-            )
-            return host, custom or {}
-        if fb_status == "ambiguous":
-            logger.warning(
-                "Ambiguous role-agnostic hostCredentials for agent tag %s (wanted type %s); "
-                "leaving hostCredentials empty instead of guessing",
-                new_tag,
-                agent_type,
-            )
-            return {}, {}
+        if fallback is not None:
+            return fallback
 
     logger.warning(
         "No unambiguous hostCredentials for agent tag %s type %s; leaving hostCredentials "
@@ -4502,6 +4466,62 @@ def _credentials_for_duplicate_agent(
         pipeline_id,
     )
     return {}, {}
+
+
+def _role_agnostic_credentials_on_source(
+    *,
+    token: str,
+    pipeline_id: str,
+    agent_tag: str,
+    agent_type: str,
+) -> Optional[tuple[dict, dict]]:
+    """Role-agnostic same-tag credentials on the source pipeline, or None to keep looking.
+
+    Returns ``({}, {})`` when same-role shells block the fallback or the lookup is
+    ambiguous; ``(host, custom)`` on a unique hit; ``None`` when no decision was made.
+    """
+    same_role_pipelines = _list_pipeline_ids_for_lookup(
+        token=token, prefer_pipeline_id=pipeline_id, source_pipeline_only=False,
+    )
+    if _agents_matching_identity_present(
+        token=token,
+        pipeline_ids=same_role_pipelines,
+        agent_tag=agent_tag,
+        agent_type=agent_type,
+    ):
+        logger.warning(
+            "Same-role agent(s) for tag %s type %s exist but have no usable username; "
+            "not falling back across roles",
+            agent_tag,
+            agent_type,
+        )
+        return {}, {}
+
+    fb_status, host, custom, _ = _lookup_agent_credentials_by_tag(
+        token=token,
+        agent_tag=agent_tag,
+        prefer_pipeline_id=pipeline_id,
+        agent_type=None,
+        source_pipeline_only=True,
+    )
+    if fb_status == "ok" and host is not None:
+        logger.warning(
+            "Resolved hostCredentials for agent tag %s via role-agnostic fallback "
+            "on the source pipeline only (wanted type %s; using unambiguous same-tag "
+            "credentials — verify host/user before starting)",
+            agent_tag,
+            agent_type,
+        )
+        return host, custom or {}
+    if fb_status == "ambiguous":
+        logger.warning(
+            "Ambiguous role-agnostic hostCredentials for agent tag %s (wanted type %s); "
+            "leaving hostCredentials empty instead of guessing",
+            agent_tag,
+            agent_type,
+        )
+        return {}, {}
+    return None
 
 
 class PartialPipelineImportError(RuntimeError):

@@ -401,9 +401,10 @@ class I5ExecuteRunFinallyClearsRunning(unittest.TestCase):
             raise RuntimeError("simulated crash")
 
         async def runner():
+            request = mock.Mock()
             with mock.patch.object(automator_app, "_execute_run_body", side_effect=boom):
                 with self.assertRaises(RuntimeError):
-                    await automator_app._execute_run(run_id, mock.Mock())
+                    await automator_app._execute_run(run_id, request)
 
         try:
             asyncio.run(runner())
