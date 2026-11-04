@@ -4145,6 +4145,75 @@ def _fetch_agent_credentials(
         )
     return fallback_host, fallback_custom
 
+def _pipeline_id_from_list_item(item: Any) -> Optional[str]:
+    if not isinstance(item, dict):
+        return None
+    raw_id = item.get("pipelineId") or item.get("id") or item.get("pipeline_id")
+    return str(raw_id) if raw_id is not None else None
+
+
+def _list_pipeline_ids_for_lookup(
+    *,
+    token: str,
+    prefer_pipeline_id: Optional[str] = None,
+) -> list[str]:
+    """Ordered pipeline ids to scan for agent-tag credentials (prefer first)."""
+    pipeline_ids: list[str] = []
+    if prefer_pipeline_id:
+        pipeline_ids.append(str(prefer_pipeline_id))
+    try:
+        response = fetch_core_hub(PIPELINES_PATH, token=token)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("Could not list pipelines while resolving agent credentials: %s", exc)
+        return pipeline_ids
+    if not isinstance(response, list):
+        return pipeline_ids
+    for item in response:
+        pid = _pipeline_id_from_list_item(item)
+        if pid and pid not in pipeline_ids:
+            pipeline_ids.append(pid)
+    return pipeline_ids
+
+
+def _host_credentials_usable(host: Any) -> bool:
+    return isinstance(host, dict) and bool(host.get("host") or host.get("hostname"))
+
+
+def _match_agent_on_pipeline(
+    *,
+    token: str,
+    pipeline_id: str,
+    agent_tag: str,
+) -> tuple[Optional[dict], Optional[dict], Optional[str]]:
+    """Return credentials if ``pipeline_id`` has a usable agent with ``agent_tag``."""
+    try:
+        cfg = fetch_core_hub(f"/pipelines/{pipeline_id}/config", token=token)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.debug("Skip pipeline %s while resolving tag %s: %s", pipeline_id, agent_tag, exc)
+        return None, None, None
+    if not isinstance(cfg, dict):
+        return None, None, None
+    agents = cfg.get("agents") or []
+    if not isinstance(agents, list):
+        return None, None, None
+    for agent in agents:
+        if not isinstance(agent, dict):
+            continue
+        if (agent.get("agentTag") or agent.get("tag")) != agent_tag:
+            continue
+        host, custom = _fetch_agent_credentials(token=token, pipeline_id=pipeline_id, agent=agent)
+        if not _host_credentials_usable(host):
+            continue
+        logger.info(
+            "Resolved hostCredentials for agent tag %s from pipeline %s agent %s",
+            agent_tag,
+            pipeline_id,
+            agent.get("agentId") or agent.get("id"),
+        )
+        return host, custom, pipeline_id
+    return None, None, None
+
+
 def _find_agent_credentials_by_tag(
     *,
     token: str,
@@ -4162,50 +4231,10 @@ def _find_agent_credentials_by_tag(
     if not agent_tag:
         return None, None, None
 
-    pipeline_ids: list[str] = []
-    if prefer_pipeline_id:
-        pipeline_ids.append(str(prefer_pipeline_id))
-    try:
-        response = fetch_core_hub(PIPELINES_PATH, token=token)
-        if isinstance(response, list):
-            for item in response:
-                if not isinstance(item, dict):
-                    continue
-                raw_id = item.get("pipelineId") or item.get("id") or item.get("pipeline_id")
-                if raw_id is None:
-                    continue
-                pid = str(raw_id)
-                if pid not in pipeline_ids:
-                    pipeline_ids.append(pid)
-    except Exception as exc:  # pylint: disable=broad-except
-        logger.warning("Could not list pipelines while resolving credentials for tag %s: %s", agent_tag, exc)
-
-    for pid in pipeline_ids:
-        try:
-            cfg = fetch_core_hub(f"/pipelines/{pid}/config", token=token)
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.debug("Skip pipeline %s while resolving tag %s: %s", pid, agent_tag, exc)
-            continue
-        if not isinstance(cfg, dict):
-            continue
-        agents = cfg.get("agents") or []
-        if not isinstance(agents, list):
-            continue
-        for agent in agents:
-            if not isinstance(agent, dict):
-                continue
-            if (agent.get("agentTag") or agent.get("tag")) != agent_tag:
-                continue
-            host, custom = _fetch_agent_credentials(token=token, pipeline_id=pid, agent=agent)
-            # Require a usable host — empty shells are not a template
-            if isinstance(host, dict) and (host.get("host") or host.get("hostname")):
-                logger.info(
-                    "Resolved hostCredentials for agent tag %s from pipeline %s agent %s",
-                    agent_tag,
-                    pid,
-                    agent.get("agentId") or agent.get("id"),
-                )
-                return host, custom, pid
+    for pid in _list_pipeline_ids_for_lookup(token=token, prefer_pipeline_id=prefer_pipeline_id):
+        host, custom, found = _match_agent_on_pipeline(token=token, pipeline_id=pid, agent_tag=agent_tag)
+        if host is not None:
+            return host, custom, found
     return None, None, None
 
 
@@ -4225,7 +4254,7 @@ def _credentials_for_duplicate_agent(
     if template_tag == new_tag:
         return _fetch_agent_credentials(token=token, pipeline_id=pipeline_id, agent=agent_template)
 
-    host, custom, found_pid = _find_agent_credentials_by_tag(
+    host, custom, _ = _find_agent_credentials_by_tag(
         token=token,
         agent_tag=new_tag,
         prefer_pipeline_id=pipeline_id,
