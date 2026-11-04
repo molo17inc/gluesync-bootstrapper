@@ -4348,8 +4348,13 @@ def _credentials_for_duplicate_agent(
 
     Same tag as the template → credentials from the source pipeline agent (legacy path).
     Different tag (cross-dialect) → look up a live agent with the same tag + agentType
-    (casefold). On zero or ambiguous hits, return empty hostCredentials (do not reuse
-    the wrong-dialect template host/port).
+    (casefold). Host credentials are role-agnostic: when no same-type hit exists, fall
+    back to the same tag with any agentType if that set is unambiguous (so a TARGET
+    ``mysql-cdc`` kit can seed a SOURCE ``mysql-cdc`` on cross-dialect duplicate without
+    leaving empty hostCredentials — which made Core Hub 2.3 default
+    ``trustServerCertificate=false`` and fail with "Trust store not found").
+    On zero or ambiguous hits, return empty hostCredentials (do not reuse the
+    wrong-dialect template host/port).
     """
     template_tag = _agent_tag_of(agent_template)
     agent_type = _agent_type_of(agent_template)
@@ -4364,6 +4369,23 @@ def _credentials_for_duplicate_agent(
     )
     if host is not None:
         return host, custom or {}
+
+    # Role-agnostic fallback: same tag, any agentType (H4 still rejects ambiguous hosts).
+    if agent_type:
+        host, custom, _ = _find_agent_credentials_by_tag(
+            token=token,
+            agent_tag=new_tag,
+            prefer_pipeline_id=pipeline_id,
+            agent_type=None,
+        )
+        if host is not None:
+            logger.info(
+                "Resolved hostCredentials for agent tag %s via role-agnostic fallback "
+                "(wanted type %s; using unambiguous same-tag credentials)",
+                new_tag,
+                agent_type,
+            )
+            return host, custom or {}
 
     logger.warning(
         "No unambiguous hostCredentials for agent tag %s type %s; leaving hostCredentials "

@@ -245,6 +245,48 @@ class H4UnambiguousCredentialLookup(unittest.TestCase):
         self.assertIsNone(host)
         self.assertIsNone(found)
 
+
+    def test_role_agnostic_fallback_when_type_missing(self):
+        """Cross-dialect: SOURCE mysql-cdc may reuse unambiguous TARGET mysql-cdc hostCredentials.
+
+        Without this fallback, empty hostCredentials make Core Hub 2.3 default
+        trustServerCertificate=false → "Trust store not found" on xd_mysql_ora.
+        """
+        import automator_app.corehub as corehub
+
+        def fake_fetch(path, method="GET", token=None, body=None, **kwargs):
+            if path == "/pipelines":
+                return [{"pipelineId": "pgsql-mysql"}]
+            if path == "/pipelines/pgsql-mysql/config":
+                return {"agents": [
+                    {"agentTag": "postgresql-cdc", "agentType": "SOURCE", "agentId": "pg",
+                     "hostCredentials": {"host": "pg-host", "port": 5432, "username": "pg"}},
+                    {"agentTag": "mysql-cdc", "agentType": "TARGET", "agentId": "my",
+                     "hostCredentials": {
+                         "host": "host.docker.internal", "port": 3306, "username": "gluesync",
+                         "databaseName": "demo", "trustServerCertificate": True, "enableTls": False,
+                     }},
+                ]}
+            if path.endswith("/config/credentials"):
+                return {}
+            return {}
+
+        source_template = {
+            "agentTag": "postgresql-cdc", "agentType": "SOURCE", "agentId": "pg",
+            "hostCredentials": {"host": "pg-host", "port": 5432, "username": "pg"},
+        }
+        with mock.patch.object(corehub, "fetch_core_hub", side_effect=fake_fetch):
+            host, custom = corehub._credentials_for_duplicate_agent(
+                token="tok",
+                pipeline_id="pgsql-mysql",
+                agent_template=source_template,
+                new_tag="mysql-cdc",
+            )
+        self.assertEqual(host.get("host"), "host.docker.internal")
+        self.assertEqual(host.get("port"), 3306)
+        self.assertIs(host.get("trustServerCertificate"), True)
+        self.assertEqual(custom, {})
+
     def test_usable_requires_username(self):
         import automator_app.corehub as corehub
 

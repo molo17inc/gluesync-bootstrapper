@@ -98,5 +98,104 @@ class EntityRunStatusDryRun(unittest.TestCase):
         )
 
 
+class LargeInputUploadLimit(unittest.TestCase):
+    """C9: backup / GS1 upload must 413 when over GS_IMPORT_MAX_UPLOAD_MB (chunked read)."""
+
+    def test_read_upload_enforces_max_bytes(self):
+        import asyncio
+        from automator_app import app as automator_app
+        from fastapi import HTTPException
+
+        class _FakeUpload:
+            def __init__(self, total: int, chunk: int = 1024 * 1024):
+                self._remaining = total
+                self._chunk = chunk
+
+            async def read(self, n: int = -1):
+                if self._remaining <= 0:
+                    return b""
+                take = min(self._chunk if n < 0 else min(n, self._chunk), self._remaining)
+                self._remaining -= take
+                return b"x" * take
+
+        # 3 MiB payload vs 2 MiB cap → 413 before finishing the read.
+        with self.assertRaises(HTTPException) as ctx:
+            asyncio.run(automator_app._read_capped_upload(
+                _FakeUpload(3 * 1024 * 1024), max_bytes=2 * 1024 * 1024,
+            ))
+        self.assertEqual(ctx.exception.status_code, 413)
+        self.assertIn("larger than", (ctx.exception.detail or "").lower())
+
+    def test_import_upload_max_bytes_from_env(self):
+        from automator_app import app as automator_app
+        with mock.patch.dict("os.environ", {"GS_IMPORT_MAX_UPLOAD_MB": "3"}):
+            self.assertEqual(automator_app.import_upload_max_bytes(), 3 * 1024 * 1024)
+
+
+class LargeInputEntityChunking(unittest.TestCase):
+    """C9: entity create walks chunks; a refused chunk falls back to one-by-one."""
+
+    def test_send_entity_chunks_splits(self):
+        import create_all_entities as cae
+
+        sent = []
+
+        class _Ctx:
+            dry_run = False
+            skip_errors = True
+            pipeline_id = "p1"
+
+        class _Run:
+            ctx = _Ctx()
+            errors = []
+            logs = []
+            entities = [{"entityName": f"T{i}", "columns": []} for i in range(5)]
+
+        def fake_put(ctx, chunk_data):
+            sent.append(list(chunk_data.get("entities") or []))
+
+        with mock.patch.object(cae, "_put_entities", side_effect=fake_put), \
+             mock.patch.object(cae, "_strip_single_table_columns"), \
+             mock.patch.object(cae.import_options, "current", return_value=type("O", (), {"dry_run": False})()):
+            total, ok, fail = cae._send_entity_chunks(_Run(), chunk_size=2)
+        self.assertEqual(total, 5)
+        self.assertEqual(ok, 5)
+        self.assertEqual(fail, 0)
+        self.assertEqual([len(c) for c in sent], [2, 2, 1])
+
+
+class CrossDialectCredentialFallback(unittest.TestCase):
+    """E2/E5 × S3 × C6: role-agnostic credential fallback preserves trustServerCertificate."""
+
+    def test_credentials_for_duplicate_falls_back_across_agent_type(self):
+        import automator_app.corehub as corehub
+
+        def fake_fetch(path, method="GET", token=None, body=None, **kwargs):
+            if path == "/pipelines":
+                return [{"pipelineId": "kit"}]
+            if path == "/pipelines/kit/config":
+                return {"agents": [
+                    {"agentTag": "mssql-cdc", "agentType": "SOURCE", "agentId": "ms",
+                     "hostCredentials": {"host": "ms-host", "port": 1433, "username": "sa"}},
+                    {"agentTag": "mysql-cdc", "agentType": "TARGET", "agentId": "my",
+                     "hostCredentials": {
+                         "host": "my-host", "port": 3306, "username": "u",
+                         "trustServerCertificate": True,
+                     }},
+                ]}
+            if path.endswith("/config/credentials"):
+                return {}
+            return {}
+
+        tmpl = {"agentTag": "mssql-cdc", "agentType": "SOURCE", "agentId": "ms",
+                "hostCredentials": {"host": "ms-host", "port": 1433, "username": "sa"}}
+        with mock.patch.object(corehub, "fetch_core_hub", side_effect=fake_fetch):
+            host, _ = corehub._credentials_for_duplicate_agent(
+                token="t", pipeline_id="kit", agent_template=tmpl, new_tag="mysql-cdc",
+            )
+        self.assertEqual(host.get("host"), "my-host")
+        self.assertIs(host.get("trustServerCertificate"), True)
+
+
 if __name__ == "__main__":
     unittest.main()
