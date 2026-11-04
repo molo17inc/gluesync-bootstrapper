@@ -4302,22 +4302,25 @@ def _log_resolved_credentials(
     )
 
 
-def _find_agent_credentials_by_tag(
+def _lookup_agent_credentials_by_tag(
     *,
     token: str,
     agent_tag: str,
     prefer_pipeline_id: Optional[str] = None,
     agent_type: Optional[str] = None,
-) -> tuple[Optional[dict], Optional[dict], Optional[str]]:
+) -> tuple[str, Optional[dict], Optional[dict], Optional[str]]:
     """Locate host/custom credentials for ``agent_tag`` (+ optional agentType).
 
+    Returns ``(status, host, custom, pipeline_id)`` where status is:
+    - ``ok`` — unambiguous usable match
+    - ``empty`` — no usable candidate
+    - ``ambiguous`` — several usable candidates disagree on host fingerprint (H4: do not guess)
+
     Cross-dialect duplicate must not reuse another dialect's host/port (ORA-17904).
-    Tag compare is case-insensitive. When several pipelines expose the same
-    tag+type with *different* hosts, warn and return ``(None, None, None)`` —
-    never first-match guess (H4).
+    Tag compare is case-insensitive.
     """
     if not agent_tag:
-        return None, None, None
+        return "empty", None, None, None
 
     candidates: list[tuple[dict, dict, str, str]] = []
     for pid in _list_pipeline_ids_for_lookup(token=token, prefer_pipeline_id=prefer_pipeline_id):
@@ -4328,12 +4331,33 @@ def _find_agent_credentials_by_tag(
         )
 
     if not candidates:
-        return None, None, None
+        return "empty", None, None, None
     if _credentials_are_ambiguous(candidates, agent_tag, agent_type):
-        return None, None, None
+        return "ambiguous", None, None, None
 
     _log_resolved_credentials(candidates, agent_tag, agent_type)
     host, custom, pid, _aid = candidates[0]
+    return "ok", host, custom, pid
+
+
+def _find_agent_credentials_by_tag(
+    *,
+    token: str,
+    agent_tag: str,
+    prefer_pipeline_id: Optional[str] = None,
+    agent_type: Optional[str] = None,
+) -> tuple[Optional[dict], Optional[dict], Optional[str]]:
+    """Locate host/custom credentials for ``agent_tag`` (+ optional agentType).
+
+    Wrapper over :func:`_lookup_agent_credentials_by_tag` for callers that only need
+    ``(host, custom, pipeline_id)`` — ambiguous and empty both yield ``(None, None, None)``.
+    """
+    _status, host, custom, pid = _lookup_agent_credentials_by_tag(
+        token=token,
+        agent_tag=agent_tag,
+        prefer_pipeline_id=prefer_pipeline_id,
+        agent_type=agent_type,
+    )
     return host, custom, pid
 
 
@@ -4347,38 +4371,46 @@ def _credentials_for_duplicate_agent(
     """Host/custom credentials to apply when duplicating an agent under ``new_tag``.
 
     Same tag as the template → credentials from the source pipeline agent (legacy path).
-    Different tag (cross-dialect) → look up a live agent with the same tag + agentType
-    (casefold). Host credentials are role-agnostic: when no same-type hit exists, fall
-    back to the same tag with any agentType if that set is unambiguous (so a TARGET
-    ``mysql-cdc`` kit can seed a SOURCE ``mysql-cdc`` on cross-dialect duplicate without
-    leaving empty hostCredentials — which made Core Hub 2.3 default
+    Different tag (cross-dialect) → prefer same tag + same agentType (casefold). When that
+    set is empty, fall back to the same tag with any agentType **only if that set is a
+    unique fingerprint** (so a TARGET ``mysql-cdc`` kit can seed a SOURCE ``mysql-cdc``
+    without leaving empty hostCredentials — which made Core Hub 2.3 default
     ``trustServerCertificate=false`` and fail with "Trust store not found").
-    On zero or ambiguous hits, return empty hostCredentials (do not reuse the
-    wrong-dialect template host/port).
+
+    If the same-role lookup is **ambiguous**, do **not** guess via another role — warn and
+    return empty hostCredentials. Never reuse the wrong-dialect template host/port.
     """
     template_tag = _agent_tag_of(agent_template)
     agent_type = _agent_type_of(agent_template)
     if _tags_match(template_tag, new_tag):
         return _fetch_agent_credentials(token=token, pipeline_id=pipeline_id, agent=agent_template)
 
-    host, custom, _ = _find_agent_credentials_by_tag(
+    status, host, custom, _ = _lookup_agent_credentials_by_tag(
         token=token,
         agent_tag=new_tag,
         prefer_pipeline_id=pipeline_id,
         agent_type=agent_type or None,
     )
-    if host is not None:
+    if status == "ok" and host is not None:
         return host, custom or {}
+    if status == "ambiguous":
+        logger.warning(
+            "Ambiguous same-role hostCredentials for agent tag %s type %s; not falling "
+            "back across roles (would risk picking the wrong host)",
+            new_tag,
+            agent_type or "*",
+        )
+        return {}, {}
 
-    # Role-agnostic fallback: same tag, any agentType (H4 still rejects ambiguous hosts).
+    # Same-role empty → role-agnostic fallback only when the same-tag set is unique.
     if agent_type:
-        host, custom, _ = _find_agent_credentials_by_tag(
+        fb_status, host, custom, _ = _lookup_agent_credentials_by_tag(
             token=token,
             agent_tag=new_tag,
             prefer_pipeline_id=pipeline_id,
             agent_type=None,
         )
-        if host is not None:
+        if fb_status == "ok" and host is not None:
             logger.info(
                 "Resolved hostCredentials for agent tag %s via role-agnostic fallback "
                 "(wanted type %s; using unambiguous same-tag credentials)",
@@ -4386,6 +4418,14 @@ def _credentials_for_duplicate_agent(
                 agent_type,
             )
             return host, custom or {}
+        if fb_status == "ambiguous":
+            logger.warning(
+                "Ambiguous role-agnostic hostCredentials for agent tag %s (wanted type %s); "
+                "leaving hostCredentials empty instead of guessing",
+                new_tag,
+                agent_type,
+            )
+            return {}, {}
 
     logger.warning(
         "No unambiguous hostCredentials for agent tag %s type %s; leaving hostCredentials "

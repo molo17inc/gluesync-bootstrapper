@@ -296,6 +296,142 @@ class H4UnambiguousCredentialLookup(unittest.TestCase):
         self.assertFalse(corehub._host_credentials_usable({"password": "secret"}))
 
 
+
+class CredentialFallbackAmbiguityMatrix(unittest.TestCase):
+    """Residual (A): same-tag credential fallback must never silently pick the wrong host."""
+
+    def _patch(self, pipelines: dict):
+        import automator_app.corehub as corehub
+
+        def fake_fetch(path, method="GET", token=None, body=None, **kwargs):
+            if path == "/pipelines":
+                return [{"pipelineId": pid} for pid in pipelines]
+            for pid, agents in pipelines.items():
+                if path == f"/pipelines/{pid}/config":
+                    return {"agents": agents}
+            if path.endswith("/config/credentials"):
+                return {}
+            return {}
+
+        return mock.patch.object(corehub, "fetch_core_hub", side_effect=fake_fetch)
+
+    def test_same_role_different_hosts_is_ambiguous(self):
+        import automator_app.corehub as corehub
+        pipelines = {
+            "p1": [{"agentTag": "gb81-shared", "agentType": "SOURCE", "agentId": "a1",
+                    "hostCredentials": {"host": "host-a", "port": 1433, "username": "u", "databaseName": "d1"}}],
+            "p2": [{"agentTag": "gb81-shared", "agentType": "SOURCE", "agentId": "a2",
+                    "hostCredentials": {"host": "host-b", "port": 1433, "username": "u", "databaseName": "d2"}}],
+        }
+        tmpl = {"agentTag": "other", "agentType": "SOURCE", "agentId": "t",
+                "hostCredentials": {"host": "tmpl", "port": 1, "username": "u"}}
+        with self._patch(pipelines):
+            status, host, _, _ = corehub._lookup_agent_credentials_by_tag(
+                token="t", agent_tag="gb81-shared", agent_type="SOURCE")
+            self.assertEqual(status, "ambiguous")
+            host2, custom = corehub._credentials_for_duplicate_agent(
+                token="t", pipeline_id="p1", agent_template=tmpl, new_tag="gb81-shared")
+        self.assertEqual(host2, {})
+        self.assertEqual(custom, {})
+
+    def test_ambiguous_same_role_does_not_fallback_to_other_role(self):
+        """SOURCE A+B disagree; TARGET unique — must NOT silently use TARGET."""
+        import automator_app.corehub as corehub
+        pipelines = {
+            "p1": [
+                {"agentTag": "gb81-shared", "agentType": "SOURCE", "agentId": "s1",
+                 "hostCredentials": {"host": "src-a", "port": 1433, "username": "u", "databaseName": "a"}},
+                {"agentTag": "gb81-shared", "agentType": "TARGET", "agentId": "t1",
+                 "hostCredentials": {"host": "tgt-only", "port": 3306, "username": "u",
+                                     "databaseName": "demo", "trustServerCertificate": True}},
+            ],
+            "p2": [
+                {"agentTag": "gb81-shared", "agentType": "SOURCE", "agentId": "s2",
+                 "hostCredentials": {"host": "src-b", "port": 1433, "username": "u", "databaseName": "b"}},
+            ],
+        }
+        tmpl = {"agentTag": "mssql-cdc", "agentType": "SOURCE", "agentId": "t",
+                "hostCredentials": {"host": "tmpl", "port": 1, "username": "u"}}
+        with self._patch(pipelines):
+            host, _ = corehub._credentials_for_duplicate_agent(
+                token="t", pipeline_id="p1", agent_template=tmpl, new_tag="gb81-shared")
+        self.assertEqual(host, {})
+
+    def test_different_roles_unique_target_allows_fallback(self):
+        import automator_app.corehub as corehub
+        pipelines = {
+            "kit": [
+                {"agentTag": "mysql-cdc", "agentType": "TARGET", "agentId": "my",
+                 "hostCredentials": {"host": "my-host", "port": 3306, "username": "u",
+                                     "trustServerCertificate": True}},
+            ],
+        }
+        tmpl = {"agentTag": "mssql-cdc", "agentType": "SOURCE", "agentId": "t",
+                "hostCredentials": {"host": "ms", "port": 1433, "username": "u"}}
+        with self._patch(pipelines):
+            host, _ = corehub._credentials_for_duplicate_agent(
+                token="t", pipeline_id="kit", agent_template=tmpl, new_tag="mysql-cdc")
+        self.assertEqual(host.get("host"), "my-host")
+        self.assertIs(host.get("trustServerCertificate"), True)
+
+    def test_different_roles_different_hosts_role_agnostic_ambiguous(self):
+        import automator_app.corehub as corehub
+        pipelines = {
+            "p1": [{"agentTag": "gb81-shared", "agentType": "SOURCE", "agentId": "s",
+                    "hostCredentials": {"host": "src", "port": 1433, "username": "u"}}],
+            "p2": [{"agentTag": "gb81-shared", "agentType": "TARGET", "agentId": "t",
+                    "hostCredentials": {"host": "tgt", "port": 3306, "username": "u"}}],
+        }
+        # Looking for SOURCE: same-role unique → src (not ambiguous)
+        tmpl = {"agentTag": "other", "agentType": "SOURCE", "agentId": "x",
+                "hostCredentials": {"host": "tmpl", "port": 1, "username": "u"}}
+        with self._patch(pipelines):
+            host, _ = corehub._credentials_for_duplicate_agent(
+                token="t", pipeline_id="p1", agent_template=tmpl, new_tag="gb81-shared")
+        self.assertEqual(host.get("host"), "src")
+
+    def test_missing_right_agent_returns_empty(self):
+        import automator_app.corehub as corehub
+        pipelines = {
+            "p1": [{"agentTag": "oracle-triggers", "agentType": "TARGET", "agentId": "o",
+                    "hostCredentials": {"host": "ora", "port": 1521, "username": "u"}}],
+        }
+        tmpl = {"agentTag": "mssql-cdc", "agentType": "SOURCE", "agentId": "t",
+                "hostCredentials": {"host": "ms", "port": 1433, "username": "u"}}
+        with self._patch(pipelines):
+            host, _ = corehub._credentials_for_duplicate_agent(
+                token="t", pipeline_id="p1", agent_template=tmpl, new_tag="no-such-tag")
+        self.assertEqual(host, {})
+
+    def test_casefold_tag_match_preferred(self):
+        import automator_app.corehub as corehub
+        pipelines = {
+            "p1": [{"agentTag": "Oracle-Triggers", "agentType": "TARGET", "agentId": "o",
+                    "hostCredentials": {"host": "ora", "port": 1521, "username": "GLUESYNCUSER"}}],
+        }
+        tmpl = {"agentTag": "mssql-cdc", "agentType": "TARGET", "agentId": "t",
+                "hostCredentials": {"host": "ms", "port": 1433, "username": "u"}}
+        with self._patch(pipelines):
+            host, _ = corehub._credentials_for_duplicate_agent(
+                token="t", pipeline_id="p1", agent_template=tmpl, new_tag="oracle-triggers")
+        self.assertEqual(host.get("host"), "ora")
+
+    def test_duplicate_tag_duplicate_host_is_unique(self):
+        import automator_app.corehub as corehub
+        pipelines = {
+            "p1": [{"agentTag": "mssql-cdc", "agentType": "SOURCE", "agentId": "a1",
+                    "hostCredentials": {"host": "h", "port": 1434, "username": "u", "databaseName": "demo"}}],
+            "p2": [{"agentTag": "mssql-cdc", "agentType": "SOURCE", "agentId": "a2",
+                    "hostCredentials": {"host": "h", "port": 1434, "username": "u", "databaseName": "demo"}}],
+        }
+        with self._patch(pipelines):
+            status, host, _, pid = corehub._lookup_agent_credentials_by_tag(
+                token="t", agent_tag="mssql-cdc", agent_type="SOURCE")
+        self.assertEqual(status, "ok")
+        self.assertEqual(host.get("host"), "h")
+        self.assertIn(pid, ("p1", "p2"))
+
+
 class H5AllFailedReportsFailed(unittest.TestCase):
     def test_entity_run_result_success_false_when_all_failed(self):
         import create_all_entities as cae
