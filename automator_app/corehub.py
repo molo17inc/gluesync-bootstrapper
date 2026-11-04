@@ -1170,8 +1170,9 @@ def discover_column_metadata_for_table(
             "name": name,
             "type": _discovered(col, "dataType", "type"),
             "dataLength": _discovered(col, "charMaxLength", "dataLength", default=0),
-            "numericPrecision": _discovered(col, "numPrec", "numericPrecision", default=0),
-            "numericScale": _discovered(col, "numScale", "numericScale", default=0),
+            # Null when discovery omitted precision (do not invent 0 → NUMBER(0,0) on Oracle).
+            "numericPrecision": _discovered(col, "numPrec", "numericPrecision", default=None),
+            "numericScale": _discovered(col, "numScale", "numericScale", default=None),
             "isNullable": col.get("isNullable", False),
             "id": col_id,
             "ordinalPosition": ordinal,

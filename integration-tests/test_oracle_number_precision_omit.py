@@ -135,3 +135,31 @@ class OracleNumberPrecisionOmitTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_metadata_zero_precision_becomes_null_on_oracle_number():
+    """YAML templates historically wrote numericPrecision: 0; that must not reach Core Hub."""
+    key_lookup = cat._KeyLookup(["ID"])
+    col = cat._metadata_column_dto(
+        1,
+        {"name": "ID", "type": "NUMBER", "dataLength": 22, "numericPrecision": 0, "numericScale": 0, "isNullable": False, "id": 1, "ordinalPosition": 1},
+        key_lookup,
+        {"dataTypesMatrix": ORACLE_MATRIX},
+        {"dataTypesMatrix": ORACLE_MATRIX},
+    )
+    assert col.numPrec is None
+    assert col.numScale is None
+
+
+def test_generate_payload_strips_zero_precision():
+    req = cat.GenerateCreateTargetTableStatementRequest(columns=[
+        cat.Column(id=1, tableId=0, name="ID", position=1, dataType="NUMBER",
+                   charMaxLength=22, numPrec=0, numScale=0, isPK=True, isNullable=False),
+    ])
+    # Call the sanitize path used before model_dump
+    for col in req.columns:
+        if col.numPrec == 0:
+            col.numPrec = None
+            col.numScale = None
+    payload = req.model_dump()
+    assert payload["columns"][0]["numPrec"] is None

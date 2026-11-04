@@ -192,6 +192,10 @@ def generate_create_table_statement(pipeline_id: str, schema_name: str, table_na
         encoded_table_name = urllib.parse.quote(table_name, safe='')
         # Leave missing numPrec/numScale as JSON null (not 0). Core Hub treats null as
         # unconstrained; 0 became NUMBER(0,0) on Oracle and raised ORA-01727.
+        for col in table_data.columns:
+            if col.numPrec == 0:
+                col.numPrec = None
+                col.numScale = None
         payload = table_data.model_dump()
         logger.info(f"table data: {payload}")
         response = fetch_core_hub(
@@ -666,8 +670,15 @@ def _metadata_column_dto(idx: int, col_meta: dict, key_lookup: _KeyLookup, sourc
     # missing key and falls through to the 'varchar' fallback.
     col_type = col_meta.get('dataType') or col_meta.get('type') or 'varchar'
     col_data_length = _to_int(col_meta.get('dataLength', col_meta.get('data_length')))
-    col_numeric_precision = _to_int(col_meta.get('numericPrecision', col_meta.get('numeric_precision')))
-    col_numeric_scale = _to_int(col_meta.get('numericScale', col_meta.get('numeric_scale')))
+    # None (not 0): YAML/templates often invent numericPrecision: 0 when discovery
+    # omitted precision; Oracle then gets NUMBER(0,0) → ORA-01727.
+    _raw_prec = col_meta.get('numericPrecision', col_meta.get('numeric_precision'))
+    _raw_scale = col_meta.get('numericScale', col_meta.get('numeric_scale'))
+    col_numeric_precision = None if _raw_prec is None else _to_int(_raw_prec, default=None)
+    col_numeric_scale = None if _raw_scale is None else _to_int(_raw_scale, default=None)
+    if col_numeric_precision == 0:
+        col_numeric_precision = None
+        col_numeric_scale = None
     col_is_nullable = _to_bool(col_meta.get('isNullable', col_meta.get('is_nullable')))
 
     # Use separate id and ordinalPosition from YAML metadata
@@ -833,8 +844,11 @@ def _exported_column_dto(target_name: str, relation: dict, source_col, key_looku
     raw_num_scale = _first_set(
         row.get('targetNumericScale'), row.get('numericScale'), source.get('numScale'))
     # None when every source omitted the field (do not invent 0 → NUMBER(0,0) on Oracle).
-    numeric_precision = None if raw_num_prec is None else _to_int(raw_num_prec)
-    numeric_scale = None if raw_num_scale is None else _to_int(raw_num_scale)
+    numeric_precision = None if raw_num_prec is None else _to_int(raw_num_prec, default=None)
+    numeric_scale = None if raw_num_scale is None else _to_int(raw_num_scale, default=None)
+    if numeric_precision == 0:
+        numeric_precision = None
+        numeric_scale = None
     is_pk = _to_bool(row.get('isPK'), default=False) or key_lookup.is_primary_key(target_name) \
         or any(key_lookup.is_primary_key(source_name) for source_name in relation['sources'])
     return _mark_max(raw_length, Column(
