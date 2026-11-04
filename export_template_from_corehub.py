@@ -288,6 +288,7 @@ def read_pipeline_jobs(pipeline_id: str, token: Optional[str] = None) -> Optiona
         try:
             all_jobs: List[Dict[str, Any]] = []
             seen_ids: set = set()
+            seen_page_fps: set = set()
             offset = 0
             while True:
                 jobs_response = client._request(  # type: ignore[attr-defined]
@@ -303,10 +304,22 @@ def read_pipeline_jobs(pipeline_id: str, token: Optional[str] = None) -> Optiona
                         f"keeping {len(all_jobs)} job(s) fetched so far"
                     )
                     break
-                # Chronos may ignore the pipeline_id filter and answer with every job.
-                page = [j for j in page if str(j.get("pipeline_id", pipeline_id)) == str(pipeline_id)]
+                # Decide end-of-pages from the RAW page size. Chronos may ignore
+                # pipeline_id and return mixed pipelines; filtering first would
+                # make a full raw page look short and stop early (missed jobs).
+                raw_count = len(page)
+                page_fp = tuple(str(j.get("id")) if j.get("id") is not None else f"anon:{offset}:{i}"
+                                for i, j in enumerate(page))
+                if page_fp in seen_page_fps:
+                    logger.warning(
+                        f"Chronos returned a repeated page at offset {offset} for pipeline {pipeline_id} "
+                        f"(pagination unsupported or ignored); keeping {len(all_jobs)} job(s) fetched so far"
+                    )
+                    break
+                seen_page_fps.add(page_fp)
+                matched = [j for j in page if str(j.get("pipeline_id", pipeline_id)) == str(pipeline_id)]
                 new_on_page = 0
-                for job in page:
+                for job in matched:
                     jid = job.get("id")
                     key = str(jid) if jid is not None else f"anon:{offset}:{new_on_page}"
                     if key in seen_ids:
@@ -314,15 +327,17 @@ def read_pipeline_jobs(pipeline_id: str, token: Optional[str] = None) -> Optiona
                     seen_ids.add(key)
                     all_jobs.append(job)
                     new_on_page += 1
-                if len(page) < page_limit:
+                if raw_count < page_limit:
                     break
-                if new_on_page == 0:
+                if new_on_page == 0 and matched:
+                    # Full raw page, our pipeline's jobs present but all duplicates → offset ignored.
                     logger.warning(
                         f"Chronos returned a full page of {page_limit} jobs for pipeline {pipeline_id} "
                         f"but offset={offset} added none (pagination unsupported or ignored); "
                         f"further jobs may be missing from the export"
                     )
                     break
+                # Full raw page with zero matches for this pipeline: keep walking.
                 offset += page_limit
             if all_jobs or page is not None:
                 logger.info(

@@ -37,6 +37,7 @@ from utils.log import get_logger, log_success, log_failure
 from utils.chronos_client import ChronosClient
 from utils.core_hub_client import CoreHubClient
 from utils.redact import redact
+import zlib
 
 CORE_HUB_URL = os.getenv('CORE_HUB_URL', 'https://localhost:1717')
 ENABLE_SCHEDULING = os.getenv('ENABLE_SCHEDULING', 'true').lower() == 'true'
@@ -1489,7 +1490,6 @@ def _build_filter_column(column_name, matched_column, fallback_type, table_id,
         print(f"Warning: Column '{column_name}' not found in table columns, using minimal fallback")
         # Distinct stable synthetic ids (never a shared hardcoded 1 — multi-clause collision).
         # zlib.crc32 is stable across processes; hash() is PYTHONHASHSEED-randomized.
-        import zlib
         synthetic_id = (zlib.crc32(column_name.encode("utf-8")) & 0x7FFFFFFF) + 1
         filter_column = {
             "id": synthetic_id,

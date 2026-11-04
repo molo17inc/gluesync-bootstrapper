@@ -196,6 +196,62 @@ class G9ChronosPagination(unittest.TestCase):
         source = inspect.getsource(exp.read_pipeline_jobs)
         self.assertIn("offset", source)
         self.assertIn("page_limit", source)
+        self.assertIn("raw_count", source)
+
+    def test_mixed_pipeline_pages_keep_walking(self):
+        """A full raw page of *other* pipelines must not stop pagination early."""
+        pid = "pipe-ours"
+        # page 0: 1000 other; page 1: 1 ours + padding others (short page ends)
+        pages = {
+            0: [{"id": f"o{i}", "pipeline_id": "other"} for i in range(1000)],
+            1: [{"id": "ours-1", "pipeline_id": pid}] + [
+                {"id": f"o{i}", "pipeline_id": "other"} for i in range(10)
+            ],
+        }
+        calls = []
+
+        class FakeClient:
+            base_url = "http://chronos.test"
+
+            def _request(self, path, params=None):
+                calls.append(dict(params or {}))
+                off = int((params or {}).get("offset") or 0)
+                # page_limit in production is 1000; map offset→page index
+                idx = off // 1000
+                return pages.get(idx, [])
+
+        prev = exp._chronos_clients
+        exp._chronos_clients = lambda token=None: [FakeClient()]  # type: ignore
+        try:
+            jobs = exp.read_pipeline_jobs(pid, token="t")
+        finally:
+            exp._chronos_clients = prev
+        self.assertEqual([c.get("offset") for c in calls], [0, 1000])
+        self.assertEqual([j["id"] for j in jobs], ["ours-1"])
+
+    def test_repeated_raw_page_stops(self):
+        """Offset ignored returning the same other-pipeline page must not loop forever."""
+        pid = "pipe-ours"
+        same = [{"id": f"o{i}", "pipeline_id": "other"} for i in range(1000)]
+        calls = []
+
+        class FakeClient:
+            base_url = "http://chronos.test"
+
+            def _request(self, path, params=None):
+                calls.append(dict(params or {}))
+                if len(calls) > 5:
+                    raise AssertionError("pagination did not stop")
+                return same
+
+        prev = exp._chronos_clients
+        exp._chronos_clients = lambda token=None: [FakeClient()]  # type: ignore
+        try:
+            jobs = exp.read_pipeline_jobs(pid, token="t")
+        finally:
+            exp._chronos_clients = prev
+        self.assertEqual(jobs, [])
+        self.assertEqual(len(calls), 2)  # first page + repeated detect
 
 
 class G10VersionFailClosed(unittest.TestCase):
