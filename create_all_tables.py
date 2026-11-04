@@ -237,9 +237,21 @@ def _collect_group_names(yaml_config) -> set:
 
 
 def _create_groups(token, pipeline_id, group_names) -> None:
-    """Create groups before creating entities."""
+    """Create groups before creating tables.
+
+    ``create_group`` raises ``RuntimeError`` on lookup/create failure (G6). Soft-fail
+    here so one bad group does not abort the whole create-tables pass — tables still
+    get created; entities that needed the named group fall back to ``_default``.
+    """
     for group_name in group_names:
-        group_id = create_group(token, pipeline_id, group_name)
+        try:
+            group_id = create_group(token, pipeline_id, group_name)
+        except RuntimeError as err:
+            logger.error(
+                f"Group '{group_name}' could not be created/looked up during table creation: {err}. "
+                f"Continuing without it (entities will use _default)."
+            )
+            continue
         if group_id != '_default':
             logger.info(f"Created/retrieved group '{group_name}' with ID: {group_id}")
 

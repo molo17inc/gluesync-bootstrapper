@@ -1488,7 +1488,9 @@ def _build_filter_column(column_name, matched_column, fallback_type, table_id,
     if matched_column is None:
         print(f"Warning: Column '{column_name}' not found in table columns, using minimal fallback")
         # Distinct stable synthetic ids (never a shared hardcoded 1 — multi-clause collision).
-        synthetic_id = abs(hash(column_name)) % 1_000_000_000 + 1
+        # zlib.crc32 is stable across processes; hash() is PYTHONHASHSEED-randomized.
+        import zlib
+        synthetic_id = (zlib.crc32(column_name.encode("utf-8")) & 0x7FFFFFFF) + 1
         filter_column = {
             "id": synthetic_id,
             "name": column_name,

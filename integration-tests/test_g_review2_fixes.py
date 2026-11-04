@@ -253,5 +253,29 @@ class G12NoInventedPrecision(unittest.TestCase):
         self.assertIsNone(col.get("numPrec"))
 
 
+
+class G6CreateTablesSoftFail(unittest.TestCase):
+    """create_all_tables._create_groups must not abort the batch when create_group raises (G6)."""
+
+    def test_create_all_tables_create_groups_soft_fails(self):
+        import create_all_tables as cat
+
+        calls = []
+
+        def boom(token, pipeline_id, group_name, description=None, color=None):
+            calls.append(group_name)
+            if group_name == "Sales":
+                raise RuntimeError("hub down")
+            return "gid-ok"
+
+        prev = cat.create_group
+        cat.create_group = boom
+        try:
+            cat._create_groups("tok", "pid", ["Sales", "HR"])
+        finally:
+            cat.create_group = prev
+        self.assertEqual(calls, ["Sales", "HR"])
+
+
 if __name__ == "__main__":
     unittest.main()
