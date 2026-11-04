@@ -54,6 +54,8 @@ GROUPS = [
                "integration-tests.test_field_functions_export_import"]},
     {"title": "demo-kits round-trip verifier tests",
      "names": ["integration-tests.test_automator_roundtrip"]},
+    {"title": "filter operator alias + top-level partitions",
+     "names": ["integration-tests.test_filter_operator_alias"]},
     {"title": "automator app regression tests",
      "names": ["integration-tests.test_automator_app_preexisting_bugs"]},
     {"title": "GS1 import tests (pytest)",

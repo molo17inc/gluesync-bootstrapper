@@ -1548,15 +1548,96 @@ def _build_filter_column(column_name, matched_column, fallback_type, table_id,
     return filter_column
 
 
+# SQL-ish / alias spellings customers and hand-edited YAML use → CoreHub @SerialName
+# values from gluesync-kotlin commons-model EntityType.kt (Filter.Operation):
+# Equal, Greater, Lower, GreaterEqual, LowerEqual, NotEqual, In, NotIn, IsNull, IsNotNull, Regex.
+_FILTER_OPERATION_ALIASES = {
+    "=": "Equal",
+    "==": "Equal",
+    "eq": "Equal",
+    "equals": "Equal",
+    "!=": "NotEqual",
+    "<>": "NotEqual",
+    "ne": "NotEqual",
+    "notequals": "NotEqual",
+    "not_equal": "NotEqual",
+    ">": "Greater",
+    "gt": "Greater",
+    "greaterthan": "Greater",
+    ">=": "GreaterEqual",
+    "gte": "GreaterEqual",
+    "greaterequals": "GreaterEqual",
+    "greaterthanorequal": "GreaterEqual",
+    "<": "Lower",
+    "lt": "Lower",
+    "lessthan": "Lower",
+    "<=": "LowerEqual",
+    "lte": "LowerEqual",
+    "lessequals": "LowerEqual",
+    "lessthanorequal": "LowerEqual",
+    "in": "In",
+    "notin": "NotIn",
+    "not_in": "NotIn",
+    "isnull": "IsNull",
+    "is_null": "IsNull",
+    "isnotnull": "IsNotNull",
+    "is_not_null": "IsNotNull",
+}
+
+# Canonical CoreHub names that README historically mis-documented as *Than*.
+_FILTER_OPERATION_CANONICAL = {
+    "greaterthan": "Greater",
+    "greaterthanorequal": "GreaterEqual",
+    "lessthan": "Lower",
+    "lessthanorequal": "LowerEqual",
+    "less": "Lower",
+    "lessequal": "LowerEqual",
+}
+
+
+def _normalize_filter_operation(raw):
+    """CoreHub filter operation @SerialName of a YAML ``operation`` / ``operator`` value.
+
+    Accepts documented CoreHub names (``Equal``, ``Lower``, ``GreaterEqual``, …),
+    common aliases (``Equals``, ``eq``, ``LessThan``), and SQL-ish symbols
+    (``=``, ``!=``, ``<``, ``>=``). Maps ``Less*`` → ``Lower*`` and
+    ``GreaterThan*`` → ``Greater*`` to match EntityType.kt. Returns ``None`` when empty.
+    """
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    aliased = _FILTER_OPERATION_ALIASES.get(text) or _FILTER_OPERATION_ALIASES.get(text.lower())
+    if aliased:
+        return aliased
+    canon = _FILTER_OPERATION_CANONICAL.get(text.lower())
+    if canon:
+        return canon
+    # Preserve CoreHub camel-case spellings (Equal, NotEqual, GreaterEqual, Lower, …).
+    return text
+
+
+def _filter_operation_from_clause(clause):
+    """The operation type of a YAML filter clause: ``operation``, else ``operator``."""
+    if not isinstance(clause, dict):
+        return None
+    if "operation" in clause and clause.get("operation") not in (None, ""):
+        return _normalize_filter_operation(clause.get("operation"))
+    if "operator" in clause and clause.get("operator") not in (None, ""):
+        return _normalize_filter_operation(clause.get("operator"))
+    return None
+
+
 def _build_filter_clause(clause, columns_info, table_id, source_node_info, target_node_info):
     """Convert one YAML filter clause; return None when the clause must be skipped."""
-    # Skip invalid clauses
-    if 'column' not in clause or 'operation' not in clause:
+    operation_type = _filter_operation_from_clause(clause)
+    # Skip invalid clauses (need a column and an operation/operator).
+    if not isinstance(clause, dict) or "column" not in clause or not operation_type:
         print(f"Warning: Skipping invalid filter clause: {clause}")
         return None
 
     column_name = clause['column']
-    operation_type = clause['operation']
 
     # Find the matching column from discovery
     matched_column = _find_discovered_column(columns_info, column_name)
