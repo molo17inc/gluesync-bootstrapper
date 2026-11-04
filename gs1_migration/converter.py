@@ -46,7 +46,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from . import issue_codes
 from . import model as m
-from .json_values import as_bool, content, int_member, kotlin_list, obj, optional_string, string, strings, utf16_sort_key
+from .json_values import NESTED_TOO_DEEPLY, as_bool, content, int_member, kotlin_list, obj, optional_string, string, strings, utf16_sort_key
 from .nosql_to_sql import CouchbaseSettings, NoSqlToSqlDraft, Refused
 from .secret_stripper import strip
 from .setting_notes import setting_notes
@@ -97,6 +97,8 @@ def convert(request: Dict[str, Any], structure_check: Optional[StructureCheck] =
     """The drafts, one per converted entity, what became of every GS1 entity, and the keys stripped."""
     try:
         return _convert(request, structure_check)
+    except RecursionError:
+        raise ConversionError(NESTED_TOO_DEEPLY) from None
     except (ValueError, KeyError, TypeError, AttributeError) as exc:
         raise ConversionError(f"The GS1 configuration could not be converted ({type(exc).__name__})") from None
 

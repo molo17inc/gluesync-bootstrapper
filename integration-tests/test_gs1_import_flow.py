@@ -355,3 +355,57 @@ def test_route_offline_conversion_calls_no_check(client, hub):
     assert response.status_code == 200
     assert response.json()["structureChecked"] is False
     assert hub.calls == []
+
+
+def test_route_refuses_an_upload_larger_than_the_cap(client, hub):
+    big = b" " * (2 * 1024 * 1024)
+
+    with mock.patch.dict("os.environ", {"GS_IMPORT_MAX_UPLOAD_MB": "1"}):
+        response = client.post("/api/gs1/convert", files={"file": ("gs1.json", big, "application/json")},
+                               data={"pipelineId": PIPELINE})
+
+    assert response.status_code == 413
+    assert "GS_IMPORT_MAX_UPLOAD_MB" in response.json()["detail"]
+    assert hub.calls == []
+
+
+def test_route_refuses_an_empty_upload(client):
+    response = client.post("/api/gs1/convert", files={"file": ("gs1.json", b"", "application/json")},
+                           data={"pipelineId": PIPELINE})
+
+    assert response.status_code == 400
+
+
+def test_route_answers_400_for_a_configuration_nested_too_deeply(client, hub):
+    deep = b"[" * 200_000 + b"]" * 200_000
+
+    response = client.post("/api/gs1/convert", files={"file": ("gs1.json", deep, "application/json")},
+                           data={"pipelineId": PIPELINE})
+
+    assert response.status_code == 400
+    assert "deeply" in response.json()["detail"]
+
+
+def test_a_configuration_nested_too_deeply_for_the_converter_is_a_conversion_error():
+    config = {"sourceEntities": {}}
+    node = config
+    for _ in range(5000):
+        node["next"] = {}
+        node = node["next"]
+
+    with pytest.raises(gs1_import.Gs1ImportError) as raised:
+        gs1_import.plan_import("tok", _request(config), check=False)
+
+    assert "deeply" in str(raised.value)
+
+
+def test_cli_answers_cleanly_for_a_configuration_nested_too_deeply(hub, tmp_path, capsys):
+    path = tmp_path / "deep.json"
+    path.write_text("[" * 200_000 + "]" * 200_000)
+
+    code = gs1_import.main(["--token", "tok", "convert", "--config", str(path), "--pipeline", PIPELINE])
+
+    assert code == 2
+    err = capsys.readouterr().err
+    assert "deeply" in err
+    assert "Core Hub refused" not in err

@@ -38,6 +38,7 @@ from starlette.concurrency import run_in_threadpool
 
 import gs1_import
 from gs1_migration import REPOSITORIES, conversion_request, load_config
+from gs1_migration.json_values import NestedTooDeeply
 
 from . import corehub
 from .state import state
@@ -52,6 +53,7 @@ _RESPONSES: Dict[Any, Dict[str, Any]] = {
     400: {"description": "The configuration, the choice or the confirmation is refused"},
     401: {"description": "Not signed in to a Core Hub"},
     404: {"description": "The plan is no longer kept: convert again"},
+    413: {"description": "The configuration is larger than GS_IMPORT_MAX_UPLOAD_MB"},
     500: {"description": "Core Hub failed"},
 }
 
@@ -85,6 +87,22 @@ def _kept(plan_id: str) -> Dict[str, Any]:
     if plan is None:
         raise HTTPException(status_code=404, detail="The conversion is no longer kept: convert the configuration again")
     return plan
+
+
+async def _read_capped(file: UploadFile) -> bytes:
+    """The uploaded configuration, read in chunks; 413 as soon as it exceeds GS_IMPORT_MAX_UPLOAD_MB, as for analyze."""
+    from .app import import_upload_max_bytes  # app.py imports this module: look it up when called
+
+    max_bytes = import_upload_max_bytes()
+    chunks, size = [], 0
+    while chunk := await file.read(1024 * 1024):
+        size += len(chunk)
+        if size > max_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"The configuration is larger than {max_bytes // (1024 * 1024)} MB (GS_IMPORT_MAX_UPLOAD_MB).")
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def _root_counts(text: Optional[str]) -> Dict[str, int]:
@@ -162,7 +180,9 @@ async def _convert(
     if repository not in REPOSITORIES:
         raise HTTPException(status_code=400, detail=f"The repository is one of {', '.join(REPOSITORIES)}")
     try:
-        config = load_config((await file.read()).decode("utf-8"))
+        config = load_config((await _read_capped(file)).decode("utf-8"))
+    except NestedTooDeeply as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ValueError as exc:  # UnicodeDecodeError and JSONDecodeError are ValueErrors
         raise HTTPException(status_code=400, detail="The file is not a GS1 configuration (JSON)") from exc
     if not isinstance(config, dict):

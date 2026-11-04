@@ -57,9 +57,22 @@ class JsonFloat(float):
         return value
 
 
+NESTED_TOO_DEEPLY = "The GS1 configuration is nested too deeply"
+
+
+class NestedTooDeeply(ValueError):
+    """The configuration nests objects or arrays deeper than the parser (or the converter) can follow."""
+
+    def __init__(self):
+        super().__init__(NESTED_TOO_DEEPLY)
+
+
 def load_config(text: str) -> Any:
     """Parses a GS1 configuration, keeping the literal of every number."""
-    return json.loads(text, parse_int=JsonInt, parse_float=JsonFloat)
+    try:
+        return json.loads(text, parse_int=JsonInt, parse_float=JsonFloat)
+    except RecursionError:
+        raise NestedTooDeeply() from None
 
 
 def is_primitive(value: Any) -> bool:
