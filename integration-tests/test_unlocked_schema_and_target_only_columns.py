@@ -269,7 +269,7 @@ class UnlockedSchemaPayloadTests(unittest.TestCase):
         self.assertEqual(result["successful"], 0)
         self.assertEqual(result["failed"], 1)
         self.assertEqual(result["total"], 1)
-        self.assertTrue(result.get("success"))  # skip_errors=True → overall OK
+        self.assertFalse(result.get("success"))  # H5: all-failed is failed even with skip_errors
         self.assertTrue(any("UDF is mandatory" in e for e in (result.get("errors") or [])))
 
 

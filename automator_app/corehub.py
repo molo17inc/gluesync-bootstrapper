@@ -4201,6 +4201,18 @@ def _tags_match(left: str, right: str) -> bool:
     return bool(left) and bool(right) and left.casefold() == right.casefold()
 
 
+def _agent_matches_identity(agent: dict, agent_tag: str, wanted_type: Optional[str]) -> bool:
+    if not isinstance(agent, dict):
+        return False
+    if not _tags_match(_agent_tag_of(agent), agent_tag):
+        return False
+    if not wanted_type:
+        return True
+    got = _agent_type_of(agent)
+    # Empty type on Hub agent: still accept; otherwise require exact identity.
+    return got in ("", wanted_type)
+
+
 def _collect_agents_matching_identity(
     *,
     token: str,
@@ -4222,14 +4234,8 @@ def _collect_agents_matching_identity(
         return []
     hits: list[tuple[dict, dict, str, str]] = []
     for agent in agents:
-        if not isinstance(agent, dict):
+        if not _agent_matches_identity(agent, agent_tag, wanted_type):
             continue
-        if not _tags_match(_agent_tag_of(agent), agent_tag):
-            continue
-        if wanted_type and _agent_type_of(agent) not in ("", wanted_type):
-            # Empty type on Hub agent: still accept; otherwise require exact identity.
-            if _agent_type_of(agent):
-                continue
         host, custom = _fetch_agent_credentials(token=token, pipeline_id=pipeline_id, agent=agent)
         if not _host_credentials_usable(host):
             continue
@@ -4244,6 +4250,55 @@ def _credential_fingerprint(host: dict) -> tuple:
         str(host.get("port") or ""),
         str(host.get("username") or host.get("user") or "").casefold(),
         str(host.get("databaseName") or host.get("database") or "").casefold(),
+    )
+
+
+def _credentials_are_ambiguous(
+    candidates: list[tuple[dict, dict, str, str]],
+    agent_tag: str,
+    agent_type: Optional[str],
+) -> bool:
+    """True when candidates disagree on host fingerprint; logs and must not guess (H4)."""
+    fingerprints = {_credential_fingerprint(h) for h, _c, _p, _a in candidates}
+    if len(fingerprints) <= 1:
+        return False
+    detail = ", ".join(
+        f"{pid}/{aid}:{_credential_fingerprint(h)}" for h, _c, pid, aid in candidates
+    )
+    logger.warning(
+        "Ambiguous hostCredentials for agent tag %s type %s (%d candidates: %s); "
+        "not guessing — cross-dialect duplicate must pick an unambiguous agent",
+        agent_tag,
+        agent_type or "*",
+        len(candidates),
+        detail,
+    )
+    return True
+
+
+def _log_resolved_credentials(
+    candidates: list[tuple[dict, dict, str, str]],
+    agent_tag: str,
+    agent_type: Optional[str],
+) -> None:
+    host, _custom, pid, aid = candidates[0]
+    if len(candidates) > 1:
+        logger.info(
+            "Resolved hostCredentials for agent tag %s type %s from %d identical candidates "
+            "(pipeline %s agent %s)",
+            agent_tag,
+            agent_type or "*",
+            len(candidates),
+            pid,
+            aid,
+        )
+        return
+    logger.info(
+        "Resolved hostCredentials for agent tag %s type %s from pipeline %s agent %s",
+        agent_tag,
+        agent_type or "*",
+        pid,
+        aid,
     )
 
 
@@ -4274,47 +4329,11 @@ def _find_agent_credentials_by_tag(
 
     if not candidates:
         return None, None, None
-
-    # Prefer an exact agentType match when requested; drop untyped if typed exists.
-    wanted_type = (agent_type or "").strip().upper() or None
-    if wanted_type:
-        typed = [c for c in candidates]  # already filtered in collect when type set
-        candidates = typed
-
-    fingerprints = {_credential_fingerprint(h) for h, _c, _p, _a in candidates}
-    if len(fingerprints) > 1:
-        detail = ", ".join(
-            f"{pid}/{aid}:{_credential_fingerprint(h)}" for h, _c, pid, aid in candidates
-        )
-        logger.warning(
-            "Ambiguous hostCredentials for agent tag %s type %s (%d candidates: %s); "
-            "not guessing — cross-dialect duplicate must pick an unambiguous agent",
-            agent_tag,
-            agent_type or "*",
-            len(candidates),
-            detail,
-        )
+    if _credentials_are_ambiguous(candidates, agent_tag, agent_type):
         return None, None, None
 
-    host, custom, pid, aid = candidates[0]
-    if len(candidates) > 1:
-        logger.info(
-            "Resolved hostCredentials for agent tag %s type %s from %d identical candidates "
-            "(pipeline %s agent %s)",
-            agent_tag,
-            agent_type or "*",
-            len(candidates),
-            pid,
-            aid,
-        )
-    else:
-        logger.info(
-            "Resolved hostCredentials for agent tag %s type %s from pipeline %s agent %s",
-            agent_tag,
-            agent_type or "*",
-            pid,
-            aid,
-        )
+    _log_resolved_credentials(candidates, agent_tag, agent_type)
+    host, custom, pid, _aid = candidates[0]
     return host, custom, pid
 
 

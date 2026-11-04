@@ -430,7 +430,7 @@ class RefusedTableTests(unittest.TestCase):
         self.assertEqual(result["failed"], 1, result)
         self.assertEqual(result["successful"], 1, result)
         self.assertEqual(len(result["errors"]), 1)
-        self.assertTrue(result["errors"][0].startswith("ORDERS: "), result["errors"])
+        self.assertTrue(result["errors"][0].startswith("SALES.ORDERS: "), result["errors"])
         self.assertEqual(hub.created, ["ITEM_RESULT"])
 
     def test_a_failing_statement_refuses_the_table_and_the_other_tables_are_still_created(self):
@@ -728,7 +728,7 @@ class DuplicateTableTests(unittest.TestCase):
         result = run_import(hub, yaml_text)
         self.assertEqual(entity_names(hub), ["SALES.ITEMS"])
         self.assertEqual(result["failed"], 1)
-        self.assertTrue(result["errors"][0].startswith("ITEMS@@2: "), result["errors"])
+        self.assertTrue(result["errors"][0].startswith("SALES.ITEMS@@2: "), result["errors"])
 
 
 def _backup_entity():

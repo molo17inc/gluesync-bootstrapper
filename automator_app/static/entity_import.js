@@ -62,6 +62,20 @@ export function preferDiscoverySpelling(targetTable, existingTables) {
   return hit != null ? String(hit) : name;
 }
 
+/** Unique bare-key match: ORDERS → SCHEMA.ORDERS only when one such base exists (H1). */
+function uniqueBareKeyMatch(name, base, loadedEntities) {
+  if (name.includes('.') || name.includes('@@') || !base.includes('.')) return false;
+  const key = base.slice(base.indexOf('.') + 1);
+  if (key !== name || !loadedEntities) return false;
+  const bases = new Set();
+  for (const e of loadedEntities) {
+    const b = String(e.id || '').toLowerCase().split('@@')[0];
+    if (!b.includes('.')) continue;
+    if (b.slice(b.indexOf('.') + 1) === name) bases.add(b);
+  }
+  return bases.size === 1 && bases.has(base);
+}
+
 /** Whether an Advanced include/exclude token selects this entity id (SCHEMA.KEY / bare / @@n). */
 export function advancedMatches(token, entity, loadedEntities) {
   const raw = String(token || '').trim();
@@ -73,21 +87,7 @@ export function advancedMatches(token, entity, loadedEntities) {
   if (!name.includes('@@') && base === name) return true;
   const ename = String(entity.entityName || '').toLowerCase();
   if (ename && ename === name) return true;
-  // Bare table key (no '.') matches SCHEMA.KEY when unique across loadedEntities (H1).
-  if (!name.includes('.') && !name.includes('@@') && base.includes('.')) {
-    const key = base.slice(base.indexOf('.') + 1);
-    if (key !== name) return false;
-    const pool = loadedEntities || null;
-    if (!pool) return false;
-    const bases = new Set();
-    for (const e of pool) {
-      const b = String(e.id || '').toLowerCase().split('@@')[0];
-      if (!b.includes('.')) continue;
-      if (b.slice(b.indexOf('.') + 1) === name) bases.add(b);
-    }
-    return bases.size === 1 && bases.has(base);
-  }
-  return false;
+  return uniqueBareKeyMatch(name, base, loadedEntities);
 }
 
 /** Effective selected ids for collision checks (picker Set, or Advanced include/exclude). */
@@ -251,71 +251,89 @@ export function selectionNotes(panel, loadedEntities, selectedIds, targetOverrid
   return notes;
 }
 
+function resolvedTargetInfo(entity, overrides, schemaDefaults) {
+  const resolved = resolveTarget(entity, overrides, schemaDefaults);
+  if (!resolved.targetTable) return null;
+  return {
+    resolved,
+    key: `${resolved.targetSchema}.${resolved.targetTable}`.toLowerCase(),
+  };
+}
+
+function occupiedTargetKeys(loadedEntities, effective, overrides, schemaDefaults) {
+  const occupied = new Set();
+  for (const entity of loadedEntities || []) {
+    if (!effective.has(entity.id)) continue;
+    const info = resolvedTargetInfo(entity, overrides, schemaDefaults);
+    if (info) occupied.add(info.key);
+  }
+  return occupied;
+}
+
+function collisionGroupsByTarget(loadedEntities, effective, overrides, schemaDefaults) {
+  const byTarget = new Map();
+  for (const entity of loadedEntities || []) {
+    if (!effective.has(entity.id)) continue;
+    const info = resolvedTargetInfo(entity, overrides, schemaDefaults);
+    if (!info) continue;
+    const list = byTarget.get(info.key) || [];
+    list.push({ entity, resolved: info.resolved });
+    byTarget.set(info.key, list);
+  }
+  return byTarget;
+}
+
+function nextFreeSuffixTable(resolved, occupied) {
+  const baseName = String(resolved.targetTable || '');
+  const stem = baseName.replace(/_\d+$/, '') || baseName;
+  let n = 1;
+  let nextTable = `${stem}_${n}`;
+  let nextKey = `${resolved.targetSchema}.${nextTable}`.toLowerCase();
+  while (occupied.has(nextKey) && n < 10000) {
+    n += 1;
+    nextTable = `${stem}_${n}`;
+    nextKey = `${resolved.targetSchema}.${nextTable}`.toLowerCase();
+  }
+  return { nextTable, nextKey };
+}
+
+function renameSecondaryInGroup(group, occupied, overrides) {
+  let renamed = 0;
+  for (let index = 1; index < group.length; index += 1) {
+    const { entity, resolved } = group[index];
+    const prevKey = `${resolved.targetSchema}.${resolved.targetTable}`.toLowerCase();
+    const { nextTable, nextKey } = nextFreeSuffixTable(resolved, occupied);
+    if (nextKey === prevKey) continue;
+    occupied.delete(prevKey);
+    occupied.add(nextKey);
+    const prev = overrides.get(entity.id) || {};
+    overrides.set(entity.id, {
+      ...prev,
+      targetSchema: resolved.targetSchema,
+      targetTable: nextTable,
+    });
+    renamed += 1;
+  }
+  return renamed;
+}
+
 /** Optional: rename colliding targets to table_1, table_2, … Never applied automatically. */
 export function autoRenameDuplicateTargets(loadedEntities, selectedIds, targetOverrides, schemaDefaults = null) {
   const overrides = targetOverrides instanceof Map ? targetOverrides : new Map(Object.entries(targetOverrides || {}));
   const effective = selectedIds || new Set((loadedEntities || []).map((e) => e.id));
-
-  function resolvedTargetKey(entity) {
-    const resolved = resolveTarget(entity, overrides, schemaDefaults);
-    if (!resolved.targetTable) return null;
-    return {
-      resolved,
-      key: `${resolved.targetSchema}.${resolved.targetTable}`.toLowerCase(),
-    };
-  }
-
   // Occupied targets across the effective selection (updated as we rename) — H2.
-  const occupied = new Set();
-  for (const entity of loadedEntities || []) {
-    if (!effective.has(entity.id)) continue;
-    const info = resolvedTargetKey(entity);
-    if (info) occupied.add(info.key);
-  }
+  const occupied = occupiedTargetKeys(loadedEntities, effective, overrides, schemaDefaults);
 
   let renamed = 0;
   // Recompute collision groups from current overrides; keep renaming until stable.
-  let guard = 0;
-  while (guard < 1000) {
-    guard += 1;
-    const byTarget = new Map();
-    for (const entity of loadedEntities || []) {
-      if (!effective.has(entity.id)) continue;
-      const info = resolvedTargetKey(entity);
-      if (!info) continue;
-      const list = byTarget.get(info.key) || [];
-      list.push({ entity, resolved: info.resolved });
-      byTarget.set(info.key, list);
-    }
-    let changed = false;
+  for (let guard = 0; guard < 1000; guard += 1) {
+    const byTarget = collisionGroupsByTarget(loadedEntities, effective, overrides, schemaDefaults);
+    let changed = 0;
     for (const group of byTarget.values()) {
       if (group.length < 2) continue;
-      for (let index = 1; index < group.length; index += 1) {
-        const { entity, resolved } = group[index];
-        const baseName = String(resolved.targetTable || '');
-        const stem = baseName.replace(/_\d+$/, '') || baseName;
-        let n = 1;
-        let nextTable = `${stem}_${n}`;
-        let nextKey = `${resolved.targetSchema}.${nextTable}`.toLowerCase();
-        const prevKey = `${resolved.targetSchema}.${resolved.targetTable}`.toLowerCase();
-        while (occupied.has(nextKey) && n < 10000) {
-          n += 1;
-          nextTable = `${stem}_${n}`;
-          nextKey = `${resolved.targetSchema}.${nextTable}`.toLowerCase();
-        }
-        if (nextKey === prevKey) continue;
-        occupied.delete(prevKey);
-        occupied.add(nextKey);
-        const prev = overrides.get(entity.id) || {};
-        overrides.set(entity.id, {
-          ...prev,
-          targetSchema: resolved.targetSchema,
-          targetTable: nextTable,
-        });
-        renamed += 1;
-        changed = true;
-      }
+      changed += renameSecondaryInGroup(group, occupied, overrides);
     }
+    renamed += changed;
     if (!changed) break;
   }
   return { renamed, overrides };

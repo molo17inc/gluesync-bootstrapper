@@ -67,6 +67,29 @@ class H1QualifiedFailedIdsResolve(unittest.TestCase):
         ids = cae._failed_entity_ids(failures, run.refused_tables)
         self.assertIn("HR.ORDERS", ids)
 
+    def test_multitable_refusal_exposes_sibling_retry_ids_once(self):
+        import create_all_entities as cae
+        from entity_mapping import EntityMappingError
+
+        class _Ctx:
+            skip_errors = True
+
+        run = cae._EntityRun(
+            _Ctx(), schema={}, source_schema="src", target_schema="tgt",
+            source_agent_id="s", source_type="SQL", target_type="SQL", grouped=False,
+        )
+        tables_list = [("ORDERS", {}), ("PARTS", {})]
+        reason = EntityMappingError("boom")
+        run.refuse_table(tables_list[0][0], reason)
+        for table_key, _ in tables_list[1:]:
+            label = cae._picker_fail_id(run.source_schema, table_key)
+            run.extra_retry_ids.append(label)
+        result = cae._entity_run_result(run, type("O", (), {"dry_run": False})(), None, (0, 1, 1))
+        self.assertEqual(len(result["errors"]), 1)
+        self.assertTrue(result["errors"][0].startswith("src.ORDERS: "))
+        ids = [x.casefold() for x in result["failedEntityIds"]]
+        self.assertEqual(sorted(ids), ["src.orders", "src.parts"])
+
     def test_client_advanced_matches_unique_bare_key(self):
         if not shutil.which("node"):
             self.skipTest("node not installed")

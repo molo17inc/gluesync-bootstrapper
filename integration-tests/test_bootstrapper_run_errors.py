@@ -103,8 +103,12 @@ class CreateEntitiesErrorsTests(unittest.TestCase):
         result = run(CHAINS, ["ORDERS", "PARTS", "CUSTOMERS", "NOPK"],
                      refuse=refuse_entity("src.CUSTOMERS", "MultiTable refused by CoreHub"))
         self.assertEqual(len(result["errors"]), 2)
-        self.assertRegex(errors_naming(result, "refused_chain")[0], "SYNCED_AT")
+        # H1: chain build refusal names the primary member picker id (ORDERS), not chainId.
+        self.assertRegex(errors_naming(result, "src.ORDERS")[0], "SYNCED_AT")
         self.assertIn("MultiTable refused by CoreHub", errors_naming(result, "src.CUSTOMERS")[0])
+        ids = [str(x).casefold() for x in (result.get("failedEntityIds") or [])]
+        self.assertIn("src.orders", ids)
+        self.assertIn("src.parts", ids)  # sibling retry id
         self.assertEqual((result["successful"], result["failed"], result["total"]), (0, 2, 2))
 
     def test_a_created_multitable_entity_counts_as_successful(self):

@@ -2737,6 +2737,8 @@ class _EntityRun:
         self.entities = []
         # Tables whose entity is refused before any request, with the reason logged; counted as failed.
         self.refused_tables = []
+        # Sibling MultiTable member picker ids for Retry (not counted as separate refusals) — H1.
+        self.extra_retry_ids = []
         # Every entity of the run that was not created, as "<entity>: <reason>", returned to the caller (BOP-18 A).
         self.errors = []
         self.pending_partition_requests = []
@@ -4444,10 +4446,18 @@ def _build_multi_table_entity(run, chain_id, tables_list):
 
     if cb.chain_refusals:
         reason = EntityMappingError("; ".join(cb.chain_refusals))
-        # Prefer member picker ids so Retry can select them (H1); keep chain label as extra context.
-        for table_key, _table_data in tables_list:
-            run.refuse_table(table_key, reason)
-        if not tables_list:
+        # One counted refusal (one MultiTable entity). Primary member id is picker-
+        # resolvable; sibling members go to extra_retry_ids for Retry without
+        # inflating failed/total (H1).
+        if tables_list:
+            primary_key = tables_list[0][0]
+            run.refuse_table(primary_key, reason)
+            for table_key, _table_data in tables_list[1:]:
+                label = _picker_fail_id(run.source_schema, table_key)
+                if label and label.casefold() not in {x.casefold() for x in run.refused_tables}:
+                    if label.casefold() not in {x.casefold() for x in run.extra_retry_ids}:
+                        run.extra_retry_ids.append(label)
+        else:
             run.refuse_table(f"MultiTable chain {chain_id}", reason)
         return None
     return {"entities": [entity_payload]}
@@ -5070,7 +5080,7 @@ def _entity_failures(errors):
     return failures
 
 
-def _failed_entity_ids(failures, refused_tables):
+def _failed_entity_ids(failures, refused_tables, extra_ids=None):
     failed_ids = []
     seen = set()
     for item in failures:
@@ -5078,7 +5088,7 @@ def _failed_entity_ids(failures, refused_tables):
         if eid and eid.casefold() not in seen:
             seen.add(eid.casefold())
             failed_ids.append(eid)
-    for label in refused_tables or []:
+    for label in list(refused_tables or []) + list(extra_ids or []):
         if label and str(label).casefold() not in seen:
             seen.add(str(label).casefold())
             failed_ids.append(str(label))
@@ -5088,15 +5098,18 @@ def _failed_entity_ids(failures, refused_tables):
 def _entity_run_result(run, options, offline_names, counts, skipped_entities=None):
     """The result of create_entities from its (successful, failed, total) counts.
 
-    Always returns counts for a best-effort run. ``success`` is False when any
-    entity failed and ``skip_errors`` is false (overall job status); per-entity
-    successes are still persisted before this returns.
+    Always returns counts for a best-effort run. ``success`` is True only when
+    ``failed == 0`` (H5): ``skip_errors`` only avoids aborting mid-batch; an
+    all-failed run is never treated as completed. Per-entity successes are still
+    persisted before this returns. ``partial`` covers mixed outcomes.
     """
     successful, failed, total = counts
     skipped_entities = list(skipped_entities or [])
     skipped = len(skipped_entities) if skipped_entities else max(0, total - successful - failed)
     failures = _entity_failures(run.errors)
-    failed_ids = _failed_entity_ids(failures, run.refused_tables)
+    failed_ids = _failed_entity_ids(
+        failures, run.refused_tables, getattr(run, "extra_retry_ids", None),
+    )
     result = {
         "successful": successful,
         "failed": failed,
