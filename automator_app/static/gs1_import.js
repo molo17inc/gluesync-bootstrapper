@@ -96,7 +96,7 @@ function renderReport(container, plan, selected) {
   if (!plan.structureChecked) {
     const note = document.createElement('p');
     note.className = 'hint-text';
-    note.textContent = 'Core Hub did not check the drafts, so every draft is preselected: structure errors show up only when you save them.';
+    note.textContent = 'Core Hub did not check the drafts, so every draft is preselected: structure errors show up only when you save them, and document drafts keep placeholder column types that Core Hub refuses.';
     container.appendChild(note);
   }
   const table = document.createElement('table');

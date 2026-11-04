@@ -7,6 +7,7 @@ import io
 import json
 from pathlib import Path
 from unittest import mock
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -40,6 +41,9 @@ class FakeCoreHub:
     def __init__(self):
         self.calls = []
         self.saved = []
+        self.validated = []
+        # (agent id, schema, table) -> the columns the agent's discovery answers; an unknown table has none
+        self.discovered = {}
 
     def __call__(self, path, method="GET", token=None, body=None, **_kwargs):
         self.calls.append((method, path))
@@ -67,7 +71,12 @@ class FakeCoreHub:
             return {"model": described, "capturedTables": [], "levels": [
                 {"level": root["name"], "columns": [], "occurrences": [], "constructs": [], "proposedKey": ["ID"]}],
                 "verdict": {"mode": "CDC", "reasons": []}, "issues": []}
+        if "/discovery/columns?" in path:
+            query = parse_qs(urlparse(path).query)
+            key = (path.split("/agents/")[1].split("/")[0], query["tableschema"][0], query["tablename"][0])
+            return {"columns": json.loads(json.dumps(self.discovered.get(key, [])))}
         if path.endswith("/config/entities/validate"):
+            self.validated.extend(body["entities"])
             return {"valid": True, "issues": [{"severity": "WARNING", "message": "fine", "entityName": "x"}]}
         if path == f"/pipelines/{PIPELINE}/config/entities" and method == "PUT":
             self.saved.append(body)
@@ -184,6 +193,116 @@ def test_describe_warnings_reach_the_page(client, hub):
     assert plan["checks"]["ORDERS"]["describe"]["issues"] == [WARNING_ISSUE]
 
 
+# ---------- document drafts are typed from the agents' discovery ----------
+
+def _document_request():
+    request = json.loads((FIXTURES / "nosql_default.request.json").read_text())
+    request["pipelineId"] = PIPELINE
+    return request
+
+
+def _found(name, data_type, **more):
+    return {"name": name, "dataType": data_type, **more}
+
+
+def _discover_the_holders(hub):
+    """Discovery knows the Holders collection (but not its Cards and Profile arrays) and three target tables."""
+    hub.discovered = {
+        ("couchbase-dcp", "bank", "Holders"): [_found("owner", "string"), _found("NAME", "string", isUnique=True)],
+        ("mssql", "dbo", "Holders"): [_found("OWNER", "varchar", charMaxLength=40, charOctetLength=40),
+                                      _found("holder_name", "nvarchar", charMaxLength=200, isNullable=True)],
+        ("mssql", "dbo", "Cards"): [_found("HolderRef", "varchar", charMaxLength=40), _found("CardId", "varchar"),
+                                    _found("CARD_TYPE", None)],
+    }
+
+
+def _columns(draft, side):
+    entity = draft["agentEntities"][side]
+    if side == 0:
+        return {c["name"]: c for c in entity["columns"]}
+    pairs = entity["columns"]
+    return {(table["name"], c["name"]): c for table, columns in zip(pairs[0::2], pairs[1::2]) for c in columns}
+
+
+def test_a_document_draft_is_typed_from_discovery_before_it_is_validated(hub):
+    _discover_the_holders(hub)
+
+    plan = gs1_import.plan_import("tok", _document_request())
+
+    source = _columns(plan["drafts"]["Holders"], 0)
+    assert (source["Owner"]["dataType"], source["Name"]["dataType"], source["Name"]["isUnique"]) == ("string", "string", True)
+    assert source["Cards"]["dataType"] == "gs:array" and source["Profile"]["dataType"] == "gs:object", "containers keep theirs"
+    target = _columns(plan["drafts"]["Holders"], 1)
+    assert (target["Holders", "Owner"]["dataType"], target["Holders", "Owner"]["charMaxLength"]) == ("varchar", 40)
+    assert target["Holders", "HOLDER_NAME"]["dataType"] == "nvarchar"
+    assert target["Cards", "CardId"]["dataType"] == "varchar"
+    assert [c["dataType"] for c in hub.validated[0]["agentEntities"][0]["columns"][:2]] == ["string", "string"], \
+        "validate saw the typed draft"
+    assert hub.validated[0]["agentEntities"][1]["columns"][1][0]["dataType"] == "varchar"
+    assert ("GET", f"/pipelines/{PIPELINE}/agents/couchbase-dcp/discovery/columns?tableschema=bank&tablename=Holders") in hub.calls
+    assert plan["report"]["entities"][0]["agentEntities"][0]["columns"][0]["dataType"] == "VARCHAR", \
+        "the converter's report is left as converted"
+
+
+def test_what_discovery_does_not_know_or_leaves_untyped_is_a_warning(hub):
+    _discover_the_holders(hub)
+
+    plan = gs1_import.plan_import("tok", _document_request())
+
+    [entry] = plan["report"]["perEntity"]
+    [warning] = [i for i in entry["issues"] if i["code"] == "GS1_COLUMNS_NOT_DISCOVERED"]
+    assert warning["severity"] == "WARNING"
+    assert "source bank.Holders.Cards" in warning["message"]
+    assert "source bank.Holders.Profile" in warning["message"]
+    assert "dbo.CardMetadata.COUNTRY" in warning["message"]
+    assert "reports no type for dbo.Cards.CARD_TYPE" in warning["message"]
+    assert "dbo.Holders.Owner" not in warning["message"]
+    assert "WARNING GS1_COLUMNS_NOT_DISCOVERED" in "\n".join(gs1_import.summarize(plan))
+    assert "Holders" in plan["drafts"], "a warning does not refuse the draft"
+
+
+def test_a_failing_discovery_is_reported_and_the_draft_is_not_validated(hub):
+    def failing(path, **kwargs):
+        if "/discovery/columns?" in path and "/agents/mssql/" in path:
+            raise RuntimeError("CoreHub request GET failed: 502")
+        return hub(path, **kwargs)
+
+    with mock.patch.object(gs1_import, "fetch_core_hub", failing):
+        plan = gs1_import.plan_import("tok", _document_request())
+
+    assert "502" in plan["checks"]["Holders"]["error"]
+    assert "validate" not in plan["checks"]["Holders"]
+    assert hub.validated == []
+    assert gs1_import.default_names(plan) == [], "a draft that could not be typed is not chosen by default"
+
+
+def test_offline_document_drafts_are_not_typed_and_the_report_says_so(hub):
+    plan = gs1_import.plan_import(None, _document_request(), check=False)
+
+    assert hub.calls == []
+    assert _columns(plan["drafts"]["Holders"], 0)["Owner"]["dataType"] == "VARCHAR"
+    assert "placeholder" in gs1_import.summarize(plan)[0]
+
+
+def test_a_query_draft_is_not_typed_from_the_columns_discovery(hub):
+    gs1_import.plan_import("tok", _request())
+
+    assert not any("/discovery/columns" in path for _, path in hub.calls)
+
+
+def test_the_page_gets_the_typing_warning(client, hub):
+    _discover_the_holders(hub)
+    document = {"sourceEntities": json.loads((FIXTURES / "nosql_default.request.json").read_text())["config"]["sourceEntities"]}
+    files = {"file": ("gs1.json", json.dumps(document).encode(), "application/json")}
+
+    plan = client.post("/api/gs1/convert", files=files, data={
+        "pipelineId": PIPELINE, "repository": "NOSQL_TO_SQL", "sourceAgentId": "couchbase-dcp",
+        "targetAgentId": "mssql"}).json()
+
+    [entry] = plan["perEntity"]
+    assert "GS1_COLUMNS_NOT_DISCOVERED" in [i["code"] for i in entry["issues"]]
+
+
 def test_nothing_is_saved_without_confirmation(hub):
     plan = gs1_import.plan_import("tok", _request())
 
@@ -218,8 +337,9 @@ def test_a_document_split_is_validated_and_its_errors_refuse_it(hub):
 
     [entry] = plan["report"]["perEntity"]
     assert entry["bucket"] == "UNSUPPORTED"
-    assert entry["issues"][0] == {"code": "PARENT_LINK_MISSING", "severity": "ERROR", "level": "Cards",
-                                  "message": "no link", "hint": "Link it."}
+    refusal = next(i for i in entry["issues"] if i["code"] == "PARENT_LINK_MISSING")
+    assert refusal == {"code": "PARENT_LINK_MISSING", "severity": "ERROR", "level": "Cards",
+                       "message": "no link", "hint": "Link it."}
     assert plan["drafts"] == {}
 
 

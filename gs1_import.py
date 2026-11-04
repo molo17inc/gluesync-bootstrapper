@@ -45,18 +45,21 @@ import copy
 import json
 import os
 import sys
+from urllib.parse import urlencode
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from commons import fetch_core_hub
 from gs1_migration import REPOSITORIES, ConversionError, conversion_request, convert, load_config
 from gs1_migration.json_values import utf16_sort_key
 from gs1_migration import model as gs2
+from gs1_migration.discovered_types import type_document_draft
 
 TOKEN_ENV = "GS1_IMPORT_TOKEN"
 SAVE_PATH = "/pipelines/{pipeline_id}/config/entities"
 VALIDATE_PATH = "/pipelines/{pipeline_id}/config/entities/validate"
 DESCRIBE_PATH = "/pipelines/{pipeline_id}/agents/{agent_id}/discovery/data-model"
 NODE_INFO_PATH = "/pipelines/{pipeline_id}/agents/{agent_id}/discovery/node-info"
+COLUMNS_PATH = "/pipelines/{pipeline_id}/agents/{agent_id}/discovery/columns"
 # The source-side type of the result-view column holding a child level.
 CONTAINER_ARRAY = "gs:array"
 
@@ -88,6 +91,15 @@ def data_types(token: str, pipeline_id: str, agent_id: str) -> List[Dict[str, An
     answer = fetch_core_hub(NODE_INFO_PATH.format(pipeline_id=pipeline_id, agent_id=agent_id), token=token)
     matrix = answer.get("dataTypesMatrix") if isinstance(answer, dict) else None
     return [entry for entry in matrix if isinstance(entry, dict)] if isinstance(matrix, list) else []
+
+
+def discovered_columns(token: str, pipeline_id: str, agent_id: str, schema: str, table: str) -> Dict[str, Dict[str, Any]]:
+    """The columns an agent's discovery reports for one table or collection, by lower-case name."""
+    path = COLUMNS_PATH.format(pipeline_id=pipeline_id, agent_id=agent_id) + "?" + urlencode(
+        {"tableschema": schema, "tablename": table})
+    answer = _dict(fetch_core_hub(path, token=token), "discovery columns")
+    return {str(column["name"]).lower(): column for column in answer.get("columns") or []
+            if isinstance(column, dict) and column.get("name") is not None}
 
 
 def pipeline_agents(token: str, pipeline_id: str) -> Dict[str, Optional[str]]:
@@ -143,6 +155,7 @@ class _CoreHubChecks:
         self.log = log
         self.checks: Dict[str, Dict[str, Any]] = {}
         self._types: Dict[str, List[Dict[str, Any]]] = {}
+        self._typed: Dict[str, Dict[str, Any]] = {}
 
     def structure(self, subject: Dict[str, Any]) -> List[Dict[str, Any]]:
         """The converter's structure check: describe for a Query model, validate for a document split."""
@@ -154,13 +167,20 @@ class _CoreHubChecks:
                 entry["describe"] = describe_model(self.token, self.pipeline_id, self.request["sourceAgentId"],
                                                    subject["model"])
                 return _refused_before_the_agent(entry["describe"])
+            self.log(f"Typing {name} from the agents' discovery")
+            typed, notes = type_document_draft(subject["draft"], self._columns_of)
             self.log(f"Validating {name}")
-            entry["validate"] = validate_entities(self.token, self.pipeline_id, [subject["draft"]])
-            return validation_issues(entry["validate"])
+            entry["validate"] = validate_entities(self.token, self.pipeline_id, [typed])
+            self._typed[name] = typed
+            return notes + validation_issues(entry["validate"])
         except (RuntimeError, ValueError) as exc:
             entry["error"] = str(exc)
             self.log(f"Core Hub could not check {name}: {exc}")
             return []
+
+    def _columns_of(self, side: str, schema: str, table: str) -> Dict[str, Dict[str, Any]]:
+        agent_id = self.request["sourceAgentId" if side == "source" else "targetAgentId"]
+        return discovered_columns(self.token, self.pipeline_id, agent_id, schema, table)
 
     def type_matrices(self):
         if not self._types:
@@ -174,6 +194,8 @@ class _CoreHubChecks:
         """The draft to save: a described Query draft is completed from describe, then validated as an entity."""
         name = entity["entityName"]
         entry = self.checks.setdefault(name, {})
+        if name in self._typed:
+            return copy.deepcopy(self._typed[name])
         try:
             draft = _described_draft(entity, entry.get("describe"), self.type_matrices)
         except (RuntimeError, ValueError) as exc:
@@ -328,7 +350,7 @@ def summarize(plan: Dict[str, Any]) -> List[str]:
     lines = []
     if not plan.get("structureChecked"):
         lines.append("Core Hub did not check the drafts (offline): every draft is chosen by default; structure errors show up "
-                     "only when you save them.")
+                     "only when you save them, and document drafts keep the placeholder column types discovery would set.")
     for entry in report["perEntity"]:
         name = entry["gs1Name"]
         drafted = " (draft)" if name in plan["drafts"] else ""

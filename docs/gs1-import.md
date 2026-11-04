@@ -8,7 +8,10 @@ pipeline. It runs from the command line (`gs1_import.py`) or from the Automator 
    what became of every GS1 entity. Secret-looking keys are removed first, unread, and listed by JSON path.
 2. **Check with Core Hub**: a Query draft is described against the source agent
    (`POST /pipelines/{id}/agents/{source}/discovery/data-model`), and every draft is validated as an entity
-   (`POST /pipelines/{id}/config/entities/validate`). Nothing is written.
+   (`POST /pipelines/{id}/config/entities/validate`). A document-split draft (`NOSQL_TO_SQL`) is first typed from the
+   agents' discovery (`GET .../discovery/columns?tableschema=&tablename=` for its collection and each of its tables:
+   the converter's placeholder types are not types Core Hub accepts); a column discovery does not know keeps the
+   draft's type and is listed in a `GS1_COLUMNS_NOT_DISCOVERED` warning. Nothing is written.
 3. **Save** the drafts you choose with `PUT /pipelines/{id}/config/entities`, once you confirm.
    The drafts Core Hub checked and found valid are chosen by default; one it refused, could not reach or did not
    validate is left out until you pick it. Without the check (`--offline`, *Convert only*) every draft is chosen.
@@ -52,7 +55,8 @@ project the root key (`KEY_NOT_PROJECTED`), and the document-model checks (`PARE
 `CHILD_PK_WITHOUT_ROOT_KEY`...). An ERROR makes the entity `UNSUPPORTED` and drops its draft, exactly as Core Hub's
 own converter did. For a Query draft the structure ERRORs are the ones describe answers before asking the agent;
 for a document split they are the validation issues. `convert --offline` (or *Convert only* in the Automator) runs
-no check: every draft the converter accepts is listed, and Core Hub refuses the faulty ones only when they are saved.
+no check and no typing: every draft the converter accepts is listed, and Core Hub refuses the faulty ones (document drafts
+with their placeholder column types included) only when they are saved.
 
 When Core Hub cannot be reached for one draft, the report says so for that entity and the draft is kept.
 
