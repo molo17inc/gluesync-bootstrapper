@@ -137,6 +137,19 @@ class I2DryRunReportsDryRun(unittest.TestCase):
         })
         self.assertEqual(status, "dry-run")
 
+    def test_entity_run_status_dry_run_with_errors_is_failed(self):
+        from automator_app.app import _entity_run_status
+
+        status = _entity_run_status({
+            "dry_run": True,
+            "success": False,
+            "failed": 2,
+            "successful": 0,
+            "error": "two tables failed",
+        })
+        self.assertEqual(status, "failed")
+
+
     def test_put_entities_dry_run_still_blocks_writes(self):
         import create_all_entities as cae
         import import_options
@@ -162,11 +175,23 @@ class I3ResumeAgentTagCasefold(unittest.TestCase):
         self.assertIsNotNone(matched)
         self.assertEqual(matched["agentId"], "a1")
 
-    def test_single_same_type_requires_tag_match(self):
+    def test_single_same_type_accepted_regardless_of_tag(self):
         from automator_app.app import _existing_pipeline_agent
 
         existing = [
             {"agentType": "SOURCE", "agentTag": "other-tag", "agentId": "a9"},
+        ]
+        backup = {"agentType": "SOURCE", "agentTag": "mssql-ct"}
+        matched = _existing_pipeline_agent(existing, backup)
+        self.assertIsNotNone(matched)
+        self.assertEqual(matched["agentId"], "a9")
+
+    def test_ambiguous_same_type_still_requires_tag_match(self):
+        from automator_app.app import _existing_pipeline_agent
+
+        existing = [
+            {"agentType": "SOURCE", "agentTag": "other-tag", "agentId": "a9"},
+            {"agentType": "SOURCE", "agentTag": "third-tag", "agentId": "a8"},
         ]
         backup = {"agentType": "SOURCE", "agentTag": "mssql-ct"}
         self.assertIsNone(_existing_pipeline_agent(existing, backup))
@@ -297,19 +322,30 @@ class I6PreviewListingError(unittest.TestCase):
         self.assertTrue(any("could not list" in n.lower() for n in payload["notes"]))
 
 
-class I7MissingPartitionColumnRefused(unittest.TestCase):
-    def test_build_partition_settings_raises_when_column_missing(self):
+class I7MissingPartitionColumnWarns(unittest.TestCase):
+    def test_build_partition_settings_warns_and_returns_none_when_column_missing(self):
         import create_all_entities as cae
 
-        with self.assertRaises(cae.MissingPartitionColumnError) as ctx:
-            cae._build_partition_settings(
-                "DEPT_ID",
-                [{"name": "ID", "id": 1, "dataType": "int", "isPK": True}],
-                "HR",
-                "EMPLOYEES",
-                42,
-            )
-        self.assertIn("DEPT_ID", str(ctx.exception))
+        settings = cae._build_partition_settings(
+            "DEPT_ID",
+            [{"name": "ID", "id": 1, "dataType": "int", "isPK": True}],
+            "HR",
+            "EMPLOYEES",
+            42,
+        )
+        self.assertIsNone(settings)
+
+    def test_build_partition_settings_warns_when_no_columns_discovered(self):
+        import create_all_entities as cae
+
+        settings = cae._build_partition_settings("DEPT_ID", [], "HR", "EMPLOYEES", 42)
+        self.assertIsNone(settings)
+
+    def test_build_partition_settings_warns_when_columns_none(self):
+        import create_all_entities as cae
+
+        settings = cae._build_partition_settings("DEPT_ID", None, "HR", "EMPLOYEES", 42)
+        self.assertIsNone(settings)
 
 
 class I8DryRunSuccessLogWording(unittest.TestCase):
@@ -347,6 +383,100 @@ class I9ZipReopenScoped(unittest.TestCase):
                 with automator_app._open_backup_zip(contents) as z2:
                     _ = z2.namelist()
         self.assertEqual(len(opened), 1, "scoped job must open ZipFile once (I9)")
+
+
+
+
+class I5ExecuteRunFinallyClearsRunning(unittest.TestCase):
+    def test_execute_run_finally_finalizes_when_body_raises(self):
+        import asyncio
+        from unittest import mock
+        from automator_app import app as automator_app
+        from automator_app import state as state_mod
+
+        run = state_mod.state.start_run()
+        run_id = run.run_id
+
+        async def boom(*_a, **_k):
+            raise RuntimeError("simulated crash")
+
+        async def runner():
+            with mock.patch.object(automator_app, "_execute_run_body", side_effect=boom):
+                with self.assertRaises(RuntimeError):
+                    await automator_app._execute_run(run_id, mock.Mock())
+
+        try:
+            asyncio.run(runner())
+            cur = state_mod.state.current_run
+            self.assertIsNotNone(cur)
+            self.assertEqual(cur.run_id, run_id)
+            self.assertNotEqual(cur.status, "running")
+            self.assertEqual(cur.status, "failed")
+        finally:
+            with state_mod.state._lock:
+                state_mod.state.current_run = None
+
+
+class I1ColumnLookupSkippedWithoutYamlColumns(unittest.TestCase):
+    def test_fan_in_skips_lookup_when_yaml_lists_no_columns(self):
+        import fan_in
+
+        calls = []
+
+        def existing_columns(schema, table):
+            calls.append((schema, table))
+            return ["ID"]
+
+        yaml_cfg = {
+            "schemas": {
+                "HR": {
+                    "target": "APP",
+                    "tables": {
+                        "custom": {
+                            "EMP": {"name": "EMP", "columns": []},
+                        },
+                    },
+                }
+            }
+        }
+        # Empty columns list → no union → no lookup
+        warnings = fan_in.fan_in_warnings(yaml_cfg, "HR", default_target="APP",
+                                          existing_columns=existing_columns)
+        self.assertEqual(calls, [])
+        self.assertEqual(warnings, [])
+
+    def test_fan_in_looks_up_when_yaml_lists_columns(self):
+        import fan_in
+
+        calls = []
+
+        def existing_columns(schema, table):
+            calls.append((schema, table))
+            return ["ID"]
+
+        yaml_cfg = {
+            "schemas": {
+                "HR": {
+                    "target": "APP",
+                    "tables": {
+                        "custom": {
+                            "EMP": {
+                                "name": "EMP",
+                                "columns": [
+                                    {"source": "ID", "target": "ID"},
+                                    {"source": "NAME", "target": "NAME"},
+                                ],
+                            },
+                        },
+                    },
+                }
+            }
+        }
+        warnings = fan_in.fan_in_warnings(yaml_cfg, "HR", default_target="APP",
+                                          existing_columns=existing_columns)
+        self.assertEqual(calls, [("APP", "EMP")])
+        self.assertTrue(any("name" in w for w in warnings))
+
 
 
 if __name__ == "__main__":

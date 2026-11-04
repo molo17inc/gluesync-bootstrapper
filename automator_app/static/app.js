@@ -308,7 +308,9 @@ const ui = (() => {
     const failed = Number(summary.failed || 0);
     const skipped = Number(summary.skipped || 0);
     const h = document.createElement('h4');
-    if (summary.dry_run) {
+    if (summary.dry_run && failed) {
+      h.textContent = 'Dry-run finished with failures';
+    } else if (summary.dry_run) {
       h.textContent = 'Dry-run — nothing written';
     } else if (summary.partial) {
       h.textContent = 'Partial import — successes are kept';

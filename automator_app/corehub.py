@@ -4156,11 +4156,18 @@ def _list_pipeline_ids_for_lookup(
     *,
     token: str,
     prefer_pipeline_id: Optional[str] = None,
+    source_pipeline_only: bool = False,
 ) -> list[str]:
-    """Ordered pipeline ids to scan for agent-tag credentials (prefer first)."""
+    """Ordered pipeline ids to scan for agent-tag credentials (prefer first).
+
+    When ``source_pipeline_only`` is true, only ``prefer_pipeline_id`` is scanned
+    (role-agnostic cross-dialect fallback must not roam the whole hub).
+    """
     pipeline_ids: list[str] = []
     if prefer_pipeline_id:
         pipeline_ids.append(str(prefer_pipeline_id))
+    if source_pipeline_only:
+        return pipeline_ids
     try:
         response = fetch_core_hub(PIPELINES_PATH, token=token)
     except Exception as exc:  # pylint: disable=broad-except
@@ -4244,6 +4251,36 @@ def _collect_agents_matching_identity(
     return hits
 
 
+def _agents_matching_identity_present(
+    *,
+    token: str,
+    pipeline_ids: list[str],
+    agent_tag: str,
+    agent_type: Optional[str],
+) -> bool:
+    """True when any agent matches tag (+ optional type), even without a usable username.
+
+    Same-role agents that have no username must still count as "present" so the
+    cross-role fallback does not treat them as "none" and steal another role's host.
+    """
+    wanted_type = (agent_type or "").strip().upper() or None
+    for pipeline_id in pipeline_ids:
+        try:
+            cfg = fetch_core_hub(f"/pipelines/{pipeline_id}/config", token=token)
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.debug("Skip pipeline %s while counting tag %s: %s", pipeline_id, agent_tag, exc)
+            continue
+        if not isinstance(cfg, dict):
+            continue
+        agents = cfg.get("agents") or []
+        if not isinstance(agents, list):
+            continue
+        for agent in agents:
+            if _agent_matches_identity(agent, agent_tag, wanted_type):
+                return True
+    return False
+
+
 def _credential_fingerprint(host: dict) -> tuple:
     return (
         str(host.get("host") or host.get("hostname") or "").casefold(),
@@ -4308,6 +4345,7 @@ def _lookup_agent_credentials_by_tag(
     agent_tag: str,
     prefer_pipeline_id: Optional[str] = None,
     agent_type: Optional[str] = None,
+    source_pipeline_only: bool = False,
 ) -> tuple[str, Optional[dict], Optional[dict], Optional[str]]:
     """Locate host/custom credentials for ``agent_tag`` (+ optional agentType).
 
@@ -4317,13 +4355,18 @@ def _lookup_agent_credentials_by_tag(
     - ``ambiguous`` — several usable candidates disagree on host fingerprint (H4: do not guess)
 
     Cross-dialect duplicate must not reuse another dialect's host/port (ORA-17904).
-    Tag compare is case-insensitive.
+    Tag compare is case-insensitive. ``source_pipeline_only`` limits the scan to
+    ``prefer_pipeline_id`` (role-agnostic fallback).
     """
     if not agent_tag:
         return "empty", None, None, None
 
     candidates: list[tuple[dict, dict, str, str]] = []
-    for pid in _list_pipeline_ids_for_lookup(token=token, prefer_pipeline_id=prefer_pipeline_id):
+    for pid in _list_pipeline_ids_for_lookup(
+        token=token,
+        prefer_pipeline_id=prefer_pipeline_id,
+        source_pipeline_only=source_pipeline_only,
+    ):
         candidates.extend(
             _collect_agents_matching_identity(
                 token=token, pipeline_id=pid, agent_tag=agent_tag, agent_type=agent_type,
@@ -4372,13 +4415,16 @@ def _credentials_for_duplicate_agent(
 
     Same tag as the template → credentials from the source pipeline agent (legacy path).
     Different tag (cross-dialect) → prefer same tag + same agentType (casefold). When that
-    set is empty, fall back to the same tag with any agentType **only if that set is a
-    unique fingerprint** (so a TARGET ``mysql-cdc`` kit can seed a SOURCE ``mysql-cdc``
-    without leaving empty hostCredentials — which made Core Hub 2.3 default
-    ``trustServerCertificate=false`` and fail with "Trust store not found").
+    set is empty **and no same-role agent exists even without a username**, fall back to
+    the same tag with any agentType **on the source pipeline only**, and only if that
+    set is a unique fingerprint (so a TARGET ``mysql-cdc`` kit can seed a SOURCE
+    ``mysql-cdc`` without leaving empty hostCredentials — which made Core Hub 2.3 default
+    ``trustServerCertificate=false`` and fail with "Trust store not found"). The
+    role-agnostic hit is logged as a WARNING.
 
-    If the same-role lookup is **ambiguous**, do **not** guess via another role — warn and
-    return empty hostCredentials. Never reuse the wrong-dialect template host/port.
+    If the same-role lookup is **ambiguous**, or same-role agents exist without a
+    username, do **not** guess via another role — warn and return empty hostCredentials.
+    Never reuse the wrong-dialect template host/port.
     """
     template_tag = _agent_tag_of(agent_template)
     agent_type = _agent_type_of(agent_template)
@@ -4402,18 +4448,38 @@ def _credentials_for_duplicate_agent(
         )
         return {}, {}
 
-    # Same-role empty → role-agnostic fallback only when the same-tag set is unique.
+    # Same-role empty → role-agnostic fallback only when no same-role agent exists at all
+    # (agents without a username still count as present) and only on the source pipeline.
     if agent_type:
+        same_role_pipelines = _list_pipeline_ids_for_lookup(
+            token=token, prefer_pipeline_id=pipeline_id, source_pipeline_only=False,
+        )
+        if _agents_matching_identity_present(
+            token=token,
+            pipeline_ids=same_role_pipelines,
+            agent_tag=new_tag,
+            agent_type=agent_type,
+        ):
+            logger.warning(
+                "Same-role agent(s) for tag %s type %s exist but have no usable username; "
+                "not falling back across roles",
+                new_tag,
+                agent_type,
+            )
+            return {}, {}
+
         fb_status, host, custom, _ = _lookup_agent_credentials_by_tag(
             token=token,
             agent_tag=new_tag,
             prefer_pipeline_id=pipeline_id,
             agent_type=None,
+            source_pipeline_only=True,
         )
         if fb_status == "ok" and host is not None:
-            logger.info(
+            logger.warning(
                 "Resolved hostCredentials for agent tag %s via role-agnostic fallback "
-                "(wanted type %s; using unambiguous same-tag credentials)",
+                "on the source pipeline only (wanted type %s; using unambiguous same-tag "
+                "credentials — verify host/user before starting)",
                 new_tag,
                 agent_type,
             )

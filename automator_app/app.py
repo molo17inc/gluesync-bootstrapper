@@ -3118,9 +3118,9 @@ def _import_archive_pipeline(job: _ArchiveImport, name: str, stem_no_ext: str, y
 def _existing_pipeline_agent(existing_agents: list, backup_agent: dict) -> Optional[dict]:
     """The agent of an existing pipeline that stands for one backup agent.
 
-    Same agentType; agentTag compared case-insensitively (I3). When only one same-type
-    agent is bound, the backup tag must still match (casefold) — a different tag is not
-    accepted as "already there".
+    Same agentType; agentTag compared case-insensitively (preferred). When only one
+    same-type agent is bound, accept it even when the backup tag differs — restores
+    pre-I3 resume behaviour while keeping casefold tag match as the preferred path.
     """
     a_type = str(backup_agent.get("agentType") or "").upper()
     same_type = [a for a in existing_agents if str(a.get("agentType") or "").upper() == a_type]
@@ -3135,9 +3135,7 @@ def _existing_pipeline_agent(existing_agents: list, backup_agent: dict) -> Optio
         )
         if matched is not None:
             return matched
-        # Tag present but no casefold match: do not accept a differently tagged agent (I3).
-        return None
-    # No backup tag: keep prior short-circuit when a single same-type agent is bound.
+    # No casefold match (or no backup tag): accept a single bound agent of the right type.
     if len(same_type) == 1:
         return same_type[0]
     return None
@@ -5046,10 +5044,14 @@ def _entity_run_status(result: dict) -> str:
     """The final run status of an entity creation result.
 
     A dry-run must never report ``completed`` (I2): writes were blocked.
+    A dry-run that hit errors reports ``failed``, not ``dry-run``.
     """
+    failed = int(result.get("failed") or 0)
     if result.get("dry_run"):
+        if not result.get("success") or failed > 0 or result.get("error"):
+            return "failed"
         return "dry-run"
-    if result.get("partial") or (int(result.get("successful") or 0) > 0 and int(result.get("failed") or 0) > 0):
+    if result.get("partial") or (int(result.get("successful") or 0) > 0 and failed > 0):
         return "partial"
     if result.get("success"):
         return "completed"
@@ -5057,6 +5059,22 @@ def _entity_run_status(result: dict) -> str:
 
 
 async def _execute_run(run_id: str, request: RunRequest) -> None:
+    """Run entity creation; always leave the run out of ``running`` (I5 lock + state)."""
+    try:
+        await _execute_run_body(run_id, request)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Entity run %s raised", run_id)
+        cur = state.current_run
+        if cur is not None and cur.run_id == run_id and getattr(cur, "status", None) == "running":
+            state.finalize_run(run_id, "failed", str(exc) or "Entity run raised")
+        raise
+    finally:
+        cur = state.current_run
+        if cur is not None and cur.run_id == run_id and getattr(cur, "status", None) == "running":
+            state.finalize_run(run_id, "failed", "Entity run ended without a final status")
+
+
+async def _execute_run_body(run_id: str, request: RunRequest) -> None:
     token = state.token
     base_url = state.base_url
     if not token or not base_url:

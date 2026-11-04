@@ -218,8 +218,10 @@ def fan_in_warnings(yaml_config, source_schema, default_target=None,
     """Warnings for target tables fed by YAML tables that belong to ``source_schema``.
 
     Multi-feeder (2+) targets always get type-conflict warnings. When
-    ``existing_columns`` is provided, **single-feeder** targets are checked too
-    so an existing physical table that lacks mapped columns is not skipped silently (I1).
+    ``existing_columns`` is provided, **single-feeder** targets whose YAML lists
+    columns are checked too so an existing physical table that lacks mapped
+    columns is not skipped silently (I1). Tables with no listed columns skip the
+    lookup (large plans must not pay one GET per table).
 
     ``existing_columns(target_schema, target_table)`` gives the columns of an existing target table (None when
     the table does not exist or cannot be read).
@@ -229,18 +231,21 @@ def fan_in_warnings(yaml_config, source_schema, default_target=None,
         if not any(s == source_schema for s, _k, _c in feeds):
             continue
         multi = len(feeds) >= 2
-        if not multi and existing_columns is None:
-            continue
+        union = union_columns(feeds)
+        # Single-feeder: only when a lookup is available AND the YAML lists columns
+        # (otherwise a large plan pays one sequential GET per table for nothing).
+        if not multi:
+            if existing_columns is None or not union:
+                continue
         labels = ", ".join(f"{s}.{k}" for s, k, _c in feeds)
         spelled_schema, spelled_table = _spelled_target(yaml_config, feeds, default_target)
         if multi:
             prefix = f"fan-in {spelled_schema}.{spelled_table} (fed by {labels})"
         else:
             prefix = f"existing target {spelled_schema}.{spelled_table} (from {labels})"
-        union = union_columns(feeds)
         if multi:
             warnings.extend(_type_conflict_warnings(prefix, union, type_conflicts(feeds)))
-        if existing_columns is not None:
+        if existing_columns is not None and union:
             warnings.extend(_missing_columns_warnings(prefix, union,
                                                       existing_columns(spelled_schema, spelled_table)))
     return warnings

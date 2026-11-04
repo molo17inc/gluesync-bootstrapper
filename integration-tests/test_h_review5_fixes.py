@@ -517,5 +517,123 @@ class H7TokenRefreshSingleFlight(unittest.TestCase):
         commons.clear_token_refresh()
 
 
+
+
+class CredentialFallbackSourcePipelineOnly(unittest.TestCase):
+    """Role-agnostic fallback must stay on the source pipeline and skip same-role shells."""
+
+    def _patch(self, pipelines: dict):
+        import automator_app.corehub as corehub
+
+        def fake_fetch(path, method="GET", token=None, body=None, **kwargs):
+            if path == "/pipelines":
+                return [{"pipelineId": pid} for pid in pipelines]
+            for pid, agents in pipelines.items():
+                if path == f"/pipelines/{pid}/config":
+                    return {"agents": agents}
+            if path.endswith("/config/credentials"):
+                return {}
+            return {}
+
+        return mock.patch.object(corehub, "fetch_core_hub", side_effect=fake_fetch)
+
+    def test_does_not_roam_other_pipelines_for_role_agnostic(self):
+        import automator_app.corehub as corehub
+        pipelines = {
+            "src-pipe": [
+                {"agentTag": "mssql-cdc", "agentType": "SOURCE", "agentId": "ms",
+                 "hostCredentials": {"host": "ms-host", "port": 1433, "username": "sa"}},
+            ],
+            "other-pipe": [
+                {"agentTag": "mysql-cdc", "agentType": "TARGET", "agentId": "my",
+                 "hostCredentials": {"host": "other-mysql", "port": 3306, "username": "u",
+                                     "trustServerCertificate": True}},
+            ],
+        }
+        tmpl = {"agentTag": "mssql-cdc", "agentType": "SOURCE", "agentId": "ms",
+                "hostCredentials": {"host": "ms-host", "port": 1433, "username": "sa"}}
+        with self._patch(pipelines):
+            host, _ = corehub._credentials_for_duplicate_agent(
+                token="t", pipeline_id="src-pipe", agent_template=tmpl, new_tag="mysql-cdc",
+            )
+        self.assertEqual(host, {})
+
+    def test_same_role_without_username_blocks_cross_role(self):
+        import automator_app.corehub as corehub
+        pipelines = {
+            "kit": [
+                {"agentTag": "mysql-cdc", "agentType": "SOURCE", "agentId": "my-src",
+                 "hostCredentials": {"host": "shell-only"}},  # no username
+                {"agentTag": "mysql-cdc", "agentType": "TARGET", "agentId": "my-tgt",
+                 "hostCredentials": {"host": "tgt-host", "port": 3306, "username": "u",
+                                     "trustServerCertificate": True}},
+            ],
+        }
+        tmpl = {"agentTag": "mssql-cdc", "agentType": "SOURCE", "agentId": "ms",
+                "hostCredentials": {"host": "ms", "port": 1433, "username": "u"}}
+        with self._patch(pipelines):
+            host, _ = corehub._credentials_for_duplicate_agent(
+                token="t", pipeline_id="kit", agent_template=tmpl, new_tag="mysql-cdc",
+            )
+        # Same-role SOURCE mysql-cdc exists (no username) → must NOT take TARGET creds
+        self.assertEqual(host, {})
+
+    def test_reversed_pipeline_oracle_to_mysql_warns_on_source_pipeline(self):
+        """SOURCE oracle → TARGET mysql reverse: new TARGET oracle may reuse SOURCE oracle
+        on the *source* pipeline only, logged as WARNING (not INFO / not other pipes)."""
+        import automator_app.corehub as corehub
+        import logging
+        pipelines = {
+            "ora-mysql": [
+                {"agentTag": "oracle-triggers", "agentType": "SOURCE", "agentId": "ora",
+                 "hostCredentials": {"host": "ora-host", "port": 1521, "username": "GLUESYNC"}},
+                {"agentTag": "mysql-cdc", "agentType": "TARGET", "agentId": "my",
+                 "hostCredentials": {"host": "my-host", "port": 3306, "username": "u",
+                                     "trustServerCertificate": True}},
+            ],
+            # Other pipeline has a *different* tag — must not be used for oracle-triggers.
+            "unrelated": [
+                {"agentTag": "other-oracle", "agentType": "TARGET", "agentId": "ora2",
+                 "hostCredentials": {"host": "wrong-ora", "port": 1521, "username": "OTHER"}},
+            ],
+        }
+        # Reversed: template is TARGET mysql; new tag oracle for TARGET role
+        tmpl = {"agentTag": "mysql-cdc", "agentType": "TARGET", "agentId": "my",
+                "hostCredentials": {"host": "my-host", "port": 3306, "username": "u"}}
+        with self._patch(pipelines):
+            with self.assertLogs("automator_app.corehub", level="WARNING") as cm:
+                host, _ = corehub._credentials_for_duplicate_agent(
+                    token="t", pipeline_id="ora-mysql", agent_template=tmpl,
+                    new_tag="oracle-triggers",
+                )
+        self.assertEqual(host.get("host"), "ora-host")
+        self.assertTrue(any("role-agnostic" in r.getMessage() for r in cm.records))
+        self.assertFalse(any(r.levelno == logging.INFO and "role-agnostic" in r.getMessage()
+                             for r in cm.records))
+
+    def test_reversed_does_not_take_oracle_from_unrelated_pipeline_only(self):
+        """When the source pipeline has no oracle tag at all, do not roam other pipes."""
+        import automator_app.corehub as corehub
+        pipelines = {
+            "mysql-only": [
+                {"agentTag": "mysql-cdc", "agentType": "SOURCE", "agentId": "my",
+                 "hostCredentials": {"host": "my-host", "port": 3306, "username": "u"}},
+            ],
+            "unrelated": [
+                {"agentTag": "oracle-triggers", "agentType": "SOURCE", "agentId": "ora",
+                 "hostCredentials": {"host": "wrong-ora", "port": 1521, "username": "OTHER"}},
+            ],
+        }
+        tmpl = {"agentTag": "mysql-cdc", "agentType": "TARGET", "agentId": "my",
+                "hostCredentials": {"host": "my-host", "port": 3306, "username": "u"}}
+        with self._patch(pipelines):
+            host, _ = corehub._credentials_for_duplicate_agent(
+                token="t", pipeline_id="mysql-only", agent_template=tmpl,
+                new_tag="oracle-triggers",
+            )
+        self.assertEqual(host, {})
+
+
+
 if __name__ == "__main__":
     unittest.main()
