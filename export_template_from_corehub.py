@@ -1733,7 +1733,7 @@ def attach_schedules_from_jobs(
         return pipeline_schedules, group_schedules
 
     # Fallback schema name when an entityName has no dotted schema part.
-    primary_schema = sorted(schemas.keys())[0]
+    primary_schema = min(schemas.keys())
 
     for job in jobs:
         if not isinstance(job, dict):
