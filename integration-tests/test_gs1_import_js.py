@@ -1,5 +1,6 @@
 """The pure helpers of automator_app/static/gs1_import.js, run under node."""
 
+import os
 import shutil
 import subprocess
 import tempfile
@@ -45,7 +46,8 @@ console.log('ok');
 """
 
 
-@unittest.skipUnless(shutil.which("node"), "node not installed")
+# In CI (CI is set) a missing node fails the test instead of skipping it: the check must never silently not run.
+@unittest.skipUnless(shutil.which("node") or os.environ.get("CI"), "node not installed")
 class Gs1ImportJsTests(unittest.TestCase):
     def test_report_rows_and_selection(self):
         with tempfile.TemporaryDirectory() as tmp:

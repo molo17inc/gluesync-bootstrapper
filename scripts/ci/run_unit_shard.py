@@ -9,6 +9,9 @@ jobs run them, and every test CLASS is assigned to exactly one shard:
 
 so no test can be left out, whatever is added to the test files. Each group still runs in its own process, as before.
 
+A group with "pytest" lists test files written for pytest (parametrized tests, fixtures): `python -m unittest` collects
+nothing from them. Such a group runs as a whole, with pytest, in DEFAULT_SHARD.
+
   run_unit_shard.py [SHARD]    run the tests of SHARD (default: $CI_NODE_INDEX); SHARD is 1..SHARDS
   run_unit_shard.py --list     print which classes and how many tests every shard runs
 
@@ -24,7 +27,8 @@ SHARDS = 4
 DEFAULT_SHARD = 4
 
 # Same invocations, in the same order, as the old single job. A group with "discover" is
-# `unittest discover integration-tests -p <pattern>`, otherwise `unittest <names...>`.
+# `unittest discover integration-tests -p <pattern>`, a group with "pytest" is `pytest <files...>`, otherwise
+# `unittest <names...>`.
 GROUPS = [
     {"title": "bootstrapper core YAML payload unit tests",
      "discover": ("integration-tests", "test_bootstrapper_*.py")},
@@ -52,6 +56,10 @@ GROUPS = [
      "names": ["integration-tests.test_automator_roundtrip"]},
     {"title": "automator app regression tests",
      "names": ["integration-tests.test_automator_app_preexisting_bugs"]},
+    {"title": "GS1 import tests (pytest)",
+     "pytest": ["integration-tests/test_gs1_converter.py",
+                "integration-tests/test_gs1_import_flow.py",
+                "integration-tests/test_gs1_import_js.py"]},
 ]
 
 # "<test module>.<test class>": shard. Local durations (Python 3.11, seconds) of the classes that dominate the run:
@@ -98,9 +106,32 @@ def shard_of(test):
     return CLASS_SHARD.get(class_key(test), DEFAULT_SHARD)
 
 
+def pytest_command(group, *extra):
+    return [sys.executable, "-m", "pytest", *extra, *group["pytest"]]
+
+
+def child_pytest(group, shard):
+    """A pytest group runs whole in DEFAULT_SHARD (shard 0: print the number of tests as JSON)."""
+    if shard == 0:
+        done = subprocess.run(pytest_command(group, "--collect-only", "-q"), stdout=subprocess.PIPE, text=True)
+        count = sum(1 for line in done.stdout.splitlines() if "::" in line)
+        if done.returncode != 0 or count == 0:
+            sys.stderr.write(done.stdout)
+            return 1
+        print(json.dumps({"pytest." + group["title"]: [DEFAULT_SHARD, count]}))
+        return 0
+    if shard != DEFAULT_SHARD:
+        print(f"no test of this group in shard {shard}")
+        return 0
+    # a pytest run that collects no test exits 5: that fails the job, a group must never silently run nothing
+    return subprocess.run(pytest_command(group, "-v")).returncode
+
+
 def child(index, shard):
     """Load GROUPS[index] and run its tests of `shard` (shard 0: only print the per-class counts as JSON)."""
     sys.path.insert(0, os.getcwd())  # what `python -m unittest` does
+    if "pytest" in GROUPS[index]:
+        return child_pytest(GROUPS[index], shard)
     tests = load_group(GROUPS[index])
     if shard == 0:
         counts = {}
