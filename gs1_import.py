@@ -57,6 +57,8 @@ SAVE_PATH = "/pipelines/{pipeline_id}/config/entities"
 VALIDATE_PATH = "/pipelines/{pipeline_id}/config/entities/validate"
 DESCRIBE_PATH = "/pipelines/{pipeline_id}/agents/{agent_id}/discovery/data-model"
 NODE_INFO_PATH = "/pipelines/{pipeline_id}/agents/{agent_id}/discovery/node-info"
+# The source-side type of the result-view column holding a child level.
+CONTAINER_ARRAY = "gs:array"
 
 
 class Gs1ImportError(RuntimeError):
@@ -131,6 +133,60 @@ def _refused_before_the_agent(description: Dict[str, Any]) -> List[Dict[str, Any
 
 # ---------- the flow ----------
 
+class _CoreHubChecks:
+    """Core Hub's checks of the drafts of one conversion, by entity name."""
+
+    def __init__(self, token: Optional[str], request: Dict[str, Any], log: Callable[[str], None]):
+        self.token = token
+        self.request = request
+        self.pipeline_id = request["pipelineId"]
+        self.log = log
+        self.checks: Dict[str, Dict[str, Any]] = {}
+        self._types: Dict[str, List[Dict[str, Any]]] = {}
+
+    def structure(self, subject: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """The converter's structure check: describe for a Query model, validate for a document split."""
+        name = subject["entity"]
+        entry = self.checks.setdefault(name, {})
+        try:
+            if subject["kind"] == "sql":
+                self.log(f"Describing {name} on agent {self.request['sourceAgentId']}")
+                entry["describe"] = describe_model(self.token, self.pipeline_id, self.request["sourceAgentId"],
+                                                   subject["model"])
+                return _refused_before_the_agent(entry["describe"])
+            self.log(f"Validating {name}")
+            entry["validate"] = validate_entities(self.token, self.pipeline_id, [subject["draft"]])
+            return validation_issues(entry["validate"])
+        except (RuntimeError, ValueError) as exc:
+            entry["error"] = str(exc)
+            self.log(f"Core Hub could not check {name}: {exc}")
+            return []
+
+    def type_matrices(self):
+        if not self._types:
+            self._types["source"] = data_types(self.token, self.pipeline_id, self.request["sourceAgentId"])
+            self._types["target"] = data_types(self.token, self.pipeline_id, self.request["targetAgentId"])
+        return self._types["source"], self._types["target"]
+
+    def draft(self, entity: Dict[str, Any], check: bool) -> Dict[str, Any]:
+        """The draft to save: a described Query draft is completed from describe, then validated as an entity."""
+        name = entity["entityName"]
+        entry = self.checks.setdefault(name, {})
+        try:
+            draft = _described_draft(entity, entry.get("describe"), self.type_matrices)
+        except (RuntimeError, ValueError) as exc:
+            entry["error"] = str(exc)
+            return copy.deepcopy(entity)
+        is_query = any(agent_entity.get("type") == "Query" for agent_entity in draft["agentEntities"])
+        if check and is_query and "error" not in entry:
+            try:
+                self.log(f"Validating {name}")
+                entry["validate"] = validate_entities(self.token, self.pipeline_id, [draft])
+            except (RuntimeError, ValueError) as exc:
+                entry["error"] = str(exc)
+        return draft
+
+
 def plan_import(token: Optional[str], request: Dict[str, Any], check: bool = True,
                 log: Callable[[str], None] = lambda _message: None) -> Dict[str, Any]:
     """Converts the configuration and, with ``check``, has Core Hub describe and validate every draft.
@@ -139,55 +195,13 @@ def plan_import(token: Optional[str], request: Dict[str, Any], check: bool = Tru
     root key GS1 took from the FROM table gets the key describe proposes), Core Hub's ``checks`` per entity and
     whether the structure was checked. Nothing is written to Core Hub.
     """
-    checks: Dict[str, Dict[str, Any]] = {}
-    pipeline_id = request["pipelineId"]
-
-    def structure_check(subject: Dict[str, Any]) -> List[Dict[str, Any]]:
-        name = subject["entity"]
-        entry = checks.setdefault(name, {})
-        try:
-            if subject["kind"] == "sql":
-                log(f"Describing {name} on agent {request['sourceAgentId']}")
-                description = describe_model(token, pipeline_id, request["sourceAgentId"], subject["model"])
-                entry["describe"] = description
-                return _refused_before_the_agent(description)
-            log(f"Validating {name}")
-            answer = validate_entities(token, pipeline_id, [subject["draft"]])
-            entry["validate"] = answer
-            return validation_issues(answer)
-        except (RuntimeError, ValueError) as exc:
-            entry["error"] = str(exc)
-            log(f"Core Hub could not check {name}: {exc}")
-            return []
-
+    hub = _CoreHubChecks(token, request, log)
     try:
-        report = convert(request, structure_check if check else None)
+        report = convert(request, hub.structure if check else None)
     except ConversionError as exc:
         raise Gs1ImportError(str(exc)) from None
-    types: Dict[str, List[Dict[str, Any]]] = {}
-
-    def type_matrices():
-        if not types:
-            types["source"] = data_types(token, pipeline_id, request["sourceAgentId"])
-            types["target"] = data_types(token, pipeline_id, request["targetAgentId"])
-        return types["source"], types["target"]
-
-    drafts = {}
-    for entity in report["entities"]:
-        name = entity["entityName"]
-        try:
-            draft = _described_draft(entity, checks.get(name, {}).get("describe"), type_matrices)
-        except (RuntimeError, ValueError) as exc:
-            checks.setdefault(name, {})["error"] = str(exc)
-            draft = copy.deepcopy(entity)
-        drafts[name] = draft
-        is_query = any(agent_entity.get("type") == "Query" for agent_entity in draft["agentEntities"])
-        if check and is_query and "error" not in checks.get(name, {}):
-            try:
-                log(f"Validating {name}")
-                checks[name]["validate"] = validate_entities(token, pipeline_id, [draft])
-            except (RuntimeError, ValueError) as exc:
-                checks[name]["error"] = str(exc)
+    drafts = {entity["entityName"]: hub.draft(entity, check) for entity in report["entities"]}
+    checks = {name: entry for name, entry in hub.checks.items() if entry}
     return {"report": report, "drafts": drafts, "checks": checks, "structureChecked": check}
 
 
@@ -242,16 +256,17 @@ def _map_result_view(target: Dict[str, Any], root: Dict[str, Any], source_matrix
                      target_matrix: List[Dict[str, Any]]) -> None:
     object_id = target["entityObject"]["id"]
     view_table = gs2.level_table_id(root.get("name", ""))
-    array_type = next((e.get("defaultType") for e in target_matrix if e.get("gluesyncDataType") == "ARRAY"), "gs:array")
+    array_type = next((e.get("defaultType") for e in target_matrix if e.get("gluesyncDataType") == "ARRAY"),
+                      CONTAINER_ARRAY)
     static_ids = {column["id"] for column in target["columns"]}
     view = [dict(column, isPK=column.get("name") in (root.get("key") or [])) for column in root.get("columns") or []]
-    view += [gs2.container_column(gs2.id64(child["path"]), view_table, child["path"], "gs:array")
+    view += [gs2.container_column(gs2.id64(child["path"]), view_table, child["path"], CONTAINER_ARRAY)
              for child in root.get("children") or []]
     mapped = [column for column in view if column["id"] not in static_ids]
     target["columns"] = [
         dict(column, tableId=object_id,
-             dataType=array_type if column["dataType"] == "gs:array" else _target_type(column["dataType"], source_matrix,
-                                                                                        target_matrix))
+             dataType=array_type if column["dataType"] == CONTAINER_ARRAY
+             else _target_type(column["dataType"], source_matrix, target_matrix))
         for column in mapped
     ] + target["columns"]
     target["entityType"]["columnsMappingMatrix"] = [
@@ -352,7 +367,7 @@ def _confirm(prompt: str) -> bool:
     return input(f"{prompt} [y/N] ").strip().lower() in ("y", "yes")
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Import a GS1 configuration into a Gluesync 2 pipeline")
     parser.add_argument("--token", help=f"Core Hub token (default ${TOKEN_ENV}, else admin login)")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -371,33 +386,48 @@ def main(argv: Optional[List[str]] = None) -> int:
                                              help="Do not call Core Hub: no structure check, no describe, no validate")
     commands.choices["import"].add_argument("--entities", help="Comma-separated GS1 entity names (default: every draft)")
     commands.choices["import"].add_argument("--yes", action="store_true", help="Confirm the save without asking")
-    args = parser.parse_args(argv)
+    return parser
 
+
+def _agents(args: argparse.Namespace, token: Optional[str], offline: bool):
+    source, target = args.source_agent, args.target_agent
+    if not offline and not (source and target):
+        agents = pipeline_agents(token, args.pipeline)
+        source, target = source or agents["source"], target or agents["target"]
+    if not (source and target):
+        raise Gs1ImportError("Name --source-agent and --target-agent (the pipeline has no SOURCE or TARGET agent)")
+    return source, target
+
+
+def _save_chosen(args: argparse.Namespace, token: Optional[str], plan: Dict[str, Any]) -> None:
+    names = [n.strip() for n in args.entities.split(",") if n.strip()] if args.entities else list(plan["drafts"])
+    if not names:
+        print("No entity to save")
+        return
+    confirmed = args.yes or _confirm(f"Save {len(names)} entities ({', '.join(names)}) to pipeline {args.pipeline}?")
+    saved = save_drafts(token, args.pipeline, plan, names, confirmed)
+    print(f"Saved {len(saved)} entities: {', '.join(saved)}")
+
+
+def _run(args: argparse.Namespace) -> None:
+    config = read_config(args.config)
+    offline = getattr(args, "offline", False)
+    token = None if offline else (args.token or os.getenv(TOKEN_ENV) or _admin_login())
+    source, target = _agents(args, token, offline)
+    request = conversion_request(config, args.pipeline, source, target, _root_counts(args.root_counts), args.repository)
+    plan = plan_import(token, request, check=not offline, log=lambda message: print(message, file=sys.stderr))
+    print("\n".join(summarize(plan)))
+    if args.output:
+        with open(args.output, "w", encoding="utf-8") as f:
+            json.dump({k: plan[k] for k in ("report", "drafts", "checks")}, f, indent=2, ensure_ascii=False)
+    if args.command == "import":
+        _save_chosen(args, token, plan)
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    args = _parser().parse_args(argv)
     try:
-        config = read_config(args.config)
-        offline = getattr(args, "offline", False)
-        token = None if offline else (args.token or os.getenv(TOKEN_ENV) or _admin_login())
-        source, target = args.source_agent, args.target_agent
-        if not offline and not (source and target):
-            agents = pipeline_agents(token, args.pipeline)
-            source, target = source or agents["source"], target or agents["target"]
-        if not (source and target):
-            raise Gs1ImportError("Name --source-agent and --target-agent (the pipeline has no SOURCE or TARGET agent)")
-        request = conversion_request(config, args.pipeline, source, target, _root_counts(args.root_counts), args.repository)
-        plan = plan_import(token, request, check=not offline, log=lambda message: print(message, file=sys.stderr))
-        print("\n".join(summarize(plan)))
-        if args.output:
-            with open(args.output, "w", encoding="utf-8") as f:
-                json.dump({k: plan[k] for k in ("report", "drafts", "checks")}, f, indent=2, ensure_ascii=False)
-        if args.command == "convert":
-            return 0
-        names = [n.strip() for n in args.entities.split(",") if n.strip()] if args.entities else list(plan["drafts"])
-        if not names:
-            print("No entity to save")
-            return 0
-        confirmed = args.yes or _confirm(f"Save {len(names)} entities ({', '.join(names)}) to pipeline {args.pipeline}?")
-        saved = save_drafts(token, args.pipeline, plan, names, confirmed)
-        print(f"Saved {len(saved)} entities: {', '.join(saved)}")
+        _run(args)
         return 0
     except (Gs1ImportError, ValueError, OSError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

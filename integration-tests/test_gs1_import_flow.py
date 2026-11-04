@@ -198,7 +198,8 @@ def test_cli_convert_writes_the_report_and_saves_nothing(hub, tmp_path, capsys):
     assert hub.saved == []
     assert set(json.loads(output.read_text())["drafts"]) == {"ORDERS", "KEYED"}
     printed = capsys.readouterr().out
-    assert "RECENT: UNSUPPORTED" in printed and "Secret keys removed unread: sourcePassword" in printed
+    assert "RECENT: UNSUPPORTED" in printed
+    assert "Secret keys removed unread: sourcePassword" in printed
     assert "fixture-source-password" not in printed + output.read_text()
 
 

@@ -138,7 +138,8 @@ def test_gs1_import_of_a_query_data_modeling_entity_saves_the_array(hub, gs1_tar
         [items] = query["model"]["root"]["children"]
         assert (items["path"], items["key"]) == ("ITEMS", [key, child_key])
         target = next(a for a in stored[0]["agentEntities"] if a.get("type") == "NoSqlEntity")
-        assert target["keyMapping"]["prefix"] == name and target["keyMapping"]["valueRendering"] == "GS1"
+        assert target["keyMapping"]["prefix"] == name
+        assert target["keyMapping"]["valueRendering"] == "GS1"
         assert "ITEMS" in [column["name"] for column in target["columns"]], "the array is mapped onto the collection"
     finally:
         if saved_ids:

@@ -148,6 +148,11 @@ class _Entry:
         return self.tables[0]
 
 
+def _nested(table: _Table) -> bool:
+    """A NESTED table with a ``parentField``: a ONE child under that field, else an extension of its level."""
+    return table.type == "NESTED" and table.parent_field is not None
+
+
 def _others(tables: List[_Table], main: _Table) -> List[_Table]:
     return [table for table in tables if table is not main]
 
@@ -168,17 +173,7 @@ class NoSqlToSqlDraft:
 
     def draft(self, source_agent_id: str, target_agent_id: str):
         entries = [_Entry(raw, self.sybase) for raw in self.body["dataModeling"] if isinstance(raw, dict)]
-        roots = [entry for entry in entries if entry.level == 1]
-        if len(roots) != 1:
-            raise Refused(f"{self.name} has {len(roots)} level-1 entries: a DataModeling entity has one")
-        root_entry = roots[0]
-        root_table = root_entry.main_table()
-        if root_table is None:
-            raise Refused(f"{self.name} has no level-1 table to write the document root to")
-        for entry in entries:
-            if entry.level > 3:
-                self.warnings.append(warning(
-                    "GS1_SETTING_NOT_CARRIED", f"{self.name}: level {entry.level} '{entry.name}', which GS1 skipped"))
+        root_entry, root_table = self._root(entries)
         entity_keys = self.settings.entities_keys.get(self.name)
         root_key = entity_keys if entity_keys is not None else list(root_table.keys)
         arrays = [self._array_level(entry, entries, root_key) for entry in entries if entry.level == 2]
@@ -186,17 +181,7 @@ class NoSqlToSqlDraft:
                            is_root=True, key=root_key)
         root["children"] = root["children"] + arrays
         root = self._chain_scoped(root, None, True)
-        objects = [child["path"] for child in root["children"] if child["cardinality"] == "ONE" and child["path"]]
-        for array in arrays:
-            self._container(array["path"], "gs:array")
-        for path in objects:
-            self._container(path, "gs:object")
-        for label in root_key:
-            self._entity_column(label)
-        # The DCP source decomposes the root key from the document id: those are the id columns.
-        for col in self.entity_columns:
-            if col["name"] in root_key:
-                col["isPK"] = True
+        self._header_columns(root, arrays, root_key)
         self.warnings.append(warning(
             "GS1_DOCUMENT_ID_TO_CONFIRM",
             f"{self.name}: the draft lays the root key {kotlin_list(root_key)} out in the document id with no prefix "
@@ -220,17 +205,47 @@ class NoSqlToSqlDraft:
                 date_format=date_format,
             )),
         )
+        return source, self._target(target_agent_id), list(self.warnings)
+
+    def _root(self, entries: List[_Entry]):
+        """The level-1 entry and its table; the levels below 3 GS1 skipped are reported."""
+        roots = [entry for entry in entries if entry.level == 1]
+        if len(roots) != 1:
+            raise Refused(f"{self.name} has {len(roots)} level-1 entries: a DataModeling entity has one")
+        root_table = roots[0].main_table()
+        if root_table is None:
+            raise Refused(f"{self.name} has no level-1 table to write the document root to")
+        for entry in entries:
+            if entry.level > 3:
+                self.warnings.append(warning(
+                    "GS1_SETTING_NOT_CARRIED", f"{self.name}: level {entry.level} '{entry.name}', which GS1 skipped"))
+        return roots[0], root_table
+
+    def _header_columns(self, root: Dict[str, Any], arrays: List[Dict[str, Any]], root_key: List[str]) -> None:
+        """The entity's columns holding the arrays, the objects and the root key."""
+        objects = [child["path"] for child in root["children"] if child["cardinality"] == "ONE" and child["path"]]
+        for array in arrays:
+            self._container(array["path"], "gs:array")
+        for path in objects:
+            self._container(path, "gs:object")
+        for label in root_key:
+            self._entity_column(label)
+        # The DCP source decomposes the root key from the document id: those are the id columns.
+        for col in self.entity_columns:
+            if col["name"] in root_key:
+                col["isPK"] = True
+
+    def _target(self, target_agent_id: str) -> Dict[str, Any]:
         columns: List[Any] = []
         for table, table_columns in self.target_columns.values():
             columns.extend([table, list(table_columns)])
-        target = m.multi_table_entity(
+        return m.multi_table_entity(
             self.name,
             target_agent_id,
             m.target_type(["INSERT", "UPDATE", "DELETE", "TRUNCATE"], mapping_matrix=list(self.matrix)),
             [table for table, _ in self.target_columns.values()],
             columns,
         )
-        return source, target, list(self.warnings)
 
     def _value_types(self) -> Dict[str, str]:
         """The ``entitiesDataTypes`` of the entity; a name GS1 does not know made GS1 fail, so it is reported."""
@@ -306,26 +321,12 @@ class NoSqlToSqlDraft:
         if is_root:
             for label in direct:
                 self._entity_column(label)
-        merged_levels = []
-        for sub_object, fields in merged.items():
-            for label in fields:
-                self._map(source_table_id, f"{sub_object}.{label}", table, table.column_of(label), False)
-            if is_root:
-                self._container(sub_object, "gs:object")
-            merged_name = f"{level_name}_{sub_object}"
-            merged_levels.append(m.model_level(
-                merged_name,
-                path=sub_object,
-                cardinality="ONE",
-                embedding="MERGED",
-                columns=[self._level_column(merged_name, label) for label in fields],
-                policy=_write_policy(),
-            ))
-        children = []
-        for other in others:
-            nested = other.type == "NESTED" and other.parent_field is not None
-            child_path = other.parent_field if nested else ""
-            children.append(self._level(other.target["name"], child_path, "ONE", other, [], level_key))
+        merged_levels = [self._merged_level(level_name, source_table_id, table, sub_object, fields, is_root)
+                         for sub_object, fields in merged.items()]
+        children = [
+            self._level(other.target["name"], other.parent_field if _nested(other) else "", "ONE", other, [], level_key)
+            for other in others
+        ]
         return m.model_level(
             level_name,
             path=path,
@@ -335,6 +336,23 @@ class NoSqlToSqlDraft:
             parent_link=parent_link,
             policy=_write_policy(),
             children=merged_levels + children,
+        )
+
+    def _merged_level(self, level_name: str, source_table_id: int, table: _Table, sub_object: str, fields: List[str],
+                      is_root: bool) -> Dict[str, Any]:
+        """The MERGED child holding the fields of a FLATTENED table's sub-object."""
+        for label in fields:
+            self._map(source_table_id, f"{sub_object}.{label}", table, table.column_of(label), False)
+        if is_root:
+            self._container(sub_object, "gs:object")
+        merged_name = f"{level_name}_{sub_object}"
+        return m.model_level(
+            merged_name,
+            path=sub_object,
+            cardinality="ONE",
+            embedding="MERGED",
+            columns=[self._level_column(merged_name, label) for label in fields],
+            policy=_write_policy(),
         )
 
     def _parent_link(self, table: _Table, parent_key: List[str]) -> List[Dict[str, str]]:

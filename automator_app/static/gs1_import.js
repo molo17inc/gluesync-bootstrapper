@@ -6,14 +6,15 @@ const SEVERITY_CLASS = { ERROR: 'gs1-issue-error', WARNING: 'gs1-issue-warning' 
 /** One line of an issue: severity, code, where, message. */
 export function issueText(issue) {
   const where = [issue.level, issue.location].filter(Boolean).join('/');
-  return `${issue.severity} ${issue.code}${where ? ` [${where}]` : ''}: ${issue.message}`;
+  const place = where ? ` [${where}]` : '';
+  return `${issue.severity} ${issue.code}${place}: ${issue.message}`;
 }
 
 /** The rows of the report table: one per GS1 entity, a draft only for a converted one. */
 export function reportRows(plan) {
   const drafts = new Set(plan.drafts || []);
   return (plan.perEntity || []).map((entry) => {
-    const check = (plan.checks || {})[entry.gs1Name] || {};
+    const check = plan.checks?.[entry.gs1Name] || {};
     const validate = check.validate;
     return {
       name: entry.gs1Name,
@@ -64,7 +65,8 @@ function checksCell(row) {
   if (row.checkError) lines.push(`Core Hub could not check it: ${row.checkError}`);
   if (row.verdict) {
     const keys = Object.entries(row.proposedKeys).map(([level, key]) => `${level} [${(key || []).join(', ')}]`);
-    lines.push(`describe: ${row.verdict}${keys.length ? `; proposed keys ${keys.join('; ')}` : ''}`);
+    const proposed = keys.length ? '; proposed keys ' + keys.join('; ') : '';
+    lines.push(`describe: ${row.verdict}${proposed}`);
   }
   if (row.valid !== null) lines.push(`validate: ${row.valid ? 'valid' : 'refused'}`);
   lines.forEach((line) => {

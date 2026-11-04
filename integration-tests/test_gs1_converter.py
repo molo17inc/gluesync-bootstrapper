@@ -147,8 +147,12 @@ def test_values_read_as_core_hub_reads_them():
     config = load_config('{"a": 1.50, "b": 1e3, "c": -0, "d": "7", "e": null, "f": true}')
 
     assert [content(config[k]) for k in "abcdef"] == ["1.50", "1e3", "-0", "7", "null", "true"]
-    assert as_int(config["d"]) == 7 and as_int(config["a"]) is None and as_int("2147483648") is None
-    assert as_bool("true") is True and as_bool("yes") is None
+    assert as_int(config["d"]) == 7
+    assert as_int(config["a"]) is None
+    assert as_int("2147483648") is None
+    assert as_int("\u0661") is None, "only ASCII digits, as Core Hub reads them"
+    assert as_bool("true") is True
+    assert as_bool("yes") is None
     assert json_text({"x": [1, "y\n"], "z": config["a"]}) == '{"x":[1,"y\\n"],"z":1.50}'
     assert take_utf16("a\U0001F600b", 3) == "a\U0001F600"
 
@@ -160,3 +164,21 @@ def test_ids_are_core_hub_ids():
     assert target["entityObject"]["id"] == table_or_object_id("S", "ORD")
     assert [c["id"] for c in target["columns"]] == [column_id("type"), column_id("scope")]
     assert level_table_id("Cards") == table_or_object_id("#gs_model", "Cards")
+
+
+@pytest.mark.parametrize("message, joined", [
+    ("K is a column of dbo.C, not of dbo.L, the table of the level's root key", True),
+    ("K is a column of X, not of Y, the table of the level's root key.", True),
+    (" is a column of X, not of Y, the table of the level's root key", True),
+    (" is a column of , not of , the table of the level's root key", False),
+    ("K is a column of X, not of Y,\n the table of the level's root key", False),
+    ("K is a column of X\u2028, not of Y, the table of the level's root key", False),
+    ("first line\nK is a column of X, not of Y, the table of the level's root key", True),
+    ("K is not a column of anything", False),
+    ("", False),
+])
+def test_the_joined_table_message_is_recognised_as_core_hub_words_it(message, joined):
+    """As Core Hub's `" is a column of .+, not of .+, the table of the level's root key"` finds it on one line."""
+    from gs1_migration.converter import _names_a_joined_table
+
+    assert _names_a_joined_table(message) is joined

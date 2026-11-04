@@ -163,7 +163,7 @@ async def _convert(
         raise HTTPException(status_code=400, detail=f"The repository is one of {', '.join(REPOSITORIES)}")
     try:
         config = load_config((await file.read()).decode("utf-8"))
-    except (UnicodeDecodeError, ValueError) as exc:
+    except ValueError as exc:  # UnicodeDecodeError and JSONDecodeError are ValueErrors
         raise HTTPException(status_code=400, detail="The file is not a GS1 configuration (JSON)") from exc
     if not isinstance(config, dict):
         raise HTTPException(status_code=400, detail="The file is not a GS1 configuration (a JSON object)")

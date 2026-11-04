@@ -61,7 +61,10 @@ _DEFAULT_KEYSPACE = "_default"
 _STRING_TYPE = "string"
 # 1 % of the entity's roots, never fewer than 100 deletes per window.
 _MIN_DELETES_PER_WINDOW = 100
-_JOINED_TABLE_KEY = re.compile(r" is a column of .+, not of .+, the table of the level's root key")
+# How Core Hub words a key that is a plain column of another table than the level's root key: these three parts, in
+# this order, each after at least one character, on one line.
+_JOINED_TABLE_KEY = (" is a column of ", ", not of ", ", the table of the level's root key")
+_LINE_BREAK = re.compile(r"\r\n|[\n\r\u0085\u2028\u2029]")
 
 StructureCheck = Callable[[Dict[str, Any]], List[Dict[str, Any]]]
 """Checks one draft and returns Core Hub's structure issues (dicts as Core Hub writes them).
@@ -299,10 +302,25 @@ def _max_deletes(root_count: Any) -> int:
     return max(_MIN_DELETES_PER_WINDOW, per_window)
 
 
+def _names_a_joined_table(message: str) -> bool:
+    """Whether a line of the message holds the parts of ``_JOINED_TABLE_KEY`` in order, as ``A.+B.+C`` matches."""
+    for line in _LINE_BREAK.split(message):
+        start, found = 0, True
+        for index, part in enumerate(_JOINED_TABLE_KEY):
+            position = line.find(part, start)
+            if position < 0:
+                found = False
+                break
+            start = position + len(part) + (1 if index < len(_JOINED_TABLE_KEY) - 1 else 0)
+        if found:
+            return True
+    return False
+
+
 def _with_migration_hint(issue: Dict[str, Any], root_level: str) -> Dict[str, Any]:
     """A child-level key of a table joined to the root key's table: the array is migrated as an entity of its own."""
     if (issue.get("code") == "KEY_NOT_PLAIN_COLUMN" and issue.get("level") != root_level
-            and _JOINED_TABLE_KEY.search(issue.get("message", ""))):
+            and _names_a_joined_table(issue.get("message", ""))):
         level = issue.get("level")
         location = issue.get("location")
         return dict(issue, hint=(

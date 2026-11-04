@@ -32,7 +32,7 @@ from typing import Any, Dict, List, Optional
 
 _INT32_MIN = -(2 ** 31)
 _INT32_MAX = 2 ** 31 - 1
-_INT_TEXT = re.compile(r"-?[0-9]+")
+_INT_TEXT = re.compile(r"-?\d+", re.ASCII)
 
 
 class JsonInt(int):
