@@ -3365,6 +3365,8 @@ def _create_target_table(run, pair, keys, label=None) -> bool:
             ctx.source_node_info,
             ctx.target_node_info,
             fan_in_peers=_fan_in_peers(run, pair.target_table_name),
+            source_schema=run.source_schema,
+            source_table=pair.table_name,
         ) is True
     except TargetTableCreationError as error:
         if (_discover_target_columns(ctx, pair.target_table_name) or {}).get('columns'):
