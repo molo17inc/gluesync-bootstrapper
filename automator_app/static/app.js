@@ -842,9 +842,9 @@ const stateManager = {
   handleRunUpdate(run) {
     if (!run) return;
     ui.syncServerLogs(run);
-    const statusLabel = run.status === 'partial' ? 'PARTIAL'
-      : run.status === 'dry-run' ? 'DRY-RUN'
-      : String(run.status || '').toUpperCase();
+    let statusLabel = String(run.status || '').toUpperCase();
+    if (run.status === 'partial') statusLabel = 'PARTIAL';
+    else if (run.status === 'dry-run') statusLabel = 'DRY-RUN';
     ui.setStatus(run.status, statusLabel);
     this.lastStatus = run.status;
     if (run.corehubOverview) {

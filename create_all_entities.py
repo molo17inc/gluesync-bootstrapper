@@ -5778,7 +5778,7 @@ def _fail_run(error_msg):
     """Log a failure of :func:`main` and leave the failure lockfile; raises it."""
     log_failure(logger, error_msg)
     lockfile_failure()
-    raise Exception(error_msg)
+    raise RuntimeError(error_msg)
 
 
 def _pipeline_agents(token, pipeline_id, source_type, target_type):

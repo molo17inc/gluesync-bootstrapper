@@ -434,7 +434,7 @@ class StateResponse(BaseModel):
     skip_verify: Optional[bool] = Field(None, alias="skipVerify")
     enable_scheduling: bool = Field(..., alias="enableScheduling")
     create_tables: bool = Field(..., alias="createTables")
-    run: Optional[dict]
+    run: Optional[dict] = None
     duplicate: Optional[dict] = None
     corehub_overview: Optional[dict] = Field(None, alias="corehubOverview")
 
@@ -1296,9 +1296,9 @@ def _bulk_schema_types(request: BulkCreateRequest) -> tuple[str, str]:
     return source_type, target_type
 
 
-def _bulk_create_entities(request: BulkCreateRequest) -> ApiMessage:
-    _require_session()
 
+def _bulk_prefs(request: BulkCreateRequest) -> tuple[bool, bool]:
+    """Resolve enable_scheduling / create_tables from the request or session prefs."""
     prefs = state.preferences()
     enable_scheduling = request.enable_scheduling
     if enable_scheduling is None:
@@ -1306,7 +1306,34 @@ def _bulk_create_entities(request: BulkCreateRequest) -> ApiMessage:
     create_tables = request.create_tables
     if create_tables is None:
         create_tables = prefs["createTables"]
+    return bool(enable_scheduling), bool(create_tables)
 
+
+def _bulk_effective_create_tables(create_tables: bool, target_type: str) -> bool:
+    """Disable DDL for NoSQL / object-store / streaming targets."""
+    if target_type and target_type.upper() == 'NOSQL':
+        logger.info("Target is NoSQL - disabling table creation")
+        return False
+    return bool(create_tables)
+
+
+def _bulk_result_message(ok: bool, dry: bool, result: dict) -> str:
+    """User-facing bulk create / dry-run summary line."""
+    if dry:
+        return (
+            "Bulk entity dry-run finished (no writes)"
+            if ok else (result.get("error") or "Bulk entity dry-run reported failures")
+        )
+    return (
+        "Bulk entity creation completed successfully"
+        if ok else (result.get("error") or "Bulk entity creation failed")
+    )
+
+
+def _bulk_create_entities(request: BulkCreateRequest) -> ApiMessage:
+    _require_session()
+
+    enable_scheduling, create_tables = _bulk_prefs(request)
     plan = _load_entity_plan_or_400(request.plan)
     enable_scheduling, create_tables, _restore_fc = _entity_plan_flags(
         plan, request.pipeline_id, enable_scheduling=enable_scheduling, create_tables=create_tables,
@@ -1322,13 +1349,7 @@ def _bulk_create_entities(request: BulkCreateRequest) -> ApiMessage:
         )
 
     source_type, target_type = _bulk_schema_types(request)
-
-    # Disable table creation for NoSQL / object-store / streaming targets (same as run_create_entities /
-    # duplicate pipeline — agents.json catalog type, not the request's SQL/NoSQL hint alone).
-    effective_create_tables = bool(create_tables)
-    if target_type and target_type.upper() == 'NOSQL':
-        logger.info("Target is NoSQL - disabling table creation")
-        effective_create_tables = False
+    effective_create_tables = _bulk_effective_create_tables(create_tables, target_type)
 
     pipeline = import_plan.entity_pipeline(plan, request.pipeline_id)
     import_opts = _entity_run_import_options(plan, pipeline, dry_run=bool(request.dry_run))
@@ -1364,28 +1385,18 @@ def _bulk_create_entities(request: BulkCreateRequest) -> ApiMessage:
 
     ok = result.get("success", False)
     logs = result.get("logs") or []
-    if logs:
-        for line in logs:
-            logger.info("[bulk-create] %s", line)
+    for line in logs:
+        logger.info("[bulk-create] %s", line)
 
     dry = bool(request.dry_run) or bool(result.get("dry_run"))
-    if dry:
-        msg = (
-            "Bulk entity dry-run finished (no writes)"
-            if ok else (result.get("error") or "Bulk entity dry-run reported failures")
-        )
-    else:
-        msg = (
-            "Bulk entity creation completed successfully"
-            if ok else (result.get("error") or "Bulk entity creation failed")
-        )
     return ApiMessage(
         success=ok,
-        message=msg,
+        message=_bulk_result_message(ok, dry, result),
         logs=logs,
         planUsed=plan.to_dict() if not plan.empty else None,
         dryRun=True if dry else None,
     )
+
 
 
 def _template_schema_types(pipeline_id: str) -> tuple[Any, Any]:
@@ -1400,7 +1411,7 @@ def _template_schema_types(pipeline_id: str) -> tuple[Any, Any]:
             use_ssl=state.use_ssl,
             skip_verify=state.skip_verify,
         )
-    except Exception as exc:  # pylint: disable=broad-except
+    except Exception:  # pylint: disable=broad-except
         logger.exception(
             "Failed to infer schema types for bulk template on pipeline %s", pipeline_id
         )
@@ -3601,10 +3612,9 @@ def _run_archive_import(contents: bytes, agent_overrides_text: Optional[str] = N
     ``plan`` (a custom import, this run only; None or empty: Import All), ``agent_passwords`` ({backup pipeline
     id: {agentTag|agentId: password}}, kept in memory) and ``plan_env`` (where passwordRef "env:NAME" is read).
     One import at a time: 409 while another runs."""
-    with _exclusive_import():
-        with _backup_zip_scope(contents):
-            return _run_archive_import_locked(contents, agent_overrides_text, resume_pipeline_id,
-                                              resume_source_pipeline_id, plan, agent_passwords, plan_env)
+    with _exclusive_import(), _backup_zip_scope(contents):
+        return _run_archive_import_locked(contents, agent_overrides_text, resume_pipeline_id,
+                                          resume_source_pipeline_id, plan, agent_passwords, plan_env)
 
 
 def _env_secret_values(plan: Optional[import_plan.ImportPlan], plan_env: Any,
@@ -4627,9 +4637,8 @@ def _locked_preview(contents: bytes, plan: import_plan.ImportPlan,
     owner = object()
     import_plan.SECRETS.add(owner, list(import_plan.secret_values(passwords)) + _env_secret_values(plan, None))
     try:
-        with _exclusive_import():
-            with _backup_zip_scope(contents):
-                return _preview_import(contents, plan, passwords)
+        with _exclusive_import(), _backup_zip_scope(contents):
+            return _preview_import(contents, plan, passwords)
     finally:
         import_plan.SECRETS.discard(owner)
 
