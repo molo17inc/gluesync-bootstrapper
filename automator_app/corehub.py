@@ -355,6 +355,20 @@ def _replay_logs(log_callback: Optional[Callable[..., None]], logs: list) -> Non
                 _invoke_log_callback(log_callback, line, level="info", scope="stdout")
 
 
+def _create_entities_summary_error(
+    result_payload: Dict[str, Any], errors: list, *, ok: int, failed: int, skipped: int
+) -> Any:
+    """The error text of a failed or partial create_all_entities result, when there is one."""
+    summary_error = result_payload.get("error")
+    if summary_error:
+        return summary_error
+    if errors:
+        return f"OK {ok}, failed {failed}, skipped {skipped}. " + "; ".join(errors)
+    if failed or result_payload.get("partial"):
+        return f"OK {ok}, failed {failed}, skipped {skipped}"
+    return summary_error
+
+
 def _create_entities_outcome(result_payload: Dict[str, Any], logs: list) -> Dict[str, Any]:
     """Build the response of run_create_entities from the create_all_entities result.
 
@@ -384,14 +398,7 @@ def _create_entities_outcome(result_payload: Dict[str, Any], logs: list) -> Dict
         "failedEntityIds": list(result_payload.get("failedEntityIds") or []),
     }
     if not success or payload["partial"]:
-        summary_error = result_payload.get("error")
-        if not summary_error and errors:
-            summary_error = (
-                f"OK {ok}, failed {failed}, skipped {skipped}. "
-                + "; ".join(errors)
-            )
-        elif not summary_error and (failed or payload["partial"]):
-            summary_error = f"OK {ok}, failed {failed}, skipped {skipped}"
+        summary_error = _create_entities_summary_error(result_payload, errors, ok=ok, failed=failed, skipped=skipped)
         if summary_error:
             payload["error"] = summary_error
     return payload

@@ -396,32 +396,45 @@ def make_password_login_refresh(
     """Build a refresh callback that POSTs /authentication/login with known admin passwords."""
 
     def refresh() -> Optional[str]:
-        saved = load_admin_password(credentials_path) if credentials_path else None
-        extras = list(extra_passwords or [])
-        if passwords is not None:
-            candidates = [p for p in passwords if p]
-        else:
-            candidates = login_password_candidates(
-                saved,
-                extras[0] if extras else None,
-                extras[1] if len(extras) > 1 else None,
-            )
-        for password in candidates:
-            try:
-                response = fetch_core_hub(
-                    "/authentication/login",
-                    method="POST",
-                    body={"username": username, "password": password},
-                    _auth_retry=False,
-                )
-            except Exception:
-                continue
-            token = response.get("apiToken") if isinstance(response, dict) else None
-            if token:
-                return token
-        return None
+        return _login_with_known_passwords(username, passwords, credentials_path, extra_passwords)
 
     return refresh
+
+
+def _login_with_known_passwords(
+    username: str,
+    passwords: Optional[List[Optional[str]]],
+    credentials_path: Optional[str],
+    extra_passwords: Optional[List[Optional[str]]],
+) -> Optional[str]:
+    saved = load_admin_password(credentials_path) if credentials_path else None
+    extras = list(extra_passwords or [])
+    if passwords is not None:
+        candidates = [p for p in passwords if p]
+    else:
+        candidates = login_password_candidates(
+            saved,
+            extras[0] if extras else None,
+            extras[1] if len(extras) > 1 else None,
+        )
+    for password in candidates:
+        token = _password_login_token(username, password)
+        if token:
+            return token
+    return None
+
+
+def _password_login_token(username: str, password: str) -> Optional[str]:
+    try:
+        response = fetch_core_hub(
+            "/authentication/login",
+            method="POST",
+            body={"username": username, "password": password},
+            _auth_retry=False,
+        )
+    except Exception:
+        return None
+    return response.get("apiToken") if isinstance(response, dict) else None
 
 
 def fetch_core_hub(path, method='GET', token=None, body=None, params=None, headers=None,
@@ -1648,6 +1661,17 @@ def assign_entities_to_group(token, pipeline_id, group_id, entity_ids):
         return False
 
 
+def _find_group_by_name(groups, group_name):
+    target_fold = group_name.casefold()
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        existing_name = group.get('name')
+        if existing_name is not None and str(existing_name).casefold() == target_fold:
+            return group
+    return None
+
+
 def create_group(token, pipeline_id, group_name, description: Optional[str] = None, color: Optional[str] = None):
     """Create a new group in the pipeline if it doesn't exist.
 
@@ -1681,18 +1705,14 @@ def create_group(token, pipeline_id, group_name, description: Optional[str] = No
             )
             groups = []
 
-        target_fold = group_name.casefold()
-        for group in groups:
-            if not isinstance(group, dict):
-                continue
-            existing_name = group.get('name')
-            if existing_name is not None and str(existing_name).casefold() == target_fold:
-                group_id = group.get('groupId')
-                logger.info(
-                    f"Found existing group '{existing_name}' (matched '{group_name}' casefold) "
-                    f"with ID: {group_id}"
-                )
-                return group_id
+        existing_group = _find_group_by_name(groups, group_name)
+        if existing_group is not None:
+            group_id = existing_group.get('groupId')
+            logger.info(
+                f"Found existing group '{existing_group.get('name')}' (matched '{group_name}' casefold) "
+                f"with ID: {group_id}"
+            )
+            return group_id
 
         def random_color():
             return f"#{random.randint(0, 255):02x}{random.randint(0, 255):02x}{random.randint(0, 255):02x}ff"

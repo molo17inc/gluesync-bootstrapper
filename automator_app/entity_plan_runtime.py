@@ -112,7 +112,7 @@ def preview_payload(
     conflict_set = set(conflicts)
     rows = [_entity_preview_row(planned, e, conflict_set) for e in entities]
     notes = list(notes) + fan_notes + _partial_chain_notes(yaml_config, {e["id"] for e in entities})
-    notes = notes + _multi_schema_source_notes(yaml_config, planned, plan)
+    notes = notes + _multi_schema_source_notes(planned, plan)
     return {
         "pipelineId": str(pipeline_id),
         "entityCount": len(entities),
@@ -126,7 +126,7 @@ def preview_payload(
     }
 
 
-def _multi_schema_source_notes(original: Any, planned: Any, plan: import_plan.ImportPlan) -> List[str]:
+def _multi_schema_source_notes(planned: Any, plan: import_plan.ImportPlan) -> List[str]:
     """F2: warn when a Customize Source would have dropped other selected schemas (now expanded)."""
     if plan.empty:
         return []

@@ -380,6 +380,12 @@ function badge(text, kind) {
   return el('span', { className: `entity-badge entity-badge--${kind}` }, text);
 }
 
+/** Test/harness hook: count how many Hub discovery kicks a full render would schedule. */
+function countEagerDiscoveryKicks() {
+  // After the lazy fix this is always 0 at render time (discovery arms on focus).
+  return 0;
+}
+
 export function initEntityImport({ root, getContext, setMessage, log, getSchemaDefaults }) {
   if (!root) return { currentPlan() { return null; }, isDryRun() { return false; } };
 
@@ -887,9 +893,7 @@ export function initEntityImport({ root, getContext, setMessage, log, getSchemaD
     pickerBody.append(table);
 
     const rows = groupPickerRows(visible);
-    for (let i = 0; i < rows.length; i += 1) {
-      if (gen !== pickerRenderGen) return; // superseded
-      const row = rows[i];
+    const appendRow = (row) => {
       if (row.kind === 'schema') {
         tbody.append(el('tr', { className: 'entity-picker-schema' },
           el('td', { colSpan: 6 }, row.schema)));
@@ -898,19 +902,17 @@ export function initEntityImport({ root, getContext, setMessage, log, getSchemaD
       } else {
         appendEntityRow(tbody, row.entity);
       }
-      if ((i + 1) % PICKER_RENDER_CHUNK === 0) {
-        updateCount();
-        await yieldToMain();
-      }
-    }
-    if (gen !== pickerRenderGen) return;
-    updateCount();
-  }
-
-  /** Test/harness hook: count how many Hub discovery kicks a full render would schedule. */
-  function countEagerDiscoveryKicks() {
-    // After the lazy fix this is always 0 at render time (discovery arms on focus).
-    return 0;
+    };
+    const renderFrom = async (start) => {
+      if (gen !== pickerRenderGen) return; // superseded
+      const end = Math.min(start + PICKER_RENDER_CHUNK, rows.length);
+      for (let i = start; i < end; i += 1) appendRow(rows[i]);
+      updateCount();
+      if (end >= rows.length) return;
+      await yieldToMain();
+      await renderFrom(end);
+    };
+    await renderFrom(0);
   }
 
   pickerToolbar.querySelector('[data-select-all]').addEventListener('click', () => {
@@ -1094,7 +1096,7 @@ export function initEntityImport({ root, getContext, setMessage, log, getSchemaD
     applySchemaDefaults() {
       clearPreview();
       // Drop sticky mode-only overrides so badges re-infer against the new global Target (F11).
-      for (const [id, ov] of [...targetOverrides.entries()]) {
+      for (const [id, ov] of targetOverrides.entries()) {
         const locked = Object.hasOwn(ov, 'targetSchema') || Object.hasOwn(ov, 'targetTable');
         if (!locked) {
           targetOverrides.delete(id);

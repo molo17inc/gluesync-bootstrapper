@@ -671,6 +671,19 @@ class _YamlPlanEditor:
             kept_white.append(name)
         return kept_white
 
+    def _rescue_schedules(self, entry: Dict[str, Any]) -> None:
+        # Rescue pipeline/group Chronos schedules parked on this schema (export used to
+        # park them on the alphabetically-first schema; Customize must not lose them).
+        pipe = entry.get("schedules")
+        if isinstance(pipe, list) and pipe:
+            self.rescued_pipeline_schedules.extend(pipe)
+        if self.groups:
+            grp = entry.get("group_schedules")
+            if isinstance(grp, list) and grp:
+                self.rescued_group_schedules.extend(grp)
+            elif isinstance(grp, dict) and grp:
+                self.rescued_group_schedules.append(grp)
+
     def edit_schema(self, schema: str, entry: Dict[str, Any]) -> bool:
         """Edits one schema entry in place; True when nothing of it is selected (the schema goes away)."""
         tables = entry.get("tables") if isinstance(entry.get("tables"), dict) else None
@@ -689,17 +702,7 @@ class _YamlPlanEditor:
         # An empty whitelist means "every table": a schema with nothing selected goes away.
         going_away = not kept_custom and not kept_white and bool(custom or whitelist)
         if going_away:
-            # Rescue pipeline/group Chronos schedules parked on this schema (export used to
-            # park them on the alphabetically-first schema; Customize must not lose them).
-            pipe = entry.get("schedules")
-            if isinstance(pipe, list) and pipe:
-                self.rescued_pipeline_schedules.extend(pipe)
-            if self.groups:
-                grp = entry.get("group_schedules")
-                if isinstance(grp, list) and grp:
-                    self.rescued_group_schedules.extend(grp)
-                elif isinstance(grp, dict) and grp:
-                    self.rescued_group_schedules.append(grp)
+            self._rescue_schedules(entry)
         return going_away
 
     def final_notes(self, config: Dict[str, Any]) -> List[str]:
@@ -710,6 +713,58 @@ class _YamlPlanEditor:
             dropped = (f"; schema(s) {', '.join(self.dropped_schemas)} left out" if self.dropped_schemas else "")
             self.notes.append(f"{self.skipped} table(s) not selected by the plan" + dropped)
         return self.notes
+
+
+def _append_schema_schedules(dest: Dict[str, Any], rescued_pipe: List[Any], rescued_grp: List[Any],
+                             groups: bool) -> None:
+    if rescued_pipe:
+        dest.setdefault("schedules", [])
+        if not isinstance(dest["schedules"], list):
+            dest["schedules"] = list(dest["schedules"]) if dest["schedules"] else []
+        dest["schedules"] = list(dest["schedules"]) + rescued_pipe
+    if rescued_grp and groups:
+        dest.setdefault("group_schedules", [])
+        existing = dest["group_schedules"]
+        if isinstance(existing, list):
+            dest["group_schedules"] = list(existing) + rescued_grp
+        else:
+            dest["group_schedules"] = rescued_grp
+
+
+def _rehome_schedules(config: Dict[str, Any], editor: _YamlPlanEditor, groups: bool, rescued_pipe: List[Any],
+                      rescued_grp: List[Any], root_grp: Any) -> None:
+    # Prefer re-homing onto a kept schema (import already reads schema-level schedules);
+    # else keep them at the YAML root.
+    kept_entries = [
+        (name, entry) for name, entry in _schemas_root(config).items()
+        if isinstance(entry, dict)
+    ]
+    n = len(rescued_pipe) + len(rescued_grp)
+    if not kept_entries:
+        if rescued_pipe:
+            config["pipeline_schedules"] = rescued_pipe
+        if rescued_grp and groups:
+            config["group_schedules"] = rescued_grp
+        editor.notes.append(
+            f"{n} pipeline/group schedule(s) kept at YAML root "
+            f"(no schema left to host them after the plan selection)"
+        )
+        return
+    # Stable choice: first remaining schema by name (any kept schema is imported).
+    kept_entries.sort(key=lambda kv: kv[0])
+    _name, dest = kept_entries[0]
+    _append_schema_schedules(dest, rescued_pipe, rescued_grp, groups)
+    editor.notes.append(
+        f"{n} pipeline/group schedule(s) promoted to schema {_name!r} "
+        f"(rescued from plan-dropped schema(s))"
+    )
+    # Clear stale root copies when we re-homed onto a schema
+    if isinstance(config, dict):
+        config.pop("pipeline_schedules", None)
+        if groups:
+            # Only pop root group_schedules we manage; schema-level holds them now
+            if isinstance(root_grp, list) or rescued_grp:
+                config.pop("group_schedules", None)
 
 
 def apply_to_yaml(yaml_config, plan: ImportPlan, pipeline: PipelinePlan) -> Tuple[Any, List[str]]:
@@ -742,50 +797,7 @@ def apply_to_yaml(yaml_config, plan: ImportPlan, pipeline: PipelinePlan) -> Tupl
     if isinstance(root_grp, list):
         rescued_grp = list(root_grp) + rescued_grp
     if rescued_pipe or rescued_grp:
-        # Prefer re-homing onto a kept schema (import already reads schema-level schedules);
-        # else keep them at the YAML root.
-        kept_entries = [
-            (name, entry) for name, entry in _schemas_root(config).items()
-            if isinstance(entry, dict)
-        ]
-        if kept_entries:
-            # Stable choice: first remaining schema by name (any kept schema is imported).
-            kept_entries.sort(key=lambda kv: kv[0])
-            _name, dest = kept_entries[0]
-            if rescued_pipe:
-                dest.setdefault("schedules", [])
-                if not isinstance(dest["schedules"], list):
-                    dest["schedules"] = list(dest["schedules"]) if dest["schedules"] else []
-                dest["schedules"] = list(dest["schedules"]) + rescued_pipe
-            if rescued_grp and groups:
-                dest.setdefault("group_schedules", [])
-                existing = dest["group_schedules"]
-                if isinstance(existing, list):
-                    dest["group_schedules"] = list(existing) + rescued_grp
-                else:
-                    dest["group_schedules"] = rescued_grp
-            n = len(rescued_pipe) + len(rescued_grp)
-            editor.notes.append(
-                f"{n} pipeline/group schedule(s) promoted to schema {_name!r} "
-                f"(rescued from plan-dropped schema(s))"
-            )
-        else:
-            if rescued_pipe:
-                config["pipeline_schedules"] = rescued_pipe
-            if rescued_grp and groups:
-                config["group_schedules"] = rescued_grp
-            n = len(rescued_pipe) + len(rescued_grp)
-            editor.notes.append(
-                f"{n} pipeline/group schedule(s) kept at YAML root "
-                f"(no schema left to host them after the plan selection)"
-            )
-        # Clear stale root copies when we re-homed onto a schema
-        if kept_entries and isinstance(config, dict):
-            config.pop("pipeline_schedules", None)
-            if groups:
-                # Only pop root group_schedules we manage; schema-level holds them now
-                if isinstance(root_grp, list) or rescued_grp:
-                    config.pop("group_schedules", None)
+        _rehome_schedules(config, editor, groups, rescued_pipe, rescued_grp, root_grp)
     return config, editor.final_notes(config)
 
 

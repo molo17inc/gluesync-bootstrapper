@@ -2584,6 +2584,29 @@ def _collect_groups_and_chains(yaml_config, source_schema):
     return group_names, chained_tables
 
 
+def _group_description_and_color(groups_config, group_name):
+    group_meta = groups_config.get(group_name)
+    if isinstance(group_meta, dict):
+        return group_meta.get('description'), group_meta.get('color')
+    return None, None
+
+
+def _create_group_or_default(token, pipeline_id, group_name, description, color):
+    if import_options.current().dry_run:
+        import_options.current().report.blocked_writes.append(f"create group {group_name!r} (if missing)")
+        return f"dry-run:{group_name}"
+    try:
+        return create_group(token, pipeline_id, group_name, description=description, color=color)
+    except RuntimeError as err:
+        # Soft-fail with a clear warning (never pretend success as the named group).
+        logger.error(
+            f"Group '{group_name}' could not be created/looked up: {err}. "
+            f"Entities that requested this group will use _default; "
+            f"group-level Chronos schedules for '{group_name}' will not target them."
+        )
+        return _DEFAULT_GROUP
+
+
 def _create_groups(token, pipeline_id, yaml_config, group_names):
     """Create the groups before creating entities; returns the group ID of each group name."""
     groups_config = {}
@@ -2598,27 +2621,8 @@ def _create_groups(token, pipeline_id, yaml_config, group_names):
     for group_name in group_names:
         logger.debug(f"Processing group: '{group_name}' (type: {type(group_name)})")
 
-        group_meta = groups_config.get(group_name)
-        description = None
-        color = None
-        if isinstance(group_meta, dict):
-            description = group_meta.get('description')
-            color = group_meta.get('color')
-
-        if import_options.current().dry_run:
-            import_options.current().report.blocked_writes.append(f"create group {group_name!r} (if missing)")
-            group_id = f"dry-run:{group_name}"
-        else:
-            try:
-                group_id = create_group(token, pipeline_id, group_name, description=description, color=color)
-            except RuntimeError as err:
-                # Soft-fail with a clear warning (never pretend success as the named group).
-                logger.error(
-                    f"Group '{group_name}' could not be created/looked up: {err}. "
-                    f"Entities that requested this group will use _default; "
-                    f"group-level Chronos schedules for '{group_name}' will not target them."
-                )
-                group_id = _DEFAULT_GROUP
+        description, color = _group_description_and_color(groups_config, group_name)
+        group_id = _create_group_or_default(token, pipeline_id, group_name, description, color)
         logger.debug(f"Group '{group_name}' creation result: {group_id}")
 
         if group_id and group_id != _DEFAULT_GROUP:
@@ -3364,6 +3368,18 @@ def _discovered_source_table_id(run, table, table_name):
     return _resolve_table_id(run.source_schema, table_name, run.source_tables_lookup, _SOURCE_ROLE)
 
 
+def _fallback_group_id(requested_group, token, pipeline_id):
+    if import_options.current().dry_run:
+        return f"dry-run:{requested_group}"
+    try:
+        return create_group(token, pipeline_id, requested_group)
+    except RuntimeError as err:
+        logger.error(
+            f"Could not use group '{requested_group}': {err}. Falling back to _default."
+        )
+        return _DEFAULT_GROUP
+
+
 def resolve_group_id(custom_config, group_id_map, token, pipeline_id):
     """The Core Hub group id for a table's YAML config, or '_default'.
 
@@ -3383,16 +3399,7 @@ def resolve_group_id(custom_config, group_id_map, token, pipeline_id):
         logger.debug(f"Using cached group ID for '{requested_group}': {group_id}")
     else:
         # Fallback: try to create/get the group (e.g. if upfront pre-creation failed)
-        if import_options.current().dry_run:
-            group_id = f"dry-run:{requested_group}"
-        else:
-            try:
-                group_id = create_group(token, pipeline_id, requested_group)
-            except RuntimeError as err:
-                logger.error(
-                    f"Could not use group '{requested_group}': {err}. Falling back to _default."
-                )
-                group_id = _DEFAULT_GROUP
+        group_id = _fallback_group_id(requested_group, token, pipeline_id)
         if group_id != _DEFAULT_GROUP:
             # Cache it so subsequent entities skip the API call
             group_id_map[requested_group] = group_id
@@ -4868,6 +4875,30 @@ def _create_group_level_schedules(run, schema_config, chronos_token):
         logger.error(f"Error creating group-level schedules: {str(e)}")
 
 
+def _create_root_schedules(run, yaml_config, root_pipe, root_grp, chronos_token):
+    if root_grp:
+        logger.info("Creating root-level group schedules from export")
+        _create_group_level_schedules(run, {"group_schedules": root_grp}, chronos_token)
+        yaml_config.pop("group_schedules", None)
+    if root_pipe:
+        logger.info("Creating root-level pipeline schedules from export")
+        create_pipeline_schedules(run.ctx.token, run.ctx.pipeline_id, root_pipe,
+                                  chronos_token=chronos_token)
+        yaml_config.pop("pipeline_schedules", None)
+
+
+def _create_schema_schedules(run, current_schema_config, entities_map, chronos_token):
+    _create_entity_level_schedules(run, current_schema_config, entities_map, chronos_token)
+
+    if 'group_schedules' in current_schema_config:
+        _create_group_level_schedules(run, current_schema_config, chronos_token)
+
+    if 'schedules' in current_schema_config:
+        logger.info(f"Creating pipeline-level schedules for schema {run.source_schema}")
+        create_pipeline_schedules(run.ctx.token, run.ctx.pipeline_id, current_schema_config['schedules'],
+                                  chronos_token=chronos_token)
+
+
 def _create_schedules(run, yaml_config, chronos_token):
     """Create the entity, group and pipeline schedules the YAML defines for the current source_schema."""
     has_schedules, current_schema_config = _schedules_schema_config(yaml_config, run.source_schema)
@@ -4894,28 +4925,12 @@ def _create_schedules(run, yaml_config, chronos_token):
         entities_map = _entity_ids_by_table(response, run.source_schema)
 
         if current_schema_config:
-            _create_entity_level_schedules(run, current_schema_config, entities_map, chronos_token)
-
-            if 'group_schedules' in current_schema_config:
-                _create_group_level_schedules(run, current_schema_config, chronos_token)
-
-            if 'schedules' in current_schema_config:
-                logger.info(f"Creating pipeline-level schedules for schema {run.source_schema}")
-                create_pipeline_schedules(run.ctx.token, run.ctx.pipeline_id, current_schema_config['schedules'],
-                                          chronos_token=chronos_token)
+            _create_schema_schedules(run, current_schema_config, entities_map, chronos_token)
 
         # Root-level schedules: create once, then clear so a later schema in the same
         # multi-schema import does not duplicate Chronos jobs.
         if isinstance(yaml_config, dict) and (root_pipe or root_grp):
-            if root_grp:
-                logger.info("Creating root-level group schedules from export")
-                _create_group_level_schedules(run, {"group_schedules": root_grp}, chronos_token)
-                yaml_config.pop("group_schedules", None)
-            if root_pipe:
-                logger.info("Creating root-level pipeline schedules from export")
-                create_pipeline_schedules(run.ctx.token, run.ctx.pipeline_id, root_pipe,
-                                          chronos_token=chronos_token)
-                yaml_config.pop("pipeline_schedules", None)
+            _create_root_schedules(run, yaml_config, root_pipe, root_grp, chronos_token)
 
     except Exception as e:
         logger.error(f"Error creating schedules: {str(e)}")
@@ -5029,6 +5044,21 @@ def _entity_failures(errors):
     return failures
 
 
+def _failed_entity_ids(failures, refused_tables):
+    failed_ids = []
+    seen = set()
+    for item in failures:
+        eid = item.get("entity") or ""
+        if eid and eid.casefold() not in seen:
+            seen.add(eid.casefold())
+            failed_ids.append(eid)
+    for label in refused_tables or []:
+        if label and str(label).casefold() not in seen:
+            seen.add(str(label).casefold())
+            failed_ids.append(str(label))
+    return failed_ids
+
+
 def _entity_run_result(run, options, offline_names, counts, skipped_entities=None):
     """The result of create_entities from its (successful, failed, total) counts.
 
@@ -5040,17 +5070,7 @@ def _entity_run_result(run, options, offline_names, counts, skipped_entities=Non
     skipped_entities = list(skipped_entities or [])
     skipped = len(skipped_entities) if skipped_entities else max(0, total - successful - failed)
     failures = _entity_failures(run.errors)
-    failed_ids = []
-    seen = set()
-    for item in failures:
-        eid = item.get("entity") or ""
-        if eid and eid.casefold() not in seen:
-            seen.add(eid.casefold())
-            failed_ids.append(eid)
-    for label in run.refused_tables or []:
-        if label and str(label).casefold() not in seen:
-            seen.add(str(label).casefold())
-            failed_ids.append(str(label))
+    failed_ids = _failed_entity_ids(failures, run.refused_tables)
     result = {
         "successful": successful,
         "failed": failed,
@@ -5812,6 +5832,15 @@ def _prepared_yaml(options, yaml_file, source_schema, target_schema):
     return yaml_config, source_schema, target_schema
 
 
+def _log_failed_outcome(result, summary, pipeline_id):
+    log_failure(logger, f"Entity creation completed ({summary}) for pipeline {pipeline_id}")
+    for item in result.get('failures') or []:
+        logger.error(f"  failed {item.get('entity')}: {item.get('reason')}")
+    for err in result.get('errors') or []:
+        if not result.get('failures'):
+            logger.error(f"  {err}")
+
+
 def _log_run_outcome(options, result, pipeline_id):
     if options.dry_run:
         logger.info("Dry run: nothing was written")
@@ -5820,12 +5849,7 @@ def _log_run_outcome(options, result, pipeline_id):
     skipped = int(result.get('skipped') or 0)
     summary = f"OK {ok}, failed {failed}, skipped {skipped}"
     if failed:
-        log_failure(logger, f"Entity creation completed ({summary}) for pipeline {pipeline_id}")
-        for item in result.get('failures') or []:
-            logger.error(f"  failed {item.get('entity')}: {item.get('reason')}")
-        for err in result.get('errors') or []:
-            if not result.get('failures'):
-                logger.error(f"  {err}")
+        _log_failed_outcome(result, summary, pipeline_id)
     else:
         log_success(logger, f"Entity creation completed successfully ({summary}) for pipeline {pipeline_id}")
     if skipped and result.get('skippedEntities'):

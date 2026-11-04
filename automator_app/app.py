@@ -4742,21 +4742,37 @@ def _merge_entity_run_result(aggregate: dict, result: dict) -> None:
             errs.append(msg)
 
 
+def _dedupe_failed_entity_ids(failed_ids: list) -> list:
+    """Deduplicate failed ids (case-insensitively) while preserving order."""
+    seen = set()
+    ids = []
+    for eid in failed_ids:
+        key = str(eid).casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        ids.append(eid)
+    return ids
+
+
+def _entity_run_error_text(aggregate: dict, *, ok: int, failed: int, skipped: int) -> str:
+    """The error line of a multi-pair entity run: the counts plus the first failures (or errors)."""
+    bits = [f"OK {ok}", f"failed {failed}", f"skipped {skipped}"]
+    detail = "; ".join(
+        f"{f.get('entity')}: {f.get('reason')}" for f in (aggregate.get("failures") or [])[:12]
+    )
+    if not detail and aggregate.get("errors"):
+        detail = "; ".join(str(e) for e in aggregate["errors"][:12])
+    return ". ".join(bits) + (f". {detail}" if detail else "")
+
+
 def _finalize_entity_run_aggregate(aggregate: dict) -> dict:
     """Fill summary/error/partial for a multi-pair (or single) entity run."""
     ok = int(aggregate.get("successful") or 0)
     failed = int(aggregate.get("failed") or 0)
     skipped = int(aggregate.get("skipped") or 0)
     aggregate["partial"] = bool(aggregate.get("partial") or (ok > 0 and failed > 0))
-    # Deduplicate failed ids while preserving order
-    seen = set()
-    ids = []
-    for eid in aggregate.get("failedEntityIds") or []:
-        key = str(eid).casefold()
-        if key in seen:
-            continue
-        seen.add(key)
-        ids.append(eid)
+    ids = _dedupe_failed_entity_ids(aggregate.get("failedEntityIds") or [])
     aggregate["failedEntityIds"] = ids
     summary = {
         "ok": ok,
@@ -4770,13 +4786,7 @@ def _finalize_entity_run_aggregate(aggregate: dict) -> dict:
     }
     aggregate["summary"] = summary
     if failed or not aggregate.get("success"):
-        bits = [f"OK {ok}", f"failed {failed}", f"skipped {skipped}"]
-        detail = "; ".join(
-            f"{f.get('entity')}: {f.get('reason')}" for f in (aggregate.get("failures") or [])[:12]
-        )
-        if not detail and aggregate.get("errors"):
-            detail = "; ".join(str(e) for e in aggregate["errors"][:12])
-        aggregate["error"] = ". ".join(bits) + (f". {detail}" if detail else "")
+        aggregate["error"] = _entity_run_error_text(aggregate, ok=ok, failed=failed, skipped=skipped)
     elif skipped and not aggregate.get("error"):
         aggregate["error"] = None
     return aggregate
@@ -4864,6 +4874,27 @@ def _run_all_schema_pairs_with_target(request: RunRequest, settings: _RunSetting
     return _finalize_entity_run_aggregate(aggregate)
 
 
+def _run_plan_selected_schemas(request: RunRequest, settings: _RunSettings, source: str, target: str,
+                               other_sources: list) -> dict:
+    """Create every schema the plan selected besides Customize Source, remapped to ``target`` when set."""
+    if settings.log_callback is not None:
+        settings.log_callback(
+            f"[plan] Customize Source {source!r} is set but the selection also includes "
+            f"{', '.join(repr(s) for s in other_sources)}; creating every selected schema"
+            + (f" → {target!r}" if target else " with its YAML target")
+        )
+    if target:
+        return _run_all_schema_pairs_with_target(request, settings, target)
+    return _run_all_schema_pairs(request, settings)
+
+
+def _run_single_schema_pair(request: RunRequest, settings: _RunSettings, source: str, target: str) -> dict:
+    """Create the entities of one schema pair and finalize the aggregate."""
+    aggregate = _empty_entity_run_aggregate()
+    _merge_entity_run_result(aggregate, _run_create_entities(request, settings, source, target))
+    return _finalize_entity_run_aggregate(aggregate)
+
+
 def _run_entity_creation(request: RunRequest, settings: _RunSettings, yaml_path: Path,
                          *, plan: Optional[import_plan.ImportPlan] = None) -> dict:
     """Run the entity creation of a run, for every schema pair of its YAML or for the requested schemas.
@@ -4890,27 +4921,25 @@ def _run_entity_creation(request: RunRequest, settings: _RunSettings, yaml_path:
 
     pairs = extract_all_schemas_from_yaml(yaml_file_path)
     other_sources = [src for src, _tgt in pairs if src.casefold() != source.casefold()]
-    plan_selects_others = bool(plan is not None and not plan.empty and other_sources)
-    if plan_selects_others:
-        if settings.log_callback is not None:
-            settings.log_callback(
-                f"[plan] Customize Source {source!r} is set but the selection also includes "
-                f"{', '.join(repr(s) for s in other_sources)}; creating every selected schema"
-                + (f" → {target!r}" if target else " with its YAML target")
-            )
-        if target:
-            return _run_all_schema_pairs_with_target(request, settings, target)
-        return _run_all_schema_pairs(request, settings)
+    if plan is not None and not plan.empty and other_sources:
+        return _run_plan_selected_schemas(request, settings, source, target, other_sources)
 
     if not target:
-        match = next((tgt for src, tgt in pairs if src.casefold() == source.casefold()), source)
-        aggregate = _empty_entity_run_aggregate()
-        _merge_entity_run_result(aggregate, _run_create_entities(request, settings, source, match))
-        return _finalize_entity_run_aggregate(aggregate)
+        target = next((tgt for src, tgt in pairs if src.casefold() == source.casefold()), source)
+    return _run_single_schema_pair(request, settings, source, target)
 
-    aggregate = _empty_entity_run_aggregate()
-    _merge_entity_run_result(aggregate, _run_create_entities(request, settings, source, target))
-    return _finalize_entity_run_aggregate(aggregate)
+
+def _first_not_none(value: Any, default: Any) -> Any:
+    return value if value is not None else default
+
+
+def _entity_run_status(result: dict) -> str:
+    """The final run status of an entity creation result."""
+    if result.get("partial") or (int(result.get("successful") or 0) > 0 and int(result.get("failed") or 0) > 0):
+        return "partial"
+    if result.get("success"):
+        return "completed"
+    return "failed"
 
 
 async def _execute_run(run_id: str, request: RunRequest) -> None:
@@ -4921,10 +4950,10 @@ async def _execute_run(run_id: str, request: RunRequest) -> None:
         return
 
     prefs = state.preferences()
-    enable_scheduling = request.enable_scheduling if request.enable_scheduling is not None else prefs["enableScheduling"]
-    create_tables = request.create_tables if request.create_tables is not None else prefs["createTables"]
-    use_ssl = request.use_ssl if request.use_ssl is not None else state.use_ssl
-    skip_verify = request.skip_verify if request.skip_verify is not None else state.skip_verify
+    enable_scheduling = _first_not_none(request.enable_scheduling, prefs["enableScheduling"])
+    create_tables = _first_not_none(request.create_tables, prefs["createTables"])
+    use_ssl = _first_not_none(request.use_ssl, state.use_ssl)
+    skip_verify = _first_not_none(request.skip_verify, state.skip_verify)
 
     yaml_path = state.get_upload_path(request.yaml_file_id)
     if not yaml_path:
@@ -4982,13 +5011,7 @@ async def _execute_run(run_id: str, request: RunRequest) -> None:
     result = await loop.run_in_executor(None, _run_sync)
 
     summary = result.get("summary")
-    if result.get("partial") or (int(result.get("successful") or 0) > 0 and int(result.get("failed") or 0) > 0):
-        status = "partial"
-    elif result.get("success"):
-        status = "completed"
-    else:
-        status = "failed"
-    state.finalize_run(run_id, status, result.get("error"), summary=summary)
+    state.finalize_run(run_id, _entity_run_status(result), result.get("error"), summary=summary)
 
 
 def _start_run(request: RunRequest) -> ApiMessage:

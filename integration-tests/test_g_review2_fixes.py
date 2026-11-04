@@ -174,7 +174,7 @@ class G7TokenFileMode(unittest.TestCase):
     def test_write_token_file_uses_0600(self):
         from automator_app.state import AutomatorState
         source = inspect.getsource(AutomatorState._write_token_file)
-        self.assertTrue("0o600" in source)
+        self.assertIn("0o600", source)
         self.assertNotIn('open(token_file, "w")', source)
 
 
@@ -193,7 +193,7 @@ class G8ZipPathGuard(unittest.TestCase):
 
 class G9ChronosPagination(unittest.TestCase):
     def test_chronos_jobs_paginate(self):
-        source = inspect.getsource(exp.read_pipeline_jobs)
+        source = inspect.getsource(exp._read_jobs_from_client)
         self.assertIn("offset", source)
         self.assertIn("page_limit", source)
         self.assertIn("raw_count", source)

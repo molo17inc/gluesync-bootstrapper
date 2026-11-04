@@ -277,6 +277,80 @@ def _jobs_from_response(jobs_response: Any) -> Optional[List[Dict[str, Any]]]:
     return None
 
 
+def _chronos_page_fingerprint(page: List[Dict[str, Any]], offset: int) -> tuple:
+    return tuple(str(j.get("id")) if j.get("id") is not None else f"anon:{offset}:{i}"
+                 for i, j in enumerate(page))
+
+
+def _jobs_of_pipeline(page: List[Dict[str, Any]], pipeline_id: str) -> List[Dict[str, Any]]:
+    return [j for j in page if str(j.get("pipeline_id", pipeline_id)) == str(pipeline_id)]
+
+
+def _add_new_jobs(
+    matched: List[Dict[str, Any]], seen_ids: set, all_jobs: List[Dict[str, Any]], offset: int
+) -> int:
+    """Append the jobs of a page not seen yet to ``all_jobs``; returns how many were new."""
+    new_on_page = 0
+    for job in matched:
+        jid = job.get("id")
+        key = str(jid) if jid is not None else f"anon:{offset}:{new_on_page}"
+        if key in seen_ids:
+            continue
+        seen_ids.add(key)
+        all_jobs.append(job)
+        new_on_page += 1
+    return new_on_page
+
+
+def _read_jobs_from_client(
+    client: Any, pipeline_id: str, page_limit: int
+) -> Tuple[List[Dict[str, Any]], bool]:
+    """Page through one Chronos client; returns (jobs, whether the last page read was readable)."""
+    all_jobs: List[Dict[str, Any]] = []
+    seen_ids: set = set()
+    seen_page_fps: set = set()
+    offset = 0
+    while True:
+        jobs_response = client._request(  # type: ignore[attr-defined]
+            "api/jobs/",
+            params={"pipeline_id": pipeline_id, "limit": page_limit, "offset": offset},
+        )
+        page = _jobs_from_response(jobs_response)
+        if page is None:
+            if offset != 0:
+                logger.warning(
+                    f"Chronos page at offset {offset} unreadable for pipeline {pipeline_id}; "
+                    f"keeping {len(all_jobs)} job(s) fetched so far"
+                )
+            return all_jobs, False
+        # Decide end-of-pages from the RAW page size. Chronos may ignore
+        # pipeline_id and return mixed pipelines; filtering first would
+        # make a full raw page look short and stop early (missed jobs).
+        raw_count = len(page)
+        page_fp = _chronos_page_fingerprint(page, offset)
+        if page_fp in seen_page_fps:
+            logger.warning(
+                f"Chronos returned a repeated page at offset {offset} for pipeline {pipeline_id} "
+                f"(pagination unsupported or ignored); keeping {len(all_jobs)} job(s) fetched so far"
+            )
+            return all_jobs, True
+        seen_page_fps.add(page_fp)
+        matched = _jobs_of_pipeline(page, pipeline_id)
+        new_on_page = _add_new_jobs(matched, seen_ids, all_jobs, offset)
+        if raw_count < page_limit:
+            return all_jobs, True
+        if new_on_page == 0 and matched:
+            # Full raw page, our pipeline's jobs present but all duplicates → offset ignored.
+            logger.warning(
+                f"Chronos returned a full page of {page_limit} jobs for pipeline {pipeline_id} "
+                f"but offset={offset} added none (pagination unsupported or ignored); "
+                f"further jobs may be missing from the export"
+            )
+            return all_jobs, True
+        # Full raw page with zero matches for this pipeline: keep walking.
+        offset += page_limit
+
+
 def read_pipeline_jobs(pipeline_id: str, token: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
     """The Chronos jobs of a pipeline, or None when no Chronos endpoint answered.
 
@@ -286,60 +360,8 @@ def read_pipeline_jobs(pipeline_id: str, token: Optional[str] = None) -> Optiona
     page_limit = 1000
     for client in _chronos_clients(token):
         try:
-            all_jobs: List[Dict[str, Any]] = []
-            seen_ids: set = set()
-            seen_page_fps: set = set()
-            offset = 0
-            while True:
-                jobs_response = client._request(  # type: ignore[attr-defined]
-                    "api/jobs/",
-                    params={"pipeline_id": pipeline_id, "limit": page_limit, "offset": offset},
-                )
-                page = _jobs_from_response(jobs_response)
-                if page is None:
-                    if offset == 0:
-                        break
-                    logger.warning(
-                        f"Chronos page at offset {offset} unreadable for pipeline {pipeline_id}; "
-                        f"keeping {len(all_jobs)} job(s) fetched so far"
-                    )
-                    break
-                # Decide end-of-pages from the RAW page size. Chronos may ignore
-                # pipeline_id and return mixed pipelines; filtering first would
-                # make a full raw page look short and stop early (missed jobs).
-                raw_count = len(page)
-                page_fp = tuple(str(j.get("id")) if j.get("id") is not None else f"anon:{offset}:{i}"
-                                for i, j in enumerate(page))
-                if page_fp in seen_page_fps:
-                    logger.warning(
-                        f"Chronos returned a repeated page at offset {offset} for pipeline {pipeline_id} "
-                        f"(pagination unsupported or ignored); keeping {len(all_jobs)} job(s) fetched so far"
-                    )
-                    break
-                seen_page_fps.add(page_fp)
-                matched = [j for j in page if str(j.get("pipeline_id", pipeline_id)) == str(pipeline_id)]
-                new_on_page = 0
-                for job in matched:
-                    jid = job.get("id")
-                    key = str(jid) if jid is not None else f"anon:{offset}:{new_on_page}"
-                    if key in seen_ids:
-                        continue
-                    seen_ids.add(key)
-                    all_jobs.append(job)
-                    new_on_page += 1
-                if raw_count < page_limit:
-                    break
-                if new_on_page == 0 and matched:
-                    # Full raw page, our pipeline's jobs present but all duplicates → offset ignored.
-                    logger.warning(
-                        f"Chronos returned a full page of {page_limit} jobs for pipeline {pipeline_id} "
-                        f"but offset={offset} added none (pagination unsupported or ignored); "
-                        f"further jobs may be missing from the export"
-                    )
-                    break
-                # Full raw page with zero matches for this pipeline: keep walking.
-                offset += page_limit
-            if all_jobs or page is not None:
+            all_jobs, readable = _read_jobs_from_client(client, pipeline_id, page_limit)
+            if all_jobs or readable:
                 logger.info(
                     f"Fetched {len(all_jobs)} Chronos jobs for pipeline {pipeline_id} from {client.base_url}"
                 )
@@ -1551,6 +1573,147 @@ def _process_multitable_entity(
     _attach_multitable_last_target_custom_properties(tables, schema_cfg, target_ae, target_type)
 
 
+def _schema_cfg_of(schemas: Dict[str, Dict[str, Any]], schema_name: str) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+    """Resolve ``schema_name`` against ``schemas`` casefold; prefer the map's spelling."""
+    cfg = schemas.get(schema_name)
+    if cfg is not None:
+        return schema_name, cfg
+    folded = schema_name.casefold()
+    for key, value in schemas.items():
+        if key.casefold() == folded:
+            return key, value
+    return None, None
+
+
+def _custom_entry_matches(key: str, cfg: Dict[str, Any], table_name: str, ename: str) -> bool:
+    """Whether a custom table entry is the one a Chronos entity (``ename``) refers to."""
+    ename_fold = (ename or "").casefold()
+    table_fold = table_name.casefold()
+    candidates = [
+        cfg.get("entityName"),
+        cfg.get("name"),
+        cfg.get("sourceTableName"),
+        key.split("@@", 1)[0],
+    ]
+    for cand in candidates:
+        if cand is None:
+            continue
+        cand_s = str(cand)
+        if cand_s == ename or cand_s.casefold() == ename_fold:
+            return True
+        if cand_s == table_name or cand_s.casefold() == table_fold:
+            return True
+        # entityName may be "HR.ORDERS_COPY" while table_name is ORDERS_COPY
+        if "." in cand_s and cand_s.split(".", 1)[-1].casefold() == table_fold:
+            return True
+    return False
+
+
+def _find_custom_entry(
+    custom_tables: Dict[str, Any], table_name: str, ename: str
+) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+    """Locate the custom table entry for a Chronos entity (never invent from suffix alone)."""
+    if table_name in custom_tables and isinstance(custom_tables.get(table_name), dict):
+        return table_name, custom_tables[table_name]
+    # Casefold key match
+    for key, cfg in custom_tables.items():
+        if not isinstance(cfg, dict):
+            continue
+        if key.casefold() == table_name.casefold():
+            return key, cfg
+    # Match entityName / name / sourceTableName / @@-stripped key
+    for key, cfg in custom_tables.items():
+        if isinstance(cfg, dict) and _custom_entry_matches(key, cfg, table_name, ename):
+            return key, cfg
+    return None, None
+
+
+def _base_schedule_of_job(job: Dict[str, Any], task_type: str) -> Dict[str, Any]:
+    sched: Dict[str, Any] = {
+        "name": job.get("name"),
+        "description": job.get("description"),
+        "task_type": task_type,
+        "with_snapshot": job.get("with_snapshot", False),
+        "enabled": job.get("enabled", True),
+    }
+
+    swm = job.get("snapshot_write_method")
+    if swm:
+        sched["snapshot_write_method"] = swm
+
+    if "cron_expression" in job:
+        sched["cron_expression"] = job.get("cron_expression")
+    elif "schedule" in job:
+        sched["schedule"] = job.get("schedule")
+    return sched
+
+
+def _attach_entity_job_schedules(
+    job: Dict[str, Any],
+    sched: Dict[str, Any],
+    entities_by_id: Dict[str, Dict[str, Any]],
+    schemas: Dict[str, Dict[str, Any]],
+    primary_schema: str,
+) -> None:
+    entity_ids = job.get("entity_ids") or []
+    if not isinstance(entity_ids, list):
+        entity_ids = [entity_ids]
+
+    for eid in entity_ids:
+        ent = entities_by_id.get(str(eid))
+        if not ent:
+            logger.warning(f"Schedule job {job.get('id')} references unknown entity ID {eid}")
+            continue
+
+        ename = ent.get("entityName", "") or ""
+        parts = ename.split(".", 1)
+        if len(parts) >= 2:
+            schema_name, table_name = parts[0], parts[-1]
+        else:
+            schema_name, table_name = primary_schema, (ename or "unknown")
+
+        _, schema_cfg = _schema_cfg_of(schemas, schema_name)
+        if not schema_cfg:
+            logger.warning(
+                f"Entity {ename} schema {schema_name} not present in schemas map. Skipping schedule."
+            )
+            continue
+
+        custom_tables: Dict[str, Any] = schema_cfg["tables"]["custom"]
+        _, table_cfg = _find_custom_entry(custom_tables, table_name, ename)
+        if table_cfg is None:
+            # Truly missing: create under the entityName table suffix, do not invent whitelist noise
+            # from a rename when an @@ sibling already exists under another key.
+            table_cfg = {"name": table_name}
+            custom_tables[table_name] = table_cfg
+            schema_cfg["tables"]["whitelist"].add(table_name)
+        table_schedules = table_cfg.setdefault("schedules", [])
+        table_schedules.append(sched.copy())
+
+
+def _group_job_schedule(
+    job: Dict[str, Any], sched: Dict[str, Any], group_id_to_name: Dict[str, str]
+) -> Optional[Dict[str, Any]]:
+    group_ids = job.get("group_ids") or []
+    if isinstance(group_ids, str):
+        group_ids = [group_ids]
+
+    group_names: List[str] = []
+    for gid in group_ids:
+        if gid == "*":
+            group_names.append("*")
+        else:
+            group_names.append(group_id_to_name.get(str(gid), str(gid)))
+
+    if not group_names:
+        logger.warning(f"Group-level job {job.get('id')} has no group_ids. Skipping.")
+        return None
+
+    sched_entry = sched.copy()
+    sched_entry["group_ids"] = group_names
+    return sched_entry
+
+
 def attach_schedules_from_jobs(
     jobs: List[Dict[str, Any]],
     entities_by_id: Dict[str, Dict[str, Any]],
@@ -1572,54 +1735,6 @@ def attach_schedules_from_jobs(
     # Fallback schema name when an entityName has no dotted schema part.
     primary_schema = sorted(schemas.keys())[0]
 
-    def _schema_cfg(schema_name: str) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
-        """Resolve ``schema_name`` against ``schemas`` casefold; prefer the map's spelling."""
-        cfg = schemas.get(schema_name)
-        if cfg is not None:
-            return schema_name, cfg
-        folded = schema_name.casefold()
-        for key, value in schemas.items():
-            if key.casefold() == folded:
-                return key, value
-        return None, None
-
-    def _find_custom_entry(
-        custom_tables: Dict[str, Any], table_name: str, ename: str
-    ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
-        """Locate the custom table entry for a Chronos entity (never invent from suffix alone)."""
-        if table_name in custom_tables and isinstance(custom_tables.get(table_name), dict):
-            return table_name, custom_tables[table_name]
-        # Casefold key match
-        for key, cfg in custom_tables.items():
-            if not isinstance(cfg, dict):
-                continue
-            if key.casefold() == table_name.casefold():
-                return key, cfg
-        # Match entityName / name / sourceTableName / @@-stripped key
-        ename_fold = (ename or "").casefold()
-        table_fold = table_name.casefold()
-        for key, cfg in custom_tables.items():
-            if not isinstance(cfg, dict):
-                continue
-            candidates = [
-                cfg.get("entityName"),
-                cfg.get("name"),
-                cfg.get("sourceTableName"),
-                key.split("@@", 1)[0],
-            ]
-            for cand in candidates:
-                if cand is None:
-                    continue
-                cand_s = str(cand)
-                if cand_s == ename or cand_s.casefold() == ename_fold:
-                    return key, cfg
-                if cand_s == table_name or cand_s.casefold() == table_fold:
-                    return key, cfg
-                # entityName may be "HR.ORDERS_COPY" while table_name is ORDERS_COPY
-                if "." in cand_s and cand_s.split(".", 1)[-1].casefold() == table_fold:
-                    return key, cfg
-        return None, None
-
     for job in jobs:
         if not isinstance(job, dict):
             continue
@@ -1628,88 +1743,98 @@ def attach_schedules_from_jobs(
         if not task_type:
             continue
 
-        sched: Dict[str, Any] = {
-            "name": job.get("name"),
-            "description": job.get("description"),
-            "task_type": task_type,
-            "with_snapshot": job.get("with_snapshot", False),
-            "enabled": job.get("enabled", True),
-        }
-
-        swm = job.get("snapshot_write_method")
-        if swm:
-            sched["snapshot_write_method"] = swm
-
-        if "cron_expression" in job:
-            sched["cron_expression"] = job.get("cron_expression")
-        elif "schedule" in job:
-            sched["schedule"] = job.get("schedule")
+        sched = _base_schedule_of_job(job, task_type)
 
         if task_type.startswith("entity_"):
-            entity_ids = job.get("entity_ids") or []
-            if not isinstance(entity_ids, list):
-                entity_ids = [entity_ids]
-
-            for eid in entity_ids:
-                ent = entities_by_id.get(str(eid))
-                if not ent:
-                    logger.warning(f"Schedule job {job.get('id')} references unknown entity ID {eid}")
-                    continue
-
-                ename = ent.get("entityName", "") or ""
-                parts = ename.split(".", 1)
-                if len(parts) >= 2:
-                    schema_name, table_name = parts[0], parts[-1]
-                else:
-                    schema_name, table_name = primary_schema, (ename or "unknown")
-
-                resolved_name, schema_cfg = _schema_cfg(schema_name)
-                if not schema_cfg:
-                    logger.warning(
-                        f"Entity {ename} schema {schema_name} not present in schemas map. Skipping schedule."
-                    )
-                    continue
-
-                custom_tables: Dict[str, Any] = schema_cfg["tables"]["custom"]
-                key, table_cfg = _find_custom_entry(custom_tables, table_name, ename)
-                if table_cfg is None:
-                    # Truly missing: create under the entityName table suffix, do not invent whitelist noise
-                    # from a rename when an @@ sibling already exists under another key.
-                    table_cfg = {"name": table_name}
-                    custom_tables[table_name] = table_cfg
-                    schema_cfg["tables"]["whitelist"].add(table_name)
-                    key = table_name
-                table_schedules = table_cfg.setdefault("schedules", [])
-                table_schedules.append(sched.copy())
-
-            continue
-
-        if task_type.startswith("group_"):
-            group_ids = job.get("group_ids") or []
-            if isinstance(group_ids, str):
-                group_ids = [group_ids]
-
-            group_names: List[str] = []
-            for gid in group_ids:
-                if gid == "*":
-                    group_names.append("*")
-                else:
-                    group_names.append(group_id_to_name.get(str(gid), str(gid)))
-
-            if not group_names:
-                logger.warning(f"Group-level job {job.get('id')} has no group_ids. Skipping.")
-                continue
-
-            sched_entry = sched.copy()
-            sched_entry["group_ids"] = group_names
-            group_schedules.append(sched_entry)
-            continue
-
-        if task_type.startswith("pipeline_"):
+            _attach_entity_job_schedules(job, sched, entities_by_id, schemas, primary_schema)
+        elif task_type.startswith("group_"):
+            sched_entry = _group_job_schedule(job, sched, group_id_to_name)
+            if sched_entry is not None:
+                group_schedules.append(sched_entry)
+        elif task_type.startswith("pipeline_"):
             pipeline_schedules.append(sched.copy())
-            continue
 
     return pipeline_schedules, group_schedules
+
+
+def _normalized_schema_out(schema_name: str, cfg: Dict[str, Any]) -> Dict[str, Any]:
+    tables_section = cfg.get("tables", {}) or {}
+    whitelist = sorted(list(tables_section.get("whitelist", set())))
+    custom_tables = tables_section.get("custom", {}) or {}
+
+    schema_out: Dict[str, Any] = {
+        "target": cfg.get("target", schema_name),
+    }
+
+    # Optional schema-level source/target type hints (e.g. SQL / NoSQL)
+    # These are used when re-importing the YAML to derive source/target agent types.
+    if cfg.get("sourceType"):
+        schema_out["sourceType"] = cfg["sourceType"]
+    if cfg.get("targetType"):
+        schema_out["targetType"] = cfg["targetType"]
+
+    if cfg.get("customProperties"):
+        # Only include non-empty customProperties
+        non_empty_cp = {
+            k: v for k, v in cfg["customProperties"].items() if v
+        }
+        if non_empty_cp:
+            schema_out["customProperties"] = non_empty_cp
+
+    if cfg.get("schedules"):
+        schema_out["schedules"] = cfg["schedules"]
+
+    if cfg.get("group_schedules"):
+        schema_out["group_schedules"] = cfg["group_schedules"]
+
+    schema_out["tables"] = {
+        "whitelist": whitelist,
+        "custom": custom_tables,
+    }
+    return schema_out
+
+
+def _groups_yaml_of(groups_by_name: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    groups_yaml: Dict[str, Dict[str, Any]] = {}
+    for name, meta in groups_by_name.items():
+        if not isinstance(meta, dict):
+            continue
+        g: Dict[str, Any] = {}
+        if meta.get("id") is not None:
+            g["id"] = meta["id"]
+        if meta.get("description"):
+            g["description"] = meta["description"]
+        if meta.get("color"):
+            g["color"] = meta["color"]
+        groups_yaml[name] = g
+    return groups_yaml
+
+
+def _attach_root_schedules(
+    root: Dict[str, Any],
+    normalized: Dict[str, Dict[str, Any]],
+    pipe_scheds: List[Dict[str, Any]],
+    grp_scheds: List[Dict[str, Any]],
+) -> None:
+    if len(normalized) != 1:
+        if pipe_scheds:
+            root["pipeline_schedules"] = pipe_scheds
+        if grp_scheds:
+            root["group_schedules"] = grp_scheds
+        return
+    # Single-schema YAML: keep the legacy under-schema shape import already reads.
+    _schema_name, sole = next(iter(normalized.items()))
+    if pipe_scheds:
+        sole.setdefault("schedules", [])
+        sole["schedules"] = list(sole.get("schedules") or []) + pipe_scheds
+        # Re-assign into root (single-schema root is {name: cfg})
+        if _schema_name in root:
+            root[_schema_name] = sole
+    if grp_scheds:
+        sole.setdefault("group_schedules", [])
+        sole["group_schedules"] = list(sole.get("group_schedules") or []) + grp_scheds
+        if _schema_name in root:
+            root[_schema_name] = sole
 
 
 def build_yaml_structure(
@@ -1728,43 +1853,9 @@ def build_yaml_structure(
         return {}
 
     # Convert whitelist sets to lists and drop empty customProperties when possible
-    normalized: Dict[str, Dict[str, Any]] = {}
-    for schema_name, cfg in schemas.items():
-        tables_section = cfg.get("tables", {}) or {}
-        whitelist = sorted(list(tables_section.get("whitelist", set())))
-        custom_tables = tables_section.get("custom", {}) or {}
-
-        schema_out: Dict[str, Any] = {
-            "target": cfg.get("target", schema_name),
-        }
-
-        # Optional schema-level source/target type hints (e.g. SQL / NoSQL)
-        # These are used when re-importing the YAML to derive source/target agent types.
-        if cfg.get("sourceType"):
-            schema_out["sourceType"] = cfg["sourceType"]
-        if cfg.get("targetType"):
-            schema_out["targetType"] = cfg["targetType"]
-
-        if cfg.get("customProperties"):
-            # Only include non-empty customProperties
-            non_empty_cp = {
-                k: v for k, v in cfg["customProperties"].items() if v
-            }
-            if non_empty_cp:
-                schema_out["customProperties"] = non_empty_cp
-
-        if cfg.get("schedules"):
-            schema_out["schedules"] = cfg["schedules"]
-
-        if cfg.get("group_schedules"):
-            schema_out["group_schedules"] = cfg["group_schedules"]
-
-        schema_out["tables"] = {
-            "whitelist": whitelist,
-            "custom": custom_tables,
-        }
-
-        normalized[schema_name] = schema_out
+    normalized: Dict[str, Dict[str, Any]] = {
+        schema_name: _normalized_schema_out(schema_name, cfg) for schema_name, cfg in schemas.items()
+    }
 
     # Base structure: single-schema vs multi-schema format
     if len(normalized) == 1:
@@ -1775,44 +1866,14 @@ def build_yaml_structure(
 
     # Attach group metadata at top-level when available
     if groups_by_name:
-        groups_yaml: Dict[str, Dict[str, Any]] = {}
-        for name, meta in groups_by_name.items():
-            if not isinstance(meta, dict):
-                continue
-            g: Dict[str, Any] = {}
-            if meta.get("id") is not None:
-                g["id"] = meta["id"]
-            if meta.get("description"):
-                g["description"] = meta["description"]
-            if meta.get("color"):
-                g["color"] = meta["color"]
-            groups_yaml[name] = g
-
+        groups_yaml = _groups_yaml_of(groups_by_name)
         if groups_yaml:
             root["groups"] = groups_yaml
 
     pipe_scheds = list(pipeline_schedules or [])
     grp_scheds = list(group_schedules or [])
     if pipe_scheds or grp_scheds:
-        if len(normalized) == 1:
-            # Single-schema YAML: keep the legacy under-schema shape import already reads.
-            _schema_name, sole = next(iter(normalized.items()))
-            if pipe_scheds:
-                sole.setdefault("schedules", [])
-                sole["schedules"] = list(sole.get("schedules") or []) + pipe_scheds
-                # Re-assign into root (single-schema root is {name: cfg})
-                if _schema_name in root:
-                    root[_schema_name] = sole
-            if grp_scheds:
-                sole.setdefault("group_schedules", [])
-                sole["group_schedules"] = list(sole.get("group_schedules") or []) + grp_scheds
-                if _schema_name in root:
-                    root[_schema_name] = sole
-        else:
-            if pipe_scheds:
-                root["pipeline_schedules"] = pipe_scheds
-            if grp_scheds:
-                root["group_schedules"] = grp_scheds
+        _attach_root_schedules(root, normalized, pipe_scheds, grp_scheds)
 
     return root
 
