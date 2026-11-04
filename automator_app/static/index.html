@@ -831,8 +831,8 @@
                     />
                   </label>
                   <label class="checkbox">
-                    <input type="checkbox" id="skip-errors" />
-                    Skip errors
+                    <input type="checkbox" id="skip-errors" checked />
+                    Skip errors (best-effort: keep successes, summarize failures)
                   </label>
                   <label class="checkbox">
                     <input type="checkbox" id="create-tables" checked />
@@ -924,6 +924,7 @@
           </div>
         </div>
         <div id="log-panel-body" class="log-panel-body">
+          <div id="run-entity-summary" class="run-entity-summary" hidden></div>
           <div id="log-summary" class="log-summary" hidden></div>
           <ul id="log-hints" class="log-hints" hidden></ul>
           <div id="log-output" class="log-output" role="log" aria-label="Import log" aria-live="polite"></div>

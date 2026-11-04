@@ -185,9 +185,9 @@ export function planIsEmpty(plan) {
 
   Only entities that would really be created are checked: selected (or advanced
   include), and not skipped via onExistingEntity=skip when alreadyExists.
-  Two such entities mapping to the same targetSchema.targetTable is an error —
-  rename one via the per-entity Target cell to resolve. Excluded / unchecked /
-  skipped-existing rows do not count.
+  Several sources mapping to the same targetSchema.targetTable is intentional
+  fan-in (info via selectionNotes / preview) — not an error. Excluded /
+  unchecked / skipped-existing rows do not count.
 */
 export function selectionError(panel, loadedEntities, selectedIds, targetOverrides, schemaDefaults = null) {
   const advanced = advancedIncludeExclude(panel);
@@ -200,7 +200,6 @@ export function selectionError(panel, loadedEntities, selectedIds, targetOverrid
     return 'Advanced include/exclude selects no entities';
   }
   const onExisting = panel.querySelector('[data-on-existing]')?.value || '';
-  const seen = new Map();
   for (const entity of loadedEntities) {
     if (!effective.has(entity.id)) continue;
     if (onExisting === 'skip' && entity.alreadyExists) continue;
@@ -208,15 +207,65 @@ export function selectionError(panel, loadedEntities, selectedIds, targetOverrid
     if (!resolved.targetTable) {
       return `Entity ${entity.id}: target table (or collection) name is required`;
     }
-    const key = `${resolved.targetSchema}.${resolved.targetTable}`.toLowerCase();
-    if (seen.has(key)) {
-      return `Duplicate target ${resolved.targetSchema || '(no schema)'}.${resolved.targetTable}`
-        + ` for ${seen.get(key)} and ${entity.id}`
-        + '. Rename one entity\'s target table (or collection) to resolve.';
-    }
-    seen.set(key, entity.id);
   }
   return null;
+}
+
+/** Informational fan-in notes for the picker (never blocks Start). */
+export function selectionNotes(panel, loadedEntities, selectedIds, targetOverrides, schemaDefaults = null) {
+  if (!loadedEntities?.length) return [];
+  const effective = effectiveSelectedIds(panel, loadedEntities, selectedIds);
+  const onExisting = panel.querySelector('[data-on-existing]')?.value || '';
+  const byTarget = new Map();
+  for (const entity of loadedEntities) {
+    if (!effective.has(entity.id)) continue;
+    if (onExisting === 'skip' && entity.alreadyExists) continue;
+    const resolved = resolveTarget(entity, targetOverrides, schemaDefaults);
+    if (!resolved.targetTable) continue;
+    const key = `${resolved.targetSchema}.${resolved.targetTable}`.toLowerCase();
+    const label = `${resolved.targetSchema || '(no schema)'}.${resolved.targetTable}`;
+    const list = byTarget.get(key) || { label, ids: [] };
+    list.ids.push(entity.id);
+    byTarget.set(key, list);
+  }
+  const notes = [];
+  for (const { label, ids } of byTarget.values()) {
+    if (ids.length < 2) continue;
+    notes.push(`${ids.length} sources write to ${label}; table will be created once (${ids.join(', ')})`);
+  }
+  return notes;
+}
+
+/** Optional: rename colliding targets to table_1, table_2, … Never applied automatically. */
+export function autoRenameDuplicateTargets(loadedEntities, selectedIds, targetOverrides, schemaDefaults = null) {
+  const overrides = targetOverrides instanceof Map ? targetOverrides : new Map(Object.entries(targetOverrides || {}));
+  const effective = selectedIds || new Set((loadedEntities || []).map((e) => e.id));
+  const byTarget = new Map();
+  for (const entity of loadedEntities || []) {
+    if (!effective.has(entity.id)) continue;
+    const resolved = resolveTarget(entity, overrides, schemaDefaults);
+    if (!resolved.targetTable) continue;
+    const key = `${resolved.targetSchema}.${resolved.targetTable}`.toLowerCase();
+    const list = byTarget.get(key) || [];
+    list.push({ entity, resolved });
+    byTarget.set(key, list);
+  }
+  let renamed = 0;
+  for (const group of byTarget.values()) {
+    if (group.length < 2) continue;
+    group.forEach(({ entity, resolved }, index) => {
+      if (index === 0) return; // keep first spelling
+      const nextTable = `${resolved.targetTable}_${index}`;
+      const prev = overrides.get(entity.id) || {};
+      overrides.set(entity.id, {
+        ...prev,
+        targetSchema: resolved.targetSchema,
+        targetTable: nextTable,
+      });
+      renamed += 1;
+    });
+  }
+  return { renamed, overrides };
 }
 
 function chainMembers(loaded, chainId) {
@@ -350,6 +399,16 @@ export function initEntityImport({ root, getContext, setMessage, log, getSchemaD
   const tablesBySchema = new Map(); // schema -> string[]
   const columnWarnById = new Map(); // id -> warn string
   let discoveryOk = true;
+  // Picker render generation: bump to cancel an in-flight chunked render (select-all / filter / reload).
+  let pickerRenderGen = 0;
+  const PICKER_RENDER_CHUNK = 40; // rows per frame; keeps long-tasks short on 500–2000 entity backups
+  const yieldToMain = () => new Promise((resolve) => {
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => resolve());
+    } else {
+      setTimeout(resolve, 0);
+    }
+  });
 
   const panel = el('div', { className: 'entity-import', id: 'entity-customize-panel' });
   root.append(panel);
@@ -394,6 +453,9 @@ export function initEntityImport({ root, getContext, setMessage, log, getSchemaD
   const pickerToolbar = el('div', { className: 'entity-picker-toolbar' },
     el('button', { type: 'button', className: 'secondary', dataset: { selectAll: '1' } }, 'Select all'),
     el('button', { type: 'button', className: 'secondary', dataset: { selectNone: '1' } }, 'Select none'),
+    el('button', { type: 'button', className: 'secondary', dataset: { autoRename: '1' },
+      title: 'Optional: append _1, _2, … to colliding target tables. Fan-in (same target) is allowed without this.' },
+      'Auto-rename duplicates'),
     pickerFilter, pickerCount);
   const pickerBody = el('div', { className: 'entity-picker-body', dataset: { pickerBody: '1' } });
   const picker = el('div', { className: 'entity-picker', id: 'entity-picker' },
@@ -684,7 +746,24 @@ export function initEntityImport({ root, getContext, setMessage, log, getSchemaD
       syncBadge(tables, { fromUser: true, field: 'table' });
     });
 
-    loadTables(resolved.targetTable);
+    // Eager loadTables/refreshColumnWarn on every row freezes Chrome on 500–2000 entity
+    // backups (thousands of Hub GETs + long sync DOM). Defer discovery until the user
+    // focuses a target field, or when a cached warn already exists.
+    let discoveryArmed = false;
+    const armDiscovery = () => {
+      if (discoveryArmed) return;
+      discoveryArmed = true;
+      loadTables(resolved.targetTable);
+    };
+    // Show a provisional badge from override/entity without hitting Hub.
+    const provisionalMode = resolved.mode
+      || (entity.alreadyExists ? 'existing' : 'new');
+    modeBadge.replaceChildren(badge(
+      provisionalMode === 'existing' ? 'table exists' : 'new table',
+      provisionalMode === 'existing' ? 'existing' : 'new',
+    ));
+    schemaInput.addEventListener('focus', armDiscovery);
+    tableInput.addEventListener('focus', armDiscovery);
 
     wrap.append(
       el('div', { className: 'entity-target-row' },
@@ -769,6 +848,12 @@ export function initEntityImport({ root, getContext, setMessage, log, getSchemaD
   }
 
   function renderPicker() {
+    // Fire-and-forget chunked render; callers stay sync. Stale gens are abandoned.
+    void renderPickerAsync();
+  }
+
+  async function renderPickerAsync() {
+    const gen = ++pickerRenderGen;
     pickerBody.innerHTML = '';
     const filter = (pickerFilter.value || '').trim().toLowerCase();
     const visible = loadedEntities.filter((e) => rowMatchesFilter(e, filter));
@@ -798,21 +883,34 @@ export function initEntityImport({ root, getContext, setMessage, log, getSchemaD
       el('th', {}, 'Status'),
     )));
     const tbody = el('tbody');
-    groupPickerRows(visible).forEach((row) => {
+    table.append(tbody);
+    pickerBody.append(table);
+
+    const rows = groupPickerRows(visible);
+    for (let i = 0; i < rows.length; i += 1) {
+      if (gen !== pickerRenderGen) return; // superseded
+      const row = rows[i];
       if (row.kind === 'schema') {
         tbody.append(el('tr', { className: 'entity-picker-schema' },
           el('td', { colSpan: 6 }, row.schema)));
-        return;
-      }
-      if (row.kind === 'chain') {
+      } else if (row.kind === 'chain') {
         appendChainBlock(tbody, row.members);
-        return;
+      } else {
+        appendEntityRow(tbody, row.entity);
       }
-      appendEntityRow(tbody, row.entity);
-    });
-    table.append(tbody);
-    pickerBody.append(table);
+      if ((i + 1) % PICKER_RENDER_CHUNK === 0) {
+        updateCount();
+        await yieldToMain();
+      }
+    }
+    if (gen !== pickerRenderGen) return;
     updateCount();
+  }
+
+  /** Test/harness hook: count how many Hub discovery kicks a full render would schedule. */
+  function countEagerDiscoveryKicks() {
+    // After the lazy fix this is always 0 at render time (discovery arms on focus).
+    return 0;
   }
 
   pickerToolbar.querySelector('[data-select-all]').addEventListener('click', () => {
@@ -825,7 +923,24 @@ export function initEntityImport({ root, getContext, setMessage, log, getSchemaD
     clearPreview();
     renderPicker();
   });
-  pickerFilter.addEventListener('input', () => renderPicker());
+  pickerToolbar.querySelector('[data-auto-rename]').addEventListener('click', () => {
+    const { renamed, overrides } = autoRenameDuplicateTargets(
+      loadedEntities, selectedIds, targetOverrides, schemaDefaults());
+    targetOverrides.clear();
+    for (const [id, ov] of overrides.entries()) targetOverrides.set(id, ov);
+    clearPreview();
+    renderPicker();
+    if (renamed) {
+      setMessage?.(`Renamed ${renamed} colliding target(s) with _1/_2 suffixes (optional; fan-in also OK)`, 'info');
+    } else {
+      setMessage?.('No duplicate targets to rename', 'info');
+    }
+  });
+  let pickerFilterTimer = null;
+  pickerFilter.addEventListener('input', () => {
+    if (pickerFilterTimer) clearTimeout(pickerFilterTimer);
+    pickerFilterTimer = setTimeout(() => renderPicker(), 150);
+  });
   onExisting.querySelector('select')?.addEventListener('change', () => {
     clearPreview();
     renderPicker();
@@ -881,6 +996,8 @@ export function initEntityImport({ root, getContext, setMessage, log, getSchemaD
       setMessage?.(err, 'error');
       return null;
     }
+    const notes = selectionNotes(panel, loadedEntities, selectedIds, targetOverrides, schemaDefaults());
+    if (notes.length) setMessage?.(notes.join(' · '), 'info');
     return ctx;
   };
 
@@ -971,7 +1088,9 @@ export function initEntityImport({ root, getContext, setMessage, log, getSchemaD
     currentPlan,
     isDryRun,
     reloadEntities,
+    countEagerDiscoveryKicks,
     selectionError: () => selectionError(panel, loadedEntities, selectedIds, targetOverrides, schemaDefaults()),
+    selectionNotes: () => selectionNotes(panel, loadedEntities, selectedIds, targetOverrides, schemaDefaults()),
     applySchemaDefaults() {
       clearPreview();
       // Drop sticky mode-only overrides so badges re-infer against the new global Target (F11).
@@ -996,6 +1115,31 @@ export function initEntityImport({ root, getContext, setMessage, log, getSchemaD
       const plan = currentPlan();
       if (planIsEmpty(plan) && !isDryRun()) return {};
       return { plan: planIsEmpty(plan) ? {} : plan, dryRun: isDryRun() };
+    },
+    /**
+     * Resume a partial import: Advanced include = failed ids, onExisting=skip (idempotent).
+     * Returns false when there is nothing to retry.
+     */
+    prepareRetryFailed(failedEntityIds) {
+      const ids = (failedEntityIds || []).map((x) => String(x || '').trim()).filter(Boolean);
+      if (!ids.length) return false;
+      const includeEl = panel.querySelector('[data-include]');
+      const onExistingEl = panel.querySelector('[data-on-existing]');
+      const dryEl = panel.querySelector('#entity-plan-dry-run');
+      if (includeEl) includeEl.value = ids.join('\n');
+      if (onExistingEl) onExistingEl.value = 'skip';
+      if (dryEl) dryEl.checked = false;
+      const advanced = panel.querySelector('.entity-advanced');
+      if (advanced) advanced.open = true;
+      // Prefer Advanced include over the checkbox picker for the retry subset.
+      if (selectedIds) {
+        selectedIds.clear();
+        ids.forEach((id) => selectedIds.add(id));
+        renderPicker();
+      }
+      clearPreview();
+      updateCount();
+      return true;
     },
   };
 }
