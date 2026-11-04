@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import logging
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -521,6 +522,12 @@ class H7TokenRefreshSingleFlight(unittest.TestCase):
 
 class CredentialFallbackSourcePipelineOnly(unittest.TestCase):
     """Role-agnostic fallback must stay on the source pipeline and skip same-role shells."""
+
+    def setUp(self):
+        # Sibling modules call logging.disable(CRITICAL) at import; assertLogs needs logs.
+        previous = logging.root.manager.disable
+        logging.disable(logging.NOTSET)
+        self.addCleanup(logging.disable, previous)
 
     def _patch(self, pipelines: dict):
         import automator_app.corehub as corehub
