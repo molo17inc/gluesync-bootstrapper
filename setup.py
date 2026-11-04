@@ -17,7 +17,7 @@ OPTIONS = {
         'NSHighResolutionCapable': True,
         'LSMinimumSystemVersion': '11.0',
     },
-    'packages': ['automator_app', 'create_user_defined_functions', 'utils'],
+    'packages': ['automator_app', 'create_user_defined_functions', 'utils', 'gs1_migration'],
     'includes': ['AppKit', 'WebKit', 'Foundation'],
     'excludes': ['tkinter', 'matplotlib', 'numpy', 'scipy', 'PIL'],
 }

@@ -1,5 +1,6 @@
 import { initCustomImport, getCustomImportPasswords } from './custom_import.js';
 import { initEntityImport } from './entity_import.js';
+import { initGs1Import } from './gs1_import.js';
 import { createLogPanel } from './log_panel.js';
 const api = {
   async getState() {
@@ -2269,7 +2270,8 @@ async function loadPipelines() {
   const configSelect = document.getElementById('pipeline-id');
   const bulkSelect = document.getElementById('bulk-pipeline-id');
   const duplicateSelect = document.getElementById('duplicate-pipeline-id');
-  if (!exportSelect && !configSelect && !bulkSelect && !duplicateSelect) return;
+  const gs1Select = document.getElementById('gs1-pipeline-id');
+  if (!exportSelect && !configSelect && !bulkSelect && !duplicateSelect && !gs1Select) return;
 
   try {
     const data = await api.listPipelines();
@@ -2310,6 +2312,7 @@ async function loadPipelines() {
     populateSelect(configSelect);
     populateSelect(bulkSelect);
     populateSelect(duplicateSelect);
+    populateSelect(gs1Select);
   } catch (err) {
     console.error(err);
     ui.setExportMessage(err.message, 'error');
@@ -2511,4 +2514,8 @@ bindEvents();
 updateImportButtonsVisibility();
 initMcpSetup();
 initAiSettings();
+initGs1Import({
+  setMessage: (text, type = '') => showMessage(document.getElementById('gs1-import-message'), text, type),
+  log: (message) => logActivity('GS1 import', message),
+});
 initialize();

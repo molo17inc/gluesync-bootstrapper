@@ -65,6 +65,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 import commons
 from commons import extract_all_schemas_from_yaml, extract_schema_types_from_yaml, load_yaml_config
 from . import corehub
+from .gs1_routes import register_gs1_routes
 import ai_settings
 from .corehub import PipelineInMaintenanceError
 from .state import state
@@ -5197,6 +5198,7 @@ def create_app() -> FastAPI:
     _register_mcp_routes(app)
     _mount_mcp_server(app)
     _register_ai_settings_routes(app)
+    register_gs1_routes(app)
 
     return app
 
