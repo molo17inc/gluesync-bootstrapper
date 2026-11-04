@@ -1,0 +1,1 @@
+{"entities":[],"perEntity":[{"gs1Name":"Holders","bucket":"UNSUPPORTED","issues":[{"code":"GS1_ENTITY_KIND_NOT_SUPPORTED","severity":"ERROR","message":"Holders has no level-1 table to write the document root to","hint":"Keep the entity on GS1, or rewrite it as a QueryDataModeling entity with one statement per level."}]}],"strippedKeys":[]}

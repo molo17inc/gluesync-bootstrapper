@@ -1,0 +1,1 @@
+{"config":{"couchbase":{"useCollections":true},"entitiesKeyMapping":{"ORDERS":{"prefix":"ORD","separator":"|","fields":["ID"]}},"sourceEntities":{"ORDERS":{"type":"ORDERS","scope":"S","query":"SELECT o.ID AS ID, o.TOTAL FROM dbo.ORDERS o"}}},"pipelineId":"pipeline-1","sourceAgentId":"mssql-cdc","targetAgentId":"couchbase","rootCounts":{},"repository":"SQL_TO_NOSQL"}

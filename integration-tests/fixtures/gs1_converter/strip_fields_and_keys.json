@@ -1,0 +1,1 @@
+{"input":{"targetPassword":"x","table":{"fields":{"TokenId":"TOKEN_ID"},"keys":{"TokenId":"TOKEN_ID"},"options":{"apiToken":"y"}}},"config":{"table":{"fields":{"TokenId":"TOKEN_ID"},"keys":{"TokenId":"TOKEN_ID"},"options":{}}},"paths":["targetPassword","table.options.apiToken"]}

@@ -1,0 +1,1 @@
+{"config":{"couchbase":{"useCollections":true},"sourceEntities":{"ORDERS":{"schema":"dbo","table":"ORDERS"},"LINES":{"table":"LINES","mapping":{"ID":"id"}}}},"pipelineId":"pipeline-1","sourceAgentId":"mssql-cdc","targetAgentId":"couchbase","rootCounts":{},"repository":"SQL_TO_NOSQL"}

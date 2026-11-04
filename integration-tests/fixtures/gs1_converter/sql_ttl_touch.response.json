@@ -1,0 +1,1 @@
+{"entities":[],"perEntity":[{"gs1Name":"ORDERS","bucket":"UNSUPPORTED","issues":[{"code":"GS1_TTL_TOUCH_NOT_SUPPORTED","severity":"ERROR","message":"ORDERS is listed in couchbase.entitiesToApplyTtl","hint":"Keep the entity on GS1 until GS2 refreshes document expiry."}]}],"strippedKeys":[]}
