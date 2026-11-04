@@ -24,8 +24,8 @@
    reproduce, and a report of what became of every GS1 entity. Secret-looking keys are removed unread.
 2. Core Hub checks each draft: a Query draft is described against the source agent (its structure checks run
    first and refuse a statement that depends on the moment it runs or a key that is not a plain column; then
-   the agent types the columns and proposes the keys GS1 took from the FROM table), and every draft is
-   validated as an entity. A document-split draft is validated only.
+   the agent types the columns and proposes the keys GS1 took from the FROM table), its target is mapped onto the
+   described result view, and every draft is validated as an entity. A document-split draft is validated only.
 3. The drafts the operator chooses are saved with ``PUT /pipelines/{id}/config/entities``, and only once the
    operator confirms. Nothing is saved before.
 
@@ -50,12 +50,13 @@ from typing import Any, Callable, Dict, Iterable, List, Optional
 from commons import fetch_core_hub
 from gs1_migration import REPOSITORIES, ConversionError, conversion_request, convert, load_config
 from gs1_migration.json_values import utf16_sort_key
-from gs1_migration.model import column_id
+from gs1_migration import model as gs2
 
 TOKEN_ENV = "GS1_IMPORT_TOKEN"
 SAVE_PATH = "/pipelines/{pipeline_id}/config/entities"
 VALIDATE_PATH = "/pipelines/{pipeline_id}/config/entities/validate"
 DESCRIBE_PATH = "/pipelines/{pipeline_id}/agents/{agent_id}/discovery/data-model"
+NODE_INFO_PATH = "/pipelines/{pipeline_id}/agents/{agent_id}/discovery/node-info"
 
 
 class Gs1ImportError(RuntimeError):
@@ -78,6 +79,13 @@ def validate_entities(token: str, pipeline_id: str, entities: List[Dict[str, Any
 
 def save_entities(token: str, pipeline_id: str, entities: List[Dict[str, Any]]) -> Any:
     return fetch_core_hub(SAVE_PATH.format(pipeline_id=pipeline_id), method="PUT", token=token, body={"entities": entities})
+
+
+def data_types(token: str, pipeline_id: str, agent_id: str) -> List[Dict[str, Any]]:
+    """The data types matrix an agent declares (its node info)."""
+    answer = fetch_core_hub(NODE_INFO_PATH.format(pipeline_id=pipeline_id, agent_id=agent_id), token=token)
+    matrix = answer.get("dataTypesMatrix") if isinstance(answer, dict) else None
+    return [entry for entry in matrix if isinstance(entry, dict)] if isinstance(matrix, list) else []
 
 
 def pipeline_agents(token: str, pipeline_id: str) -> Dict[str, Optional[str]]:
@@ -156,10 +164,22 @@ def plan_import(token: Optional[str], request: Dict[str, Any], check: bool = Tru
         report = convert(request, structure_check if check else None)
     except ConversionError as exc:
         raise Gs1ImportError(str(exc)) from None
+    types: Dict[str, List[Dict[str, Any]]] = {}
+
+    def type_matrices():
+        if not types:
+            types["source"] = data_types(token, pipeline_id, request["sourceAgentId"])
+            types["target"] = data_types(token, pipeline_id, request["targetAgentId"])
+        return types["source"], types["target"]
+
     drafts = {}
     for entity in report["entities"]:
         name = entity["entityName"]
-        draft = _described_draft(entity, checks.get(name, {}).get("describe"))
+        try:
+            draft = _described_draft(entity, checks.get(name, {}).get("describe"), type_matrices)
+        except (RuntimeError, ValueError) as exc:
+            checks.setdefault(name, {})["error"] = str(exc)
+            draft = copy.deepcopy(entity)
         drafts[name] = draft
         is_query = any(agent_entity.get("type") == "Query" for agent_entity in draft["agentEntities"])
         if check and is_query and "error" not in checks.get(name, {}):
@@ -171,27 +191,72 @@ def plan_import(token: Optional[str], request: Dict[str, Any], check: bool = Tru
     return {"report": report, "drafts": drafts, "checks": checks, "structureChecked": check}
 
 
-def _described_draft(entity: Dict[str, Any], description: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """The draft with the model describe normalised (typed columns, proposed keys), the converter's options kept.
+def _described_draft(entity: Dict[str, Any], description: Optional[Dict[str, Any]],
+                     type_matrices: Callable[[], Any]) -> Dict[str, Any]:
+    """The draft completed from describe, as Core Hub's own data-model entity draft completes it.
 
-    A Query without ``entitiesKeyMapping`` had GS1 ids from the FROM table's primary key: the id keys are the
-    root key describe proposes, sorted by label as GS1 laid them out.
+    The model is the one describe normalised (typed labels, proposed keys) with the converter's options. The
+    target maps the result view of the root (its labels, then one array per child level) onto the collection, each
+    column in the target's own type; a label the converter writes as a static field (``type``, ``scope``) keeps
+    the static value. A Query without ``entitiesKeyMapping`` had GS1 ids from the FROM table's primary key: the id
+    keys are the root key describe proposes, sorted by label as GS1 laid them out.
     """
     draft = copy.deepcopy(entity)
     if not description or not description.get("levels") or not isinstance(description.get("model"), dict):
         return draft
-    root_key: List[str] = []
-    keys: Dict[str, Any] = {}
-    for agent_entity in draft["agentEntities"]:
-        if agent_entity.get("type") == "Query":
-            options = agent_entity["model"]["options"]
-            agent_entity["model"] = dict(copy.deepcopy(description["model"]), options=options)
-            root_key = agent_entity["model"].get("root", {}).get("key") or []
-        elif agent_entity.get("type") == "NoSqlEntity":
-            keys = agent_entity.get("keyMapping") or {}
+    query = next((a for a in draft["agentEntities"] if a.get("type") == "Query"), None)
+    target = next((a for a in draft["agentEntities"] if a.get("type") == "NoSqlEntity"), None)
+    if query is None or target is None:
+        return draft
+    query["model"] = dict(copy.deepcopy(description["model"]), options=query["model"]["options"])
+    root = query["model"].get("root") or {}
+    root_key = root.get("key") or []
+    keys = target.get("keyMapping") or {}
     if keys.get("valueRendering") == "GS1" and not keys.get("keys") and root_key:
-        keys["keys"] = [column_id(label) for label in sorted(root_key, key=utf16_sort_key)]
+        keys["keys"] = [gs2.column_id(label) for label in sorted(root_key, key=utf16_sort_key)]
+    _map_result_view(target, root, *type_matrices())
     return draft
+
+
+def _entry_for(data_type: str, matrix: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    wanted = str(data_type).lower()
+    for entry in matrix:
+        names = [entry.get("defaultType"), entry.get("gluesyncDataType"), *(entry.get("supportedTypes") or [])]
+        if wanted in (str(name).lower() for name in names if name):
+            return entry
+    return None
+
+
+def _target_type(data_type: str, source_matrix: List[Dict[str, Any]], target_matrix: List[Dict[str, Any]]) -> str:
+    """The target's own type for a source type, matched by Gluesync type; the source type when none matches."""
+    source_entry = _entry_for(data_type, source_matrix)
+    target_entry = next((e for e in target_matrix
+                         if source_entry and e.get("gluesyncDataType") == source_entry.get("gluesyncDataType")), None)
+    if target_entry is None:
+        return data_type
+    same = [t for t in target_entry.get("supportedTypes") or [] if str(t).lower() == str(data_type).lower()]
+    return same[0] if same else target_entry.get("defaultType") or data_type
+
+
+def _map_result_view(target: Dict[str, Any], root: Dict[str, Any], source_matrix: List[Dict[str, Any]],
+                     target_matrix: List[Dict[str, Any]]) -> None:
+    object_id = target["entityObject"]["id"]
+    view_table = gs2.level_table_id(root.get("name", ""))
+    array_type = next((e.get("defaultType") for e in target_matrix if e.get("gluesyncDataType") == "ARRAY"), "gs:array")
+    static_ids = {column["id"] for column in target["columns"]}
+    view = [dict(column, isPK=column.get("name") in (root.get("key") or [])) for column in root.get("columns") or []]
+    view += [gs2.container_column(gs2.id64(child["path"]), view_table, child["path"], "gs:array")
+             for child in root.get("children") or []]
+    mapped = [column for column in view if column["id"] not in static_ids]
+    target["columns"] = [
+        dict(column, tableId=object_id,
+             dataType=array_type if column["dataType"] == "gs:array" else _target_type(column["dataType"], source_matrix,
+                                                                                        target_matrix))
+        for column in mapped
+    ] + target["columns"]
+    target["entityType"]["columnsMappingMatrix"] = [
+        gs2.mapping_matrix_entry(view_table, object_id, column["id"], column["id"]) for column in mapped
+    ]
 
 
 def save_drafts(token: str, pipeline_id: str, plan: Dict[str, Any], names: Iterable[str], confirmed: bool) -> List[str]:

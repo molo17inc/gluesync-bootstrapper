@@ -25,6 +25,13 @@ Document ids keep GS1's layout: a QDM entity `NAME::` and its `primaryTableKeys`
 order, dropping null values as GS1 did, and any other Query `NAME::` and the primary key of its FROM table, which
 describe proposes (`GS1_ROOT_KEY_TO_CONFIRM`: the flow takes the proposed key, check it in the report).
 
+Core Hub's converter left the target of a Query draft without its column mapping: Gluesync 2 completes it from
+describe. The flow does the same once describe answers: the model takes the typed labels and proposed keys, and
+the target maps the result view of the root (its labels, then one array column per child level) onto the
+collection, each column in the target agent's own type. A label named like a static field (`type`, `scope`) keeps
+the static value. Without describe (`--offline`, or Core Hub unreachable) the draft keeps the converter's target,
+which Core Hub refuses to save (`ROOT_KEY_NOT_MAPPED`).
+
 Converted Query entities omit empty arrays, write GS1's `type` and `scope` as static fields, and never delete:
 `allowedOperations` is `INSERT, UPDATE` until the customer signs off the delete counts of the cut-over. With
 `--root-counts`, `maxDeletesPerWindow` is 1 % of the entity's roots, at least 100. Document models report their

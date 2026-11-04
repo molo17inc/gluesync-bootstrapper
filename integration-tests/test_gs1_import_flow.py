@@ -12,6 +12,7 @@ import pytest
 
 import gs1_import
 from gs1_migration import conversion_request
+from gs1_migration.model import column_id, level_table_id
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "gs1_converter"
 PIPELINE = "pipe-1"
@@ -42,6 +43,11 @@ class FakeCoreHub:
 
     def __call__(self, path, method="GET", token=None, body=None, **_kwargs):
         self.calls.append((method, path))
+        if path.endswith("/discovery/node-info"):
+            if "/agents/mssql-cdc/" in path:
+                return {"dataTypesMatrix": [{"defaultType": "int", "gluesyncDataType": "INTEGER", "supportedTypes": ["int"]}]}
+            return {"dataTypesMatrix": [{"defaultType": "number", "gluesyncDataType": "INTEGER", "supportedTypes": []},
+                                        {"defaultType": "array", "gluesyncDataType": "ARRAY", "supportedTypes": []}]}
         if path == f"/pipelines/{PIPELINE}/config":
             return {"agents": [{"agentType": "SOURCE", "agentId": "mssql-cdc"}, {"agentType": "TARGET", "agentId": "couchbase"}]}
         if path.endswith("/discovery/data-model"):
@@ -51,7 +57,12 @@ class FakeCoreHub:
                         "verdict": {"mode": "SNAPSHOT_ONLY", "reasons": []}, "issues": [NON_DETERMINISTIC]}
             described = json.loads(json.dumps(body["model"]))
             described["root"]["key"] = described["root"]["key"] or ["ID"]
-            described["root"]["columns"] = [{"name": "ID"}]
+            described["root"]["columns"] = [
+                {"id": column_id("ID"), "tableId": level_table_id(root["name"]), "name": "ID", "position": 1,
+                 "dataType": "int", "isPK": False, "isIdentity": False, "isNullable": False},
+                {"id": column_id("type"), "tableId": level_table_id(root["name"]), "name": "type", "position": 2,
+                 "dataType": "int", "isPK": False, "isIdentity": False, "isNullable": False},
+            ]
             described["options"] = {"emptyArray": "EMPTY"}
             return {"model": described, "capturedTables": [], "levels": [
                 {"level": root["name"], "columns": [], "occurrences": [], "constructs": [], "proposedKey": ["ID"]}],
@@ -95,10 +106,15 @@ def test_a_query_keyed_on_the_from_table_takes_the_proposed_key_in_its_gs1_id(hu
     orders = plan["drafts"]["ORDERS"]
     source, target = orders["agentEntities"]
     assert source["model"]["root"]["key"] == ["ID"]
-    assert source["model"]["root"]["columns"] == [{"name": "ID"}]
+    assert [c["name"] for c in source["model"]["root"]["columns"]] == ["ID", "type"]
     assert source["model"]["options"]["emptyArray"] == "OMIT", "the converter's options are kept"
     assert target["keyMapping"]["prefix"] == "ORDERS"
-    assert target["keyMapping"]["keys"] == [gs1_import.column_id("ID")]
+    assert target["keyMapping"]["keys"] == [column_id("ID")]
+    assert [(c["name"], c["dataType"], c["isPK"]) for c in target["columns"]] == [
+        ("ID", "number", True), ("type", "string", False), ("scope", "string", False)], "type stays the static field"
+    assert target["entityType"]["columnsMappingMatrix"] == [{
+        "sourceTableObjectId": level_table_id("ORDERS"), "targetTableObjectId": target["entityObject"]["id"],
+        "sourceColumnIds": [column_id("ID")], "targetColumnIds": [column_id("ID")]}]
     report_draft = next(e for e in plan["report"]["entities"] if e["entityName"] == "ORDERS")
     assert report_draft["agentEntities"][1]["keyMapping"]["keys"] == [], "the converter's report is left as converted"
 
