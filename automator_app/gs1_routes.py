@@ -106,8 +106,10 @@ def _check_view(check: Dict[str, Any]) -> Dict[str, Any]:
         view["error"] = check["error"]
     description = check.get("describe")
     if description:
+        described = bool(description.get("levels"))
         view["describe"] = {
-            "verdict": (description.get("verdict") or {}).get("mode"),
+            # A describe refused for its structure never reached the agent: it has no verdict to show.
+            "verdict": (description.get("verdict") or {}).get("mode") if described else "REFUSED",
             "proposedKeys": {level.get("level"): level.get("proposedKey") for level in description.get("levels") or []},
             "issues": description.get("issues") or [],
         }

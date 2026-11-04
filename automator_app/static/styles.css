@@ -1203,6 +1203,14 @@ body.is-authenticated #auth-card {
   vertical-align: top;
   padding: 0.35rem 0.5rem;
   border-bottom: 1px solid var(--border);
+}
+
+.gs1-report th:nth-child(-n + 3),
+.gs1-report td:nth-child(-n + 3) {
+  white-space: nowrap;
+}
+
+.gs1-report td:nth-child(n + 4) {
   overflow-wrap: anywhere;
 }
 
