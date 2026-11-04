@@ -161,6 +161,14 @@ class ApplyEntityOptions(unittest.TestCase):
         opts = import_plan.entity_import_options(plan, pipeline, base=import_options.ImportOptions())
         self.assertEqual(opts.on_existing, "skip")
 
+    def test_on_existing_entity_plan_overrides_env(self):
+        """Customize skip must win over GS_IMPORT_ON_EXISTING=fail so Preview/Import do not fail."""
+        plan = _plan(defaults={"onExistingEntity": "skip"})
+        pipeline = import_plan.entity_pipeline(plan, "pipe")
+        base = import_options.ImportOptions(on_existing="fail")
+        opts = import_plan.entity_import_options(plan, pipeline, base=base)
+        self.assertEqual(opts.on_existing, "skip")
+
     def test_remap_into_import_options(self):
         plan = _plan(pipelines={"pipe": {"remap": {"schemas": {"SCH01": "SCH01_QA"},
                                                     "groups": {"nightly": "nightly_qa"}}}})
@@ -329,6 +337,96 @@ class PreviewPayload(unittest.TestCase):
         self.assertEqual(payload["conflicts"], ["SCH01.TAB001"])
         self.assertTrue(payload["dryRunSafe"])
 
+
+
+class EmptyCustomizeSchemaTests(unittest.TestCase):
+    """Empty Customize source/target fields fall back per-field to YAML (bug: empty Source + Target set)."""
+
+    def _request(self, *, auto=False, source='', target=''):
+        return automator.RunRequest.model_validate({
+            "pipelineId": "pipe-1",
+            "sourceSchema": source,
+            "targetSchema": target,
+            "autoSchemas": auto,
+            "sourceType": "SQL",
+            "targetType": "SQL",
+            "chunkSize": 50,
+            "yamlFileId": "yaml-1",
+            "skipErrors": False,
+        })
+
+    def _settings(self, yaml_path):
+        return automator._RunSettings(
+            token="t",
+            base_url="http://example",
+            enable_scheduling=False,
+            create_tables=False,
+            use_ssl=False,
+            skip_verify=True,
+            yaml_file=str(yaml_path),
+            source_type="SQL",
+            target_type="SQL",
+            log_callback=None,
+        )
+
+    def _yaml(self, tmp: Path):
+        path = tmp / "entities.yaml"
+        path.write_text(yaml.safe_dump({
+            "SRC_A": {"target": "TGT", "tables": {"whitelist": ["ORDERS"]}},
+            "SRC_B": {"target": "TGT", "tables": {"whitelist": ["ORDERS"]}},
+        }), encoding="utf-8")
+        return path
+
+    def test_empty_source_with_target_runs_all_pairs_remapped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            yaml_path = self._yaml(Path(tmp))
+            request = self._request(auto=False, source='', target='GLUESYNC')
+            settings = self._settings(yaml_path)
+            calls = []
+
+            def fake_create(req, sett, src, tgt):
+                calls.append((src, tgt))
+                return {"success": True, "logs": [], "error": None}
+
+            with mock.patch.object(automator, "_run_create_entities", side_effect=fake_create), \
+                 mock.patch.object(automator, "_run_schema_types", return_value=("SQL", "SQL")):
+                result = automator._run_entity_creation(request, settings, yaml_path)
+            self.assertTrue(result["success"])
+            self.assertEqual(sorted(calls), [("SRC_A", "GLUESYNC"), ("SRC_B", "GLUESYNC")])
+
+    def test_both_empty_with_auto_false_uses_yaml_pairs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            yaml_path = self._yaml(Path(tmp))
+            request = self._request(auto=False, source='', target='')
+            settings = self._settings(yaml_path)
+            calls = []
+
+            def fake_create(req, sett, src, tgt):
+                calls.append((src, tgt))
+                return {"success": True, "logs": [], "error": None}
+
+            with mock.patch.object(automator, "_run_create_entities", side_effect=fake_create), \
+                 mock.patch.object(automator, "_run_schema_types", return_value=("SQL", "SQL")):
+                result = automator._run_entity_creation(request, settings, yaml_path)
+            self.assertTrue(result["success"])
+            self.assertEqual(sorted(calls), [("SRC_A", "TGT"), ("SRC_B", "TGT")])
+
+    def test_source_only_uses_yaml_target_for_that_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            yaml_path = self._yaml(Path(tmp))
+            request = self._request(auto=False, source='SRC_A', target='')
+            settings = self._settings(yaml_path)
+            calls = []
+
+            def fake_create(req, sett, src, tgt):
+                calls.append((src, tgt))
+                return {"success": True, "logs": [], "error": None}
+
+            with mock.patch.object(automator, "_run_create_entities", side_effect=fake_create), \
+                 mock.patch.object(automator, "_run_schema_types", return_value=("SQL", "SQL")):
+                result = automator._run_entity_creation(request, settings, yaml_path)
+            self.assertTrue(result["success"])
+            self.assertEqual(calls, [("SRC_A", "TGT")])
 
 if __name__ == "__main__":
     unittest.main()

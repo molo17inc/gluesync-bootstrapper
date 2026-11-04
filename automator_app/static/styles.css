@@ -464,6 +464,11 @@ body.is-authenticated .requires-auth {
   color: var(--success);
 }
 
+.status-partial {
+  background: #f59e0b;
+  color: #111;
+}
+
 .status-failed {
   color: var(--error);
 }
@@ -878,7 +883,7 @@ body.is-authenticated #auth-card {
 
 /* Customizable backup import */
 .custom-import { margin-top: 1rem; display: grid; gap: 0.75rem; }
-.custom-import-pipeline { border: 1px solid var(--border); border-radius: 6px; padding: 0.5rem 0.75rem; }
+.custom-import-pipeline { border: 1px solid var(--border, #d0d7de); border-radius: 6px; padding: 0.5rem 0.75rem; }
 .custom-import-pipeline > summary { cursor: pointer; font-weight: 600; }
 .custom-import-tables { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
 .custom-import-tables th, .custom-import-tables td { padding: 2px 4px; text-align: left; }
@@ -891,7 +896,7 @@ body.is-authenticated #auth-card {
 .entity-import { margin-top: 1rem; display: grid; gap: 0.75rem; }
 .entity-parts { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: center; }
 .entity-on-existing { display: grid; gap: 0.25rem; }
-.entity-picker { border: 1px solid var(--border); border-radius: 6px; padding: 0.5rem 0.75rem; display: grid; gap: 0.5rem; }
+.entity-picker { border: 1px solid var(--border, #d0d7de); border-radius: 6px; padding: 0.5rem 0.75rem; display: grid; gap: 0.5rem; }
 .entity-picker-toolbar { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
 .entity-picker-filter {
   flex: 1 1 12rem;
@@ -905,7 +910,7 @@ body.is-authenticated #auth-card {
 .entity-picker-body {
   max-height: 420px;
   overflow: auto;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border, #d0d7de);
   border-radius: 4px;
 }
 .entity-picker-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; table-layout: auto; }
@@ -920,7 +925,7 @@ body.is-authenticated #auth-card {
   top: 0;
   z-index: 1;
   background: var(--surface-alt, #f9f9fb);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border, #d0d7de);
   font-weight: 600;
 }
 .entity-picker-table .mono,
@@ -1003,13 +1008,13 @@ body.is-authenticated #auth-card {
   white-space: normal;
 }
 
-.entity-advanced { border: 1px solid var(--border); border-radius: 6px; padding: 0.35rem 0.75rem; }
+.entity-advanced { border: 1px solid var(--border, #d0d7de); border-radius: 6px; padding: 0.35rem 0.75rem; }
 .entity-advanced > summary { cursor: pointer; font-weight: 600; }
 .entity-plan-preview { display: grid; gap: 0.5rem; max-width: 100%; overflow-x: auto; }
 .entity-preview-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
 .entity-preview-table th,
 .entity-preview-table td { padding: 3px 6px; text-align: left; border-bottom: 1px solid var(--border, #e6ebf1); }
-.entity-preview-parts { border: 1px solid var(--border); border-radius: 4px; padding: 0.25rem 0.5rem; }
+.entity-preview-parts { border: 1px solid var(--border, #d0d7de); border-radius: 4px; padding: 0.25rem 0.5rem; }
 .entity-preview-parts > summary { cursor: pointer; font-size: 0.85rem; font-weight: 600; }
 .entity-preview-parts-pre {
   white-space: pre-wrap;
@@ -1038,7 +1043,7 @@ body.is-authenticated #auth-card {
   padding: 0.65rem 0.75rem;
   margin-top: 0.75rem;
   background: var(--surface, #fff);
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--border, #d0d7de);
   box-shadow: 0 -4px 12px rgba(20, 30, 47, 0.06);
 }
 .entity-run-bar {
@@ -1134,7 +1139,7 @@ body.is-authenticated #auth-card {
 .import-advanced-actions {
   margin-top: 0.65rem;
   padding: 0.5rem 0.65rem;
-  border: 1px dashed var(--border);
+  border: 1px dashed var(--border, #d0d7de);
   border-radius: 6px;
 }
 .import-advanced-actions summary {
@@ -1185,6 +1190,21 @@ body.is-authenticated #auth-card {
   gap: 0.35rem;
   font-size: 0.8rem;
 }
+
+
+.run-entity-summary {
+  margin: 0.75rem 0;
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  background: #0f172a0d;
+  border: 1px solid #94a3b855;
+  font-size: 0.9rem;
+}
+.run-entity-summary[hidden] { display: none !important; }
+.run-entity-summary h4 { margin: 0 0 0.35rem; font-size: 0.95rem; }
+.run-entity-summary .run-entity-counts { margin: 0 0 0.5rem; }
+.run-entity-summary ul { margin: 0.25rem 0 0.5rem; padding-left: 1.2rem; }
+.run-entity-summary .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85em; }
 
 /* GS1 configuration import report */
 #gs1-report {

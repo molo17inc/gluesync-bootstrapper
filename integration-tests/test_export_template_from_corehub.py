@@ -39,7 +39,7 @@ class FetchPipelineJobsTests(unittest.TestCase):
         self.assertEqual(jobs, jobs_payload)
         req_mock.assert_called_once_with(
             "api/jobs/",
-            params={"pipeline_id": "7ab21909", "limit": 1000},
+            params={"pipeline_id": "7ab21909", "limit": 1000, "offset": 0},
         )
 
     def test_fetch_pipeline_jobs_accepts_legacy_list_shape(self):

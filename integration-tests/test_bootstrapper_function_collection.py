@@ -907,15 +907,14 @@ src:
         self.assertIn("column email_address is composed by the function maskEmail", message)
         self.assertNotIn("column name is composed", message)
 
-    def test_a_refusal_raises_when_errors_are_not_skipped(self):
-        from entity_mapping import EntityMappingError
-
+    def test_a_refusal_is_recorded_when_errors_are_not_skipped(self):
+        """F3 best-effort: unbound CustomFn fails that entity; no mid-batch raise."""
         collection = FakeFunctionCollections.exporting("trimAll")
-
-        with self.assertRaises(EntityMappingError) as raised:
-            run(CUSTOM_FN_COLUMNS, collection, skip_errors=False)
-
-        self.assertIn("function collection", str(raised.exception))
+        _hub, result = run(CUSTOM_FN_COLUMNS, collection, skip_errors=False)
+        self.assertGreaterEqual(result.get("failed", 0), 1)
+        self.assertFalse(result.get("success"))
+        self.assertTrue(any("function collection" in e.lower() or "function" in e.lower()
+                            for e in (result.get("errors") or [])), result)
 
     def test_a_yaml_without_custom_functions_does_not_read_the_collection(self):
         hub, result = run("""        name: customers

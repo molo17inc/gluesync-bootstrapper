@@ -35,8 +35,12 @@ def prepare_yaml(
     plan: import_plan.ImportPlan,
     pipeline_id: str,
 ) -> Tuple[Any, List[str], import_plan.PipelinePlan, Dict[str, bool]]:
-    """Planned YAML, notes, pipeline plan and part flags. Empty plan leaves YAML unchanged."""
+    """Planned YAML, notes, pipeline plan and part flags. Empty plan leaves YAML unchanged.
+
+    Shared final targets are fan-in (informational notes), not PlanError.
+    """
     planned, notes, pipeline = import_plan.apply_entity(yaml_config, plan, pipeline_id)
+    notes = list(notes) + import_plan.fan_in_notes(planned, pipeline)
     return planned, notes, pipeline, import_plan.entity_part_flags(plan, pipeline)
 
 
@@ -96,13 +100,19 @@ def preview_payload(
 ) -> Dict[str, Any]:
     """Read-only preview dict: selected entities, parts, conflicts, notes. No secrets."""
     source = copy.deepcopy(yaml_config)
+    pipeline = import_plan.entity_pipeline(plan, pipeline_id)
+    # Case-only override accidents still refuse; shared targets are fan-in (notes, not errors).
+    import_plan.check_names(source, pipeline)
+    import_plan.check_target_collisions(source, pipeline, pipeline_id)
+    fan_notes = import_plan.fan_in_notes(source, pipeline)
     planned, notes, pipeline = import_plan.apply_entity(source, plan, pipeline_id)
     entities = import_plan.entity_ids(planned)
     parts = import_plan.entity_part_flags(plan, pipeline)
     conflicts = _conflict_ids(entities, existing_sources)
     conflict_set = set(conflicts)
     rows = [_entity_preview_row(planned, e, conflict_set) for e in entities]
-    notes = list(notes) + _partial_chain_notes(yaml_config, {e["id"] for e in entities})
+    notes = list(notes) + fan_notes + _partial_chain_notes(yaml_config, {e["id"] for e in entities})
+    notes = notes + _multi_schema_source_notes(planned, plan)
     return {
         "pipelineId": str(pipeline_id),
         "entityCount": len(entities),
@@ -114,6 +124,20 @@ def preview_payload(
         "plan": plan.to_dict(),
         "dryRunSafe": True,
     }
+
+
+def _multi_schema_source_notes(planned: Any, plan: import_plan.ImportPlan) -> List[str]:
+    """F2: warn when a Customize Source would have dropped other selected schemas (now expanded)."""
+    if plan.empty:
+        return []
+    planned_schemas = sorted({e["schema"] for e in import_plan.entity_ids(planned)})
+    if len(planned_schemas) <= 1:
+        return []
+    return [
+        "Selection spans multiple source schemas "
+        f"({', '.join(planned_schemas)}). If Customize Source is set, every selected "
+        "schema is still created (remapped to Customize Target when that field is set)."
+    ]
 
 
 

@@ -355,21 +355,50 @@ def _replay_logs(log_callback: Optional[Callable[..., None]], logs: list) -> Non
                 _invoke_log_callback(log_callback, line, level="info", scope="stdout")
 
 
-def _create_entities_outcome(result_payload: Dict[str, Any], logs: list) -> Dict[str, Any]:
-    """Build the response of run_create_entities from the create_all_entities result."""
-    success = bool(result_payload.get("success", True))
-    errors = result_payload.get("errors") or []
+def _create_entities_summary_error(
+    result_payload: Dict[str, Any], errors: list, *, ok: int, failed: int, skipped: int
+) -> Any:
+    """The error text of a failed or partial create_all_entities result, when there is one."""
+    summary_error = result_payload.get("error")
+    if summary_error:
+        return summary_error
     if errors:
-        success = False
+        return f"OK {ok}, failed {failed}, skipped {skipped}. " + "; ".join(errors)
+    if failed or result_payload.get("partial"):
+        return f"OK {ok}, failed {failed}, skipped {skipped}"
+    return summary_error
+
+
+def _create_entities_outcome(result_payload: Dict[str, Any], logs: list) -> Dict[str, Any]:
+    """Build the response of run_create_entities from the create_all_entities result.
+
+    Prefer the create_entities ``success`` / ``partial`` flags (best-effort F3). When
+    those are absent, fall back to "any errors ⇒ failed" for older payloads.
+    """
+    errors = result_payload.get("errors") or []
+    if "success" in result_payload:
+        success = bool(result_payload.get("success"))
+    else:
+        success = not errors
+    ok = int(result_payload.get("successful") or 0)
+    failed = int(result_payload.get("failed") or 0)
+    skipped = int(result_payload.get("skipped") or 0)
     payload: Dict[str, Any] = {
         "success": success,
+        "partial": bool(result_payload.get("partial")),
         "logs": logs,
         "result": result_payload,
+        "successful": ok,
+        "failed": failed,
+        "skipped": skipped,
+        "total": int(result_payload.get("total") or 0),
+        "errors": list(errors),
+        "failures": list(result_payload.get("failures") or []),
+        "skippedEntities": list(result_payload.get("skippedEntities") or []),
+        "failedEntityIds": list(result_payload.get("failedEntityIds") or []),
     }
-    if not success:
-        summary_error = result_payload.get("error")
-        if not summary_error and errors:
-            summary_error = "; ".join(errors)
+    if not success or payload["partial"]:
+        summary_error = _create_entities_summary_error(result_payload, errors, ok=ok, failed=failed, skipped=skipped)
         if summary_error:
             payload["error"] = summary_error
     return payload
@@ -1170,8 +1199,9 @@ def discover_column_metadata_for_table(
             "name": name,
             "type": _discovered(col, "dataType", "type"),
             "dataLength": _discovered(col, "charMaxLength", "dataLength", default=0),
-            "numericPrecision": _discovered(col, "numPrec", "numericPrecision", default=0),
-            "numericScale": _discovered(col, "numScale", "numericScale", default=0),
+            # Null when discovery omitted precision (do not invent 0 → NUMBER(0,0) on Oracle).
+            "numericPrecision": _discovered(col, "numPrec", "numericPrecision", default=None),
+            "numericScale": _discovered(col, "numScale", "numericScale", default=None),
             "isNullable": col.get("isNullable", False),
             "id": col_id,
             "ordinalPosition": ordinal,
@@ -1873,7 +1903,11 @@ def export_pipeline_yaml(
 
     if not skip_schedules:
         jobs = fetch_pipeline_jobs(pipeline_id, token=chronos_token or token)
-        attach_schedules_from_jobs(jobs, entities_by_id, schemas, group_id_to_name)
+        pipe_scheds, grp_scheds = attach_schedules_from_jobs(
+            jobs, entities_by_id, schemas, group_id_to_name
+        )
+    else:
+        pipe_scheds, grp_scheds = [], []
 
     # Backfill null column types that are caused by legacy entities whose
     # DataTypeInterface was not registered for serialisation and therefore
@@ -1887,7 +1921,7 @@ def export_pipeline_yaml(
         schema_cfg.pop("has_duplicates", None)
         # Note: sourceTableName is preserved as it's needed during import
 
-    yaml_data = build_yaml_structure(schemas, groups_by_name)
+    yaml_data = build_yaml_structure(schemas, groups_by_name, pipe_scheds, grp_scheds)
 
     # Embed pipeline identity as a first-class YAML key so imports can
     # resolve the original pipeline without parsing the backup filename.
@@ -3882,6 +3916,35 @@ def import_data_access_policies(
     return _restore_result(counts, report, connections)
 
 
+
+def _zip_member_destination(root: Path, member: str) -> Path:
+    """root / member, refusing a ZIP member path that escapes root (zip slip)."""
+    normalized = member.replace("\\", "/")
+    parts = normalized.split("/")
+    if normalized.startswith("/") or ".." in parts or (parts and ":" in parts[0]):
+        raise ValueError(f"Unsafe path in the backup ZIP, refusing to extract it: {member!r}")
+    dest = (root / normalized).resolve()
+    if not dest.is_relative_to(root.resolve()):
+        raise ValueError(f"Unsafe path in the backup ZIP, refusing to extract it: {member!r}")
+    return dest
+
+
+def _safe_extract_zip(zf: "zipfile.ZipFile", extract_dir: Path) -> None:
+    """Extract every ZIP member under extract_dir with a path-traversal guard."""
+    extract_dir = extract_dir.resolve()
+    for info in zf.infolist():
+        name = info.filename
+        if not name or name.endswith("/"):
+            # Ensure directory members exist without writing file content
+            if name:
+                _zip_member_destination(extract_dir, name).mkdir(parents=True, exist_ok=True)
+            continue
+        dest = _zip_member_destination(extract_dir, name)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with zf.open(info, "r") as src, open(dest, "wb") as out:
+            out.write(src.read())
+
+
 def import_full_corehub_backup(
     *,
     token: str,
@@ -3910,7 +3973,7 @@ def import_full_corehub_backup(
     extract_dir.mkdir(parents=True, exist_ok=True)
     try:
         with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
-            zf.extractall(str(extract_dir))
+            _safe_extract_zip(zf, extract_dir)
 
         connection = {
             "token": token,
