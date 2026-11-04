@@ -421,8 +421,10 @@ def test_a_configuration_nested_too_deeply_for_the_converter_is_a_conversion_err
         node["next"] = {}
         node = node["next"]
 
+    request = _request(config)
+
     with pytest.raises(gs1_import.Gs1ImportError) as raised:
-        gs1_import.plan_import("tok", _request(config), check=False)
+        gs1_import.plan_import("tok", request, check=False)
 
     assert "deeply" in str(raised.value)
 
