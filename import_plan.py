@@ -469,9 +469,28 @@ def _final_target(yaml_config, pipeline: PipelinePlan, entity: Dict[str, Any]) -
     return str(schema), str(table)
 
 
+def _entity_base_id(entity_id: str) -> str:
+    """``SCHEMA.key`` with ``@@n`` stripped, casefolded — @@ siblings share a base."""
+    schema, _, rest = str(entity_id).partition(".")
+    key = rest.split("@@", 1)[0]
+    return f"{schema.casefold()}.{key.casefold()}"
+
+
+def _has_plan_target_remap(pipeline: PipelinePlan, entity_id: str) -> bool:
+    """True when the plan sets targetSchema / targetTable / tableTargetSchema for this entity."""
+    override = _override_for(pipeline.overrides, entity_id) or {}
+    if override.get("targetTable") or override.get("targetSchema"):
+        return True
+    return bool(_override_for(pipeline.table_target_schema, entity_id))
+
+
 def check_target_collisions(yaml_config, pipeline: PipelinePlan, old_id: Optional[str] = None) -> None:
-    """PlanError for two overrides (or tableTargetSchema entries) differing only by case, where the first one
-    would silently win, and for two selected tables the plan renames onto the same target table."""
+    """PlanError only for genuine accidents: case-only duplicate override keys.
+
+    Several selected sources mapping to the same final ``(targetSchema, targetTable)`` is intentional
+    fan-in (the table is created once). Use :func:`fan_in_notes` for the informational preview note.
+    ``@@n`` siblings sharing a target stay allowed the same way.
+    """
     where = f"pipelines.{old_id or pipeline.old_id}"
     for section, mapping in (("entities.overrides", pipeline.overrides),
                              ("tableTargetSchema", pipeline.table_target_schema)):
@@ -480,17 +499,89 @@ def check_target_collisions(yaml_config, pipeline: PipelinePlan, old_id: Optiona
             other = seen.setdefault(str(key).casefold(), str(key))
             if other != str(key):
                 raise PlanError(f"{where}.{section}: {other!r} and {key!r} differ only by case; keep one")
+
+
+def fan_in_notes(yaml_config, pipeline: PipelinePlan) -> List[str]:
+    """Informational notes when N>1 selected sources share one final target (fan-in).
+
+    Does not block. Column/type differences are listed when the YAML carries column metadata;
+    merge behaviour follows create_all_tables / fan_in (first feeder DDL, peers widened when possible).
+    """
     selected = {i.casefold() for i in selected_ids(yaml_config, pipeline)}
-    renamed: Dict[Tuple[str, str], str] = {}
+    by_target: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
     for entity in entity_ids(yaml_config):
-        override = _override_for(pipeline.overrides, entity["id"]) or {}
-        if entity["id"].casefold() not in selected or not override.get("targetTable"):
+        if entity["id"].casefold() not in selected:
             continue
         schema, table = _final_target(yaml_config, pipeline, entity)
-        other = renamed.setdefault((schema.casefold(), table.casefold()), entity["id"])
-        if other != entity["id"]:
-            raise PlanError(f"{where}.entities.overrides: {other!r} and {entity['id']!r} are both renamed to "
-                            f"{schema}.{table}; give each its own targetTable")
+        if not str(table).strip():
+            continue
+        # Case-insensitive target identity (MSSQL/MySQL default collations treat NEW/new as one table).
+        by_target.setdefault((str(schema).casefold(), str(table).casefold()), []).append(
+            {**entity, "_fan_in_schema": schema, "_fan_in_table": table}
+        )
+    notes: List[str] = []
+    for (_sk, _tk), entities in sorted(by_target.items(), key=lambda kv: kv[0]):
+        # Distinct source bases only (@@ siblings of one key count as one feeder for the note)
+        bases = []
+        seen_bases = set()
+        for entity in entities:
+            base = _entity_base_id(entity["id"])
+            if base in seen_bases:
+                continue
+            seen_bases.add(base)
+            bases.append(entity["id"])
+        if len(bases) < 2:
+            continue
+        schema = entities[0].get("_fan_in_schema", "")
+        table = entities[0].get("_fan_in_table", "")
+        spelled = f"{schema}.{table}" if schema else table
+        notes.append(
+            f"{len(bases)} sources write to {spelled}; table will be created once "
+            f"({', '.join(bases)})"
+        )
+        notes.extend(_fan_in_column_diff_notes(yaml_config, entities, spelled))
+    return notes
+
+
+def _fan_in_column_diff_notes(yaml_config, entities: List[Dict[str, Any]], spelled: str) -> List[str]:
+    """Warn when fan-in feeders disagree on columns/types (YAML metadata). Unverified vs live Core Hub."""
+    try:
+        import fan_in  # pylint: disable=import-outside-toplevel
+    except ImportError:
+        return [f"fan-in {spelled}: column diff check unavailable (fan_in module missing); unverified"]
+    feeds = []
+    root = _schemas_root(yaml_config)
+    for entity in entities:
+        entry = _dict_or_empty(root.get(entity["schema"]))
+        custom = _dict_or_empty(_dict_or_empty(entry.get("tables")).get("custom"))
+        cfg = _dict_or_empty(custom.get(entity["key"]))
+        feeds.append((entity["schema"], entity["key"], cfg))
+    if len(feeds) < 2:
+        return []
+    notes: List[str] = []
+    union = fan_in.union_columns(feeds)
+    conflicts = fan_in.type_conflicts(feeds) if hasattr(fan_in, "type_conflicts") else {}
+    # Columns only some feeders write
+    for column, types in sorted(union.items()):
+        feeders = sorted({f for labels in types.values() for f in labels})
+        if len(feeders) < len(feeds):
+            missing = sorted({f"{s}.{k}" for s, k, _ in feeds} - set(feeders))
+            if missing:
+                notes.append(
+                    f"fan-in {spelled}: column {column} missing from {', '.join(missing)} "
+                    f"(present in {', '.join(feeders)}); Core Hub create uses the first feeder's DDL "
+                    f"and fan_in merge when peers are known — unverified on every agent"
+                )
+        known = {t: v for t, v in types.items() if t != "?"}
+        if len(known) > 1:
+            detail = "; ".join(f"{t} from {', '.join(v)}" for t, v in sorted(known.items()))
+            reason = conflicts.get(column, "differing types") if isinstance(conflicts, dict) else "differing types"
+            notes.append(
+                f"fan-in {spelled}: column {column} type mismatch ({reason}): {detail}; "
+                f"table is created from the first feeder (see fan_in.merge_types); set "
+                f"targetDataType/targetDataLength on the rows to choose one"
+            )
+    return notes
 
 
 def _override_for(mapping: Mapping[str, Any], entity_id: str):
@@ -519,6 +610,9 @@ class _YamlPlanEditor:
         self.notes: List[str] = []
         self.dropped_schemas: List[str] = []
         self.skipped = 0
+        # Pipeline/group schedules rescued from schemas the plan drops (G1).
+        self.rescued_pipeline_schedules: List[Any] = []
+        self.rescued_group_schedules: List[Any] = []
 
     def _apply_overrides(self, cfg: Dict[str, Any], entity_id: str) -> None:
         target = _override_for(self.pipeline.table_target_schema, entity_id)
@@ -577,6 +671,19 @@ class _YamlPlanEditor:
             kept_white.append(name)
         return kept_white
 
+    def _rescue_schedules(self, entry: Dict[str, Any]) -> None:
+        # Rescue pipeline/group Chronos schedules parked on this schema (export used to
+        # park them on the alphabetically-first schema; Customize must not lose them).
+        pipe = entry.get("schedules")
+        if isinstance(pipe, list) and pipe:
+            self.rescued_pipeline_schedules.extend(pipe)
+        if self.groups:
+            grp = entry.get("group_schedules")
+            if isinstance(grp, list) and grp:
+                self.rescued_group_schedules.extend(grp)
+            elif isinstance(grp, dict) and grp:
+                self.rescued_group_schedules.append(grp)
+
     def edit_schema(self, schema: str, entry: Dict[str, Any]) -> bool:
         """Edits one schema entry in place; True when nothing of it is selected (the schema goes away)."""
         tables = entry.get("tables") if isinstance(entry.get("tables"), dict) else None
@@ -593,7 +700,10 @@ class _YamlPlanEditor:
         if not self.groups:
             entry.pop("group_schedules", None)
         # An empty whitelist means "every table": a schema with nothing selected goes away.
-        return not kept_custom and not kept_white and bool(custom or whitelist)
+        going_away = not kept_custom and not kept_white and bool(custom or whitelist)
+        if going_away:
+            self._rescue_schedules(entry)
+        return going_away
 
     def final_notes(self, config: Dict[str, Any]) -> List[str]:
         if not self.groups and "groups" in config:
@@ -603,6 +713,58 @@ class _YamlPlanEditor:
             dropped = (f"; schema(s) {', '.join(self.dropped_schemas)} left out" if self.dropped_schemas else "")
             self.notes.append(f"{self.skipped} table(s) not selected by the plan" + dropped)
         return self.notes
+
+
+def _append_schema_schedules(dest: Dict[str, Any], rescued_pipe: List[Any], rescued_grp: List[Any],
+                             groups: bool) -> None:
+    if rescued_pipe:
+        dest.setdefault("schedules", [])
+        if not isinstance(dest["schedules"], list):
+            dest["schedules"] = list(dest["schedules"]) if dest["schedules"] else []
+        dest["schedules"] = list(dest["schedules"]) + rescued_pipe
+    if rescued_grp and groups:
+        dest.setdefault("group_schedules", [])
+        existing = dest["group_schedules"]
+        if isinstance(existing, list):
+            dest["group_schedules"] = list(existing) + rescued_grp
+        else:
+            dest["group_schedules"] = rescued_grp
+
+
+def _rehome_schedules(config: Dict[str, Any], editor: _YamlPlanEditor, groups: bool, rescued_pipe: List[Any],
+                      rescued_grp: List[Any], root_grp: Any) -> None:
+    # Prefer re-homing onto a kept schema (import already reads schema-level schedules);
+    # else keep them at the YAML root.
+    kept_entries = [
+        (name, entry) for name, entry in _schemas_root(config).items()
+        if isinstance(entry, dict)
+    ]
+    n = len(rescued_pipe) + len(rescued_grp)
+    if not kept_entries:
+        if rescued_pipe:
+            config["pipeline_schedules"] = rescued_pipe
+        if rescued_grp and groups:
+            config["group_schedules"] = rescued_grp
+        editor.notes.append(
+            f"{n} pipeline/group schedule(s) kept at YAML root "
+            f"(no schema left to host them after the plan selection)"
+        )
+        return
+    # Stable choice: first remaining schema by name (any kept schema is imported).
+    kept_entries.sort(key=lambda kv: kv[0])
+    _name, dest = kept_entries[0]
+    _append_schema_schedules(dest, rescued_pipe, rescued_grp, groups)
+    editor.notes.append(
+        f"{n} pipeline/group schedule(s) promoted to schema {_name!r} "
+        f"(rescued from plan-dropped schema(s))"
+    )
+    # Clear stale root copies when we re-homed onto a schema
+    if isinstance(config, dict):
+        config.pop("pipeline_schedules", None)
+        if groups:
+            # Only pop root group_schedules we manage; schema-level holds them now
+            if isinstance(root_grp, list) or rescued_grp:
+                config.pop("group_schedules", None)
 
 
 def apply_to_yaml(yaml_config, plan: ImportPlan, pipeline: PipelinePlan) -> Tuple[Any, List[str]]:
@@ -620,11 +782,22 @@ def apply_to_yaml(yaml_config, plan: ImportPlan, pipeline: PipelinePlan) -> Tupl
     config = copy.deepcopy(yaml_config)
     editor = _YamlPlanEditor(pipeline, {i.casefold() for i in selected}, udfs, groups)
     root = config["schemas"] if isinstance(config.get("schemas"), dict) else config
+    # Preserve root-level schedules from newer exports across the plan edit.
+    root_pipe = config.get("pipeline_schedules") if isinstance(config, dict) else None
+    root_grp = config.get("group_schedules") if isinstance(config, dict) else None
     # _schemas_root builds a new dict, so deleting from ``root`` while iterating it is safe.
     for schema, entry in _schemas_root(config).items():
         if editor.edit_schema(schema, entry):
             del root[schema]
             editor.dropped_schemas.append(schema)
+    rescued_pipe = list(editor.rescued_pipeline_schedules)
+    rescued_grp = list(editor.rescued_group_schedules)
+    if isinstance(root_pipe, list):
+        rescued_pipe = list(root_pipe) + rescued_pipe
+    if isinstance(root_grp, list):
+        rescued_grp = list(root_grp) + rescued_grp
+    if rescued_pipe or rescued_grp:
+        _rehome_schedules(config, editor, groups, rescued_pipe, rescued_grp, root_grp)
     return config, editor.final_notes(config)
 
 
@@ -829,6 +1002,7 @@ def apply_entity(yaml_config, plan: ImportPlan, pipeline_id: str) -> Tuple[Any, 
             "or list at least one SCHEMA.TABLE"
         )
     planned, notes = apply_to_yaml(yaml_config, plan, pipeline)
+    notes = list(notes) + fan_in_notes(yaml_config, pipeline)
     return planned, notes, pipeline
 
 
@@ -843,8 +1017,12 @@ def entity_import_options(plan: ImportPlan, pipeline: PipelinePlan, *, dry_run: 
     ):
         options.remap = options.remap.merged(pipeline.remap)
     on_existing = plan.on_existing_entity(pipeline)
-    if on_existing and not options.on_existing:
+    # Explicit Customize / plan choice wins over GS_IMPORT_ON_EXISTING (same as Automator archive plan).
+    if on_existing:
         options.on_existing = on_existing
+    elif not plan.empty:
+        # F12: a non-empty plan with the dropdown left at default must not inherit GS_IMPORT_ON_EXISTING.
+        options.on_existing = None
     if "validate" in plan.defaults:
         options.validate = plan.defaults["validate"] is not False
     if plan.defaults.get("strictValidate"):

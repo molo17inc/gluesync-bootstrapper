@@ -130,59 +130,50 @@ def get_gluesync_data_type(source_type: str, source_node_info) -> str:
     logger.info(f"Warning: No gluesyncDataType mapping found for source type {source_type}. Using 'STRING' as fallback.")
     return 'STRING'
 
+def _case_fold_alternates(name: str) -> list:
+    """Exact name plus lower/upper forms (deduped) for Oracle / quoted-id lookups."""
+    out = []
+    for candidate in (name, name.lower(), name.upper()):
+        if candidate not in out:
+            out.append(candidate)
+    return out
+
+
 def table_exists(pipeline_id: str, schema_name: str, table_name: str, token: str) -> bool:
     """
     Check if a table exists in the given schema.
+
+    Tries exact spelling first, then lower/upper for the table and the schema
+    (Oracle unquoted identifiers fold to uppercase; mixed-case needs both flips).
     """
     # When CREATE_TABLE_IF_NOT_EXISTS is enabled, a 404 "not found" is expected
     # during table discovery and should not be logged as an error.
     expected_statuses = {404} if CREATE_TABLE_IF_NOT_EXISTS else None
 
-    try:
-        # URL-encode schema and table names (spaces, unicode, reserved chars)
-        encoded_schema_name = urllib.parse.quote(schema_name, safe='')
-        encoded_table_name = urllib.parse.quote(table_name, safe='')
-        fetch_core_hub(
-            f"/pipelines/{pipeline_id}/config/entities/schemas/{encoded_schema_name}/tables/{encoded_table_name}",
-            method="GET",
-            token=token,
-            expected_error_statuses=expected_statuses
-        )
-        logger.info(f"Table {table_name} exists in schema {schema_name}")
-        return True
-    except (requests.exceptions.RequestException, RuntimeError) as e:
-        error_msg = str(e)
-        logger.info(f"Initial table existence check failed for {table_name}: {error_msg}")
-
-        # Try opposite casing
-        if table_name != table_name.lower():
-            # Original has uppercase, try lowercase
-            alternate_table_name = table_name.lower()
-            logger.info(f"Trying lowercase version: {alternate_table_name}")
-        elif table_name != table_name.upper():
-            # Original is lowercase, try uppercase
-            alternate_table_name = table_name.upper()
-            logger.info(f"Trying uppercase version: {alternate_table_name}")
-        else:
-            # No casing change possible, return False
-            return False
-
-        try:
-            # URL-encode the alternate table name as well (schema already encoded above)
-            encoded_alternate_table_name = urllib.parse.quote(alternate_table_name, safe='')
-            fetch_core_hub(
-                f"/pipelines/{pipeline_id}/config/entities/schemas/{encoded_schema_name}/tables/{encoded_alternate_table_name}",
-                method="GET",
-                token=token,
-                expected_error_statuses=expected_statuses
-            )
-            logger.info(f"Table {alternate_table_name} exists in schema {schema_name} (using alternate casing)")
-            return True
-        except (requests.exceptions.RequestException, RuntimeError) as e2:
-            error_msg2 = str(e2)
-            logger.info(f"Alternate casing check also failed for {alternate_table_name}: {error_msg2}")
-
-        return False
+    for schema_try in _case_fold_alternates(schema_name):
+        for table_try in _case_fold_alternates(table_name):
+            try:
+                encoded_schema_name = urllib.parse.quote(schema_try, safe='')
+                encoded_table_name = urllib.parse.quote(table_try, safe='')
+                fetch_core_hub(
+                    f"/pipelines/{pipeline_id}/config/entities/schemas/{encoded_schema_name}/tables/{encoded_table_name}",
+                    method="GET",
+                    token=token,
+                    expected_error_statuses=expected_statuses
+                )
+                if schema_try != schema_name or table_try != table_name:
+                    logger.info(
+                        f"Table {table_try} exists in schema {schema_try} "
+                        f"(alternate casing for {schema_name}.{table_name})"
+                    )
+                else:
+                    logger.info(f"Table {table_name} exists in schema {schema_name}")
+                return True
+            except (requests.exceptions.RequestException, RuntimeError) as e:
+                logger.info(
+                    f"Table existence check failed for {schema_try}.{table_try}: {e}"
+                )
+    return False
 
 def generate_create_table_statement(pipeline_id: str, schema_name: str, table_name: str, token: str,
                                     table_data: GenerateCreateTargetTableStatementRequest) -> str:
@@ -190,12 +181,19 @@ def generate_create_table_statement(pipeline_id: str, schema_name: str, table_na
         # URL-encode schema and table names (spaces, unicode, reserved chars)
         encoded_schema_name = urllib.parse.quote(schema_name, safe='')
         encoded_table_name = urllib.parse.quote(table_name, safe='')
-        logger.info(f"table data: {table_data.model_dump()}")
+        # Leave missing numPrec/numScale as JSON null (not 0). Core Hub treats null as
+        # unconstrained; 0 became NUMBER(0,0) on Oracle and raised ORA-01727.
+        for col in table_data.columns:
+            if col.numPrec == 0:
+                col.numPrec = None
+                col.numScale = None
+        payload = table_data.model_dump()
+        logger.info(f"table data: {payload}")
         response = fetch_core_hub(
             f"/pipelines/{pipeline_id}/config/entities/schemas/{encoded_schema_name}/tables/{encoded_table_name}/statements/create-table",
             method="PUT",
             token=token,
-            body=table_data.model_dump()
+            body=payload
         )
         return response
     except requests.exceptions.RequestException as e:
@@ -239,9 +237,21 @@ def _collect_group_names(yaml_config) -> set:
 
 
 def _create_groups(token, pipeline_id, group_names) -> None:
-    """Create groups before creating entities."""
+    """Create groups before creating tables.
+
+    ``create_group`` raises ``RuntimeError`` on lookup/create failure (G6). Soft-fail
+    here so one bad group does not abort the whole create-tables pass — tables still
+    get created; entities that needed the named group fall back to ``_default``.
+    """
     for group_name in group_names:
-        group_id = create_group(token, pipeline_id, group_name)
+        try:
+            group_id = create_group(token, pipeline_id, group_name)
+        except RuntimeError as err:
+            logger.error(
+                f"Group '{group_name}' could not be created/looked up during table creation: {err}. "
+                f"Continuing without it (entities will use _default)."
+            )
+            continue
         if group_id != '_default':
             logger.info(f"Created/retrieved group '{group_name}' with ID: {group_id}")
 
@@ -663,8 +673,15 @@ def _metadata_column_dto(idx: int, col_meta: dict, key_lookup: _KeyLookup, sourc
     # missing key and falls through to the 'varchar' fallback.
     col_type = col_meta.get('dataType') or col_meta.get('type') or 'varchar'
     col_data_length = _to_int(col_meta.get('dataLength', col_meta.get('data_length')))
-    col_numeric_precision = _to_int(col_meta.get('numericPrecision', col_meta.get('numeric_precision')))
-    col_numeric_scale = _to_int(col_meta.get('numericScale', col_meta.get('numeric_scale')))
+    # None (not 0): YAML/templates often invent numericPrecision: 0 when discovery
+    # omitted precision; Oracle then gets NUMBER(0,0) → ORA-01727.
+    _raw_prec = col_meta.get('numericPrecision', col_meta.get('numeric_precision'))
+    _raw_scale = col_meta.get('numericScale', col_meta.get('numeric_scale'))
+    col_numeric_precision = None if _raw_prec is None else _to_int(_raw_prec, default=None)
+    col_numeric_scale = None if _raw_scale is None else _to_int(_raw_scale, default=None)
+    if col_numeric_precision == 0:
+        col_numeric_precision = None
+        col_numeric_scale = None
     col_is_nullable = _to_bool(col_meta.get('isNullable', col_meta.get('is_nullable')))
 
     # Use separate id and ordinalPosition from YAML metadata
@@ -751,18 +768,22 @@ def _source_column_dtos(columns, key_lookup: _KeyLookup, source_node_info, targe
         # YAML-defined keys override source metadata so templates can
         # create target PKs for source tables that do not expose one.
         col_is_pk = key_lookup.is_primary_key(col["name"]) or bool(col.get("isPK"))
+        # Prefer None over 0 when discovery omitted precision/scale: Oracle NUMBER with
+        # no precision must stay unscoped (NUMBER), not NUMBER(0,0) which raises ORA-01727.
+        src_num_prec = col["numPrec"] if "numPrec" in col and col["numPrec"] is not None else None
+        src_num_scale = col["numScale"] if "numScale" in col and col["numScale"] is not None else None
         column_dtos.append(_mark_max(raw_length, Column(
             name=col["name"],
             dataType=format_column_type(mapped_type, col_data_length,
-                                   col.get("numPrec", 0), col.get("numScale", 0)),
+                                   src_num_prec or 0, src_num_scale or 0),
             id=col.get("position", col.get("id", 1)),
             tableId=0,
             position=col.get("position", col.get("id", 1)),
             isPK=col_is_pk,
             isNullable=col.get("isNullable", False),
             charMaxLength=col_data_length,
-            numPrec=col.get("numPrec", 0),
-            numScale=col.get("numScale", 0)
+            numPrec=src_num_prec,
+            numScale=src_num_scale
         )))
     return column_dtos
 
@@ -821,15 +842,21 @@ def _exported_column_dto(target_name: str, relation: dict, source_col, key_looku
     data_type = _exported_target_type(row, source_col, source_node_info, target_node_info)
     raw_length = _first_set(row.get('targetDataLength'), row.get('dataLength'), source.get('charMaxLength'))
     data_length = _normalize_data_length(data_type, raw_length)
-    numeric_precision = _to_int(_first_set(
-        row.get('targetNumericPrecision'), row.get('numericPrecision'), source.get('numPrec')))
-    numeric_scale = _to_int(_first_set(
-        row.get('targetNumericScale'), row.get('numericScale'), source.get('numScale')))
+    raw_num_prec = _first_set(
+        row.get('targetNumericPrecision'), row.get('numericPrecision'), source.get('numPrec'))
+    raw_num_scale = _first_set(
+        row.get('targetNumericScale'), row.get('numericScale'), source.get('numScale'))
+    # None when every source omitted the field (do not invent 0 → NUMBER(0,0) on Oracle).
+    numeric_precision = None if raw_num_prec is None else _to_int(raw_num_prec, default=None)
+    numeric_scale = None if raw_num_scale is None else _to_int(raw_num_scale, default=None)
+    if numeric_precision == 0:
+        numeric_precision = None
+        numeric_scale = None
     is_pk = _to_bool(row.get('isPK'), default=False) or key_lookup.is_primary_key(target_name) \
         or any(key_lookup.is_primary_key(source_name) for source_name in relation['sources'])
     return _mark_max(raw_length, Column(
         name=target_name,
-        dataType=format_column_type(data_type, data_length, numeric_precision, numeric_scale),
+        dataType=format_column_type(data_type, data_length, numeric_precision or 0, numeric_scale or 0),
         id=0,
         tableId=0,
         position=_row_position(row),

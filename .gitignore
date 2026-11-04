@@ -54,3 +54,4 @@ bootstrapper-result.json
 
 # Version stamped into the Windows image build (CI writes it before docker build)
 /VERSION
+.gluesync_mcp_token

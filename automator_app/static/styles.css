@@ -464,6 +464,11 @@ body.is-authenticated .requires-auth {
   color: var(--success);
 }
 
+.status-partial {
+  background: #f59e0b;
+  color: #111;
+}
+
 .status-failed {
   color: var(--error);
 }
@@ -1185,3 +1190,18 @@ body.is-authenticated #auth-card {
   gap: 0.35rem;
   font-size: 0.8rem;
 }
+
+
+.run-entity-summary {
+  margin: 0.75rem 0;
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  background: #0f172a0d;
+  border: 1px solid #94a3b855;
+  font-size: 0.9rem;
+}
+.run-entity-summary[hidden] { display: none !important; }
+.run-entity-summary h4 { margin: 0 0 0.35rem; font-size: 0.95rem; }
+.run-entity-summary .run-entity-counts { margin: 0 0 0.5rem; }
+.run-entity-summary ul { margin: 0.25rem 0 0.5rem; padding-left: 1.2rem; }
+.run-entity-summary .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85em; }

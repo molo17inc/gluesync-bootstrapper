@@ -30,7 +30,8 @@ from typing import Any
 from commons import get_node_info, get_table_columns, fetch_core_hub, get_pipeline_config, get_pipeline_agents, \
     get_agent_tables, create_entity_schedules, map_data_type, create_pipeline_schedules, create_group_schedules, load_yaml_config, \
     process_filter_clauses, create_group, assign_entities_to_group, get_table_id, extract_target_column_types, \
-    corehub_takes_grouped_matrix, canonicalize_target_type, coerce_document_key_config, set_scheduling_enabled
+    corehub_takes_grouped_matrix, canonicalize_target_type, coerce_document_key_config, set_scheduling_enabled, \
+    register_token_refresh, make_password_login_refresh, clear_token_refresh, admin_credentials_path
 from create_all_tables import TargetTableCreationError, handle_table_creation, \
     set_create_table_if_not_exists as _set_tables_flag
 from create_user_defined_functions import handle_udf_function_definition
@@ -2583,6 +2584,29 @@ def _collect_groups_and_chains(yaml_config, source_schema):
     return group_names, chained_tables
 
 
+def _group_description_and_color(groups_config, group_name):
+    group_meta = groups_config.get(group_name)
+    if isinstance(group_meta, dict):
+        return group_meta.get('description'), group_meta.get('color')
+    return None, None
+
+
+def _create_group_or_default(token, pipeline_id, group_name, description, color):
+    if import_options.current().dry_run:
+        import_options.current().report.blocked_writes.append(f"create group {group_name!r} (if missing)")
+        return f"dry-run:{group_name}"
+    try:
+        return create_group(token, pipeline_id, group_name, description=description, color=color)
+    except RuntimeError as err:
+        # Soft-fail with a clear warning (never pretend success as the named group).
+        logger.error(
+            f"Group '{group_name}' could not be created/looked up: {err}. "
+            f"Entities that requested this group will use _default; "
+            f"group-level Chronos schedules for '{group_name}' will not target them."
+        )
+        return _DEFAULT_GROUP
+
+
 def _create_groups(token, pipeline_id, yaml_config, group_names):
     """Create the groups before creating entities; returns the group ID of each group name."""
     groups_config = {}
@@ -2597,22 +2621,11 @@ def _create_groups(token, pipeline_id, yaml_config, group_names):
     for group_name in group_names:
         logger.debug(f"Processing group: '{group_name}' (type: {type(group_name)})")
 
-        group_meta = groups_config.get(group_name)
-        description = None
-        color = None
-        if isinstance(group_meta, dict):
-            description = group_meta.get('description')
-            color = group_meta.get('color')
-
-        if import_options.current().dry_run:
-            import_options.current().report.blocked_writes.append(f"create group {group_name!r} (if missing)")
-            group_id = f"dry-run:{group_name}"
-        else:
-            group_id = create_group(token, pipeline_id, group_name, description=description, color=color)
+        description, color = _group_description_and_color(groups_config, group_name)
+        group_id = _create_group_or_default(token, pipeline_id, group_name, description, color)
         logger.debug(f"Group '{group_name}' creation result: {group_id}")
 
         if group_id and group_id != _DEFAULT_GROUP:
-            # Map the group name to its ID for later use
             group_id_map[group_name] = group_id
             logger.info(f"Created/retrieved group '{group_name}' with ID: {group_id}")
         else:
@@ -2726,11 +2739,17 @@ class _EntityRun:
         self.yaml_config = None
 
     def refuse_table(self, table_label, error):
+        """Record a per-entity failure and keep going (best-effort).
+
+        ``skip_errors=False`` used to raise here and abort the batch before later
+        entities were built or PUT — successes already in memory were never sent,
+        so the whole import looked lost (F3). Failures are collected; the run
+        finishes groups/schedules for what succeeded; overall status still fails
+        when skip_errors is false (see create_entities / _entity_run_result).
+        """
         logger.error(f"Entity for table {table_label} not created: {error}")
         self.refused_tables.append(table_label)
         self.errors.append(f"{table_label}: {error}")
-        if not self.ctx.skip_errors:
-            raise error
 
     def table_columns(self, table_name, custom_config=None):
         """The source discovery of a table of the schema, in the order the YAML ``custom_config`` of the table gives
@@ -2773,8 +2792,9 @@ def _offline_column(col, name, position, keys):
         "isIdentity": bool(col.get('isIdentity', False)),
         "isNullable": bool(col.get('isNullable', True)),
         "charMaxLength": col.get('dataLength') or 0,
-        "numPrec": col.get('numericPrecision') or 0,
-        "numScale": col.get('numericScale') or 0,
+        # None when YAML omitted precision/scale (do not invent 0 → NUMBER(0,0)).
+        "numPrec": col.get('numericPrecision'),
+        "numScale": col.get('numericScale'),
     }
 
 
@@ -2941,8 +2961,7 @@ def _table_properties(run, custom_config, label, duplicate=False):
             logger.error(f"Table {label} has unlockedSchema=true but no UDF. Skipping.")
         else:
             logger.error(f"Table {label} is configured with unlockedSchema=true but no UDF is defined. UDF is mandatory for unlocked schema.")
-        if not run.ctx.skip_errors:
-            raise ValueError(f"UDF is mandatory for table {label} with unlocked schema")
+        # Best-effort: skip this table; do not abort the batch (F3).
         return None
 
     return _TableProperties(source_custom_properties, target_custom_properties, partition_column_name,
@@ -3127,8 +3146,7 @@ def _define_table_udfs(run, table_name, table_udfs, label):
         logger.info(f"Successfully processed UDFs for {label}")
     except Exception as e:
         logger.error(f"Failed to process UDFs for {label}: {str(e)}")
-        if not run.ctx.skip_errors:
-            raise
+        run.errors.append(f"{label}: UDF processing failed: {e}")
 
 
 def _table_name_and_schema(table):
@@ -3222,8 +3240,7 @@ def _discover_source_table(run, table_name, custom_config=None):
     # Validate that columns were discovered
     error_msg = f"Cannot create entity for table {table_name}: No columns discovered from source. Please verify the table exists and is accessible."
     logger.error(error_msg)
-    if not run.ctx.skip_errors:
-        raise ValueError(error_msg)
+    # Best-effort: caller treats None as a skipped/refused table.
     return None
 
 
@@ -3351,6 +3368,18 @@ def _discovered_source_table_id(run, table, table_name):
     return _resolve_table_id(run.source_schema, table_name, run.source_tables_lookup, _SOURCE_ROLE)
 
 
+def _fallback_group_id(requested_group, token, pipeline_id):
+    if import_options.current().dry_run:
+        return f"dry-run:{requested_group}"
+    try:
+        return create_group(token, pipeline_id, requested_group)
+    except RuntimeError as err:
+        logger.error(
+            f"Could not use group '{requested_group}': {err}. Falling back to _default."
+        )
+        return _DEFAULT_GROUP
+
+
 def resolve_group_id(custom_config, group_id_map, token, pipeline_id):
     """The Core Hub group id for a table's YAML config, or '_default'.
 
@@ -3370,8 +3399,7 @@ def resolve_group_id(custom_config, group_id_map, token, pipeline_id):
         logger.debug(f"Using cached group ID for '{requested_group}': {group_id}")
     else:
         # Fallback: try to create/get the group (e.g. if upfront pre-creation failed)
-        group_id = (f"dry-run:{requested_group}" if import_options.current().dry_run
-                    else create_group(token, pipeline_id, requested_group))
+        group_id = _fallback_group_id(requested_group, token, pipeline_id)
         if group_id != _DEFAULT_GROUP:
             # Cache it so subsequent entities skip the API call
             group_id_map[requested_group] = group_id
@@ -3526,6 +3554,10 @@ def _process_discovered_table(run, table):
 
     props = _table_properties(run, custom_config, table_name)
     if props is None:
+        run.refuse_table(
+            f"{run.source_schema}.{table_name}",
+            "UDF is mandatory for unlocked schema (unlockedSchema=true but no UDF is defined)",
+        )
         return
 
     logger.debug(f"Source custom properties for {table_name}: {props.source}")
@@ -3582,8 +3614,7 @@ def _duplicate_table_columns(run, yaml_table_key, table_name, custom_config):
         return True, run.table_columns(table_name, custom_config)
     except Exception as e:
         logger.error(f"Failed to get columns for duplicate table {yaml_table_key}: {str(e)}")
-        if not run.ctx.skip_errors:
-            raise
+        run.errors.append(f"{yaml_table_key}: {e}")
         return False, None
 
 
@@ -3678,6 +3709,10 @@ def _process_duplicate_table(run, yaml_table_key, custom_config, unprocessed_cou
 
     props = _table_properties(run, custom_config, yaml_table_key, duplicate=True)
     if props is None:
+        run.refuse_table(
+            yaml_table_key,
+            "UDF is mandatory for unlocked schema (unlockedSchema=true but no UDF is defined)",
+        )
         return unprocessed_count
 
     target_table_name = custom_config.get('name', table_name)
@@ -4489,9 +4524,7 @@ def _send_multi_table_entity(run, index, total_multi_tables, multi_entity):
         error_msg = str(e)
         logger.error(f"Error creating MultiTable entity {index+1}/{total_multi_tables}: {error_msg}")
         run.errors.append(f"{multi_entity['entities'][0].get('entityName', _UNKNOWN_ENTITY)}: {error_msg}")
-        if not ctx.skip_errors:
-            raise
-        logger.warning("Skipping MultiTable entity due to skip_errors=True")
+        logger.warning("Skipping MultiTable entity; continuing best-effort with the rest")
         return False
 
 
@@ -4553,15 +4586,14 @@ def _send_entity_chunk(run, chunk, chunk_start, chunk_end, total_entities):
     except Exception as e:
         error_msg = str(e)
         logger.error(f"Error creating entities {chunk_start}-{chunk_end}: {error_msg}")
-        if not ctx.skip_errors:
-            raise
-        if _http_status(e) == 400 and len(chunk) > 1:
-            # A Gluesync 2.3 CoreHub refuses the whole request at the first entity its mapping stage
-            # refuses: send the chunk again one entity at a time, so the valid ones are saved (C-6).
+        if len(chunk) > 1:
+            # Core Hub (esp. 2.3) often refuses the whole request at the first bad entity.
+            # Always fall back one-by-one so successes in the chunk are persisted (F3 / C-6),
+            # whether or not skip_errors is set — skip_errors only affects overall status.
             logger.warning(f"Chunk {chunk_start}-{chunk_end} refused; sending its {len(chunk)} entities one by one")
             return _send_entities_one_by_one(run, chunk)
         run.errors.extend(f"{entity_payload.get('entityName', _UNKNOWN_ENTITY)}: {error_msg}" for entity_payload in chunk)
-        logger.warning("Skipping chunk due to skip_errors=True")
+        logger.warning("Entity chunk failed; continuing best-effort with remaining chunks")
         return 0, len(chunk)
 
 
@@ -4624,10 +4656,11 @@ def _assign_group(run, group_id, entity_ids):
 
     logger.info(f"Assigning {len(entity_ids)} entities to group ID: {group_id}")
     success = assign_entities_to_group(run.ctx.token, run.ctx.pipeline_id, group_id, entity_ids)
-    if not success and not run.ctx.skip_errors:
-        raise RuntimeError(f"Failed to assign entities to group {group_id}")
-    elif success:
+    if success:
         logger.info(f"Successfully assigned {len(entity_ids)} entities to group {group_id}")
+    else:
+        logger.warning(f"Failed to assign entities to group {group_id}; entities already created remain")
+        run.errors.append(f"group {group_id}: assignment failed")
 
 
 def _assign_entities_to_groups(run):
@@ -4643,8 +4676,7 @@ def _assign_entities_to_groups(run):
 
     except Exception as e:
         logger.error(f"Error during group assignment: {str(e)}")
-        if not run.ctx.skip_errors:
-            raise
+        run.errors.append(f"group assignment: {e}")
 
 
 def _group_schedules_declared(group_scheds):
@@ -4843,10 +4875,38 @@ def _create_group_level_schedules(run, schema_config, chronos_token):
         logger.error(f"Error creating group-level schedules: {str(e)}")
 
 
+def _create_root_schedules(run, yaml_config, root_pipe, root_grp, chronos_token):
+    if root_grp:
+        logger.info("Creating root-level group schedules from export")
+        _create_group_level_schedules(run, {"group_schedules": root_grp}, chronos_token)
+        yaml_config.pop("group_schedules", None)
+    if root_pipe:
+        logger.info("Creating root-level pipeline schedules from export")
+        create_pipeline_schedules(run.ctx.token, run.ctx.pipeline_id, root_pipe,
+                                  chronos_token=chronos_token)
+        yaml_config.pop("pipeline_schedules", None)
+
+
+def _create_schema_schedules(run, current_schema_config, entities_map, chronos_token):
+    _create_entity_level_schedules(run, current_schema_config, entities_map, chronos_token)
+
+    if 'group_schedules' in current_schema_config:
+        _create_group_level_schedules(run, current_schema_config, chronos_token)
+
+    if 'schedules' in current_schema_config:
+        logger.info(f"Creating pipeline-level schedules for schema {run.source_schema}")
+        create_pipeline_schedules(run.ctx.token, run.ctx.pipeline_id, current_schema_config['schedules'],
+                                  chronos_token=chronos_token)
+
+
 def _create_schedules(run, yaml_config, chronos_token):
     """Create the entity, group and pipeline schedules the YAML defines for the current source_schema."""
     has_schedules, current_schema_config = _schedules_schema_config(yaml_config, run.source_schema)
-    if not has_schedules:
+    # Newer exports park pipeline/group schedules at the YAML root (multi-schema).
+    root_pipe = yaml_config.get("pipeline_schedules") if isinstance(yaml_config, dict) else None
+    root_grp = yaml_config.get("group_schedules") if isinstance(yaml_config, dict) else None
+    has_root = bool(root_pipe) or bool(root_grp)
+    if not has_schedules and not has_root:
         logger.debug("No schedules defined in YAML config, skipping schedule creation")
         return
 
@@ -4864,16 +4924,13 @@ def _create_schedules(run, yaml_config, chronos_token):
         # Process entities in the format used in main.py
         entities_map = _entity_ids_by_table(response, run.source_schema)
 
-        _create_entity_level_schedules(run, current_schema_config, entities_map, chronos_token)
+        if current_schema_config:
+            _create_schema_schedules(run, current_schema_config, entities_map, chronos_token)
 
-        if 'group_schedules' in current_schema_config:
-            _create_group_level_schedules(run, current_schema_config, chronos_token)
-
-        # Create pipeline-level schedules if defined
-        if 'schedules' in current_schema_config:
-            logger.info(f"Creating pipeline-level schedules for schema {run.source_schema}")
-            create_pipeline_schedules(run.ctx.token, run.ctx.pipeline_id, current_schema_config['schedules'],
-                                      chronos_token=chronos_token)
+        # Root-level schedules: create once, then clear so a later schema in the same
+        # multi-schema import does not duplicate Chronos jobs.
+        if isinstance(yaml_config, dict) and (root_pipe or root_grp):
+            _create_root_schedules(run, yaml_config, root_pipe, root_grp, chronos_token)
 
     except Exception as e:
         logger.error(f"Error creating schedules: {str(e)}")
@@ -4896,11 +4953,11 @@ def _process_duplicate_tables(run):
 def _print_summary(counts):
     print("\nProcessing complete:")
     print(f"- Total regular entities: {counts['total']}")
-    print(f"- Successfully created regular entities: {counts['successful']}")
-    print(f"- Failed regular entities: {counts['failed']}")
+    print(f"- OK (regular): {counts['successful']}")
+    print(f"- Failed (regular): {counts['failed']}")
     print(f"- Total MultiTable entities: {counts['total_multi']}")
-    print(f"- Successfully created MultiTable entities: {counts['successful_multi']}")
-    print(f"- Failed MultiTable entities: {counts['failed_multi']}")
+    print(f"- OK (MultiTable): {counts['successful_multi']}")
+    print(f"- Failed (MultiTable): {counts['failed_multi']}")
 
 
 def _exported_custom_functions(token, pipeline_id, yaml_config, grouped):
@@ -4974,14 +5031,58 @@ def _build_multi_table_entities(run, chained_tables):
     return multi_table_entities
 
 
-def _entity_run_result(run, options, offline_names, counts):
-    """The result of create_entities from its (successful, failed, total) counts."""
+def _entity_failures(errors):
+    """Parse ``"entity: reason"`` error lines into ``{entity, reason}`` dicts."""
+    failures = []
+    for err in errors or []:
+        text = str(err)
+        label, sep, reason = text.partition(': ')
+        if sep and label.strip():
+            failures.append({"entity": label.strip(), "reason": reason.strip() or text})
+        else:
+            failures.append({"entity": text, "reason": text})
+    return failures
+
+
+def _failed_entity_ids(failures, refused_tables):
+    failed_ids = []
+    seen = set()
+    for item in failures:
+        eid = item.get("entity") or ""
+        if eid and eid.casefold() not in seen:
+            seen.add(eid.casefold())
+            failed_ids.append(eid)
+    for label in refused_tables or []:
+        if label and str(label).casefold() not in seen:
+            seen.add(str(label).casefold())
+            failed_ids.append(str(label))
+    return failed_ids
+
+
+def _entity_run_result(run, options, offline_names, counts, skipped_entities=None):
+    """The result of create_entities from its (successful, failed, total) counts.
+
+    Always returns counts for a best-effort run. ``success`` is False when any
+    entity failed and ``skip_errors`` is false (overall job status); per-entity
+    successes are still persisted before this returns.
+    """
     successful, failed, total = counts
+    skipped_entities = list(skipped_entities or [])
+    skipped = len(skipped_entities) if skipped_entities else max(0, total - successful - failed)
+    failures = _entity_failures(run.errors)
+    failed_ids = _failed_entity_ids(failures, run.refused_tables)
     result = {
         "successful": successful,
         "failed": failed,
+        "skipped": skipped,
         "total": total,
-        "errors": run.errors,
+        "errors": list(run.errors),
+        "refused": list(run.refused_tables),
+        "failures": failures,
+        "skippedEntities": skipped_entities,
+        "failedEntityIds": failed_ids,
+        "success": failed == 0 or bool(run.ctx.skip_errors),
+        "partial": successful > 0 and failed > 0,
     }
     if offline_names:
         result["saved_without_discovery"] = offline_names
@@ -5051,7 +5152,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
     # For each chainId, create a MultiTable entity
     multi_table_entities = _build_multi_table_entities(run, chained_tables)
 
+    skipped_before = len(options.report.skipped_existing)
     plan_flags = _apply_on_existing(run, multi_table_entities, existing)
+    skipped_entities = list(options.report.skipped_existing[skipped_before:])
 
     if options.dry_run:
         _record_dry_run_plan(run, multi_table_entities, plan_flags)
@@ -5082,10 +5185,11 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
     result = _entity_run_result(run, options, offline_names,
                                 (successful_entities + successful_multi_tables,
                                  failed_entities + failed_multi_tables,
-                                 total_entities + total_multi_tables))
+                                 total_entities + total_multi_tables),
+                                skipped_entities=skipped_entities)
 
-    # Assign entities to their groups and create schedules if successful
-    if successful_entities > 0 and not options.dry_run:
+    # Final steps for whatever succeeded — even when some entities failed (F3 best-effort).
+    if (successful_entities + successful_multi_tables) > 0 and not options.dry_run:
         _assign_entities_to_groups(run)
         _create_schedules(run, yaml_config, chronos_token)
 
@@ -5414,8 +5518,13 @@ def _apply_on_existing(run, multi_table_entities, existing):
             run.errors.append(f"{name}: {error}")
             return False
         if options.on_existing == 'update':
-            # Sent again with the existing entityId: how a live Core Hub handles it is not verified.
+            # Inject existing entityId and POST again. Live Core Hub may update, no-op, or
+            # duplicate; Automator UI warns. Prefer skip for resume after a partial run (F5).
             payload['entityId'] = match.get('entityId', '')
+            logger.warning(
+                "on-existing=update for %s (entityId %s): Core Hub update contract is unverified",
+                name, match.get('entityId'),
+            )
             options.report.updated_existing.append(name)
             flags[id(payload)] = (True, 'update')
             return True
@@ -5619,9 +5728,20 @@ def main(pipeline_id, source_schema, target_schema, source_type, target_type, ya
     options: remap, dry run, validation, offline entities, on-existing. The result then carries ``report`` when ``import_opts`` is given.
     """
     options = import_opts or import_options.current()
-    with import_options.use(options):
-        result = _main(pipeline_id, source_schema, target_schema, source_type, target_type, yaml_file, token,
-                       skip_errors, chunk_size, chronos_token, restore_function_collection)
+    # Mid-import 401: one re-login from saved admin credentials when present (G11).
+    cred_path = os.environ.get("GLUESYNC_ADMIN_CREDENTIALS") or admin_credentials_path(
+        os.environ.get("GLUESYNC_AUTH_TOKEN_PATH", "/opt/config/auth_token.json")
+    )
+    register_token_refresh(make_password_login_refresh(credentials_path=cred_path, extra_passwords=[
+        os.environ.get("ADMIN_PASSWORD"),
+        os.environ.get("DEFAULT_PASSWORD") or os.environ.get("HUB_ADMIN_PASSWORD"),
+    ]))
+    try:
+        with import_options.use(options):
+            result = _main(pipeline_id, source_schema, target_schema, source_type, target_type, yaml_file, token,
+                           skip_errors, chunk_size, chronos_token, restore_function_collection)
+    finally:
+        clear_token_refresh()
     rendered = options.report.render(dry_run=options.dry_run)
     if rendered:
         logger.info("\n" + rendered)
@@ -5712,14 +5832,28 @@ def _prepared_yaml(options, yaml_file, source_schema, target_schema):
     return yaml_config, source_schema, target_schema
 
 
+def _log_failed_outcome(result, summary, pipeline_id):
+    log_failure(logger, f"Entity creation completed ({summary}) for pipeline {pipeline_id}")
+    for item in result.get('failures') or []:
+        logger.error(f"  failed {item.get('entity')}: {item.get('reason')}")
+    for err in result.get('errors') or []:
+        if not result.get('failures'):
+            logger.error(f"  {err}")
+
+
 def _log_run_outcome(options, result, pipeline_id):
     if options.dry_run:
         logger.info("Dry run: nothing was written")
-    if result.get('failed'):
-        log_failure(logger, f"Entity creation completed with {result['failed']} of {result['total']} entities "
-                            f"failed for pipeline {pipeline_id}")
+    ok = int(result.get('successful') or 0)
+    failed = int(result.get('failed') or 0)
+    skipped = int(result.get('skipped') or 0)
+    summary = f"OK {ok}, failed {failed}, skipped {skipped}"
+    if failed:
+        _log_failed_outcome(result, summary, pipeline_id)
     else:
-        log_success(logger, f"Entity creation completed successfully for pipeline {pipeline_id}")
+        log_success(logger, f"Entity creation completed successfully ({summary}) for pipeline {pipeline_id}")
+    if skipped and result.get('skippedEntities'):
+        logger.info("Skipped (already in pipeline): " + ", ".join(result['skippedEntities']))
     lockfile_complete()
 
 
@@ -5752,7 +5886,9 @@ def build_arg_parser():
     parser.add_argument('--source-schema', default=None, help="Source schema name (required unless --write-plan)")
     parser.add_argument('--chunk-size', type=int, default=50,
                         help="Number of entities to process in each chunk (default: 50)")
-    parser.add_argument('--skip-errors', action='store_true', help="Continue execution even if errors occur")
+    parser.add_argument('--skip-errors', action=argparse.BooleanOptionalAction, default=True,
+                        help="Best-effort: continue after per-entity failures and keep successes (default: true). "
+                             "Use --no-skip-errors to mark the run failed when any entity fails (successes still kept).")
     parser.add_argument('--target-schema', default=None, help="Target schema name (required unless --write-plan)")
     parser.add_argument('--source-type', default=None, help="Source agent type (required unless --write-plan)")
     parser.add_argument('--target-type', default=None, help="Target agent type (required unless --write-plan)")

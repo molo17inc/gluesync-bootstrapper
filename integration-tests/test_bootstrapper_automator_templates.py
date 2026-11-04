@@ -49,10 +49,11 @@ class AutomatorTemplateTests(unittest.TestCase):
         self.assertEqual(call("discover_primary_key_names"), ["ID"])
 
     def test_column_metadata_reads_the_discovery_names(self):
+        # Missing discovery numPrec/numScale stay None (G12) — do not invent 0.
         self.assertEqual(call("discover_column_metadata_for_table"), [
             {"name": "ID", "type": "NUMBER", "dataLength": 0, "numericPrecision": 10, "numericScale": 0,
              "isNullable": False, "id": 7, "ordinalPosition": 1},
-            {"name": "NAME", "type": "VARCHAR2", "dataLength": 120, "numericPrecision": 0, "numericScale": 0,
+            {"name": "NAME", "type": "VARCHAR2", "dataLength": 120, "numericPrecision": None, "numericScale": None,
              "isNullable": True, "id": 8, "ordinalPosition": 2, "charSet": "AL32UTF8"},
         ])
 
