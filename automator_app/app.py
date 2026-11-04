@@ -458,12 +458,16 @@ class RunSnapshot(BaseModel):
 
 
 class ApiMessage(BaseModel):
+    model_config = ConfigDict(validate_by_name=True)
+
     success: bool = True
     message: Optional[str] = None
     logs: Optional[list[str]] = None
     planUsed: Optional[Dict[str, Any]] = None
     # Things to do after a successful call, never failures (a restored connection that needs a sign-in)
     warnings: Optional[list[str]] = None
+    # Set when the call was a dry-run (I2 bulk path): never imply a real "completed" write.
+    dry_run: Optional[bool] = Field(None, alias="dryRun")
 
 
 class AiSettingsExportRequest(BaseModel):
@@ -1364,8 +1368,24 @@ def _bulk_create_entities(request: BulkCreateRequest) -> ApiMessage:
         for line in logs:
             logger.info("[bulk-create] %s", line)
 
-    msg = "Bulk entity creation completed successfully" if ok else result.get("error") or "Bulk entity creation failed"
-    return ApiMessage(success=ok, message=msg, logs=logs, planUsed=plan.to_dict() if not plan.empty else None)
+    dry = bool(request.dry_run) or bool(result.get("dry_run"))
+    if dry:
+        msg = (
+            "Bulk entity dry-run finished (no writes)"
+            if ok else (result.get("error") or "Bulk entity dry-run reported failures")
+        )
+    else:
+        msg = (
+            "Bulk entity creation completed successfully"
+            if ok else (result.get("error") or "Bulk entity creation failed")
+        )
+    return ApiMessage(
+        success=ok,
+        message=msg,
+        logs=logs,
+        planUsed=plan.to_dict() if not plan.empty else None,
+        dryRun=True if dry else None,
+    )
 
 
 def _template_schema_types(pipeline_id: str) -> tuple[Any, Any]:
@@ -2269,16 +2289,17 @@ def _find_mapped_agent(agents_list: list, a_type: Any, a_tag: Any, a_id: Any) ->
     """The agents-config.yaml agent a per-pipeline agents mapping entry points at."""
     # Prefer matching by agentId when present to avoid merging distinct
     # agents that share the same tag/type. Fall back to tag/type only
-    # for backwards compatibility with older exports.
+    # for backwards compatibility with older exports. Tag compare is casefold (I3).
     match = next((a for a in agents_list if _agent_matches(a, a_type, a_tag, a_id)), None)
     if not match and a_id is not None:
+        tag_fold = str(a_tag or "").casefold()
         match = next(
             (
                 a
                 for a in agents_list
                 if isinstance(a, dict)
                 and a.get("agentType") == a_type
-                and a.get("agentTag") == a_tag
+                and str(a.get("agentTag") or "").casefold() == tag_fold
             ),
             None,
         )
@@ -2319,7 +2340,7 @@ def _dedupe_agents(selected: list[dict]) -> list[dict]:
     seen_local: set[tuple] = set()
     deduped: list[dict] = []
     for a in selected:
-        key = (a.get("agentType"), a.get("agentTag"))
+        key = (a.get("agentType"), str(a.get("agentTag") or "").casefold())
         if key in seen_local:
             continue
         seen_local.add(key)
