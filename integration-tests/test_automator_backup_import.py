@@ -349,6 +349,110 @@ class DuplicatePipelineUdfTests(unittest.TestCase):
         self.assertTrue(any("demo.ORDERS" in e and "UDF_ORDERS" in e for e in result["udfCloneErrors"]))
 
 
+
+class CrossDialectDuplicateCredentialsTests(unittest.TestCase):
+    """Cross-dialect duplicate must not reuse the other dialect's host/port (ORA-17904)."""
+
+    def test_target_tag_change_pulls_credentials_from_matching_pipeline(self):
+        import automator_app.corehub as corehub
+
+        captured_imports = []
+
+        def fake_fetch(path, method="GET", token=None, body=None, **kwargs):
+            if path == "/pipelines/env-pipe/config" and method == "GET":
+                return {
+                    "agents": [
+                        {
+                            "agentType": "SOURCE",
+                            "agentTag": "mssql-cdc",
+                            "agentId": "src-mssql",
+                            "hostCredentials": {"host": "mssql-host", "port": 1434, "username": "sa"},
+                        },
+                        {
+                            "agentType": "TARGET",
+                            "agentTag": "mysql-cdc",
+                            "agentId": "tgt-mysql",
+                            "hostCredentials": {"host": "mysql-host", "port": 3306, "username": "gluesync"},
+                        },
+                    ]
+                }
+            if path == "/pipelines/ora-pipe/config" and method == "GET":
+                return {
+                    "agents": [
+                        {
+                            "agentType": "SOURCE",
+                            "agentTag": "oracle-triggers",
+                            "agentId": "ora-src",
+                            "hostCredentials": {
+                                "host": "oracle-host",
+                                "port": 1521,
+                                "username": "GLUESYNCUSER",
+                                "databaseName": "XEPDB1",
+                            },
+                        },
+                        {
+                            "agentType": "TARGET",
+                            "agentTag": "oracle-triggers",
+                            "agentId": "ora-tgt",
+                            "hostCredentials": {
+                                "host": "oracle-host",
+                                "port": 1521,
+                                "username": "GLUESYNCUSER",
+                                "databaseName": "XEPDB1",
+                            },
+                        },
+                    ]
+                }
+            if path == "/pipelines" and method == "GET":
+                return [
+                    {"pipelineId": "env-pipe", "name": "env"},
+                    {"pipelineId": "ora-pipe", "name": "oracle"},
+                ]
+            if path.endswith("/config/credentials") and method == "GET":
+                return {}
+            if path == "/pipelines" and method == "POST":
+                return {"pipelineId": "cloned-xd", "name": body.get("name") if isinstance(body, dict) else None}
+            if "/agents/add" in path:
+                return {"agentId": "new-agent"}
+            return {"ok": True}
+
+        def fake_import(**kwargs):
+            captured_imports.append(kwargs.get("config") or {})
+            return {"pipelineId": "cloned-xd"}
+
+        with mock.patch.object(corehub, "fetch_core_hub", side_effect=fake_fetch), \
+             mock.patch.object(corehub, "export_pipeline_yaml", return_value="schemas:\n  demo:\n    target: public\n"), \
+             mock.patch.object(corehub, "import_pipeline_config_only", side_effect=fake_import), \
+             mock.patch.object(corehub, "_load_agent_type_catalog", return_value={
+                 "mssql-cdc": "RDBMS", "mysql-cdc": "RDBMS", "oracle-triggers": "RDBMS"}):
+            result = corehub.duplicate_pipeline(
+                token="tok",
+                base_url="http://test",
+                pipeline_id="env-pipe",
+                new_pipeline_name="XDPipe",
+                source_agent_tag="mssql-cdc",
+                target_agent_tag="oracle-triggers",
+                source_agent_password="src-pass",
+                target_agent_password="ora-pass",
+                clone_entities=False,
+                use_ssl=False,
+                skip_verify=False,
+            )
+
+        self.assertEqual(result["newPipelineId"], "cloned-xd")
+        self.assertTrue(captured_imports)
+        agents = captured_imports[0]["agents"]
+        tgt = next(a for a in agents if a.get("agentType") == "TARGET")
+        self.assertEqual(tgt["agentTag"], "oracle-triggers")
+        host = tgt["hostCredentials"]
+        self.assertEqual(host.get("host"), "oracle-host")
+        self.assertEqual(host.get("port"), 1521)
+        self.assertEqual(host.get("username"), "GLUESYNCUSER")
+        self.assertEqual(host.get("password"), "ora-pass")
+        self.assertNotEqual(host.get("port"), 3306)
+        self.assertNotEqual(host.get("host"), "mysql-host")
+
+
 class GlobalConfigFileSkipTests(unittest.TestCase):
     """Verify global-config.yaml files are excluded from pipeline YAML scanning."""
 

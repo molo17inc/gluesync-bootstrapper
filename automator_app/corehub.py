@@ -4145,6 +4145,106 @@ def _fetch_agent_credentials(
         )
     return fallback_host, fallback_custom
 
+def _find_agent_credentials_by_tag(
+    *,
+    token: str,
+    agent_tag: str,
+    prefer_pipeline_id: Optional[str] = None,
+) -> tuple[Optional[dict], Optional[dict], Optional[str]]:
+    """Locate host/custom credentials for ``agent_tag`` from any pipeline that already has it.
+
+    Used when duplicating across agent tags (cross-dialect): the source pipeline's
+    SOURCE/TARGET hostCredentials belong to a different database type and must not
+    be reused under the new tag (that yields ORA-17904 / wrong-port connects).
+
+    Returns ``(host_credentials, custom_credentials, pipeline_id)`` or ``(None, None, None)``.
+    """
+    if not agent_tag:
+        return None, None, None
+
+    pipeline_ids: list[str] = []
+    if prefer_pipeline_id:
+        pipeline_ids.append(str(prefer_pipeline_id))
+    try:
+        response = fetch_core_hub(PIPELINES_PATH, token=token)
+        if isinstance(response, list):
+            for item in response:
+                if not isinstance(item, dict):
+                    continue
+                raw_id = item.get("pipelineId") or item.get("id") or item.get("pipeline_id")
+                if raw_id is None:
+                    continue
+                pid = str(raw_id)
+                if pid not in pipeline_ids:
+                    pipeline_ids.append(pid)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("Could not list pipelines while resolving credentials for tag %s: %s", agent_tag, exc)
+
+    for pid in pipeline_ids:
+        try:
+            cfg = fetch_core_hub(f"/pipelines/{pid}/config", token=token)
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.debug("Skip pipeline %s while resolving tag %s: %s", pid, agent_tag, exc)
+            continue
+        if not isinstance(cfg, dict):
+            continue
+        agents = cfg.get("agents") or []
+        if not isinstance(agents, list):
+            continue
+        for agent in agents:
+            if not isinstance(agent, dict):
+                continue
+            if (agent.get("agentTag") or agent.get("tag")) != agent_tag:
+                continue
+            host, custom = _fetch_agent_credentials(token=token, pipeline_id=pid, agent=agent)
+            # Require a usable host — empty shells are not a template
+            if isinstance(host, dict) and (host.get("host") or host.get("hostname")):
+                logger.info(
+                    "Resolved hostCredentials for agent tag %s from pipeline %s agent %s",
+                    agent_tag,
+                    pid,
+                    agent.get("agentId") or agent.get("id"),
+                )
+                return host, custom, pid
+    return None, None, None
+
+
+def _credentials_for_duplicate_agent(
+    *,
+    token: str,
+    pipeline_id: str,
+    agent_template: Dict[str, Any],
+    new_tag: str,
+) -> tuple[dict, dict]:
+    """Host/custom credentials to apply when duplicating an agent under ``new_tag``.
+
+    Same tag as the template → credentials from the source pipeline agent (legacy path).
+    Different tag (cross-dialect) → look up a live agent that already uses ``new_tag``.
+    """
+    template_tag = agent_template.get("agentTag") or agent_template.get("tag")
+    if template_tag == new_tag:
+        return _fetch_agent_credentials(token=token, pipeline_id=pipeline_id, agent=agent_template)
+
+    host, custom, found_pid = _find_agent_credentials_by_tag(
+        token=token,
+        agent_tag=new_tag,
+        prefer_pipeline_id=pipeline_id,
+    )
+    if host is not None:
+        return host, custom or {}
+
+    # Last resort: keep template credentials but log loudly — caller may still fail to connect
+    logger.warning(
+        "No pipeline has agent tag %s with usable hostCredentials; falling back to template "
+        "tag %s credentials from pipeline %s (cross-dialect duplicate may fail with wrong-port "
+        "errors such as ORA-17904)",
+        new_tag,
+        template_tag,
+        pipeline_id,
+    )
+    return _fetch_agent_credentials(token=token, pipeline_id=pipeline_id, agent=agent_template)
+
+
 
 class PartialPipelineImportError(RuntimeError):
     """An import that failed after its pipeline was created: ``pipeline_id`` / ``agents`` say what is left."""
@@ -4693,10 +4793,11 @@ def duplicate_pipeline(
             "Source",
             source_host_override,
             source_port_override,
-            *_fetch_agent_credentials(
+            *_credentials_for_duplicate_agent(
                 token=token,
                 pipeline_id=pipeline_id,
-                agent=source_agent,
+                agent_template=source_agent,
+                new_tag=source_agent_tag,
             ),
         ),
         _convert_agent_payload(
@@ -4706,10 +4807,11 @@ def duplicate_pipeline(
             "Target",
             target_host_override,
             target_port_override,
-            *_fetch_agent_credentials(
+            *_credentials_for_duplicate_agent(
                 token=token,
                 pipeline_id=pipeline_id,
-                agent=target_agent,
+                agent_template=target_agent,
+                new_tag=target_agent_tag,
             ),
         ),
     ]
