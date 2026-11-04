@@ -119,10 +119,14 @@ class LargeInputUploadLimit(unittest.TestCase):
                 return b"x" * take
 
         # 3 MiB payload vs 2 MiB cap → 413 before finishing the read.
-        with self.assertRaises(HTTPException) as ctx:
-            asyncio.run(automator_app._read_capped_upload(
+        # Single call inside assertRaises (python:S5778).
+        def _invoke_oversize_upload():
+            return asyncio.run(automator_app._read_capped_upload(
                 _FakeUpload(3 * 1024 * 1024), max_bytes=2 * 1024 * 1024,
             ))
+
+        with self.assertRaises(HTTPException) as ctx:
+            _invoke_oversize_upload()
         self.assertEqual(ctx.exception.status_code, 413)
         self.assertIn("larger than", (ctx.exception.detail or "").lower())
 
