@@ -4396,6 +4396,49 @@ def _chain_tables_in_whitelist(run, chain_id, tables_list):
     return filtered_tables_list
 
 
+def _log_chain_table_order(chain_id, tables_list):
+    """Log MultiTable member order (YAML order) for debugging."""
+    logger.info(
+        f"Creating MultiTable entity for chainId: {chain_id} with {len(tables_list)} tables in YAML order:"
+    )
+    for idx, (table_key, _) in enumerate(tables_list):
+        logger.info(f"  {idx+1}. Table {table_key}")
+
+
+def _multi_table_group_id(run, last_table_data):
+    """Resolve group id/name for a MultiTable entity from its last member."""
+    group_id = run.group_id_map.get(
+        last_table_data.get('groupId', _DEFAULT_GROUP),
+        last_table_data.get('groupId', _DEFAULT_GROUP),
+    )
+    group_name = next(
+        (name for name, gid in run.group_id_map.items() if gid == group_id),
+        group_id,
+    )
+    return group_id, group_name
+
+
+def _refuse_multi_table_chain(run, chain_id, tables_list, chain_refusals):
+    """One counted MultiTable refusal; siblings go to extra_retry_ids (H1)."""
+    reason = EntityMappingError("; ".join(chain_refusals))
+    if not tables_list:
+        run.refuse_table(f"MultiTable chain {chain_id}", reason)
+        return
+    primary_key = tables_list[0][0]
+    run.refuse_table(primary_key, reason)
+    refused_cf = {x.casefold() for x in run.refused_tables}
+    extra_cf = {x.casefold() for x in run.extra_retry_ids}
+    for table_key, _table_data in tables_list[1:]:
+        label = _picker_fail_id(run.source_schema, table_key)
+        if not label:
+            continue
+        cf = label.casefold()
+        if cf in refused_cf or cf in extra_cf:
+            continue
+        run.extra_retry_ids.append(label)
+        extra_cf.add(cf)
+
+
 def _build_multi_table_entity(run, chain_id, tables_list):
     """The MultiTable entity of a chain (``{"entities": [...]}``), None when the chain gets none."""
     if not tables_list:
@@ -4404,61 +4447,35 @@ def _build_multi_table_entity(run, chain_id, tables_list):
     if tables_list is None:
         return None
 
-    # Tables are processed in the order they appear in the YAML file
-    # Log table ordering for debugging
-    logger.info(f"Creating MultiTable entity for chainId: {chain_id} with {len(tables_list)} tables in YAML order:")
-    for idx, (table_key, _) in enumerate(tables_list):
-        logger.info(f"  {idx+1}. Table {table_key}")
+    _log_chain_table_order(chain_id, tables_list)
 
-    # We'll reuse the entity name captured during export if available
     first_table_key, first_table_data = tables_list[0]
     entity_name = import_options.current().remap.entity_name(
         first_table_data.get("entityName") or f"{run.source_schema}.{first_table_key}")
 
     cb = _ChainBuild(run, chain_id)
-    # Process each table in the chain (in YAML order)
     for table_key, table_data in tables_list:
         _add_chain_source_table(cb, table_key, table_data)
-    # The chain settings are read from its last table, as they always have been.
     last_table_data = tables_list[-1][1]
     source_entity = _chain_source_entity(cb, entity_name, last_table_data)
 
-    # Process each table for the target (in YAML order)
     for table_key, table_data in tables_list:
         _add_chain_target_table(cb, table_key, table_data)
     target_entity = _chain_target_entity(cb, entity_name, tables_list, last_table_data)
 
-    # Get group info for multi-table entity
-    group_id = run.group_id_map.get(last_table_data.get('groupId', _DEFAULT_GROUP), last_table_data.get('groupId', _DEFAULT_GROUP))
-    group_name = next((name for name, gid in run.group_id_map.items() if gid == group_id), group_id)
+    group_id, group_name = _multi_table_group_id(run, last_table_data)
     logger.info(f"Assigning multi-table entity '{entity_name}' to group: {group_name} (ID: {group_id})")
 
-    # Create the MultiTable entity
     entity_payload = {
         "entityId": "",
         "entityName": entity_name,
         "agentEntities": [source_entity, target_entity],
     }
-
-    # Only add groupId if it's not the default
     if group_id and group_id != _DEFAULT_GROUP:
         entity_payload["groupId"] = group_id
 
     if cb.chain_refusals:
-        reason = EntityMappingError("; ".join(cb.chain_refusals))
-        # One counted refusal (one MultiTable entity). Primary member id is picker-
-        # resolvable; sibling members go to extra_retry_ids for Retry without
-        # inflating failed/total (H1).
-        if tables_list:
-            primary_key = tables_list[0][0]
-            run.refuse_table(primary_key, reason)
-            for table_key, _table_data in tables_list[1:]:
-                label = _picker_fail_id(run.source_schema, table_key)
-                if label and label.casefold() not in {x.casefold() for x in run.refused_tables}:
-                    if label.casefold() not in {x.casefold() for x in run.extra_retry_ids}:
-                        run.extra_retry_ids.append(label)
-        else:
-            run.refuse_table(f"MultiTable chain {chain_id}", reason)
+        _refuse_multi_table_chain(run, chain_id, tables_list, cb.chain_refusals)
         return None
     return {"entities": [entity_payload]}
 

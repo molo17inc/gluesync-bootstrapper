@@ -4281,7 +4281,7 @@ def _log_resolved_credentials(
     agent_tag: str,
     agent_type: Optional[str],
 ) -> None:
-    host, _custom, pid, aid = candidates[0]
+    _host, _custom, pid, aid = candidates[0]
     if len(candidates) > 1:
         logger.info(
             "Resolved hostCredentials for agent tag %s type %s from %d identical candidates "
