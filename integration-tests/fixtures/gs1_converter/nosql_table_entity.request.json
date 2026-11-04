@@ -1,0 +1,1 @@
+{"config":{"sourceEntities":{"Plain":{"table":"dbo.Plain","fields":{"a":"A"}}}},"pipelineId":"pipeline","sourceAgentId":"couchbase-dcp","targetAgentId":"mssql","rootCounts":{},"repository":"NOSQL_TO_SQL"}

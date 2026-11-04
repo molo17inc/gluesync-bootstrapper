@@ -1,0 +1,1 @@
+{"entities":[],"perEntity":[{"gs1Name":"Mapped","bucket":"UNSUPPORTED","issues":[{"code":"GS1_ENTITY_KIND_NOT_SUPPORTED","severity":"ERROR","message":"Mapped is a mapping entity: only DataModeling entities convert","hint":"Keep the entity on GS1, or rewrite it as a QueryDataModeling entity with one statement per level."}]}],"strippedKeys":[]}

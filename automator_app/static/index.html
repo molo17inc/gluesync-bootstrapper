@@ -542,6 +542,82 @@
               ></div>
             </section>
 
+            <section class="card requires-auth" id="gs1-import-card">
+              <h2>Import a GS1 (Gluesync 1.x) configuration</h2>
+              <form id="gs1-import-form" class="form-grid">
+                <fieldset class="fieldset">
+                  <legend>Convert GS1 entities into Gluesync 2 entities</legend>
+                  <label>
+                    GS1 configuration (.json)
+                    <input
+                      type="file"
+                      id="gs1-config-file"
+                      accept=".json,application/json"
+                    />
+                  </label>
+                  <label>
+                    Pipeline
+                    <select id="gs1-pipeline-id" name="gs1PipelineId">
+                      <option value="">Select a pipeline…</option>
+                    </select>
+                  </label>
+                  <label>
+                    GS1 product
+                    <select id="gs1-repository" name="gs1Repository">
+                      <option value="SQL_TO_NOSQL">sql-to-nosql (Query, QueryDataModeling)</option>
+                      <option value="NOSQL_TO_SQL">nosql-to-sql (DataModeling)</option>
+                      <option value="NOSQL_TO_SQL_SYBASE">nosql-to-sql, Sybase build (DataModeling)</option>
+                    </select>
+                  </label>
+                  <label>
+                    Source agent id (empty: the pipeline's source)
+                    <input type="text" id="gs1-source-agent" autocomplete="off" />
+                  </label>
+                  <label>
+                    Target agent id (empty: the pipeline's target)
+                    <input type="text" id="gs1-target-agent" autocomplete="off" />
+                  </label>
+                  <label>
+                    Root counts (optional JSON: GS1 entity name to number of roots)
+                    <textarea
+                      id="gs1-root-counts"
+                      rows="2"
+                      placeholder='{"ORDERS": 54321}'
+                    ></textarea>
+                  </label>
+                  <label class="checkbox">
+                    <input type="checkbox" id="gs1-offline" />
+                    Convert only: do not ask Core Hub to describe and validate the drafts
+                  </label>
+                  <span class="hint-text"
+                    >Secret-looking keys are removed before the file is read.
+                    Converting saves nothing: choose the drafts in the report,
+                    then Save asks you to confirm.</span
+                  >
+                  <div class="button-group">
+                    <button
+                      type="button"
+                      class="secondary"
+                      id="gs1-convert-btn"
+                      disabled
+                    >
+                      Convert and check
+                    </button>
+                    <button
+                      type="button"
+                      class="secondary"
+                      id="gs1-save-btn"
+                      disabled
+                    >
+                      Save chosen entities
+                    </button>
+                  </div>
+                </fieldset>
+              </form>
+              <div id="gs1-import-message" class="message" aria-live="polite"></div>
+              <div id="gs1-report"></div>
+            </section>
+
             <section class="card requires-auth" id="duplicate-card">
               <h2>Duplicate pipeline (w/ agents)</h2>
               <form id="duplicate-form" class="form-grid">

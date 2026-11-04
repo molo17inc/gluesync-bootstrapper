@@ -1205,3 +1205,45 @@ body.is-authenticated #auth-card {
 .run-entity-summary .run-entity-counts { margin: 0 0 0.5rem; }
 .run-entity-summary ul { margin: 0.25rem 0 0.5rem; padding-left: 1.2rem; }
 .run-entity-summary .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85em; }
+
+/* GS1 configuration import report */
+#gs1-report {
+  overflow-x: auto;
+}
+
+.gs1-report {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.gs1-report th,
+.gs1-report td {
+  text-align: left;
+  vertical-align: top;
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.gs1-report th:nth-child(-n + 3),
+.gs1-report td:nth-child(-n + 3) {
+  white-space: nowrap;
+}
+
+.gs1-report td:nth-child(n + 4) {
+  overflow-wrap: anywhere;
+}
+
+.gs1-issues {
+  margin: 0;
+  padding-left: 1rem;
+}
+
+.gs1-issue-error,
+.gs1-unsupported {
+  color: var(--error);
+}
+
+.gs1-issue-warning {
+  color: var(--warn);
+}

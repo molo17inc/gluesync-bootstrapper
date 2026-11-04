@@ -1,0 +1,1 @@
+{"entities":[],"perEntity":[{"gs1Name":"Holders","bucket":"UNSUPPORTED","issues":[{"code":"GS1_ENTITY_KIND_NOT_SUPPORTED","severity":"ERROR","message":"Holders has 2 level-1 entries: a DataModeling entity has one","hint":"Keep the entity on GS1, or rewrite it as a QueryDataModeling entity with one statement per level."}]}],"strippedKeys":[]}

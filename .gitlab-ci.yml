@@ -127,6 +127,8 @@ dbmoto_converter_tests:
 # (the 12 `python3 -m unittest` invocations this job used to run one after the other) and assigns every test class to
 # exactly one shard: the classes it names go to the shard it says, every other class (new ones too) to the last shard.
 # Keep `parallel:` equal to SHARDS in that script (the script checks CI_NODE_TOTAL).
+# pytest runs the test files written for it (the GS1 import tests, in the last shard); nodejs-wheel-binaries gives the
+# job the `node` the JavaScript helper tests need (the Python image has none).
 bootstrapper_core_unit_tests:
   extends: .python_with_deps
   stage: test
@@ -134,7 +136,7 @@ bootstrapper_core_unit_tests:
   parallel: 4
   rules: *rules_checks
   variables:
-    PIP_INSTALL_ARGS: "-r requirements.txt"
+    PIP_INSTALL_ARGS: "-r requirements.txt pytest nodejs-wheel-binaries"
   script:
     - python3 scripts/ci/run_unit_shard.py
   allow_failure: false
