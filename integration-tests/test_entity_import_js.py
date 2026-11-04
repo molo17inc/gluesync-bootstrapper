@@ -165,6 +165,82 @@ const existingResolved = resolveTarget(
 assert(existingResolved.mode === 'existing', 'existing mode preserved');
 assert(existingResolved.targetTable === 'cust_primary', 'existing table preserved');
 
+
+// --- Regression: duplicate target + skip (Customize Preview/Import) ---
+// Two sources, same table name → same default target. Both new → error.
+const crossSchema = [
+  { id: 'SRC_A.ORDERS', schema: 'SRC_A', source: 'SRC_A.ORDERS', targetSchema: 'TGT', targetTable: 'ORDERS', alreadyExists: false },
+  { id: 'SRC_B.ORDERS', schema: 'SRC_B', source: 'SRC_B.ORDERS', targetSchema: 'TGT', targetTable: 'ORDERS', alreadyExists: false },
+];
+const skipPanel = basePanel({ onExisting: 'skip' });
+assert(selectionError(skipPanel, crossSchema, new Set(['SRC_A.ORDERS', 'SRC_B.ORDERS']), new Map()) !== null,
+  'two new entities same target must error');
+
+// One already exists + skip → only the new one is created → no error
+const oneExists = [
+  { id: 'SRC_A.ORDERS', schema: 'SRC_A', source: 'SRC_A.ORDERS', targetSchema: 'TGT', targetTable: 'ORDERS', alreadyExists: true },
+  { id: 'SRC_B.ORDERS', schema: 'SRC_B', source: 'SRC_B.ORDERS', targetSchema: 'TGT', targetTable: 'ORDERS', alreadyExists: false },
+];
+assert(selectionError(skipPanel, oneExists, new Set(['SRC_A.ORDERS', 'SRC_B.ORDERS']), new Map()) === null,
+  'skip alreadyExists removes it from duplicate check');
+
+// Both already exist + skip → nothing created → no error
+const bothExist = oneExists.map((e) => ({ ...e, alreadyExists: true }));
+assert(selectionError(skipPanel, bothExist, new Set(['SRC_A.ORDERS', 'SRC_B.ORDERS']), new Map()) === null,
+  'skip both existing → no duplicate error');
+
+// Unchecked (excluded) entity does not count toward collision
+assert(selectionError(skipPanel, crossSchema, new Set(['SRC_A.ORDERS']), new Map()) === null,
+  'unchecked peer is not a collision');
+
+// Per-entity rename resolves the collision
+const renamed = new Map([
+  ['SRC_B.ORDERS', { mode: 'new', targetSchema: 'TGT', targetTable: 'ORDERS_B' }],
+]);
+assert(selectionError(skipPanel, crossSchema, new Set(['SRC_A.ORDERS', 'SRC_B.ORDERS']), renamed) === null,
+  'rename via per-entity targetTable clears duplicate');
+
+// fail / empty onExisting still errors when both would be created
+const failPanel = basePanel({ onExisting: 'fail' });
+assert(selectionError(failPanel, oneExists, new Set(['SRC_A.ORDERS', 'SRC_B.ORDERS']), new Map()) !== null,
+  'fail policy still counts alreadyExists toward duplicate');
+
+// --- Regression: global Customize target schema propagates ---
+const globalTgt = { targetSchema: 'GLUESYNC' };
+const rGlobal = resolveTarget(crossSchema[0], new Map(), globalTgt);
+assert(rGlobal.targetSchema === 'GLUESYNC', 'global target schema applies: ' + rGlobal.targetSchema);
+assert(rGlobal.targetTable === 'ORDERS', 'global leaves YAML table');
+
+// Per-entity explicit schema wins over global
+const rExplicit = resolveTarget(
+  crossSchema[0],
+  new Map([['SRC_A.ORDERS', { targetSchema: 'OTHER', targetTable: 'ORDERS' }]]),
+  globalTgt,
+);
+assert(rExplicit.targetSchema === 'OTHER', 'per-entity schema beats global');
+
+// Mode-only override (discovery) must NOT lock schema — global still applies
+const rModeOnly = resolveTarget(
+  crossSchema[0],
+  new Map([['SRC_A.ORDERS', { mode: 'existing' }]]),
+  globalTgt,
+);
+assert(rModeOnly.targetSchema === 'GLUESYNC', 'mode-only override keeps global schema');
+assert(rModeOnly.mode === 'existing', 'mode-only preserves mode');
+
+// buildEntityPlan emits global target as overrides
+const planGlobal = buildEntityPlan(
+  skipPanel, 'pipe-1', crossSchema, new Set(['SRC_A.ORDERS', 'SRC_B.ORDERS']), new Map(), globalTgt,
+);
+assert(planGlobal.pipelines['pipe-1'].entities.overrides['SRC_A.ORDERS'].targetSchema === 'GLUESYNC',
+  'plan emits global target for SRC_A');
+assert(planGlobal.pipelines['pipe-1'].entities.overrides['SRC_B.ORDERS'].targetSchema === 'GLUESYNC',
+  'plan emits global target for SRC_B');
+
+// selectionError with global schema still detects collision under remapped schema
+assert(selectionError(skipPanel, crossSchema, new Set(['SRC_A.ORDERS', 'SRC_B.ORDERS']), new Map(), globalTgt) !== null,
+  'global schema remap still flags duplicate table names');
+
 console.log('ok');
 """
 

@@ -843,7 +843,8 @@ def entity_import_options(plan: ImportPlan, pipeline: PipelinePlan, *, dry_run: 
     ):
         options.remap = options.remap.merged(pipeline.remap)
     on_existing = plan.on_existing_entity(pipeline)
-    if on_existing and not options.on_existing:
+    # Explicit Customize / plan choice wins over GS_IMPORT_ON_EXISTING (same as Automator archive plan).
+    if on_existing:
         options.on_existing = on_existing
     if "validate" in plan.defaults:
         options.validate = plan.defaults["validate"] is not False

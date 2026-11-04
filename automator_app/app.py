@@ -4757,17 +4757,62 @@ def _run_all_schema_pairs(request: RunRequest, settings: _RunSettings) -> dict:
     }
 
 
+def _run_all_schema_pairs_with_target(request: RunRequest, settings: _RunSettings, target_schema: str) -> dict:
+    """Create entities for every YAML schema pair, remapping each pair's target to ``target_schema``."""
+    yaml_file_path = settings.yaml_file
+    schema_pairs = extract_all_schemas_from_yaml(yaml_file_path)
+    if not schema_pairs:
+        return {
+            "success": False,
+            "logs": [],
+            "error": f"No schemas found in YAML file: {yaml_file_path}",
+        }
+
+    overall_success = True
+    errors: list[str] = []
+    for idx, (src_schema, _yaml_tgt) in enumerate(schema_pairs, start=1):
+        if settings.log_callback is not None:
+            settings.log_callback(
+                f"[Schema {idx}/{len(schema_pairs)}] Creating entities for {src_schema} -> {target_schema}"
+            )
+        result = _run_create_entities(request, settings, src_schema, target_schema)
+        if not result.get("success"):
+            overall_success = False
+            if result.get("error"):
+                errors.append(str(result["error"]))
+    return {
+        "success": overall_success,
+        "logs": [],
+        "error": "; ".join(errors) if errors else None,
+    }
+
+
 def _run_entity_creation(request: RunRequest, settings: _RunSettings, yaml_path: Path) -> dict:
-    """Run the entity creation of a run, for every schema pair of its YAML or for the requested schemas."""
+    """Run the entity creation of a run, for every schema pair of its YAML or for the requested schemas.
+
+    Empty Customize fields mean no override (same as Duplicate Pipeline): both empty → YAML pairs;
+    source empty + target set → every YAML source with the given target; source set + target empty →
+    YAML target for that source (or the source name when the YAML has no pair).
+    """
     yaml_file_path = str(yaml_path)
     source_type, target_type = _run_schema_types(request, yaml_file_path)
     settings = dataclass_replace(settings, yaml_file=yaml_file_path, source_type=source_type, target_type=target_type)
 
-    if request.auto_schemas:
+    source = (request.source_schema or "").strip()
+    target = (request.target_schema or "").strip()
+
+    if request.auto_schemas or not source and not target:
         return _run_all_schema_pairs(request, settings)
 
-    # Custom schemas provided by user
-    return _run_create_entities(request, settings, request.source_schema, request.target_schema)
+    if not source:
+        return _run_all_schema_pairs_with_target(request, settings, target)
+
+    if not target:
+        pairs = extract_all_schemas_from_yaml(yaml_file_path)
+        match = next((tgt for src, tgt in pairs if src.casefold() == source.casefold()), source)
+        return _run_create_entities(request, settings, source, match)
+
+    return _run_create_entities(request, settings, source, target)
 
 
 async def _execute_run(run_id: str, request: RunRequest) -> None:

@@ -1678,8 +1678,9 @@ function bindEvents() {
       }
 
       const customSchemasEnabled = customSchemasCheckbox ? customSchemasCheckbox.checked : false;
-      const sourceSchemaValue = document.getElementById('source-schema').value;
-      const targetSchemaValue = document.getElementById('target-schema').value;
+      // Empty field = no override (same as Duplicate Pipeline). Both empty → YAML pairs (auto).
+      const sourceSchemaValue = (document.getElementById('source-schema')?.value || '').trim();
+      const targetSchemaValue = (document.getElementById('target-schema')?.value || '').trim();
 
       const selectErr = entityImport?.selectionError?.();
       if (selectErr) {
@@ -1699,7 +1700,7 @@ function bindEvents() {
         pipelineId: document.getElementById('pipeline-id').value,
         sourceSchema: customSchemasEnabled ? sourceSchemaValue : '',
         targetSchema: customSchemasEnabled ? targetSchemaValue : '',
-        autoSchemas: !customSchemasEnabled,
+        autoSchemas: !customSchemasEnabled || (!sourceSchemaValue && !targetSchemaValue),
         sourceType: document.getElementById('source-type').value,
         targetType: document.getElementById('target-type').value,
         chunkSize: Number(document.getElementById('chunk-size').value || 50),
@@ -1892,6 +1893,13 @@ function bindEvents() {
         pipelineId: document.getElementById('pipeline-id')?.value,
         yamlFileId: stateManager.yamlFileId,
       }),
+      getSchemaDefaults: () => {
+        if (!customSchemasCheckbox?.checked) return null;
+        return {
+          sourceSchema: (document.getElementById('source-schema')?.value || '').trim(),
+          targetSchema: (document.getElementById('target-schema')?.value || '').trim(),
+        };
+      },
       setMessage: (msg, kind) => ui.setConfigMessage(msg, kind),
       log: logActivity,
     });
@@ -1902,6 +1910,12 @@ function bindEvents() {
         refreshEntityImportPicker(entityImport);
       });
     }
+    const onSchemaDefaultsChange = () => {
+      entityImport?.applySchemaDefaults?.();
+    };
+    customSchemasCheckbox?.addEventListener('change', onSchemaDefaultsChange);
+    document.getElementById('source-schema')?.addEventListener('input', onSchemaDefaultsChange);
+    document.getElementById('target-schema')?.addEventListener('input', onSchemaDefaultsChange);
     refreshEntityImportPicker(entityImport);
 
     initCustomImport({

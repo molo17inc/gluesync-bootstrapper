@@ -53,11 +53,26 @@ export function inferTargetMode(targetTable, existingTables) {
   return hit ? 'existing' : 'new';
 }
 
-/** Resolve effective target for an entity from overrides Map/object or YAML defaults. */
-export function resolveTarget(entity, overrides) {
+/** Resolve effective target for an entity.
+
+  Precedence for targetSchema: explicit per-entity override key → global Customize
+  target schema (schemaDefaults.targetSchema) → YAML default.
+  targetTable: explicit per-entity override key → YAML default.
+  schemaDefaults is optional; omitted in unit tests that only pass overrides.
+*/
+export function resolveTarget(entity, overrides, schemaDefaults = null) {
   const ov = overrides instanceof Map ? overrides.get(entity.id) : overrides?.[entity.id];
-  const targetSchema = String(ov?.targetSchema ?? entity.targetSchema ?? '').trim();
-  const targetTable = String(ov?.targetTable ?? entity.targetTable ?? '').trim();
+  const yamlSchema = String(entity.targetSchema ?? '').trim();
+  const yamlTable = String(entity.targetTable ?? '').trim();
+  const globalSchema = String(schemaDefaults?.targetSchema ?? '').trim();
+  const hasSchemaOv = ov != null && Object.hasOwn(ov, 'targetSchema');
+  const hasTableOv = ov != null && Object.hasOwn(ov, 'targetTable');
+  const targetSchema = hasSchemaOv
+    ? String(ov.targetSchema ?? '').trim()
+    : (globalSchema || yamlSchema);
+  const targetTable = hasTableOv
+    ? String(ov.targetTable ?? '').trim()
+    : yamlTable;
   const mode = ov?.mode === 'existing' ? 'existing' : 'new';
   return { targetSchema, targetTable, mode };
 }
@@ -74,7 +89,7 @@ export function targetDiffersFromDefault(entity, resolved) {
  * @param selectedIds Set|null  null = picker not loaded (omit include); Set of exact ids when loaded.
  * @param targetOverrides Map|object|null  per-entity {targetSchema,targetTable,mode}
  */
-export function buildEntityPlan(panel, pipelineId, loadedEntities, selectedIds, targetOverrides) {
+export function buildEntityPlan(panel, pipelineId, loadedEntities, selectedIds, targetOverrides, schemaDefaults = null) {
   const plan = { version: 1, defaults: {}, pipelines: {} };
   const entry = {};
   const onExisting = panel.querySelector('[data-on-existing]')?.value;
@@ -104,7 +119,7 @@ export function buildEntityPlan(panel, pipelineId, loadedEntities, selectedIds, 
   const overrideMap = {};
   (loadedEntities || []).forEach((entity) => {
     if (selectedIds && !selectedIds.has(entity.id)) return;
-    const resolved = resolveTarget(entity, targetOverrides);
+    const resolved = resolveTarget(entity, targetOverrides, schemaDefaults);
     if (!targetDiffersFromDefault(entity, resolved)) return;
     const piece = {};
     if (resolved.targetSchema) piece.targetSchema = resolved.targetSchema;
@@ -124,25 +139,35 @@ export function planIsEmpty(plan) {
   return !plan || (!Object.keys(plan.defaults || {}).length && !Object.keys(plan.pipelines || {}).length);
 }
 
-/** Validate picker selection and per-entity target names (empty / duplicate new targets). */
-export function selectionError(panel, loadedEntities, selectedIds, targetOverrides) {
+/** Validate picker selection and per-entity targets.
+
+  Only entities that would really be created are checked: selected (or advanced
+  include), and not skipped via onExistingEntity=skip when alreadyExists.
+  Two such entities mapping to the same targetSchema.targetTable is an error —
+  rename one via the per-entity Target cell to resolve. Excluded / unchecked /
+  skipped-existing rows do not count.
+*/
+export function selectionError(panel, loadedEntities, selectedIds, targetOverrides, schemaDefaults = null) {
   const advanced = advancedIncludeExclude(panel);
   if (advanced.used) return null;
   if (!loadedEntities?.length) return null;
   if (!selectedIds?.size) {
     return 'Select at least one entity (or use Advanced include), or Select all to import every table';
   }
+  const onExisting = panel.querySelector('[data-on-existing]')?.value || '';
   const seen = new Map();
   for (const entity of loadedEntities) {
     if (!selectedIds.has(entity.id)) continue;
-    const resolved = resolveTarget(entity, targetOverrides);
+    if (onExisting === 'skip' && entity.alreadyExists) continue;
+    const resolved = resolveTarget(entity, targetOverrides, schemaDefaults);
     if (!resolved.targetTable) {
       return `Entity ${entity.id}: target table (or collection) name is required`;
     }
     const key = `${resolved.targetSchema}.${resolved.targetTable}`.toLowerCase();
     if (seen.has(key)) {
       return `Duplicate target ${resolved.targetSchema || '(no schema)'}.${resolved.targetTable}`
-        + ` for ${seen.get(key)} and ${entity.id}`;
+        + ` for ${seen.get(key)} and ${entity.id}`
+        + '. Rename one entity\'s target table (or collection) to resolve.';
     }
     seen.set(key, entity.id);
   }
@@ -261,12 +286,21 @@ function badge(text, kind) {
   return el('span', { className: `entity-badge entity-badge--${kind}` }, text);
 }
 
-export function initEntityImport({ root, getContext, setMessage, log }) {
+export function initEntityImport({ root, getContext, setMessage, log, getSchemaDefaults }) {
   if (!root) return { currentPlan() { return null; }, isDryRun() { return false; } };
 
   let loadedEntities = [];
   let selectedIds = null; // null until first successful load; then a Set of exact ids
   const targetOverrides = new Map(); // id -> {targetSchema, targetTable, mode}
+  const schemaDefaults = () => {
+    const raw = typeof getSchemaDefaults === 'function' ? getSchemaDefaults() : null;
+    if (!raw || typeof raw !== 'object') return null;
+    const targetSchema = String(raw.targetSchema ?? '').trim();
+    const sourceSchema = String(raw.sourceSchema ?? '').trim();
+    if (!targetSchema && !sourceSchema) return null;
+    return { targetSchema, sourceSchema };
+  };
+
   let targetSchemas = []; // discovery cache
   const tablesBySchema = new Map(); // schema -> string[]
   const columnWarnById = new Map(); // id -> warn string
@@ -347,7 +381,7 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
 
   function currentPlan() {
     const ctx = getContext() || {};
-    return buildEntityPlan(panel, ctx.pipelineId, loadedEntities, selectedIds, targetOverrides);
+    return buildEntityPlan(panel, ctx.pipelineId, loadedEntities, selectedIds, targetOverrides, schemaDefaults());
   }
 
   function isDryRun() {
@@ -445,7 +479,7 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
   }
 
   async function refreshColumnWarn(entity) {
-    const resolved = resolveTarget(entity, targetOverrides);
+    const resolved = resolveTarget(entity, targetOverrides, schemaDefaults());
     if (resolved.mode !== 'existing' || !resolved.targetTable) {
       columnWarnById.delete(entity.id);
       updateMismatchUi(entity.id, '');
@@ -499,7 +533,7 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
   }
 
   function buildTargetControls(entity) {
-    const resolved = resolveTarget(entity, targetOverrides);
+    const resolved = resolveTarget(entity, targetOverrides, schemaDefaults());
     const listId = `entity-target-tables-${String(entity.id).replace(/[^a-zA-Z0-9_-]/g, '_')}`;
     const wrap = el('div', { className: 'entity-target-cell' });
     const schemaInput = el('input', {
@@ -526,7 +560,7 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
     const modeBadge = el('span', { className: 'entity-target-mode-badge', dataset: { modeBadgeFor: entity.id } });
     const mismatchHost = el('span', { dataset: { colWarnHost: entity.id } });
 
-    const syncBadge = (tables) => {
+    const syncBadge = (tables, { fromUser = false } = {}) => {
       const mode = inferTargetMode(tableInput.value, tables);
       modeBadge.replaceChildren(badge(
         mode === 'existing' ? 'table exists' : 'new table',
@@ -534,46 +568,52 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
       ));
       schemaInput.title = schemaInput.value || 'Target schema (or NoSQL database)';
       tableInput.title = tableInput.value || 'Target table or collection';
-      setOverride(entity.id, {
-        mode,
-        targetSchema: schemaInput.value || '',
-        targetTable: tableInput.value || '',
-      });
+      if (fromUser) {
+        // Lock both fields so a later global Customize change does not clobber a manual edit.
+        setOverride(entity.id, {
+          mode,
+          targetSchema: schemaInput.value || '',
+          targetTable: tableInput.value || '',
+        });
+      } else {
+        // Discovery-only: keep mode for the badge; do not lock schema/table (global can still apply).
+        setOverride(entity.id, { mode });
+      }
       refreshColumnWarn(entity).catch((err) => {
         log?.('Config', `Column mismatch check failed: ${err.message}`);
       });
     };
 
-    const loadTables = (preferred) => {
+    const loadTables = (preferred, { fromUser = false } = {}) => {
       const ctx = getContext() || {};
       if (!ctx.pipelineId) {
-        syncBadge([]);
+        syncBadge([], { fromUser });
         return;
       }
       ensureTargetTables(ctx.pipelineId, schemaInput.value || '')
         .then((tables) => {
           fillDatalist(tableList, tables);
-          syncBadge(tables);
+          syncBadge(tables, { fromUser });
           if (preferred && !tableInput.value) tableInput.value = preferred;
         })
         .catch((err) => {
           log?.('Config', `Target table discovery failed: ${err.message}`);
-          syncBadge([]);
+          syncBadge([], { fromUser });
         });
     };
 
-    schemaInput.addEventListener('change', () => loadTables());
+    schemaInput.addEventListener('change', () => loadTables(undefined, { fromUser: true }));
     schemaInput.addEventListener('input', () => {
       const tables = tablesBySchema.get(schemaInput.value || '') || [];
-      syncBadge(tables);
+      syncBadge(tables, { fromUser: true });
     });
     tableInput.addEventListener('input', () => {
       const tables = tablesBySchema.get(schemaInput.value || '') || [];
-      syncBadge(tables);
+      syncBadge(tables, { fromUser: true });
     });
     tableInput.addEventListener('change', () => {
       const tables = tablesBySchema.get(schemaInput.value || '') || [];
-      syncBadge(tables);
+      syncBadge(tables, { fromUser: true });
     });
 
     loadTables(resolved.targetTable);
@@ -768,7 +808,7 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
       setMessage?.('Select a pipeline and upload a YAML first', 'error');
       return null;
     }
-    const err = selectionError(panel, loadedEntities, selectedIds, targetOverrides);
+    const err = selectionError(panel, loadedEntities, selectedIds, targetOverrides, schemaDefaults());
     if (err) {
       setMessage?.(err, 'error');
       return null;
@@ -791,7 +831,7 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
   });
 
   function actionForEntity(entity) {
-    const resolved = resolveTarget(entity, targetOverrides);
+    const resolved = resolveTarget(entity, targetOverrides, schemaDefaults());
     if (resolved.mode === 'existing') return 'use existing (no create)';
     const createOn = panel.querySelector('[data-part="createTables"]')?.checked !== false;
     return createOn ? 'create if missing' : 'map only (create off)';
@@ -813,12 +853,12 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
     const tbody = el('tbody');
     (preview.entities || []).forEach((e) => {
       const local = loadedEntities.find((x) => x.id === e.id) || e;
-      const resolved = resolveTarget(local, targetOverrides);
+      const resolved = resolveTarget(local, targetOverrides, schemaDefaults());
       const mode = resolved.mode === 'existing' ? 'existing' : 'new';
       tbody.append(el('tr', {},
         el('td', {}, e.entityName || e.id),
         el('td', { className: 'mono' }, e.source || ''),
-        el('td', { className: 'mono' }, `${e.targetSchema}.${e.targetTable}`),
+        el('td', { className: 'mono' }, `${resolved.targetSchema}.${resolved.targetTable}`),
         el('td', {}, badge(mode === 'existing' ? 'table exists' : 'new table', mode === 'existing' ? 'existing' : 'new')),
         el('td', {}, actionForEntity(local)),
       ));
@@ -863,9 +903,13 @@ export function initEntityImport({ root, getContext, setMessage, log }) {
     currentPlan,
     isDryRun,
     reloadEntities,
-    selectionError: () => selectionError(panel, loadedEntities, selectedIds, targetOverrides),
+    selectionError: () => selectionError(panel, loadedEntities, selectedIds, targetOverrides, schemaDefaults()),
+    applySchemaDefaults() {
+      clearPreview();
+      renderPicker();
+    },
     planPayload() {
-      const err = selectionError(panel, loadedEntities, selectedIds, targetOverrides);
+      const err = selectionError(panel, loadedEntities, selectedIds, targetOverrides, schemaDefaults());
       if (err) throw new Error(err);
       const plan = currentPlan();
       if (planIsEmpty(plan) && !isDryRun()) return {};
