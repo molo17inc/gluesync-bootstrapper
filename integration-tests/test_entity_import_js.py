@@ -241,6 +241,83 @@ assert(planGlobal.pipelines['pipe-1'].entities.overrides['SRC_B.ORDERS'].targetS
 assert(selectionError(skipPanel, crossSchema, new Set(['SRC_A.ORDERS', 'SRC_B.ORDERS']), new Map(), globalTgt) !== null,
   'global schema remap still flags duplicate table names');
 
+
+// ── Expanded Customize matrix (client-side) ───────────────────────────
+const threeSchema = [
+  { id: 'SRC_A.ORDERS', schema: 'SRC_A', table: 'ORDERS', targetSchema: 'TGT', targetTable: 'ORDERS', alreadyExists: false },
+  { id: 'SRC_B.ORDERS', schema: 'SRC_B', table: 'ORDERS', targetSchema: 'TGT', targetTable: 'ORDERS', alreadyExists: false },
+  { id: 'SRC_C.ORDERS', schema: 'SRC_C', table: 'ORDERS', targetSchema: 'TGT', targetTable: 'ORDERS', alreadyExists: false },
+];
+
+// 3-way collision: all would create → error
+assert(selectionError(skipPanel, threeSchema, new Set(['SRC_A.ORDERS','SRC_B.ORDERS','SRC_C.ORDERS']), new Map()) !== null,
+  '3-schema collision both-create errors');
+
+// 3-way: one exists (skip) + two create same target → still error
+const threeOneExists = threeSchema.map((e,i) => i===0 ? {...e, alreadyExists:true} : e);
+assert(selectionError(skipPanel, threeOneExists, new Set(['SRC_A.ORDERS','SRC_B.ORDERS','SRC_C.ORDERS']), new Map()) !== null,
+  '3-schema one-skip two-create still errors');
+
+// 3-way: two exist (skip) + one create → ok
+const threeTwoExist = threeSchema.map((e,i) => i<2 ? {...e, alreadyExists:true} : e);
+assert(selectionError(skipPanel, threeTwoExist, new Set(['SRC_A.ORDERS','SRC_B.ORDERS','SRC_C.ORDERS']), new Map()) === null,
+  '3-schema two-skip one-create ok');
+
+// 3-way all skipped (all alreadyExists) → ok
+const threeAllExist = threeSchema.map(e => ({...e, alreadyExists:true}));
+assert(selectionError(skipPanel, threeAllExist, new Set(['SRC_A.ORDERS','SRC_B.ORDERS','SRC_C.ORDERS']), new Map()) === null,
+  '3-schema all-skip ok');
+
+// Uncheck resolves 3-way
+assert(selectionError(skipPanel, threeSchema, new Set(['SRC_A.ORDERS']), new Map()) === null,
+  '3-schema uncheck to one ok');
+
+// Rename resolves 3-way
+const renamed3 = new Map([
+  ['SRC_A.ORDERS', {targetTable:'ORDERS_A'}],
+  ['SRC_B.ORDERS', {targetTable:'ORDERS_B'}],
+  ['SRC_C.ORDERS', {targetTable:'ORDERS_C'}],
+]);
+assert(selectionError(skipPanel, threeSchema, new Set(['SRC_A.ORDERS','SRC_B.ORDERS','SRC_C.ORDERS']), renamed3) === null,
+  '3-schema rename resolves');
+
+// Per-entity wins over global when both set
+const rPerWins = resolveTarget(
+  crossSchema[0],
+  new Map([['SRC_A.ORDERS', {targetSchema:'PER_ENTITY'}]]),
+  { targetSchema: 'GLOBAL_LATER' },
+);
+assert(rPerWins.targetSchema === 'PER_ENTITY', 'per-entity wins after global change');
+
+// Clearing per-entity (omit key) falls back to global
+const rClearFalls = resolveTarget(crossSchema[0], new Map(), { targetSchema: 'GLOBAL_ONLY' });
+assert(rClearFalls.targetSchema === 'GLOBAL_ONLY', 'cleared per-entity falls back to global');
+
+// Explicit empty string per-entity schema should NOT inherit global (hasOwn)
+const rEmptyExplicit = resolveTarget(
+  crossSchema[0],
+  new Map([['SRC_A.ORDERS', {targetSchema:''}]]),
+  { targetSchema: 'GLOBAL_ONLY' },
+);
+assert(rEmptyExplicit.targetSchema === '', 'explicit empty per-entity schema does not inherit global');
+
+// Whitespace-only global trimmed to empty → YAML default
+const rWsGlobal = resolveTarget(crossSchema[0], new Map(), { targetSchema: '   ' });
+assert(rWsGlobal.targetSchema === 'TGT', 'whitespace global trims to YAML default');
+
+// Case difference in global still applied as given (trim only, no casefold of value)
+const rCase = resolveTarget(crossSchema[0], new Map(), { targetSchema: 'GlUeSyNc' });
+assert(rCase.targetSchema === 'GlUeSyNc', 'global schema preserves case');
+
+// onExisting fail: alreadyExists still counted as collision participant when would-create peer exists
+assert(selectionError(failPanel, oneExists, new Set(['SRC_A.ORDERS','SRC_B.ORDERS']), new Map()) !== null,
+  'fail mode: existing+create still duplicate error');
+
+// Duplicate error message must mention Duplicate target and hint rename
+const dupMsg = selectionError(skipPanel, crossSchema, new Set(['SRC_A.ORDERS','SRC_B.ORDERS']), new Map());
+assert(dupMsg && /Duplicate target/i.test(dupMsg), 'dup message has Duplicate target');
+assert(/rename/i.test(dupMsg), 'dup message hints rename');
+
 console.log('ok');
 """
 
