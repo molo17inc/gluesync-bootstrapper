@@ -30,7 +30,11 @@ from typing import Any, Dict, List, Tuple
 
 from .json_values import is_primitive
 
-_SECRET_KEY = re.compile(r"password|secret|token|certificate|credential|keystore", re.IGNORECASE)
+_SECRET_KEY = re.compile(
+    r"password|passwd|pwd|passphrase|secret|token|certificate|credential|keystore|auth"
+    r"|api[-_]?key|private[-_]?key|access[-_]?key|secret[-_]?key",
+    re.IGNORECASE,
+)
 _NAME_MAPS = {"fields", "keys"}
 
 

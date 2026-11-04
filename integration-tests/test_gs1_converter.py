@@ -81,6 +81,44 @@ def test_secrets_are_never_echoed_in_the_report():
         assert secret not in echoed
 
 
+@pytest.mark.parametrize("key", [
+    "sourcePwd", "sourcePasswd", "keyPassphrase", "apiKey", "api_key", "api-key", "privateKey", "private_key",
+    "accessKey", "secretKey", "authToken", "authHeader",
+])
+def test_every_key_that_looks_like_a_secret_is_stripped_unread(key):
+    config, paths = strip({"couchbase": {key: "hunter2"}, key: "hunter2"})
+
+    assert paths == [f"couchbase.{key}", key]
+    assert "hunter2" not in _compact(config)
+
+
+def test_an_unknown_setting_is_named_and_its_value_never_echoed():
+    request = load_config(_read("nosql_default.request.json"))
+    request["config"]["someUnknownTopLevel"] = "s3cr3t-value"
+    request["config"].setdefault("couchbase", {})["mysteryOption"] = "AKIA123"
+
+    report = convert(request)
+
+    echoed = _compact(report)
+    assert "AKIA123" not in echoed
+    assert "s3cr3t-value" not in echoed
+    notes = [i["message"] for e in report["perEntity"] for i in e["issues"] if i["code"] == "GS1_SETTING_ELSEWHERE"]
+    assert any(note.startswith("GS1 couchbase.mysteryOption:") for note in notes), notes
+    assert any(note.startswith("GS1 someUnknownTopLevel:") for note in notes), notes
+
+
+def test_a_secret_under_an_unknown_name_is_stripped_before_it_can_be_noted():
+    request = load_config(_read("nosql_default.request.json"))
+    request["config"]["sourcePwd"] = "hunter2"
+    request["config"].setdefault("couchbase", {})["apiKey"] = "AKIA123"
+
+    report = convert(request)
+
+    assert set(report["strippedKeys"]) >= {"sourcePwd", "couchbase.apiKey"}
+    assert "hunter2" not in _compact(report)
+    assert "AKIA123" not in _compact(report)
+
+
 def test_without_structure_checks_every_draft_the_converter_accepts_is_returned():
     request = load_config(_read("sql_fixture.request.json"))
 

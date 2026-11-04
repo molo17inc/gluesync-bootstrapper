@@ -121,8 +121,8 @@ def _notes(settings: Dict[str, Any], rules: List[Tuple[List[str], str]], prefix:
             named.append((f"{prefix}{present[0]}", f"GS1 {values}: {where}"))
     unknown = [
         (f"{prefix}{key}",
-         f"GS1 {prefix}{key} = {_text(value)}: GS2 has no entity or agent setting for it, it is not carried over")
-        for key, value in settings.items()
+         f"GS1 {prefix}{key}: GS2 has no entity or agent setting for it, it is not carried over")
+        for key in settings
         if key not in known and (prefix or key not in _BLOCKS)
     ]
     return named + unknown

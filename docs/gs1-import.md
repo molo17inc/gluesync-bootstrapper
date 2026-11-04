@@ -37,7 +37,9 @@ Converted Query entities omit empty arrays, write GS1's `type` and `scope` as st
 `--root-counts`, `maxDeletesPerWindow` is 1 % of the entity's roots, at least 100. Document models report their
 deletes (`REPORT_ONLY`), keep the children of an absent array, keep the last of two items with one key, and write
 lists and maps as GS1's JSON text. Every nosql-to-sql setting the drafts do not carry gets a `GS1_SETTING_ELSEWHERE`
-note naming the Gluesync 2 agent or entity setting it maps to.
+note naming the Gluesync 2 agent or entity setting it maps to; a setting Gluesync 2 has no counterpart for is
+named without its value, and any key whose name looks like a secret (password, pwd, passphrase, token, api key,
+private key, access key, auth...) is stripped unread.
 
 ## Structure checks are Core Hub's
 
