@@ -307,9 +307,13 @@ const ui = (() => {
     const failed = Number(summary.failed || 0);
     const skipped = Number(summary.skipped || 0);
     const h = document.createElement('h4');
-    let heading = failed ? 'Import finished with failures' : 'Import summary';
-    if (summary.partial) heading = 'Partial import — successes are kept';
-    h.textContent = heading;
+    if (summary.partial) {
+      h.textContent = 'Partial import — successes are kept';
+    } else if (failed) {
+      h.textContent = 'Import finished with failures';
+    } else {
+      h.textContent = 'Import summary';
+    }
     const counts = document.createElement('p');
     counts.className = 'run-entity-counts';
     counts.textContent = `OK ${ok} · failed ${failed} · skipped ${skipped}`;

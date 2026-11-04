@@ -1714,6 +1714,24 @@ def _group_job_schedule(
     return sched_entry
 
 
+
+def _dispatch_schedule_job(
+    job, sched, entities_by_id, schemas, primary_schema,
+    group_id_to_name, pipeline_schedules, group_schedules,
+):
+    task_type = sched.get("task_type") or ""
+    if task_type.startswith("entity_"):
+        _attach_entity_job_schedules(job, sched, entities_by_id, schemas, primary_schema)
+        return
+    if task_type.startswith("group_"):
+        sched_entry = _group_job_schedule(job, sched, group_id_to_name)
+        if sched_entry is not None:
+            group_schedules.append(sched_entry)
+        return
+    if task_type.startswith("pipeline_"):
+        pipeline_schedules.append(sched.copy())
+
+
 def attach_schedules_from_jobs(
     jobs: List[Dict[str, Any]],
     entities_by_id: Dict[str, Dict[str, Any]],
@@ -1736,23 +1754,12 @@ def attach_schedules_from_jobs(
     primary_schema = min(schemas.keys())
 
     for job in jobs:
-        if not isinstance(job, dict):
+        if not isinstance(job, dict) or not job.get("task_type"):
             continue
-
-        task_type = job.get("task_type")
-        if not task_type:
-            continue
-
-        sched = _base_schedule_of_job(job, task_type)
-
-        if task_type.startswith("entity_"):
-            _attach_entity_job_schedules(job, sched, entities_by_id, schemas, primary_schema)
-        elif task_type.startswith("group_"):
-            sched_entry = _group_job_schedule(job, sched, group_id_to_name)
-            if sched_entry is not None:
-                group_schedules.append(sched_entry)
-        elif task_type.startswith("pipeline_"):
-            pipeline_schedules.append(sched.copy())
+        _dispatch_schedule_job(
+            job, _base_schedule_of_job(job, job["task_type"]), entities_by_id, schemas,
+            primary_schema, group_id_to_name, pipeline_schedules, group_schedules,
+        )
 
     return pipeline_schedules, group_schedules
 

@@ -903,16 +903,17 @@ export function initEntityImport({ root, getContext, setMessage, log, getSchemaD
         appendEntityRow(tbody, row.entity);
       }
     };
-    const renderFrom = async (start) => {
-      if (gen !== pickerRenderGen) return; // superseded
+    const renderFrom = (start) => {
+      if (gen !== pickerRenderGen) return Promise.resolve();
       const end = Math.min(start + PICKER_RENDER_CHUNK, rows.length);
       for (let i = start; i < end; i += 1) appendRow(rows[i]);
       updateCount();
-      if (end >= rows.length) return;
-      await yieldToMain();
-      await renderFrom(end);
+      if (end >= rows.length) return Promise.resolve();
+      return yieldToMain().then(() => renderFrom(end));
     };
     await renderFrom(0);
+    if (gen !== pickerRenderGen) return;
+    updateCount();
   }
 
   pickerToolbar.querySelector('[data-select-all]').addEventListener('click', () => {
