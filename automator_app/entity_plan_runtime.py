@@ -103,7 +103,7 @@ def preview_payload(
     pipeline = import_plan.entity_pipeline(plan, pipeline_id)
     # Case-only override accidents still refuse; shared targets are fan-in (notes, not errors).
     import_plan.check_names(source, pipeline)
-    import_plan.check_target_collisions(source, pipeline, pipeline_id)
+    import_plan.check_target_collisions(pipeline, pipeline_id)
     fan_notes = import_plan.fan_in_notes(source, pipeline)
     planned, notes, pipeline = import_plan.apply_entity(source, plan, pipeline_id)
     entities = import_plan.entity_ids(planned)

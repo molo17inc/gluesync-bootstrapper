@@ -2623,7 +2623,7 @@ function initMcpSetup() {
     }
   });
 
-  refreshStatus();
+  refreshStatus().catch((err) => console.error('MCP status check failed', err));
 }
 
 initTabs();

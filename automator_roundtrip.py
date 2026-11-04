@@ -202,6 +202,21 @@ def _walk_table_refs(node: Any):
             yield from _walk_table_refs(child)
 
 
+def _is_table_id_value(key: str, value: Any) -> bool:
+    """True when ``value`` is the id of a table held under a key that points at a table by id."""
+    return key in TABLE_ID_REFERENCE_KEYS and isinstance(value, (int, str)) and not isinstance(value, bool)
+
+
+def _table_placeholder(key: str, table_id: Any, side: str, tables: Dict[str, Dict[str, str]]) -> Optional[str]:
+    """The placeholder of the table ``table_id`` belongs to: the key's own side first, then the others."""
+    preferred = TABLE_ID_REFERENCE_KEYS[key] or side
+    for lookup_side in [preferred] + [s for s in tables if s != preferred]:
+        placeholder = tables.get(lookup_side, {}).get(str(table_id))
+        if placeholder:
+            return placeholder
+    return None
+
+
 def _replace_table_ids(node: Any, side: str, tables: Dict[str, Dict[str, str]]) -> None:
     """Replace, in place, every table id of an agent entity by its table's placeholder."""
     if isinstance(node, list):
@@ -213,15 +228,12 @@ def _replace_table_ids(node: Any, side: str, tables: Dict[str, Dict[str, str]]) 
     if _is_table_ref(node):
         node["id"] = f"<table:{side}:{_table_ref_name(node)}>"
     for key, child in node.items():
-        if key in TABLE_ID_REFERENCE_KEYS and isinstance(child, (int, str)) and not isinstance(child, bool):
-            preferred = TABLE_ID_REFERENCE_KEYS[key] or side
-            for lookup_side in [preferred] + [s for s in tables if s != preferred]:
-                placeholder = tables.get(lookup_side, {}).get(str(child))
-                if placeholder:
-                    node[key] = placeholder
-                    break
-        else:
+        if not _is_table_id_value(key, child):
             _replace_table_ids(child, side, tables)
+            continue
+        placeholder = _table_placeholder(key, child, side, tables)
+        if placeholder:
+            node[key] = placeholder
 
 
 def normalize_table_ids(entity: Dict[str, Any], agent_sides: Dict[str, str]) -> Dict[str, Any]:

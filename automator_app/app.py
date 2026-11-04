@@ -3483,7 +3483,7 @@ def _check_pipeline_plan(job: _ArchiveImport, old_id: str, pipeline_plan: Any, n
     if not import_plan.selected_ids(config, pipeline_plan):
         raise import_plan.PlanError(f"pipelines.{old_id}: no table selected; set \"import\": false to leave "
                                     "the pipeline out")
-    import_plan.check_target_collisions(config, pipeline_plan, old_id)
+    import_plan.check_target_collisions(pipeline_plan, old_id)
     _check_plan_agents(job, old_id, name, pipeline_plan)
     if pipeline_plan.resume_into:
         _check_resume_target(old_id, str(pipeline_plan.resume_into))
@@ -4247,7 +4247,7 @@ def _preview_pipeline(job: _ArchiveImport, analysed: Dict[str, Any], text: str, 
     try:
         import_plan.check_names(config, pipeline_plan)
         planned, notes = import_plan.apply_to_yaml(copy.deepcopy(config), plan, pipeline_plan)
-        import_plan.check_target_collisions(config, pipeline_plan, old_id)
+        import_plan.check_target_collisions(pipeline_plan, old_id)
     except import_plan.PlanError as exc:
         out["error"] = str(exc)
         errors.append(str(exc))
@@ -4470,7 +4470,7 @@ def _prepare_entity_yaml_for_run(yaml_path: Path, plan: import_plan.ImportPlan,
     yaml_config = load_yaml_config(str(yaml_path))
     pipeline = import_plan.entity_pipeline(plan, pipeline_id)
     import_plan.check_names(yaml_config, pipeline)
-    import_plan.check_target_collisions(yaml_config, pipeline, pipeline_id)
+    import_plan.check_target_collisions(pipeline, pipeline_id)
     planned, notes, pipeline, _parts = entity_plan_runtime.prepare_yaml(yaml_config, plan, pipeline_id)
     if planned is yaml_config and not notes:
         # apply_to_yaml returned the same object: nothing to rewrite.

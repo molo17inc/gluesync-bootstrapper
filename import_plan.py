@@ -504,7 +504,7 @@ def _has_plan_target_remap(pipeline: PipelinePlan, entity_id: str) -> bool:
     return bool(_override_for(pipeline.table_target_schema, entity_id))
 
 
-def check_target_collisions(yaml_config, pipeline: PipelinePlan, old_id: Optional[str] = None) -> None:
+def check_target_collisions(pipeline: PipelinePlan, old_id: Optional[str] = None) -> None:
     """PlanError only for genuine accidents: case-only duplicate override keys.
 
     Several selected sources mapping to the same final ``(targetSchema, targetTable)`` is intentional
@@ -1014,7 +1014,7 @@ def apply_entity(yaml_config, plan: ImportPlan, pipeline_id: str) -> Tuple[Any, 
     if plan.empty and not pipeline.changes_yaml() and not pipeline.parts and not pipeline.remap_raw:
         return yaml_config, [], pipeline
     check_names(yaml_config, pipeline)
-    check_target_collisions(yaml_config, pipeline, pipeline.old_id)
+    check_target_collisions(pipeline, pipeline.old_id)
     selected = selected_ids(yaml_config, pipeline)
     if pipeline.include is not None and not selected:
         raise PlanError(

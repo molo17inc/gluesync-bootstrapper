@@ -2904,10 +2904,9 @@ def export_full_corehub_backup(
                 include_secrets=include_secrets,
                 chronos_token=chronos_token,
             )
-            with io.BytesIO(pipelines_zip_bytes) as inner_buf:
-                with zipfile.ZipFile(inner_buf, "r") as inner_zip:
-                    for name in inner_zip.namelist():
-                        zip_file.writestr(f"pipelines/{name}", inner_zip.read(name))
+            with io.BytesIO(pipelines_zip_bytes) as inner_buf, zipfile.ZipFile(inner_buf, "r") as inner_zip:
+                for name in inner_zip.namelist():
+                    zip_file.writestr(f"pipelines/{name}", inner_zip.read(name))
         except Exception as exc:  # pylint: disable=broad-except
             logger.warning("Failed to include pipelines in full backup: %s", exc)
             zip_file.writestr("pipelines/error.yaml", _dump_to_yaml({"error": str(exc)}).encode("utf-8"))

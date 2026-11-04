@@ -50,7 +50,7 @@ class F1F4FinalTargetCollisions(unittest.TestCase):
             "FIN.ORDERS": {"targetSchema": "APP"},
         }}}})
         pipeline = import_plan.entity_pipeline(plan, "p1")
-        import_plan.check_target_collisions(MULTI, pipeline, "p1")  # does not raise
+        import_plan.check_target_collisions(pipeline, "p1")  # does not raise
         notes = import_plan.fan_in_notes(MULTI, pipeline)
         self.assertTrue(any("APP.ORDERS" in n and "2" in n for n in notes), notes)
 
@@ -63,7 +63,7 @@ class F1F4FinalTargetCollisions(unittest.TestCase):
             },
         }}})
         pipeline = import_plan.entity_pipeline(plan, "p1")
-        import_plan.check_target_collisions(MULTI, pipeline, "p1")
+        import_plan.check_target_collisions(pipeline, "p1")
         notes = import_plan.fan_in_notes(MULTI, pipeline)
         self.assertTrue(any("APP.ORDERS" in n for n in notes), notes)
 
@@ -76,7 +76,7 @@ class F1F4FinalTargetCollisions(unittest.TestCase):
             },
         }}})
         pipeline = import_plan.entity_pipeline(plan, "p1")
-        import_plan.check_target_collisions(MULTI, pipeline, "p1")
+        import_plan.check_target_collisions(pipeline, "p1")
         notes = import_plan.fan_in_notes(MULTI, pipeline)
         self.assertFalse(any("APP.ORDERS" in n for n in notes), notes)
 
@@ -115,7 +115,7 @@ class F1F4FinalTargetCollisions(unittest.TestCase):
             },
         }}})
         pipeline = import_plan.entity_pipeline(plan, "pipe")
-        import_plan.check_target_collisions(yaml_cfg, pipeline, "pipe")
+        import_plan.check_target_collisions(pipeline, "pipe")
 
     def test_preview_notes_multi_schema(self):
         plan = _plan(pipelines={"pipe": {"entities": {"include": ["HR.ORDERS", "FIN.ORDERS"]}}})
