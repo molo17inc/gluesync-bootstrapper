@@ -302,6 +302,12 @@ def _add_new_jobs(
     return new_on_page
 
 
+# Cap Chronos paging when raw pages never mention this pipeline (H6).
+# Absolute page budget + consecutive zero-match streak; keep limit/offset only.
+_CHRONOS_MAX_PAGES = 50
+_CHRONOS_MAX_ZERO_MATCH_STREAK = 5
+
+
 def _read_jobs_from_client(
     client: Any, pipeline_id: str, page_limit: int
 ) -> Tuple[List[Dict[str, Any]], bool]:
@@ -310,6 +316,8 @@ def _read_jobs_from_client(
     seen_ids: set = set()
     seen_page_fps: set = set()
     offset = 0
+    pages_read = 0
+    zero_match_streak = 0
     while True:
         jobs_response = client._request(  # type: ignore[attr-defined]
             "api/jobs/",
@@ -337,6 +345,11 @@ def _read_jobs_from_client(
         seen_page_fps.add(page_fp)
         matched = _jobs_of_pipeline(page, pipeline_id)
         new_on_page = _add_new_jobs(matched, seen_ids, all_jobs, offset)
+        pages_read += 1
+        if not matched:
+            zero_match_streak += 1
+        else:
+            zero_match_streak = 0
         if raw_count < page_limit:
             return all_jobs, True
         if new_on_page == 0 and matched:
@@ -347,7 +360,20 @@ def _read_jobs_from_client(
                 f"further jobs may be missing from the export"
             )
             return all_jobs, True
-        # Full raw page with zero matches for this pipeline: keep walking.
+        if zero_match_streak >= _CHRONOS_MAX_ZERO_MATCH_STREAK:
+            logger.warning(
+                f"Chronos returned {zero_match_streak} consecutive full pages with no jobs for "
+                f"pipeline {pipeline_id} (offset={offset}); stopping walk "
+                f"(kept {len(all_jobs)} job(s) so far)"
+            )
+            return all_jobs, True
+        if pages_read >= _CHRONOS_MAX_PAGES:
+            logger.warning(
+                f"Chronos page budget ({_CHRONOS_MAX_PAGES}) exhausted for pipeline {pipeline_id} "
+                f"at offset={offset}; keeping {len(all_jobs)} job(s) fetched so far"
+            )
+            return all_jobs, True
+        # Full raw page with zero matches for this pipeline: keep walking (bounded).
         offset += page_limit
 
 

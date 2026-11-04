@@ -4176,42 +4176,75 @@ def _list_pipeline_ids_for_lookup(
 
 
 def _host_credentials_usable(host: Any) -> bool:
-    return isinstance(host, dict) and bool(host.get("host") or host.get("hostname"))
+    """True when hostCredentials identify a real endpoint (host + username).
+
+    Host-only shells (no username) are not templates — they produced empty/wrong
+    cross-dialect targets (H4). Password may still be supplied by the duplicate request.
+    """
+    if not isinstance(host, dict):
+        return False
+    if not (host.get("host") or host.get("hostname")):
+        return False
+    username = host.get("username") or host.get("user")
+    return bool(username and str(username).strip())
 
 
-def _match_agent_on_pipeline(
+def _agent_tag_of(agent: Dict[str, Any]) -> str:
+    return str(agent.get("agentTag") or agent.get("tag") or "").strip()
+
+
+def _agent_type_of(agent: Dict[str, Any]) -> str:
+    return str(agent.get("agentType") or agent.get("type") or "").strip().upper()
+
+
+def _tags_match(left: str, right: str) -> bool:
+    return bool(left) and bool(right) and left.casefold() == right.casefold()
+
+
+def _collect_agents_matching_identity(
     *,
     token: str,
     pipeline_id: str,
     agent_tag: str,
-) -> tuple[Optional[dict], Optional[dict], Optional[str]]:
-    """Return credentials if ``pipeline_id`` has a usable agent with ``agent_tag``."""
+    agent_type: Optional[str],
+) -> list[tuple[dict, dict, str, str]]:
+    """Usable (host, custom, pipeline_id, agent_id) for tag (+ optional type), casefolded."""
+    wanted_type = (agent_type or "").strip().upper() or None
     try:
         cfg = fetch_core_hub(f"/pipelines/{pipeline_id}/config", token=token)
     except Exception as exc:  # pylint: disable=broad-except
         logger.debug("Skip pipeline %s while resolving tag %s: %s", pipeline_id, agent_tag, exc)
-        return None, None, None
+        return []
     if not isinstance(cfg, dict):
-        return None, None, None
+        return []
     agents = cfg.get("agents") or []
     if not isinstance(agents, list):
-        return None, None, None
+        return []
+    hits: list[tuple[dict, dict, str, str]] = []
     for agent in agents:
         if not isinstance(agent, dict):
             continue
-        if (agent.get("agentTag") or agent.get("tag")) != agent_tag:
+        if not _tags_match(_agent_tag_of(agent), agent_tag):
             continue
+        if wanted_type and _agent_type_of(agent) not in ("", wanted_type):
+            # Empty type on Hub agent: still accept; otherwise require exact identity.
+            if _agent_type_of(agent):
+                continue
         host, custom = _fetch_agent_credentials(token=token, pipeline_id=pipeline_id, agent=agent)
         if not _host_credentials_usable(host):
             continue
-        logger.info(
-            "Resolved hostCredentials for agent tag %s from pipeline %s agent %s",
-            agent_tag,
-            pipeline_id,
-            agent.get("agentId") or agent.get("id"),
-        )
-        return host, custom, pipeline_id
-    return None, None, None
+        agent_id = str(agent.get("agentId") or agent.get("id") or "")
+        hits.append((host, custom or {}, pipeline_id, agent_id))
+    return hits
+
+
+def _credential_fingerprint(host: dict) -> tuple:
+    return (
+        str(host.get("host") or host.get("hostname") or "").casefold(),
+        str(host.get("port") or ""),
+        str(host.get("username") or host.get("user") or "").casefold(),
+        str(host.get("databaseName") or host.get("database") or "").casefold(),
+    )
 
 
 def _find_agent_credentials_by_tag(
@@ -4219,23 +4252,70 @@ def _find_agent_credentials_by_tag(
     token: str,
     agent_tag: str,
     prefer_pipeline_id: Optional[str] = None,
+    agent_type: Optional[str] = None,
 ) -> tuple[Optional[dict], Optional[dict], Optional[str]]:
-    """Locate host/custom credentials for ``agent_tag`` from any pipeline that already has it.
+    """Locate host/custom credentials for ``agent_tag`` (+ optional agentType).
 
-    Used when duplicating across agent tags (cross-dialect): the source pipeline's
-    SOURCE/TARGET hostCredentials belong to a different database type and must not
-    be reused under the new tag (that yields ORA-17904 / wrong-port connects).
-
-    Returns ``(host_credentials, custom_credentials, pipeline_id)`` or ``(None, None, None)``.
+    Cross-dialect duplicate must not reuse another dialect's host/port (ORA-17904).
+    Tag compare is case-insensitive. When several pipelines expose the same
+    tag+type with *different* hosts, warn and return ``(None, None, None)`` —
+    never first-match guess (H4).
     """
     if not agent_tag:
         return None, None, None
 
+    candidates: list[tuple[dict, dict, str, str]] = []
     for pid in _list_pipeline_ids_for_lookup(token=token, prefer_pipeline_id=prefer_pipeline_id):
-        host, custom, found = _match_agent_on_pipeline(token=token, pipeline_id=pid, agent_tag=agent_tag)
-        if host is not None:
-            return host, custom, found
-    return None, None, None
+        candidates.extend(
+            _collect_agents_matching_identity(
+                token=token, pipeline_id=pid, agent_tag=agent_tag, agent_type=agent_type,
+            )
+        )
+
+    if not candidates:
+        return None, None, None
+
+    # Prefer an exact agentType match when requested; drop untyped if typed exists.
+    wanted_type = (agent_type or "").strip().upper() or None
+    if wanted_type:
+        typed = [c for c in candidates]  # already filtered in collect when type set
+        candidates = typed
+
+    fingerprints = {_credential_fingerprint(h) for h, _c, _p, _a in candidates}
+    if len(fingerprints) > 1:
+        detail = ", ".join(
+            f"{pid}/{aid}:{_credential_fingerprint(h)}" for h, _c, pid, aid in candidates
+        )
+        logger.warning(
+            "Ambiguous hostCredentials for agent tag %s type %s (%d candidates: %s); "
+            "not guessing — cross-dialect duplicate must pick an unambiguous agent",
+            agent_tag,
+            agent_type or "*",
+            len(candidates),
+            detail,
+        )
+        return None, None, None
+
+    host, custom, pid, aid = candidates[0]
+    if len(candidates) > 1:
+        logger.info(
+            "Resolved hostCredentials for agent tag %s type %s from %d identical candidates "
+            "(pipeline %s agent %s)",
+            agent_tag,
+            agent_type or "*",
+            len(candidates),
+            pid,
+            aid,
+        )
+    else:
+        logger.info(
+            "Resolved hostCredentials for agent tag %s type %s from pipeline %s agent %s",
+            agent_tag,
+            agent_type or "*",
+            pid,
+            aid,
+        )
+    return host, custom, pid
 
 
 def _credentials_for_duplicate_agent(
@@ -4248,31 +4328,33 @@ def _credentials_for_duplicate_agent(
     """Host/custom credentials to apply when duplicating an agent under ``new_tag``.
 
     Same tag as the template → credentials from the source pipeline agent (legacy path).
-    Different tag (cross-dialect) → look up a live agent that already uses ``new_tag``.
+    Different tag (cross-dialect) → look up a live agent with the same tag + agentType
+    (casefold). On zero or ambiguous hits, return empty hostCredentials (do not reuse
+    the wrong-dialect template host/port).
     """
-    template_tag = agent_template.get("agentTag") or agent_template.get("tag")
-    if template_tag == new_tag:
+    template_tag = _agent_tag_of(agent_template)
+    agent_type = _agent_type_of(agent_template)
+    if _tags_match(template_tag, new_tag):
         return _fetch_agent_credentials(token=token, pipeline_id=pipeline_id, agent=agent_template)
 
     host, custom, _ = _find_agent_credentials_by_tag(
         token=token,
         agent_tag=new_tag,
         prefer_pipeline_id=pipeline_id,
+        agent_type=agent_type or None,
     )
     if host is not None:
         return host, custom or {}
 
-    # Last resort: keep template credentials but log loudly — caller may still fail to connect
     logger.warning(
-        "No pipeline has agent tag %s with usable hostCredentials; falling back to template "
-        "tag %s credentials from pipeline %s (cross-dialect duplicate may fail with wrong-port "
-        "errors such as ORA-17904)",
+        "No unambiguous hostCredentials for agent tag %s type %s; leaving hostCredentials "
+        "empty instead of reusing template tag %s from pipeline %s (avoids ORA-17904 / wrong-port)",
         new_tag,
+        agent_type or "*",
         template_tag,
         pipeline_id,
     )
-    return _fetch_agent_credentials(token=token, pipeline_id=pipeline_id, agent=agent_template)
-
+    return {}, {}
 
 
 class PartialPipelineImportError(RuntimeError):

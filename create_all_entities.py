@@ -2697,6 +2697,23 @@ class _SchemaSettings:
         logger.debug(f"Global target custom properties: {self.global_target_custom_properties}")
 
 
+
+def _picker_fail_id(source_schema, table_label) -> str:
+    """Normalize a refused-table label to a picker id (``SCHEMA.KEY`` when possible)."""
+    text = str(table_label or "").strip()
+    if not text:
+        return text
+    if text.lower().startswith("multitable chain "):
+        return text
+    base = text.split("@@", 1)[0]
+    if "." in base:
+        return text
+    schema = str(source_schema or "").strip()
+    if schema:
+        return f"{schema}.{text}"
+    return text
+
+
 class _EntityRun:
     """One create_entities run: its pipeline context, the YAML settings of its schema, and what it builds.
 
@@ -2746,10 +2763,14 @@ class _EntityRun:
         so the whole import looked lost (F3). Failures are collected; the run
         finishes groups/schedules for what succeeded; overall status still fails
         when skip_errors is false (see create_entities / _entity_run_result).
+
+        Labels are stored as picker ids (``SCHEMA.KEY`` / ``SCHEMA.KEY@@n``) so
+        Retry failed / Advanced include can resolve them (H1).
         """
-        logger.error(f"Entity for table {table_label} not created: {error}")
-        self.refused_tables.append(table_label)
-        self.errors.append(f"{table_label}: {error}")
+        label = _picker_fail_id(self.source_schema, table_label)
+        logger.error(f"Entity for table {label} not created: {error}")
+        self.refused_tables.append(label)
+        self.errors.append(f"{label}: {error}")
 
     def table_columns(self, table_name, custom_config=None):
         """The source discovery of a table of the schema, in the order the YAML ``custom_config`` of the table gives
@@ -4422,7 +4443,12 @@ def _build_multi_table_entity(run, chain_id, tables_list):
         entity_payload["groupId"] = group_id
 
     if cb.chain_refusals:
-        run.refuse_table(f"MultiTable chain {chain_id}", EntityMappingError("; ".join(cb.chain_refusals)))
+        reason = EntityMappingError("; ".join(cb.chain_refusals))
+        # Prefer member picker ids so Retry can select them (H1); keep chain label as extra context.
+        for table_key, _table_data in tables_list:
+            run.refuse_table(table_key, reason)
+        if not tables_list:
+            run.refuse_table(f"MultiTable chain {chain_id}", reason)
         return None
     return {"entities": [entity_payload]}
 
@@ -5081,7 +5107,8 @@ def _entity_run_result(run, options, offline_names, counts, skipped_entities=Non
         "failures": failures,
         "skippedEntities": skipped_entities,
         "failedEntityIds": failed_ids,
-        "success": failed == 0 or bool(run.ctx.skip_errors),
+        "success": failed == 0,
+        # skip_errors only avoids aborting mid-batch; all-failed is never "completed"
         "partial": successful > 0 and failed > 0,
     }
     if offline_names:

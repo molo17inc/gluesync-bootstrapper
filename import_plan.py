@@ -373,9 +373,21 @@ def _custom_keys_for(custom: Mapping[str, Any], name: str) -> List[str]:
 
 
 def _matches(name: str, entity_id: str) -> bool:
-    """``SCHEMA.KEY`` matches its id exactly (casefolded); without ``@@`` it also matches the @@n variants."""
+    """``SCHEMA.KEY`` matches its id exactly (casefolded); without ``@@`` it also matches the @@n variants.
+
+    A bare table key (no ``.``) matches the key part of ``SCHEMA.KEY`` / ``SCHEMA.KEY@@n``.
+    Callers that need uniqueness (Advanced include / resolve_selection) must filter to one hit.
+    """
     name, entity_id = name.casefold(), entity_id.casefold()
-    return entity_id == name or ("@@" not in name and entity_id.split("@@")[0] == name)
+    if entity_id == name:
+        return True
+    base = entity_id.split("@@")[0]
+    if "@@" not in name and base == name:
+        return True
+    if "." not in name and "@@" not in name and "." in base:
+        key = base.split(".", 1)[1]
+        return key == name
+    return False
 
 
 def _yaml_entity_name(yaml_config, entity: Dict[str, Any]) -> Optional[str]:
@@ -398,6 +410,14 @@ def resolve_selection(yaml_config, name: str, *, where: str = "entities.include"
     ids = [e["id"] for e in entities]
     hit = [i for i in ids if _matches(name, i)]
     if hit:
+        # Bare table keys must be unique across schemas (H1); qualified ids may expand @@n.
+        if "." not in str(name) and "@@" not in str(name):
+            bases = {i.split("@@")[0].casefold() for i in hit}
+            if len(bases) > 1:
+                raise PlanError(
+                    f"{where}: bare table key {name!r} matches {len(bases)} tables "
+                    f"({', '.join(sorted(bases))}); use an exact SCHEMA.KEY instead"
+                )
         return hit
     folded = str(name).casefold()
     by_name: Dict[str, List[str]] = {}

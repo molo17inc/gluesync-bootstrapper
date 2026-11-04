@@ -63,7 +63,7 @@ export function preferDiscoverySpelling(targetTable, existingTables) {
 }
 
 /** Whether an Advanced include/exclude token selects this entity id (SCHEMA.KEY / bare / @@n). */
-export function advancedMatches(token, entity) {
+export function advancedMatches(token, entity, loadedEntities) {
   const raw = String(token || '').trim();
   if (!raw || !entity) return false;
   const id = String(entity.id || '').toLowerCase();
@@ -72,7 +72,22 @@ export function advancedMatches(token, entity) {
   const base = id.split('@@')[0];
   if (!name.includes('@@') && base === name) return true;
   const ename = String(entity.entityName || '').toLowerCase();
-  return Boolean(ename && ename === name);
+  if (ename && ename === name) return true;
+  // Bare table key (no '.') matches SCHEMA.KEY when unique across loadedEntities (H1).
+  if (!name.includes('.') && !name.includes('@@') && base.includes('.')) {
+    const key = base.slice(base.indexOf('.') + 1);
+    if (key !== name) return false;
+    const pool = loadedEntities || null;
+    if (!pool) return false;
+    const bases = new Set();
+    for (const e of pool) {
+      const b = String(e.id || '').toLowerCase().split('@@')[0];
+      if (!b.includes('.')) continue;
+      if (b.slice(b.indexOf('.') + 1) === name) bases.add(b);
+    }
+    return bases.size === 1 && bases.has(base);
+  }
+  return false;
 }
 
 /** Effective selected ids for collision checks (picker Set, or Advanced include/exclude). */
@@ -83,13 +98,13 @@ export function effectiveSelectedIds(panel, loadedEntities, selectedIds) {
   if (advanced.include.length) {
     ids = new Set(
       (loadedEntities || [])
-        .filter((e) => advanced.include.some((t) => advancedMatches(t, e)))
+        .filter((e) => advanced.include.some((t) => advancedMatches(t, e, loadedEntities)))
         .map((e) => e.id),
     );
   }
   for (const token of advanced.exclude) {
     for (const e of loadedEntities || []) {
-      if (advancedMatches(token, e)) ids.delete(e.id);
+      if (advancedMatches(token, e, loadedEntities)) ids.delete(e.id);
     }
   }
   return ids;
@@ -240,30 +255,68 @@ export function selectionNotes(panel, loadedEntities, selectedIds, targetOverrid
 export function autoRenameDuplicateTargets(loadedEntities, selectedIds, targetOverrides, schemaDefaults = null) {
   const overrides = targetOverrides instanceof Map ? targetOverrides : new Map(Object.entries(targetOverrides || {}));
   const effective = selectedIds || new Set((loadedEntities || []).map((e) => e.id));
-  const byTarget = new Map();
+
+  function resolvedTargetKey(entity) {
+    const resolved = resolveTarget(entity, overrides, schemaDefaults);
+    if (!resolved.targetTable) return null;
+    return {
+      resolved,
+      key: `${resolved.targetSchema}.${resolved.targetTable}`.toLowerCase(),
+    };
+  }
+
+  // Occupied targets across the effective selection (updated as we rename) — H2.
+  const occupied = new Set();
   for (const entity of loadedEntities || []) {
     if (!effective.has(entity.id)) continue;
-    const resolved = resolveTarget(entity, overrides, schemaDefaults);
-    if (!resolved.targetTable) continue;
-    const key = `${resolved.targetSchema}.${resolved.targetTable}`.toLowerCase();
-    const list = byTarget.get(key) || [];
-    list.push({ entity, resolved });
-    byTarget.set(key, list);
+    const info = resolvedTargetKey(entity);
+    if (info) occupied.add(info.key);
   }
+
   let renamed = 0;
-  for (const group of byTarget.values()) {
-    if (group.length < 2) continue;
-    group.forEach(({ entity, resolved }, index) => {
-      if (index === 0) return; // keep first spelling
-      const nextTable = `${resolved.targetTable}_${index}`;
-      const prev = overrides.get(entity.id) || {};
-      overrides.set(entity.id, {
-        ...prev,
-        targetSchema: resolved.targetSchema,
-        targetTable: nextTable,
-      });
-      renamed += 1;
-    });
+  // Recompute collision groups from current overrides; keep renaming until stable.
+  let guard = 0;
+  while (guard < 1000) {
+    guard += 1;
+    const byTarget = new Map();
+    for (const entity of loadedEntities || []) {
+      if (!effective.has(entity.id)) continue;
+      const info = resolvedTargetKey(entity);
+      if (!info) continue;
+      const list = byTarget.get(info.key) || [];
+      list.push({ entity, resolved: info.resolved });
+      byTarget.set(info.key, list);
+    }
+    let changed = false;
+    for (const group of byTarget.values()) {
+      if (group.length < 2) continue;
+      for (let index = 1; index < group.length; index += 1) {
+        const { entity, resolved } = group[index];
+        const baseName = String(resolved.targetTable || '');
+        const stem = baseName.replace(/_\d+$/, '') || baseName;
+        let n = 1;
+        let nextTable = `${stem}_${n}`;
+        let nextKey = `${resolved.targetSchema}.${nextTable}`.toLowerCase();
+        const prevKey = `${resolved.targetSchema}.${resolved.targetTable}`.toLowerCase();
+        while (occupied.has(nextKey) && n < 10000) {
+          n += 1;
+          nextTable = `${stem}_${n}`;
+          nextKey = `${resolved.targetSchema}.${nextTable}`.toLowerCase();
+        }
+        if (nextKey === prevKey) continue;
+        occupied.delete(prevKey);
+        occupied.add(nextKey);
+        const prev = overrides.get(entity.id) || {};
+        overrides.set(entity.id, {
+          ...prev,
+          targetSchema: resolved.targetSchema,
+          targetTable: nextTable,
+        });
+        renamed += 1;
+        changed = true;
+      }
+    }
+    if (!changed) break;
   }
   return { renamed, overrides };
 }
@@ -1124,12 +1177,29 @@ export function initEntityImport({ root, getContext, setMessage, log, getSchemaD
      * Returns false when there is nothing to retry.
      */
     prepareRetryFailed(failedEntityIds) {
-      const ids = (failedEntityIds || []).map((x) => String(x || '').trim()).filter(Boolean);
-      if (!ids.length) return false;
+      const raw = (failedEntityIds || []).map((x) => String(x || '').trim()).filter(Boolean);
+      if (!raw.length) return false;
+      // Resolve bare keys / aliases against loaded picker ids (H1); clear stale exclude (H3).
+      const resolved = [];
+      const seen = new Set();
+      for (const token of raw) {
+        const hits = (loadedEntities || []).filter((e) => advancedMatches(token, e, loadedEntities));
+        if (hits.length) {
+          hits.forEach((e) => {
+            if (!seen.has(e.id)) { seen.add(e.id); resolved.push(e.id); }
+          });
+        } else if (!seen.has(token)) {
+          seen.add(token);
+          resolved.push(token);
+        }
+      }
+      const ids = resolved.length ? resolved : raw;
       const includeEl = panel.querySelector('[data-include]');
+      const excludeEl = panel.querySelector('[data-exclude]');
       const onExistingEl = panel.querySelector('[data-on-existing]');
       const dryEl = panel.querySelector('#entity-plan-dry-run');
       if (includeEl) includeEl.value = ids.join('\n');
+      if (excludeEl) excludeEl.value = '';
       if (onExistingEl) onExistingEl.value = 'skip';
       if (dryEl) dryEl.checked = false;
       const advanced = panel.querySelector('.entity-advanced');

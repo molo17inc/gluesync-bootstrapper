@@ -32,11 +32,18 @@ import table_target_schema as tts  # noqa: E402
 from automator_app import import_backup  # noqa: E402
 from utils.udf_signature import adapt_udf_signature, corehub_supports_is_snapshot  # noqa: E402
 
-from .zip_builder import archive_with_entities, entities_dict, minimal_create_table_entities, synth_archive
+try:
+    from .zip_builder import archive_with_entities, entities_dict, minimal_create_table_entities, synth_archive
+except ImportError:  # unittest discover may load without package context
+    from zip_builder import archive_with_entities, entities_dict, minimal_create_table_entities, synth_archive
 
-hypothesis = pytest.importorskip("hypothesis")
-from hypothesis import HealthCheck, given, settings, assume  # noqa: E402
-from hypothesis import strategies as st  # noqa: E402
+try:
+    import hypothesis
+    from hypothesis import HealthCheck, given, settings, assume  # noqa: E402
+    from hypothesis import strategies as st  # noqa: E402
+except ImportError:  # pragma: no cover — avoid unittest FailedTest when hypothesis absent
+    pytest.skip("hypothesis not installed", allow_module_level=True)
+
 
 
 # ---------------------------------------------------------------------------
