@@ -655,9 +655,10 @@ class ExistingEntitySources(unittest.TestCase):
             prev = automator.state._token
             automator.state._token = "tok"
             try:
-                sources = automator._existing_entity_sources("pipe-1")
+                sources, listing_error = automator._existing_entity_sources("pipe-1")
             finally:
                 automator.state._token = prev
+        self.assertIsNone(listing_error)
         self.assertEqual(
             sources,
             {("dbo", "articles"), ("dbo", "orders_headers"), ("dbo", "orders_rows")},
