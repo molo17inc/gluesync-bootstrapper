@@ -13,6 +13,7 @@ export function issueText(issue) {
 /** The rows of the report table: one per GS1 entity, a draft only for a converted one. */
 export function reportRows(plan) {
   const drafts = new Set(plan.drafts || []);
+  const structureChecked = plan.structureChecked !== false;
   return (plan.perEntity || []).map((entry) => {
     const check = plan.checks?.[entry.gs1Name] || {};
     const validate = check.validate;
@@ -20,6 +21,7 @@ export function reportRows(plan) {
       name: entry.gs1Name,
       bucket: entry.bucket,
       hasDraft: drafts.has(entry.gs1Name),
+      structureChecked,
       issues: entry.issues || [],
       checkError: check.error || null,
       verdict: check.describe?.verdict || null,
@@ -30,9 +32,15 @@ export function reportRows(plan) {
   });
 }
 
-/** The drafts the operator can save by default: converted and not refused by Core Hub's validation. */
+/**
+ * The drafts preselected for saving: converted, checked by Core Hub and found valid. A draft Core Hub refused, could
+ * not reach (valid is null) or did not validate stays unchecked. Without the check (convert only) there is no verdict
+ * to wait for and every draft is preselected, as the report says.
+ */
 export function defaultSelection(rows) {
-  return rows.filter((row) => row.hasDraft && row.valid !== false).map((row) => row.name);
+  return rows
+    .filter((row) => row.hasDraft && (row.structureChecked ? row.valid === true && !row.checkError : true))
+    .map((row) => row.name);
 }
 
 export function confirmationText(names, pipelineLabel) {
@@ -69,6 +77,7 @@ function checksCell(row) {
     lines.push(`describe: ${row.verdict}${proposed}`);
   }
   if (row.valid !== null) lines.push(`validate: ${row.valid ? 'valid' : 'refused'}`);
+  else if (row.hasDraft && row.structureChecked) lines.push('Not preselected: Core Hub did not validate it.');
   lines.forEach((line) => {
     const div = document.createElement('div');
     div.textContent = line;
@@ -84,7 +93,7 @@ function renderReport(container, plan, selected) {
   if (!plan.structureChecked) {
     const note = document.createElement('p');
     note.className = 'hint-text';
-    note.textContent = 'Core Hub did not check the drafts: structure errors show up only when you save them.';
+    note.textContent = 'Core Hub did not check the drafts, so every draft is preselected: structure errors show up only when you save them.';
     container.appendChild(note);
   }
   const table = document.createElement('table');

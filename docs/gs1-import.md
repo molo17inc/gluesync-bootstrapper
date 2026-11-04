@@ -10,6 +10,8 @@ pipeline. It runs from the command line (`gs1_import.py`) or from the Automator 
    (`POST /pipelines/{id}/agents/{source}/discovery/data-model`), and every draft is validated as an entity
    (`POST /pipelines/{id}/config/entities/validate`). Nothing is written.
 3. **Save** the drafts you choose with `PUT /pipelines/{id}/config/entities`, once you confirm.
+   The drafts Core Hub checked and found valid are chosen by default; one it refused, could not reach or did not
+   validate is left out until you pick it. Without the check (`--offline`, *Convert only*) every draft is chosen.
 
 ## What the converter drafts
 
@@ -70,7 +72,7 @@ python gs1_import.py import --config gs1-config.json --pipeline <PIPELINE_ID> [-
 | `--root-counts` | JSON file: GS1 entity name -> number of roots |
 | `--output` | writes the report, the drafts and Core Hub's checks |
 | `convert --offline` | no Core Hub call (needs `--source-agent` and `--target-agent`) |
-| `import --entities` | the drafts to save (default: all of them) |
+| `import --entities` | the drafts to save (default: the drafts Core Hub checked and found valid; the others are listed and can be named here) |
 | `import --yes` | confirms the save; without it the command asks, and saves nothing when it cannot ask |
 
 ## After the import

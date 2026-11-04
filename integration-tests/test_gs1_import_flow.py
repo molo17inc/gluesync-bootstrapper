@@ -243,6 +243,52 @@ def test_cli_import_yes_confirms_every_draft(hub, tmp_path):
     assert [[e["entityName"] for e in body["entities"]] for body in hub.saved] == [["ORDERS", "KEYED"]]
 
 
+def _refusing_keyed(hub, valid_for=None, fail=False):
+    """A Core Hub that refuses (or cannot reach) the validation of KEYED and accepts the rest."""
+    def answer(path, **kwargs):
+        if path.endswith("/config/entities/validate") and kwargs["body"]["entities"][0]["entityName"] == "KEYED":
+            if fail:
+                raise RuntimeError("CoreHub request POST failed: 401")
+            return {"valid": False, "issues": [{"severity": "ERROR", "code": "ROOT_KEY_NOT_MAPPED", "message": "no"}]}
+        return hub(path, **kwargs)
+    return answer
+
+
+def test_cli_import_without_entities_saves_only_the_drafts_checked_and_valid(hub, tmp_path, capsys):
+    with mock.patch.object(gs1_import, "fetch_core_hub", _refusing_keyed(hub)):
+        code = gs1_import.main(["--token", "tok", "import", "--config", _write_config(tmp_path), "--pipeline", PIPELINE,
+                                "--yes"])
+
+    assert code == 0
+    assert [[e["entityName"] for e in body["entities"]] for body in hub.saved] == [["ORDERS"]]
+    assert "Not saved by default: KEYED" in capsys.readouterr().out
+
+
+def test_cli_import_does_not_save_a_draft_core_hub_could_not_validate(hub, tmp_path, capsys):
+    with mock.patch.object(gs1_import, "fetch_core_hub", _refusing_keyed(hub, fail=True)):
+        code = gs1_import.main(["--token", "tok", "import", "--config", _write_config(tmp_path), "--pipeline", PIPELINE,
+                                "--yes"])
+
+    assert code == 0
+    assert [[e["entityName"] for e in body["entities"]] for body in hub.saved] == [["ORDERS"]]
+    assert "KEYED (Core Hub could not check it)" in capsys.readouterr().out
+
+
+def test_cli_import_names_win_over_the_default_choice(hub, tmp_path):
+    with mock.patch.object(gs1_import, "fetch_core_hub", _refusing_keyed(hub)):
+        code = gs1_import.main(["--token", "tok", "import", "--config", _write_config(tmp_path), "--pipeline", PIPELINE,
+                                "--entities", "KEYED", "--yes"])
+
+    assert code == 0
+    assert [[e["entityName"] for e in body["entities"]] for body in hub.saved] == [["KEYED"]]
+
+
+def test_without_a_check_every_draft_is_the_default_choice(hub):
+    plan = gs1_import.plan_import(None, _request(), check=False)
+
+    assert gs1_import.default_names(plan) == ["ORDERS", "KEYED", "RECENT"]
+
+
 def test_cli_offline_convert_needs_the_agents(tmp_path, capsys):
     code = gs1_import.main(["convert", "--offline", "--config", _write_config(tmp_path), "--pipeline", PIPELINE])
 

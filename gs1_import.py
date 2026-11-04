@@ -290,6 +290,31 @@ def save_drafts(token: str, pipeline_id: str, plan: Dict[str, Any], names: Itera
     return chosen
 
 
+def _why_not_default(check: Dict[str, Any]) -> str:
+    if check.get("error"):
+        return "Core Hub could not check it"
+    validation = check.get("validate")
+    if validation is None:
+        return "not validated"
+    return "refused by Core Hub's validation"
+
+
+def default_names(plan: Dict[str, Any]) -> List[str]:
+    """The drafts saved when the operator names none: the ones Core Hub checked and found valid.
+
+    A draft Core Hub refused, could not reach or did not validate is left out (name it to save it anyway). A plan
+    made without the check (``--offline``) has no verdict to wait for: every draft is chosen, as the report says.
+    """
+    if not plan.get("structureChecked"):
+        return list(plan["drafts"])
+    return [name for name in plan["drafts"] if _checked_valid(plan["checks"].get(name, {}))]
+
+
+def _checked_valid(check: Dict[str, Any]) -> bool:
+    validation = check.get("validate")
+    return not check.get("error") and isinstance(validation, dict) and validation.get("valid") is True
+
+
 # ---------- what the operator reads ----------
 
 def _issue_line(issue: Dict[str, Any]) -> str:
@@ -302,7 +327,8 @@ def summarize(plan: Dict[str, Any]) -> List[str]:
     report = plan["report"]
     lines = []
     if not plan.get("structureChecked"):
-        lines.append("Core Hub did not check the drafts (offline): structure errors show up only when you save them.")
+        lines.append("Core Hub did not check the drafts (offline): every draft is chosen by default; structure errors show up "
+                     "only when you save them.")
     for entry in report["perEntity"]:
         name = entry["gs1Name"]
         drafted = " (draft)" if name in plan["drafts"] else ""
@@ -386,7 +412,8 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("--output", help="Write the report, the drafts and Core Hub's checks to this JSON file")
     commands.choices["convert"].add_argument("--offline", action="store_true",
                                              help="Do not call Core Hub: no structure check, no describe, no validate")
-    commands.choices["import"].add_argument("--entities", help="Comma-separated GS1 entity names (default: every draft)")
+    commands.choices["import"].add_argument(
+        "--entities", help="Comma-separated GS1 entity names (default: every draft Core Hub checked and found valid)")
     commands.choices["import"].add_argument("--yes", action="store_true", help="Confirm the save without asking")
     return parser
 
@@ -402,7 +429,13 @@ def _agents(args: argparse.Namespace, token: Optional[str], offline: bool):
 
 
 def _save_chosen(args: argparse.Namespace, token: Optional[str], plan: Dict[str, Any]) -> None:
-    names = [n.strip() for n in args.entities.split(",") if n.strip()] if args.entities else list(plan["drafts"])
+    if args.entities:
+        names = [n.strip() for n in args.entities.split(",") if n.strip()]
+    else:
+        names = default_names(plan)
+        skipped = [f"{name} ({_why_not_default(plan['checks'].get(name, {}))})" for name in plan["drafts"] if name not in names]
+        if skipped:
+            print(f"Not saved by default: {', '.join(skipped)}. Name them with --entities to save them anyway.")
     if not names:
         print("No entity to save")
         return

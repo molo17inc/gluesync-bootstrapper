@@ -17,10 +17,12 @@ function assert(condition, message) {
 }
 
 const plan = {
-  drafts: ['ORDERS', 'LINES'],
+  drafts: ['ORDERS', 'LINES', 'UNCHECKED', 'BLIND'],
   perEntity: [
     { gs1Name: 'ORDERS', bucket: 'FLAT', issues: [] },
     { gs1Name: 'LINES', bucket: 'MULTI_LEVEL', issues: [] },
+    { gs1Name: 'UNCHECKED', bucket: 'FLAT', issues: [] },
+    { gs1Name: 'BLIND', bucket: 'FLAT', issues: [] },
     { gs1Name: 'RECENT', bucket: 'UNSUPPORTED', issues: [
       { code: 'NON_DETERMINISTIC_QUERY', severity: 'ERROR', level: 'RECENT', location: '1:45', message: 'GETDATE' },
     ] },
@@ -28,17 +30,25 @@ const plan = {
   checks: {
     ORDERS: { describe: { verdict: 'CDC', proposedKeys: { ORDERS: ['ID'] } }, validate: { valid: true, issues: [] } },
     LINES: { validate: { valid: false, issues: [{ code: 'X', severity: 'ERROR', message: 'refused' }] } },
+    UNCHECKED: { error: 'Core Hub unreachable' },
     RECENT: { error: 'Core Hub down' },
   },
 };
 
 const rows = reportRows(plan);
-assert(rows.length === 3, 'one row per GS1 entity');
+assert(rows.length === 5, 'one row per GS1 entity');
 assert(rows[0].hasDraft && rows[0].verdict === 'CDC' && rows[0].proposedKeys.ORDERS[0] === 'ID', 'describe shown');
 assert(rows[1].valid === false && rows[1].validationIssues.length === 1, 'validation shown');
-assert(!rows[2].hasDraft && rows[2].checkError === 'Core Hub down', 'no draft for an unsupported entity');
-assert(JSON.stringify(defaultSelection(rows)) === JSON.stringify(['ORDERS']), 'refused and unsupported are not preselected');
-assert(issueText(plan.perEntity[2].issues[0]) === 'ERROR NON_DETERMINISTIC_QUERY [RECENT/1:45]: GETDATE', issueText(plan.perEntity[2].issues[0]));
+assert(rows[2].checkError === 'Core Hub unreachable' && rows[2].valid === null, 'a check error is shown');
+assert(!rows[4].hasDraft && rows[4].checkError === 'Core Hub down', 'no draft for an unsupported entity');
+assert(rows.every((row) => row.structureChecked), 'checked by default');
+assert(JSON.stringify(defaultSelection(rows)) === JSON.stringify(['ORDERS']),
+  'only the drafts Core Hub checked and found valid are preselected: ' + JSON.stringify(defaultSelection(rows)));
+const offlineRows = reportRows({ ...plan, structureChecked: false, checks: {} });
+assert(offlineRows.every((row) => !row.structureChecked), 'offline rows say they were not checked');
+assert(JSON.stringify(defaultSelection(offlineRows)) === JSON.stringify(['ORDERS', 'LINES', 'UNCHECKED', 'BLIND']),
+  'offline: every draft is preselected, as before');
+assert(issueText(plan.perEntity[4].issues[0]) === 'ERROR NON_DETERMINISTIC_QUERY [RECENT/1:45]: GETDATE', issueText(plan.perEntity[4].issues[0]));
 assert(issueText({ code: 'C', severity: 'WARNING', message: 'm' }) === 'WARNING C: m', 'no location');
 assert(confirmationText(['ORDERS'], 'Pipe (p1)').startsWith('Save 1 entities (ORDERS) to pipeline Pipe (p1)?'), 'prompt');
 assert(reportRows({}).length === 0, 'empty plan');
