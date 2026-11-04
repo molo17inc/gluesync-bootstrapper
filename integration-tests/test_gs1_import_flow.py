@@ -231,7 +231,8 @@ def test_a_document_draft_is_typed_from_discovery_before_it_is_validated(hub):
 
     source = _columns(plan["drafts"]["Holders"], 0)
     assert (source["Owner"]["dataType"], source["Name"]["dataType"], source["Name"]["isUnique"]) == ("string", "string", True)
-    assert source["Cards"]["dataType"] == "gs:array" and source["Profile"]["dataType"] == "gs:object", "containers keep theirs"
+    assert source["Cards"]["dataType"] == "gs:array", "a container keeps its type"
+    assert source["Profile"]["dataType"] == "gs:object", "a container keeps its type"
     target = _columns(plan["drafts"]["Holders"], 1)
     assert (target["Holders", "Owner"]["dataType"], target["Holders", "Owner"]["charMaxLength"]) == ("varchar", 40)
     assert target["Holders", "HOLDER_NAME"]["dataType"] == "nvarchar"
