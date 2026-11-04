@@ -177,8 +177,9 @@ class CreatingHub(FakeCoreHub):
             self.created.append(table)
             if self.reflect_created:
                 self.target_tables[(TARGET_SCHEMA, table)] = [
-                    {key: c[key] for key in ("id", "name", "dataType", "position", "isPK", "isNullable", "charMaxLength",
-                                             "numPrec", "numScale")}
+                    {key: c.get(key, 0 if key in ("charMaxLength", "numPrec", "numScale") else None)
+                     for key in ("id", "name", "dataType", "position", "isPK", "isNullable", "charMaxLength",
+                                 "numPrec", "numScale")}
                     for c in self.statements[table]["columns"]]
             return {}
         exists = re.search(r"/schemas/([^/]+)/tables/([^/]+)$", path)
@@ -216,7 +217,12 @@ def created(hub, table):
     isPK, isNullable)]`` in the order sent, positions 1..n."""
     columns = hub.statements[table]["columns"]
     assert [c["position"] for c in columns] == list(range(1, len(columns) + 1)), columns
-    return [(c["name"], c["dataType"], c["charMaxLength"], c["numPrec"], c["numScale"], c["isPK"], c["isNullable"])
+    def _dim(col, key):
+        value = col.get(key)
+        return 0 if value is None else value
+
+    return [(c["name"], c["dataType"], _dim(c, "charMaxLength"), _dim(c, "numPrec"), _dim(c, "numScale"),
+             c["isPK"], c["isNullable"])
             for c in columns]
 
 

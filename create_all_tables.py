@@ -190,12 +190,15 @@ def generate_create_table_statement(pipeline_id: str, schema_name: str, table_na
         # URL-encode schema and table names (spaces, unicode, reserved chars)
         encoded_schema_name = urllib.parse.quote(schema_name, safe='')
         encoded_table_name = urllib.parse.quote(table_name, safe='')
-        logger.info(f"table data: {table_data.model_dump()}")
+        # Leave missing numPrec/numScale as JSON null (not 0). Core Hub treats null as
+        # unconstrained; 0 became NUMBER(0,0) on Oracle and raised ORA-01727.
+        payload = table_data.model_dump()
+        logger.info(f"table data: {payload}")
         response = fetch_core_hub(
             f"/pipelines/{pipeline_id}/config/entities/schemas/{encoded_schema_name}/tables/{encoded_table_name}/statements/create-table",
             method="PUT",
             token=token,
-            body=table_data.model_dump()
+            body=payload
         )
         return response
     except requests.exceptions.RequestException as e:
@@ -751,18 +754,22 @@ def _source_column_dtos(columns, key_lookup: _KeyLookup, source_node_info, targe
         # YAML-defined keys override source metadata so templates can
         # create target PKs for source tables that do not expose one.
         col_is_pk = key_lookup.is_primary_key(col["name"]) or bool(col.get("isPK"))
+        # Prefer None over 0 when discovery omitted precision/scale: Oracle NUMBER with
+        # no precision must stay unscoped (NUMBER), not NUMBER(0,0) which raises ORA-01727.
+        src_num_prec = col["numPrec"] if "numPrec" in col and col["numPrec"] is not None else None
+        src_num_scale = col["numScale"] if "numScale" in col and col["numScale"] is not None else None
         column_dtos.append(_mark_max(raw_length, Column(
             name=col["name"],
             dataType=format_column_type(mapped_type, col_data_length,
-                                   col.get("numPrec", 0), col.get("numScale", 0)),
+                                   src_num_prec or 0, src_num_scale or 0),
             id=col.get("position", col.get("id", 1)),
             tableId=0,
             position=col.get("position", col.get("id", 1)),
             isPK=col_is_pk,
             isNullable=col.get("isNullable", False),
             charMaxLength=col_data_length,
-            numPrec=col.get("numPrec", 0),
-            numScale=col.get("numScale", 0)
+            numPrec=src_num_prec,
+            numScale=src_num_scale
         )))
     return column_dtos
 
@@ -821,15 +828,18 @@ def _exported_column_dto(target_name: str, relation: dict, source_col, key_looku
     data_type = _exported_target_type(row, source_col, source_node_info, target_node_info)
     raw_length = _first_set(row.get('targetDataLength'), row.get('dataLength'), source.get('charMaxLength'))
     data_length = _normalize_data_length(data_type, raw_length)
-    numeric_precision = _to_int(_first_set(
-        row.get('targetNumericPrecision'), row.get('numericPrecision'), source.get('numPrec')))
-    numeric_scale = _to_int(_first_set(
-        row.get('targetNumericScale'), row.get('numericScale'), source.get('numScale')))
+    raw_num_prec = _first_set(
+        row.get('targetNumericPrecision'), row.get('numericPrecision'), source.get('numPrec'))
+    raw_num_scale = _first_set(
+        row.get('targetNumericScale'), row.get('numericScale'), source.get('numScale'))
+    # None when every source omitted the field (do not invent 0 → NUMBER(0,0) on Oracle).
+    numeric_precision = None if raw_num_prec is None else _to_int(raw_num_prec)
+    numeric_scale = None if raw_num_scale is None else _to_int(raw_num_scale)
     is_pk = _to_bool(row.get('isPK'), default=False) or key_lookup.is_primary_key(target_name) \
         or any(key_lookup.is_primary_key(source_name) for source_name in relation['sources'])
     return _mark_max(raw_length, Column(
         name=target_name,
-        dataType=format_column_type(data_type, data_length, numeric_precision, numeric_scale),
+        dataType=format_column_type(data_type, data_length, numeric_precision or 0, numeric_scale or 0),
         id=0,
         tableId=0,
         position=_row_position(row),
