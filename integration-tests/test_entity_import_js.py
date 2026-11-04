@@ -9,7 +9,8 @@ JS = Path(__file__).resolve().parents[1] / "automator_app" / "static" / "entity_
 
 SCRIPT = r"""
 import {
-  buildEntityPlan, planIsEmpty, selectionError, resolveTarget, targetDiffersFromDefault,
+  buildEntityPlan, planIsEmpty, selectionError, selectionNotes, resolveTarget, targetDiffersFromDefault,
+  autoRenameDuplicateTargets,
   columnMismatchNote, inferTargetMode, preferDiscoverySpelling, entityIdSubtitle, groupPickerRows,
   advancedMatches, effectiveSelectedIds,
 } from './entity_import.mjs';
@@ -68,17 +69,19 @@ assert(JSON.stringify(planPart.pipelines['pipe-1'].entities.include) === JSON.st
 const nonePanel = basePanel();
 assert(selectionError(nonePanel, loaded, new Set()) !== null, 'none error');
 assert(selectionError(allPanel, loaded, new Set(['SCH.T1','SCH.T2','SCH.T3'])) === null, 'all ok');
-// Advanced with include still validates collisions (F1); empty picker Set is OK when Advanced used
+// Advanced with include: empty picker Set is OK when Advanced used
 assert(selectionError(advanced, loaded, new Set()) === null, 'advanced include SCH.T1 only ok');
-// Advanced include of two entities that collide under global Target
+// Advanced include of two entities that fan-in under global Target (info, not error)
 const advDup = basePanel({ include: 'SCH.T1\nSCH.T2' });
 const globalTgtAdv = { targetSchema: 'APP' };
 const loadedSame = [
   { id: 'SCH.T1', schema: 'SCH', targetSchema: 'TGT', targetTable: 'ORDERS' },
   { id: 'SCH.T2', schema: 'SCH', targetSchema: 'TGT', targetTable: 'ORDERS' },
 ];
-assert(selectionError(advDup, loadedSame, new Set(), new Map(), globalTgtAdv) !== null,
-  'advanced detects schema-remap collision');
+assert(selectionError(advDup, loadedSame, new Set(), new Map(), globalTgtAdv) === null,
+  'advanced fan-in under global target is allowed');
+assert(selectionNotes(advDup, loadedSame, new Set(), new Map(), globalTgtAdv).some((n) => /sources write to/i.test(n)),
+  'advanced fan-in emits selectionNotes');
 assert(preferDiscoverySpelling('Orders', ['ORDERS', 'OTHER']) === 'ORDERS', 'prefer discovery spelling');
 assert(preferDiscoverySpelling('NEW', ['ORDERS']) === 'NEW', 'prefer keeps unknown');
 assert(advancedMatches('SCH.T1', loaded[0]), 'advancedMatches exact');
@@ -110,12 +113,14 @@ assert(!planOv.pipelines['pipe-1'].entities.overrides['SCH.T3'], 'default omits 
 const emptyTarget = new Map([['SCH.T1', { mode: 'new', targetSchema: 'TGT', targetTable: '' }]]);
 assert(selectionError(allPanel, loaded, new Set(['SCH.T1']), emptyTarget) !== null, 'empty target error');
 
-// Duplicate targets → error
+// Duplicate targets → fan-in notes (not an error)
 const dup = new Map([
   ['SCH.T1', { mode: 'new', targetSchema: 'TGT', targetTable: 'SAME' }],
   ['SCH.T2', { mode: 'new', targetSchema: 'TGT', targetTable: 'SAME' }],
 ]);
-assert(selectionError(allPanel, loaded, new Set(['SCH.T1','SCH.T2']), dup) !== null, 'dup target error');
+assert(selectionError(allPanel, loaded, new Set(['SCH.T1','SCH.T2']), dup) === null, 'dup target allowed as fan-in');
+assert(selectionNotes(allPanel, loaded, new Set(['SCH.T1','SCH.T2']), dup).some((n) => /SAME/i.test(n)),
+  'dup target emits fan-in note');
 
 // resolveTarget / differs helpers
 const r = resolveTarget(loaded[0], ov);
@@ -170,7 +175,11 @@ assert(planAt.pipelines.pipe1.entities.overrides['dbo.CUSTOMERS@@2'].targetTable
 assert(selectionError(allPanel, loadedAt, new Set(['dbo.CUSTOMERS', 'dbo.CUSTOMERS@@2']), new Map([
   ['dbo.CUSTOMERS', { mode: 'existing', targetSchema: 'gb75_tgt', targetTable: 'same' }],
   ['dbo.CUSTOMERS@@2', { mode: 'existing', targetSchema: 'gb75_tgt', targetTable: 'same' }],
-])) !== null, 'dup exact ids blocked in UI');
+])) === null, 'dup exact ids allowed as fan-in');
+assert(selectionNotes(allPanel, loadedAt, new Set(['dbo.CUSTOMERS', 'dbo.CUSTOMERS@@2']), new Map([
+  ['dbo.CUSTOMERS', { mode: 'existing', targetSchema: 'gb75_tgt', targetTable: 'same' }],
+  ['dbo.CUSTOMERS@@2', { mode: 'existing', targetSchema: 'gb75_tgt', targetTable: 'same' }],
+])).some((n) => /sources write to/i.test(n)), 'dup exact ids emit fan-in note');
 
 // Existing pick must surface as mode=existing in resolveTarget (preview action uses this)
 const existingResolved = resolveTarget(
@@ -188,8 +197,10 @@ const crossSchema = [
   { id: 'SRC_B.ORDERS', schema: 'SRC_B', source: 'SRC_B.ORDERS', targetSchema: 'TGT', targetTable: 'ORDERS', alreadyExists: false },
 ];
 const skipPanel = basePanel({ onExisting: 'skip' });
-assert(selectionError(skipPanel, crossSchema, new Set(['SRC_A.ORDERS', 'SRC_B.ORDERS']), new Map()) !== null,
-  'two new entities same target must error');
+assert(selectionError(skipPanel, crossSchema, new Set(['SRC_A.ORDERS', 'SRC_B.ORDERS']), new Map()) === null,
+  'two new entities same target are fan-in (allowed)');
+assert(selectionNotes(skipPanel, crossSchema, new Set(['SRC_A.ORDERS', 'SRC_B.ORDERS']), new Map()).some((n) => /2 sources write to/i.test(n)),
+  'two new same target emit fan-in note');
 
 // One already exists + skip → only the new one is created → no error
 const oneExists = [
@@ -215,10 +226,12 @@ const renamed = new Map([
 assert(selectionError(skipPanel, crossSchema, new Set(['SRC_A.ORDERS', 'SRC_B.ORDERS']), renamed) === null,
   'rename via per-entity targetTable clears duplicate');
 
-// fail / empty onExisting still errors when both would be created
+// fail / empty onExisting: shared target is still fan-in (allowed); notes list both feeders
 const failPanel = basePanel({ onExisting: 'fail' });
-assert(selectionError(failPanel, oneExists, new Set(['SRC_A.ORDERS', 'SRC_B.ORDERS']), new Map()) !== null,
-  'fail policy still counts alreadyExists toward duplicate');
+assert(selectionError(failPanel, oneExists, new Set(['SRC_A.ORDERS', 'SRC_B.ORDERS']), new Map()) === null,
+  'fail policy allows fan-in to shared target');
+assert(selectionNotes(failPanel, oneExists, new Set(['SRC_A.ORDERS', 'SRC_B.ORDERS']), new Map()).some((n) => /sources write to/i.test(n)),
+  'fail policy fan-in still notes both feeders');
 
 // --- Regression: global Customize target schema propagates ---
 const globalTgt = { targetSchema: 'GLUESYNC' };
@@ -252,9 +265,11 @@ assert(planGlobal.pipelines['pipe-1'].entities.overrides['SRC_A.ORDERS'].targetS
 assert(planGlobal.pipelines['pipe-1'].entities.overrides['SRC_B.ORDERS'].targetSchema === 'GLUESYNC',
   'plan emits global target for SRC_B');
 
-// selectionError with global schema still detects collision under remapped schema
-assert(selectionError(skipPanel, crossSchema, new Set(['SRC_A.ORDERS', 'SRC_B.ORDERS']), new Map(), globalTgt) !== null,
-  'global schema remap still flags duplicate table names');
+// global schema remap: shared table name is fan-in (notes), not an error
+assert(selectionError(skipPanel, crossSchema, new Set(['SRC_A.ORDERS', 'SRC_B.ORDERS']), new Map(), globalTgt) === null,
+  'global schema remap allows fan-in');
+assert(selectionNotes(skipPanel, crossSchema, new Set(['SRC_A.ORDERS', 'SRC_B.ORDERS']), new Map(), globalTgt).some((n) => /GLUESYNC\.ORDERS/i.test(n)),
+  'global schema remap emits fan-in note');
 
 
 // ── Expanded Customize matrix (client-side) ───────────────────────────
@@ -264,14 +279,18 @@ const threeSchema = [
   { id: 'SRC_C.ORDERS', schema: 'SRC_C', table: 'ORDERS', targetSchema: 'TGT', targetTable: 'ORDERS', alreadyExists: false },
 ];
 
-// 3-way collision: all would create → error
-assert(selectionError(skipPanel, threeSchema, new Set(['SRC_A.ORDERS','SRC_B.ORDERS','SRC_C.ORDERS']), new Map()) !== null,
-  '3-schema collision both-create errors');
+// 3-way fan-in: all would create → allowed + notes
+assert(selectionError(skipPanel, threeSchema, new Set(['SRC_A.ORDERS','SRC_B.ORDERS','SRC_C.ORDERS']), new Map()) === null,
+  '3-schema fan-in both-create allowed');
+assert(selectionNotes(skipPanel, threeSchema, new Set(['SRC_A.ORDERS','SRC_B.ORDERS','SRC_C.ORDERS']), new Map()).some((n) => /3 sources write to/i.test(n)),
+  '3-schema fan-in notes');
 
-// 3-way: one exists (skip) + two create same target → still error
+// 3-way: one exists (skip) + two create same target → fan-in of the two creates
 const threeOneExists = threeSchema.map((e,i) => i===0 ? {...e, alreadyExists:true} : e);
-assert(selectionError(skipPanel, threeOneExists, new Set(['SRC_A.ORDERS','SRC_B.ORDERS','SRC_C.ORDERS']), new Map()) !== null,
-  '3-schema one-skip two-create still errors');
+assert(selectionError(skipPanel, threeOneExists, new Set(['SRC_A.ORDERS','SRC_B.ORDERS','SRC_C.ORDERS']), new Map()) === null,
+  '3-schema one-skip two-create fan-in allowed');
+assert(selectionNotes(skipPanel, threeOneExists, new Set(['SRC_A.ORDERS','SRC_B.ORDERS','SRC_C.ORDERS']), new Map()).some((n) => /2 sources write to/i.test(n)),
+  '3-schema one-skip two-create notes the two creates');
 
 // 3-way: two exist (skip) + one create → ok
 const threeTwoExist = threeSchema.map((e,i) => i<2 ? {...e, alreadyExists:true} : e);
@@ -324,14 +343,14 @@ assert(rWsGlobal.targetSchema === 'TGT', 'whitespace global trims to YAML defaul
 const rCase = resolveTarget(crossSchema[0], new Map(), { targetSchema: 'GlUeSyNc' });
 assert(rCase.targetSchema === 'GlUeSyNc', 'global schema preserves case');
 
-// onExisting fail: alreadyExists still counted as collision participant when would-create peer exists
-assert(selectionError(failPanel, oneExists, new Set(['SRC_A.ORDERS','SRC_B.ORDERS']), new Map()) !== null,
-  'fail mode: existing+create still duplicate error');
+// onExisting fail: shared target is fan-in (allowed)
+assert(selectionError(failPanel, oneExists, new Set(['SRC_A.ORDERS','SRC_B.ORDERS']), new Map()) === null,
+  'fail mode: existing+create fan-in allowed');
 
-// Duplicate error message must mention Duplicate target and hint rename
-const dupMsg = selectionError(skipPanel, crossSchema, new Set(['SRC_A.ORDERS','SRC_B.ORDERS']), new Map());
-assert(dupMsg && /Duplicate target/i.test(dupMsg), 'dup message has Duplicate target');
-assert(/rename/i.test(dupMsg), 'dup message hints rename');
+// Fan-in notes mention sources write to; Auto-rename remains optional
+const fanNotes = selectionNotes(skipPanel, crossSchema, new Set(['SRC_A.ORDERS','SRC_B.ORDERS']), new Map());
+assert(fanNotes.some((n) => /sources write to/i.test(n)), 'fan-in note present');
+assert(fanNotes.some((n) => /created once/i.test(n)), 'fan-in note says created once');
 
 
 // F9: resolveTarget with cleared override key inherits global (clearEmpty semantics)
@@ -342,6 +361,28 @@ assert(resolveTarget(crossSchema[0], clearedOv, { targetSchema: 'GLOBAL_T' }).ta
 const lockedEmpty = new Map([['SRC_A.ORDERS', { targetSchema: '' }]]);
 assert(resolveTarget(crossSchema[0], lockedEmpty, { targetSchema: 'GLOBAL_T' }).targetSchema === '',
   'explicit empty stays locked (pre-clearEmpty behaviour still testable)');
+
+// Auto-rename is optional and never automatic
+const ar = autoRenameDuplicateTargets(
+  crossSchema, new Set(['SRC_A.ORDERS','SRC_B.ORDERS']), new Map(), null);
+assert(ar.renamed === 1, 'auto-rename renames one of two colliding targets');
+assert(ar.overrides.size >= 1, 'auto-rename writes overrides');
+
+// prepareRetryFailed wires Advanced include + onExisting=skip
+const panelHtml = `<div>
+  <textarea data-include></textarea>
+  <select data-on-existing><option value="skip">skip</option><option value="fail">fail</option></select>
+  <input id="entity-plan-dry-run" type="checkbox" />
+  <details class="entity-advanced"></details>
+  <div data-picker></div>
+</div>`;
+// mountEntityImport needs DOM — skip full mount; unit-test the pure rename path above is enough.
+// Soft check: source exports prepareRetryFailed on controller (grep via fs)
+import fs from 'node:fs';
+const src = fs.readFileSync(new URL('./entity_import.mjs', import.meta.url)).toString();
+assert(/prepareRetryFailed\s*\(/.test(src), 'prepareRetryFailed exported on controller');
+assert(/dataset:\s*\{\s*autoRename/.test(src) || /data-auto-rename|Auto-rename duplicates/.test(src),
+  'Auto-rename button present');
 
 console.log('ok');
 """

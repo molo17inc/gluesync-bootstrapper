@@ -225,7 +225,7 @@ class ExportPipelineYamlMetadataTests(unittest.TestCase):
             mock.patch.object(corehub, "build_schemas_from_entities", return_value=schemas),
             mock.patch.object(corehub, "infer_agent_schema_types", return_value=("SQL", "SQL")),
             mock.patch.object(corehub, "fetch_pipeline_jobs", return_value=[]),
-            mock.patch.object(corehub, "attach_schedules_from_jobs"),
+            mock.patch.object(corehub, "attach_schedules_from_jobs", return_value=([], [])),
             mock.patch.object(corehub, "enrich_null_column_types_from_discovery", return_value=0),
             mock.patch.object(corehub, "fetch_core_hub", side_effect=fake_fetch),
             mock.patch.object(corehub, "build_export_header", return_value="# header\n"),

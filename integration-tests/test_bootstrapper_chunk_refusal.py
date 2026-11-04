@@ -54,9 +54,15 @@ class ChunkRefusalTests(unittest.TestCase):
         self.assertEqual(len(result["errors"]), 1)
         self.assertRegex(result["errors"][0], r"^src\.NOPK: .*R12\.6")
 
-    def test_without_skip_errors_the_refusal_is_raised(self):
-        with self.assertRaisesRegex(RuntimeError, "src.NOPK"):
-            run(skip_errors=False)
+    def test_without_skip_errors_successes_still_persist(self):
+        """skip_errors=False fails overall status but does not abort the batch (F3 best-effort)."""
+        hub, result = run(skip_errors=False)
+        self.assertEqual(sorted(e["entityName"] for e in hub.saved), ["src.CUSTOMERS", "src.PARTS"])
+        self.assertEqual({k: result[k] for k in ("successful", "failed", "total")},
+                         {"successful": 2, "failed": 1, "total": 3})
+        self.assertFalse(result.get("success"))
+        self.assertTrue(result.get("partial"))
+        self.assertEqual(result.get("failedEntityIds"), ["src.NOPK"])
 
 
 if __name__ == "__main__":

@@ -85,19 +85,22 @@ class TargetCollisionTests(unittest.TestCase):
         with self.assertRaisesRegex(import_plan.PlanError, "differ only by case"):
             import_plan.check_target_collisions(YAML, p)
 
-    def test_duplicate_rename_refused(self):
+    def test_duplicate_rename_is_fan_in_not_refused(self):
+        # F1/F4: several sources -> same NEW target is legitimate fan-in (info note, not PlanError).
         p = self.plan(overrides={"SCH01.TAB001": {"targetTable": "NEW"}, "SCH01.TAB002": {"targetTable": "new"}})
-        with self.assertRaisesRegex(import_plan.PlanError, "both map to"):
-            import_plan.check_target_collisions(YAML, p)
+        import_plan.check_target_collisions(YAML, p)  # must not raise
+        notes = import_plan.fan_in_notes(YAML, p)
+        self.assertTrue(any("sources write to" in n and "created once" in n for n in notes), notes)
 
-    def test_schema_only_remap_collision_refused(self):
-        # F4: global Target / schema-only overrides must collide on final (schema, table)
+    def test_schema_only_remap_is_fan_in(self):
+        # F4: schema-only overrides that land on the same final (schema, table) are fan-in.
         p = self.plan(overrides={
             "SCH01.TAB001": {"targetSchema": "APP"},
             "SCH01.TAB002": {"targetSchema": "APP", "targetTable": "TAB001"},
         })
-        with self.assertRaisesRegex(import_plan.PlanError, r"both map to APP\.TAB001"):
-            import_plan.check_target_collisions(YAML, p)
+        import_plan.check_target_collisions(YAML, p)
+        notes = import_plan.fan_in_notes(YAML, p)
+        self.assertTrue(any("APP.TAB001" in n or "APP.tab001" in n.lower() for n in notes), notes)
 
     def test_excluded_or_distinct_targets_ok(self):
         p = self.plan(overrides={"SCH01.TAB001": {"targetTable": "NEW"}, "SCH01.TAB002": {"targetTable": "NEW"}},
@@ -106,10 +109,12 @@ class TargetCollisionTests(unittest.TestCase):
         # Distinct final targets are fine
         import_plan.check_target_collisions(
             YAML, self.plan(overrides={"SCH01.TAB001": {"targetTable": "ONLY_ONE"}}))
-        # Renaming onto another selected entity's YAML name is refused
-        with self.assertRaisesRegex(import_plan.PlanError, "both map to"):
-            import_plan.check_target_collisions(
-                YAML, self.plan(overrides={"SCH01.TAB001": {"targetTable": "TAB003"}}))
+        # Renaming onto another selected entity's YAML name is fan-in (TAB003@@2 already targets TAB003)
+        import_plan.check_target_collisions(
+            YAML, self.plan(overrides={"SCH01.TAB001": {"targetTable": "TAB003"}}))
+        notes = import_plan.fan_in_notes(
+            YAML, self.plan(overrides={"SCH01.TAB001": {"targetTable": "TAB003"}}))
+        self.assertTrue(any("TAB003" in n for n in notes), notes)
         # YAML-only fan-in (no plan remap) stays allowed
         import_plan.check_target_collisions(YAML, self.plan())
 

@@ -458,7 +458,8 @@ class RefusedTableTests(unittest.TestCase):
         self.assertEqual(sorted(entity_names(hub)), ["SALES.ITEMS", "SALES.ORDERS"])
         self.assertEqual((result["failed"], result["errors"]), (0, []))
 
-    def test_without_skip_errors_the_run_stops_on_the_refusal(self):
+    def test_without_skip_errors_other_entities_still_persist(self):
+        """Table creation refusal is collected; siblings still commit (F3 best-effort)."""
         import create_all_entities
         import create_all_tables
 
@@ -469,12 +470,17 @@ class RefusedTableTests(unittest.TestCase):
             stack.enter_context(mock.patch.object(create_all_entities, "CREATE_TABLE_IF_NOT_EXISTS", True))
             stack.enter_context(mock.patch.object(create_all_tables, "CREATE_TABLE_IF_NOT_EXISTS", True))
             stack.enter_context(mock.patch.object(create_all_tables, "fetch_core_hub", side_effect=hub.fetch))
-            with self.assertRaises(create_all_tables.TargetTableCreationError):
-                create_all_entities.create_entities(
-                    token="token", pipeline_id="pipeline", source_schema=SOURCE_SCHEMA,
-                    target_schema=TARGET_SCHEMA, tables=SOURCE_LIST, source_agent_id=fake_corehub.SOURCE_AGENT,
-                    target_agent_id=fake_corehub.TARGET_AGENT, source_type="SQL", target_type="SQL",
-                    yaml_config=yaml_config, skip_errors=False)
+            result = create_all_entities.create_entities(
+                token="token", pipeline_id="pipeline", source_schema=SOURCE_SCHEMA,
+                target_schema=TARGET_SCHEMA, tables=SOURCE_LIST, source_agent_id=fake_corehub.SOURCE_AGENT,
+                target_agent_id=fake_corehub.TARGET_AGENT, source_type="SQL", target_type="SQL",
+                yaml_config=yaml_config, skip_errors=False)
+        # ORDER_RESULT refused; ITEMS (and any other) still created when possible.
+        self.assertGreaterEqual(result["failed"], 1)
+        self.assertFalse(result.get("success"))
+        self.assertTrue(any("ORDER_RESULT" in str(e) or "ORDER_RESULT" in str(r)
+                            for e, r in zip(result.get("errors") or [""],
+                                            (result.get("refused") or [""]) + [""])))
 
 
 class RowShapesTests(unittest.TestCase):
@@ -689,9 +695,9 @@ class RunSummaryTests(unittest.TestCase):
         log_success.assert_not_called()
         log_failure.assert_called_once()
         self.assertEqual(log_failure.call_args.args[1],
-                         "Entity creation completed with 2 of 3 entities failed for pipeline pipeline-1")
+                         "Entity creation completed (OK 1, failed 2, skipped 0) for pipeline pipeline-1")
         lockfile_complete.assert_called_once()
-        self.assertEqual(returned, result)
+        self.assertEqual({k: returned[k] for k in ("successful", "failed", "total", "errors")}, result)
 
     def test_a_run_without_failed_entities_still_logs_the_pass(self):
         result = {"successful": 3, "failed": 0, "total": 3, "errors": []}
@@ -699,7 +705,7 @@ class RunSummaryTests(unittest.TestCase):
         log_failure.assert_not_called()
         log_success.assert_called_once()
         lockfile_complete.assert_called_once()
-        self.assertEqual(returned, result)
+        self.assertEqual({k: returned[k] for k in ("successful", "failed", "total", "errors")}, result)
 
 
 class DuplicateTableTests(unittest.TestCase):

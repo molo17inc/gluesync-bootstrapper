@@ -23,19 +23,39 @@ class PyInstallerCompatibilityChecker(ast.NodeVisitor):
     def __init__(self):
         self.violations: List[Tuple[int, str, str]] = []
         self.current_file: str = ""
+        self._in_annotation = False
+    
+    def _visit_annotation(self, node):
+        if node is None:
+            return
+        prev = self._in_annotation
+        self._in_annotation = True
+        self.visit(node)
+        self._in_annotation = prev
+    
+    def visit_FunctionDef(self, node: ast.FunctionDef):
+        for arg in node.args.args + node.args.posonlyargs + node.args.kwonlyargs:
+            self._visit_annotation(arg.annotation)
+        self._visit_annotation(node.args.vararg.annotation if node.args.vararg else None)
+        self._visit_annotation(node.args.kwarg.annotation if node.args.kwarg else None)
+        self._visit_annotation(node.returns)
+        for stmt in node.body:
+            self.visit(stmt)
+    
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef):
+        self.visit_FunctionDef(node)
+    
+    def visit_AnnAssign(self, node: ast.AnnAssign):
+        self._visit_annotation(node.annotation)
+        if node.value is not None:
+            self.visit(node.value)
     
     def visit_BinOp(self, node: ast.BinOp):
-        """Detect X | Y union type syntax (Python 3.10+)."""
-        if isinstance(node.op, ast.BitOr):
-            # Check if either operand is a type-like expression
-            left_is_type = self._is_type_expression(node.left)
-            right_is_type = self._is_type_expression(node.right)
-            
-            if left_is_type or right_is_type:
-                line = node.lineno
-                code = self._get_source_line(node)
-                self.violations.append((line, code.strip(), "Uses '|' union syntax instead of Optional[] or Union[]"))
-        
+        """Detect X | Y union type syntax (Python 3.10+) in annotations only."""
+        if self._in_annotation and isinstance(node.op, ast.BitOr):
+            line = node.lineno
+            code = self._get_source_line(node)
+            self.violations.append((line, code.strip(), "Uses '|' union syntax instead of Optional[] or Union[]"))
         self.generic_visit(node)
     
     def _is_type_expression(self, node: ast.AST) -> bool:

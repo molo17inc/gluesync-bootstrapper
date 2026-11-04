@@ -43,16 +43,18 @@ MULTI = {
 
 
 class F1F4FinalTargetCollisions(unittest.TestCase):
-    def test_schema_only_remap_collides(self):
+    def test_schema_only_remap_is_fan_in_note(self):
+        """Multi-source → same NEW target is intentional fan-in (not a PlanError)."""
         plan = _plan(pipelines={"p1": {"entities": {"overrides": {
             "HR.ORDERS": {"targetSchema": "APP"},
             "FIN.ORDERS": {"targetSchema": "APP"},
         }}}})
         pipeline = import_plan.entity_pipeline(plan, "p1")
-        with self.assertRaisesRegex(import_plan.PlanError, r"both map to APP\.ORDERS"):
-            import_plan.check_target_collisions(MULTI, pipeline, "p1")
+        import_plan.check_target_collisions(MULTI, pipeline, "p1")  # does not raise
+        notes = import_plan.fan_in_notes(MULTI, pipeline)
+        self.assertTrue(any("APP.ORDERS" in n and "2" in n for n in notes), notes)
 
-    def test_advanced_include_still_collides(self):
+    def test_advanced_include_fan_in_note(self):
         plan = _plan(pipelines={"p1": {"entities": {
             "include": ["HR.ORDERS", "FIN.ORDERS"],
             "overrides": {
@@ -61,10 +63,11 @@ class F1F4FinalTargetCollisions(unittest.TestCase):
             },
         }}})
         pipeline = import_plan.entity_pipeline(plan, "p1")
-        with self.assertRaisesRegex(import_plan.PlanError, "both map to"):
-            import_plan.check_target_collisions(MULTI, pipeline, "p1")
+        import_plan.check_target_collisions(MULTI, pipeline, "p1")
+        notes = import_plan.fan_in_notes(MULTI, pipeline)
+        self.assertTrue(any("APP.ORDERS" in n for n in notes), notes)
 
-    def test_exclude_avoids_collision(self):
+    def test_exclude_avoids_fan_in_note(self):
         plan = _plan(pipelines={"p1": {"entities": {
             "exclude": ["FIN.ORDERS"],
             "overrides": {
@@ -74,8 +77,10 @@ class F1F4FinalTargetCollisions(unittest.TestCase):
         }}})
         pipeline = import_plan.entity_pipeline(plan, "p1")
         import_plan.check_target_collisions(MULTI, pipeline, "p1")
+        notes = import_plan.fan_in_notes(MULTI, pipeline)
+        self.assertFalse(any("APP.ORDERS" in n for n in notes), notes)
 
-    def test_prepare_yaml_refuses_collision(self):
+    def test_prepare_yaml_allows_fan_in(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "e.yaml"
             path.write_text(yaml.safe_dump(MULTI), encoding="utf-8")
@@ -83,8 +88,14 @@ class F1F4FinalTargetCollisions(unittest.TestCase):
                 "HR.ORDERS": {"targetSchema": "APP"},
                 "FIN.ORDERS": {"targetSchema": "APP"},
             }}}})
-            with self.assertRaises(import_plan.PlanError):
-                automator._prepare_entity_yaml_for_run(path, plan, "pipe")
+            yaml_for_run, notes, _pipeline, planned_temp = automator._prepare_entity_yaml_for_run(
+                path, plan, "pipe")
+            self.assertTrue(
+                any("sources write to APP.ORDERS" in n for n in notes),
+                notes,
+            )
+            if planned_temp is not None:
+                planned_temp.unlink(missing_ok=True)
 
     def test_at_at_siblings_may_share_final_target(self):
         yaml_cfg = {
@@ -257,14 +268,22 @@ class F12EnvOnExistingCleared(unittest.TestCase):
 
 
 class F13BulkSkipErrorsDefault(unittest.TestCase):
-    def test_bulk_skip_errors_defaults_false(self):
+    def test_bulk_skip_errors_defaults_true(self):
+        """CLI / UI / Bulk share skipErrors=True (best-effort F3/F13)."""
         req = automator.BulkCreateRequest.model_validate({
             "pipelineId": "p",
             "sourceSchema": "S",
             "targetSchema": "T",
             "tableNames": ["X"],
         })
-        self.assertFalse(req.skip_errors)
+        self.assertTrue(req.skip_errors)
+        run_req = automator.RunRequest.model_validate({
+            "pipelineId": "p",
+            "sourceSchema": "S",
+            "targetSchema": "T",
+            "yamlFileId": "y",
+        })
+        self.assertTrue(run_req.skip_errors)
 
 
 class F5UpdateWarning(unittest.TestCase):
