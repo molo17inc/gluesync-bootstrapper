@@ -25,6 +25,8 @@ export function reportRows(plan) {
       issues: entry.issues || [],
       checkError: check.error || null,
       verdict: check.describe?.verdict || null,
+      // a describe refused for its structure never reached the agent: its issues are the converter report's
+      describeIssues: check.describe && check.describe.verdict !== 'REFUSED' ? check.describe.issues || [] : [],
       proposedKeys: check.describe?.proposedKeys || {},
       valid: validate ? validate.valid : null,
       validationIssues: validate?.issues || [],
@@ -83,6 +85,7 @@ function checksCell(row) {
     div.textContent = line;
     td.appendChild(div);
   });
+  if (row.describeIssues.length) td.appendChild(issueList(row.describeIssues));
   if (row.validationIssues.length) td.appendChild(issueList(row.validationIssues));
   return td;
 }

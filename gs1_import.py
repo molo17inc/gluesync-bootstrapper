@@ -349,6 +349,8 @@ def _check_lines(check: Dict[str, Any], draft: Optional[Dict[str, Any]]) -> List
         mode = (description.get("verdict") or {}).get("mode")
         keys = ", ".join(f"{level.get('level')} {level.get('proposedKey')}" for level in description["levels"])
         lines.append(f"describe: {mode}; proposed keys {keys}")
+        # the issues of a describe that never reached the agent are the converter's (the draft is refused): not repeated
+        lines.extend(f"  {_issue_line(issue)}" for issue in description.get("issues") or [] if isinstance(issue, dict))
     validation = check.get("validate")
     if validation is not None and draft is not None:
         issues = validation_issues(validation)

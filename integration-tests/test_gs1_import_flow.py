@@ -156,6 +156,34 @@ def test_a_failing_target_node_info_is_reported_for_every_query_draft(hub):
     assert "validate" not in plan["checks"]["KEYED"]
 
 
+WARNING_ISSUE = {"code": "KEY_NOT_UNIQUE_HINT", "severity": "WARNING", "level": "ORDERS", "message": "check the key"}
+
+
+def _describe_warning(hub):
+    def answer(path, **kwargs):
+        result = hub(path, **kwargs)
+        if path.endswith("/discovery/data-model") and "GETDATE" not in kwargs["body"]["model"]["root"]["source"]["query"]:
+            result = dict(result, issues=[WARNING_ISSUE])
+        return result
+    return answer
+
+
+def test_describe_warnings_of_a_query_draft_are_in_the_report(hub):
+    with mock.patch.object(gs1_import, "fetch_core_hub", _describe_warning(hub)):
+        plan = gs1_import.plan_import("tok", _request())
+
+    lines = gs1_import.summarize(plan)
+    assert "    WARNING KEY_NOT_UNIQUE_HINT [ORDERS]: check the key" in lines
+    assert plan["drafts"].keys() == {"ORDERS", "KEYED"}, "a warning does not refuse the draft"
+
+
+def test_describe_warnings_reach_the_page(client, hub):
+    with mock.patch.object(gs1_import, "fetch_core_hub", _describe_warning(hub)):
+        plan = _convert(client).json()
+
+    assert plan["checks"]["ORDERS"]["describe"]["issues"] == [WARNING_ISSUE]
+
+
 def test_nothing_is_saved_without_confirmation(hub):
     plan = gs1_import.plan_import("tok", _request())
 

@@ -28,7 +28,8 @@ const plan = {
     ] },
   ],
   checks: {
-    ORDERS: { describe: { verdict: 'CDC', proposedKeys: { ORDERS: ['ID'] } }, validate: { valid: true, issues: [] } },
+    ORDERS: { describe: { verdict: 'CDC', proposedKeys: { ORDERS: ['ID'] }, issues: [{ code: 'W', severity: 'WARNING', message: 'w' }] },
+              validate: { valid: true, issues: [] } },
     LINES: { validate: { valid: false, issues: [{ code: 'X', severity: 'ERROR', message: 'refused' }] } },
     UNCHECKED: { error: 'Core Hub unreachable' },
     RECENT: { error: 'Core Hub down' },
@@ -38,6 +39,12 @@ const plan = {
 const rows = reportRows(plan);
 assert(rows.length === 5, 'one row per GS1 entity');
 assert(rows[0].hasDraft && rows[0].verdict === 'CDC' && rows[0].proposedKeys.ORDERS[0] === 'ID', 'describe shown');
+assert(rows[0].describeIssues.length === 1 && rows[0].describeIssues[0].code === 'W', 'describe warnings shown');
+const refused = reportRows({
+  perEntity: [{ gs1Name: 'R', bucket: 'UNSUPPORTED', issues: [] }],
+  checks: { R: { describe: { verdict: 'REFUSED', issues: [{ code: 'E', severity: 'ERROR', message: 'm' }] } } },
+});
+assert(refused[0].describeIssues.length === 0, 'a refused describe repeats nothing');
 assert(rows[1].valid === false && rows[1].validationIssues.length === 1, 'validation shown');
 assert(rows[2].checkError === 'Core Hub unreachable' && rows[2].valid === null, 'a check error is shown');
 assert(!rows[4].hasDraft && rows[4].checkError === 'Core Hub down', 'no draft for an unsupported entity');
@@ -48,7 +55,8 @@ const offlineRows = reportRows({ ...plan, structureChecked: false, checks: {} })
 assert(offlineRows.every((row) => !row.structureChecked), 'offline rows say they were not checked');
 assert(JSON.stringify(defaultSelection(offlineRows)) === JSON.stringify(['ORDERS', 'LINES', 'UNCHECKED', 'BLIND']),
   'offline: every draft is preselected, as before');
-assert(issueText(plan.perEntity[4].issues[0]) === 'ERROR NON_DETERMINISTIC_QUERY [RECENT/1:45]: GETDATE', issueText(plan.perEntity[4].issues[0]));
+const line = issueText(plan.perEntity[4].issues[0]);
+assert(line === 'ERROR NON_DETERMINISTIC_QUERY [RECENT/1:45]: GETDATE', line);
 assert(issueText({ code: 'C', severity: 'WARNING', message: 'm' }) === 'WARNING C: m', 'no location');
 assert(confirmationText(['ORDERS'], 'Pipe (p1)').startsWith('Save 1 entities (ORDERS) to pipeline Pipe (p1)?'), 'prompt');
 assert(reportRows({}).length === 0, 'empty plan');
