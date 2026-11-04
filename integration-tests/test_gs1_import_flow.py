@@ -141,6 +141,21 @@ def test_a_core_hub_failure_is_reported_and_the_draft_kept(hub):
     assert any("Core Hub could not check it" in line for line in gs1_import.summarize(plan))
 
 
+def test_a_failing_target_node_info_is_reported_for_every_query_draft(hub):
+    def failing(path, **kwargs):
+        if path.endswith("/discovery/node-info") and "/agents/couchbase/" in path:
+            raise RuntimeError("CoreHub request GET failed: 503")
+        return hub(path, **kwargs)
+
+    with mock.patch.object(gs1_import, "fetch_core_hub", failing):
+        plan = gs1_import.plan_import("tok", _request())
+
+    assert set(plan["drafts"]) == {"ORDERS", "KEYED"}
+    assert "503" in plan["checks"]["ORDERS"]["error"]
+    assert "503" in plan["checks"]["KEYED"]["error"], "the second draft must not fail on a half-filled cache"
+    assert "validate" not in plan["checks"]["KEYED"]
+
+
 def test_nothing_is_saved_without_confirmation(hub):
     plan = gs1_import.plan_import("tok", _request())
 

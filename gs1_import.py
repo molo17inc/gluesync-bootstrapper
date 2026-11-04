@@ -164,8 +164,10 @@ class _CoreHubChecks:
 
     def type_matrices(self):
         if not self._types:
-            self._types["source"] = data_types(self.token, self.pipeline_id, self.request["sourceAgentId"])
-            self._types["target"] = data_types(self.token, self.pipeline_id, self.request["targetAgentId"])
+            # both or none: a failing target call must not leave a half-filled cache for the next draft
+            source = data_types(self.token, self.pipeline_id, self.request["sourceAgentId"])
+            target = data_types(self.token, self.pipeline_id, self.request["targetAgentId"])
+            self._types = {"source": source, "target": target}
         return self._types["source"], self._types["target"]
 
     def draft(self, entity: Dict[str, Any], check: bool) -> Dict[str, Any]:
