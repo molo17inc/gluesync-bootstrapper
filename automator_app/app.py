@@ -4556,7 +4556,7 @@ def _validate_entity_plan_for_run(yaml_path: Path, plan: import_plan.ImportPlan,
     yaml_config = load_yaml_config(str(yaml_path))
     pipeline = import_plan.entity_pipeline(plan, pipeline_id)
     import_plan.check_names(yaml_config, pipeline)
-    import_plan.check_target_collisions(yaml_config, pipeline, pipeline_id)
+    import_plan.check_target_collisions(pipeline, pipeline_id)
     entity_plan_runtime.prepare_yaml(yaml_config, plan, pipeline_id)
 
 
