@@ -26,6 +26,10 @@
    first and refuse a statement that depends on the moment it runs or a key that is not a plain column; then
    the agent types the columns and proposes the keys GS1 took from the FROM table), its target is mapped onto the
    described result view, and every draft is validated as an entity. A document-split draft is validated only.
+   A draft whose entity name is already in the pipeline (read with ``GET /pipelines/{id}/entities``) takes that
+   entity's ids, so that the validation and the save update it instead of comparing it with itself (the keyspace
+   check of Core Hub refuses a second entity writing the same id prefix). Such a draft is reported as already
+   imported and is never chosen by default: name it to update it.
 3. The drafts the operator chooses are saved with ``PUT /pipelines/{id}/config/entities``, and only once the
    operator confirms. Nothing is saved before.
 
@@ -33,6 +37,8 @@ Command line (the token is read from GS1_IMPORT_TOKEN, else a login as admin wit
 
     python gs1_import.py convert --config gs1.json --pipeline ID [--offline] [--output report.json]
     python gs1_import.py import --config gs1.json --pipeline ID [--entities A,B] [--yes]
+
+An entity already imported is updated only when named in --entities.
 
 Both take --source-agent and --target-agent (default: the pipeline's SOURCE and TARGET agents),
 --repository SQL_TO_NOSQL | NOSQL_TO_SQL | NOSQL_TO_SQL_SYBASE (default SQL_TO_NOSQL) and --root-counts, a JSON
@@ -57,9 +63,11 @@ from gs1_migration.discovered_types import type_document_draft
 TOKEN_ENV = "GS1_IMPORT_TOKEN"
 SAVE_PATH = "/pipelines/{pipeline_id}/config/entities"
 VALIDATE_PATH = "/pipelines/{pipeline_id}/config/entities/validate"
+ENTITIES_PATH = "/pipelines/{pipeline_id}/entities"
 DESCRIBE_PATH = "/pipelines/{pipeline_id}/agents/{agent_id}/discovery/data-model"
 NODE_INFO_PATH = "/pipelines/{pipeline_id}/agents/{agent_id}/discovery/node-info"
 COLUMNS_PATH = "/pipelines/{pipeline_id}/agents/{agent_id}/discovery/columns"
+ALREADY_IMPORTED = "already imported, will be updated"
 # The source-side type of the result-view column holding a child level.
 CONTAINER_ARRAY = "gs:array"
 
@@ -84,6 +92,35 @@ def validate_entities(token: str, pipeline_id: str, entities: List[Dict[str, Any
 
 def save_entities(token: str, pipeline_id: str, entities: List[Dict[str, Any]]) -> Any:
     return fetch_core_hub(SAVE_PATH.format(pipeline_id=pipeline_id), method="PUT", token=token, body={"entities": entities})
+
+
+def pipeline_entities(token: str, pipeline_id: str) -> Dict[str, Dict[str, Any]]:
+    """The entities the pipeline already holds by name (``GET /pipelines/{id}/entities``: a list of ``{entity}``)."""
+    answer = fetch_core_hub(ENTITIES_PATH.format(pipeline_id=pipeline_id), token=token)
+    if not isinstance(answer, list):
+        raise Gs1ImportError("Unexpected entities answer from Core Hub")
+    found: Dict[str, Dict[str, Any]] = {}
+    for item in answer:
+        entity = item.get("entity") if isinstance(item, dict) and isinstance(item.get("entity"), dict) else item
+        if isinstance(entity, dict) and entity.get("entityName") and entity.get("entityId"):
+            found.setdefault(entity["entityName"], entity)
+    return found
+
+
+def adopt_existing_ids(draft: Dict[str, Any], existing: Dict[str, Any]) -> None:
+    """Gives a draft the ids of the saved entity it re-imports: ``entityId`` and, per side, ``entityId`` and
+    ``agentEntityId``. A side is matched by its agent (with the same type first when an agent is on both sides)."""
+    draft["entityId"] = existing["entityId"]
+    unused = [side for side in existing.get("agentEntities") or [] if isinstance(side, dict)]
+    for side in draft.get("agentEntities") or []:
+        candidates = [other for other in unused if other.get("agentId") == side.get("agentId")]
+        match = next((other for other in candidates if other.get("type") == side.get("type")),
+                     candidates[0] if candidates else None)
+        side["entityId"] = existing["entityId"]
+        if match is not None:
+            unused.remove(match)
+            if match.get("agentEntityId"):
+                side["agentEntityId"] = match["agentEntityId"]
 
 
 def data_types(token: str, pipeline_id: str, agent_id: str) -> List[Dict[str, Any]]:
@@ -156,6 +193,27 @@ class _CoreHubChecks:
         self.checks: Dict[str, Dict[str, Any]] = {}
         self._types: Dict[str, List[Dict[str, Any]]] = {}
         self._typed: Dict[str, Dict[str, Any]] = {}
+        # the entities the pipeline holds by name, the ones the drafts re-import (name -> entityId) and why the
+        # pipeline's entities could not be read
+        self.saved: Dict[str, Dict[str, Any]] = {}
+        self.reimported: Dict[str, str] = {}
+        self.saved_error: Optional[str] = None
+
+    def load_saved(self) -> None:
+        """Reads the pipeline's entities, so that a re-imported draft is validated and saved as an update."""
+        try:
+            self.log(f"Reading the entities of pipeline {self.pipeline_id}")
+            self.saved = pipeline_entities(self.token, self.pipeline_id)
+        except (RuntimeError, ValueError) as exc:
+            self.saved_error = str(exc)
+            self.log(f"Core Hub could not list the pipeline's entities: {exc}")
+
+    def adopt(self, draft: Dict[str, Any]) -> Dict[str, Any]:
+        existing = self.saved.get(draft["entityName"])
+        if existing is not None:
+            adopt_existing_ids(draft, existing)
+            self.reimported[draft["entityName"]] = existing["entityId"]
+        return draft
 
     def structure(self, subject: Dict[str, Any]) -> List[Dict[str, Any]]:
         """The converter's structure check: describe for a Query model, validate for a document split."""
@@ -169,6 +227,7 @@ class _CoreHubChecks:
                 return _refused_before_the_agent(entry["describe"])
             self.log(f"Typing {name} from the agents' discovery")
             typed, notes = type_document_draft(subject["draft"], self._columns_of)
+            self.adopt(typed)
             self.log(f"Validating {name}")
             entry["validate"] = validate_entities(self.token, self.pipeline_id, [typed])
             self._typed[name] = typed
@@ -200,7 +259,8 @@ class _CoreHubChecks:
             draft = _described_draft(entity, entry.get("describe"), self.type_matrices)
         except (RuntimeError, ValueError) as exc:
             entry["error"] = str(exc)
-            return copy.deepcopy(entity)
+            return self.adopt(copy.deepcopy(entity))
+        self.adopt(draft)
         is_query = any(agent_entity.get("type") == "Query" for agent_entity in draft["agentEntities"])
         if check and is_query and "error" not in entry:
             try:
@@ -217,16 +277,21 @@ def plan_import(token: Optional[str], request: Dict[str, Any], check: bool = Tru
 
     The answer holds the converter's ``report``, the ``drafts`` ready to save by entity name (a Query draft whose
     root key GS1 took from the FROM table gets the key describe proposes), Core Hub's ``checks`` per entity and
-    whether the structure was checked. Nothing is written to Core Hub.
+    whether the structure was checked. ``existing`` maps the name of each draft the pipeline already holds to the
+    entityId it takes (``existingError`` says why the entities could not be read). Nothing is written to Core Hub.
     """
     hub = _CoreHubChecks(token, request, log)
+    if check:
+        hub.load_saved()
     try:
         report = convert(request, hub.structure if check else None)
     except ConversionError as exc:
         raise Gs1ImportError(str(exc)) from None
     drafts = {entity["entityName"]: hub.draft(entity, check) for entity in report["entities"]}
     checks = {name: entry for name, entry in hub.checks.items() if entry}
-    return {"report": report, "drafts": drafts, "checks": checks, "structureChecked": check}
+    return {"report": report, "drafts": drafts, "checks": checks, "structureChecked": check,
+            "existing": {name: hub.reimported[name] for name in drafts if name in hub.reimported},
+            "existingError": hub.saved_error}
 
 
 def _described_draft(entity: Dict[str, Any], description: Optional[Dict[str, Any]],
@@ -312,7 +377,10 @@ def save_drafts(token: str, pipeline_id: str, plan: Dict[str, Any], names: Itera
     return chosen
 
 
-def _why_not_default(check: Dict[str, Any]) -> str:
+def _why_not_default(plan: Dict[str, Any], name: str) -> str:
+    if name in plan.get("existing", {}):
+        return ALREADY_IMPORTED
+    check = plan["checks"].get(name, {})
     if check.get("error"):
         return "Core Hub could not check it"
     validation = check.get("validate")
@@ -324,12 +392,20 @@ def _why_not_default(check: Dict[str, Any]) -> str:
 def default_names(plan: Dict[str, Any]) -> List[str]:
     """The drafts saved when the operator names none: the ones Core Hub checked and found valid.
 
-    A draft Core Hub refused, could not reach or did not validate is left out (name it to save it anyway). A plan
-    made without the check (``--offline``) has no verdict to wait for: every draft is chosen, as the report says.
+    A draft Core Hub refused, could not reach or did not validate is left out (name it to save it anyway), and so is
+    one the pipeline already holds: saving it would overwrite that entity, so only naming it does. A plan made
+    without the check (``--offline``) has no verdict to wait for: every draft is chosen, as the report says.
     """
     if not plan.get("structureChecked"):
         return list(plan["drafts"])
-    return [name for name in plan["drafts"] if _checked_valid(plan["checks"].get(name, {}))]
+    already = plan.get("existing", {})
+    return [name for name in plan["drafts"] if name not in already and _checked_valid(plan["checks"].get(name, {}))]
+
+
+def updated_names(plan: Dict[str, Any], names: Iterable[str]) -> List[str]:
+    """The names among ``names`` whose save updates an entity the pipeline already holds."""
+    already = plan.get("existing", {})
+    return [name for name in dict.fromkeys(names) if name in already]
 
 
 def _checked_valid(check: Dict[str, Any]) -> bool:
@@ -355,8 +431,13 @@ def summarize(plan: Dict[str, Any]) -> List[str]:
         name = entry["gs1Name"]
         drafted = " (draft)" if name in plan["drafts"] else ""
         lines.append(f"{name}: {entry['bucket']}{drafted}")
+        if name in plan.get("existing", {}):
+            lines.append(f"  {ALREADY_IMPORTED} (entityId {plan['existing'][name]}); saved only when you name it")
         lines.extend(f"  {_issue_line(issue)}" for issue in entry["issues"])
         lines.extend(f"  {line}" for line in _check_lines(plan["checks"].get(name, {}), plan["drafts"].get(name)))
+    if plan.get("existingError"):
+        lines.append(f"Core Hub could not list the pipeline's entities ({plan['existingError']}): a draft already imported "
+                     "may be refused by the keyspace check.")
     stripped = report.get("strippedKeys") or []
     lines.append(f"Secret keys removed unread: {', '.join(stripped) if stripped else 'none'}")
     return lines
@@ -437,7 +518,8 @@ def _parser() -> argparse.ArgumentParser:
     commands.choices["convert"].add_argument("--offline", action="store_true",
                                              help="Do not call Core Hub: no structure check, no describe, no validate")
     commands.choices["import"].add_argument(
-        "--entities", help="Comma-separated GS1 entity names (default: every draft Core Hub checked and found valid)")
+        "--entities", help="Comma-separated GS1 entity names (default: every draft Core Hub checked and found valid "
+                          "and not already imported; name an already imported one to update it)")
     commands.choices["import"].add_argument("--yes", action="store_true", help="Confirm the save without asking")
     return parser
 
@@ -457,15 +539,19 @@ def _save_chosen(args: argparse.Namespace, token: Optional[str], plan: Dict[str,
         names = [n.strip() for n in args.entities.split(",") if n.strip()]
     else:
         names = default_names(plan)
-        skipped = [f"{name} ({_why_not_default(plan['checks'].get(name, {}))})" for name in plan["drafts"] if name not in names]
+        skipped = [f"{name} ({_why_not_default(plan, name)})" for name in plan["drafts"] if name not in names]
         if skipped:
             print(f"Not saved by default: {', '.join(skipped)}. Name them with --entities to save them anyway.")
     if not names:
         print("No entity to save")
         return
-    confirmed = args.yes or _confirm(f"Save {len(names)} entities ({', '.join(names)}) to pipeline {args.pipeline}?")
+    updating = updated_names(plan, names)
+    note = f" Already imported, updated: {', '.join(updating)}." if updating else ""
+    confirmed = args.yes or _confirm(f"Save {len(names)} entities ({', '.join(names)}) to pipeline {args.pipeline}?{note}")
     saved = save_drafts(token, args.pipeline, plan, names, confirmed)
     print(f"Saved {len(saved)} entities: {', '.join(saved)}")
+    if updating:
+        print(f"Updated, already imported: {', '.join(updating)}")
 
 
 def _run(args: argparse.Namespace) -> None:

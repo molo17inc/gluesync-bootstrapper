@@ -21,8 +21,10 @@
 """The GS1 configuration import of the Automator UI: convert and check, then save the drafts the operator confirms.
 
 ``POST /api/gs1/convert`` converts an uploaded GS1 configuration for a pipeline and has Core Hub describe and
-validate every draft; it saves nothing and keeps the plan under an id. ``POST /api/gs1/save`` saves the drafts
-of that plan the operator chose, and only when the request says the operator confirmed.
+validate every draft; it saves nothing and keeps the plan under an id. A draft whose entity the pipeline already
+holds is listed under ``existing``: saving it updates that entity, so the page leaves it unchecked.
+``POST /api/gs1/save`` saves the drafts of that plan the operator chose, and only when the request says the
+operator confirmed.
 """
 
 import json
@@ -146,6 +148,9 @@ def _plan_view(plan_id: str, plan: Dict[str, Any]) -> Dict[str, Any]:
         "perEntity": report["perEntity"],
         "strippedKeys": report["strippedKeys"],
         "drafts": list(plan["drafts"]),
+        # the drafts the pipeline already holds: saving one updates that entity, so the page never preselects it
+        "existing": list(plan.get("existing") or {}),
+        "existingError": plan.get("existingError"),
         "checks": {name: _check_view(check) for name, check in plan["checks"].items()},
         "summary": gs1_import.summarize(plan),
     }
@@ -214,7 +219,10 @@ async def _save(request: Gs1SaveRequest) -> Dict[str, Any]:
     except RuntimeError as exc:
         logger.warning("GS1 import: saving failed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    return {"saved": saved, "message": f"Saved {len(saved)} entities to pipeline {plan['pipelineId']}"}
+    updated = gs1_import.updated_names(plan, saved)
+    note = f" (already imported, updated: {', '.join(updated)})" if updated else ""
+    return {"saved": saved, "updated": updated,
+            "message": f"Saved {len(saved)} entities to pipeline {plan['pipelineId']}{note}"}
 
 
 def register_gs1_routes(app: FastAPI) -> None:

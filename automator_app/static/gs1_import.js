@@ -13,6 +13,7 @@ export function issueText(issue) {
 /** The rows of the report table: one per GS1 entity, a draft only for a converted one. */
 export function reportRows(plan) {
   const drafts = new Set(plan.drafts || []);
+  const existing = new Set(plan.existing || []);
   const structureChecked = plan.structureChecked !== false;
   return (plan.perEntity || []).map((entry) => {
     const check = plan.checks?.[entry.gs1Name] || {};
@@ -21,6 +22,8 @@ export function reportRows(plan) {
       name: entry.gs1Name,
       bucket: entry.bucket,
       hasDraft: drafts.has(entry.gs1Name),
+      // the pipeline already holds this entity: saving the draft updates it
+      existing: existing.has(entry.gs1Name),
       structureChecked,
       issues: entry.issues || [],
       checkError: check.error || null,
@@ -36,17 +39,26 @@ export function reportRows(plan) {
 
 /**
  * The drafts preselected for saving: converted, checked by Core Hub and found valid. A draft Core Hub refused, could
- * not reach (valid is null) or did not validate stays unchecked. Without the check (convert only) there is no verdict
+ * not reach (valid is null) or did not validate stays unchecked, and so does one the pipeline already holds (saving it
+ * overwrites that entity: the operator ticks it on purpose). Without the check (convert only) there is no verdict
  * to wait for and every draft is preselected, as the report says.
  */
 export function defaultSelection(rows) {
   return rows
-    .filter((row) => row.hasDraft && (row.structureChecked ? row.valid === true && !row.checkError : true))
+    .filter((row) => row.hasDraft && !row.existing
+      && (row.structureChecked ? row.valid === true && !row.checkError : true))
     .map((row) => row.name);
 }
 
-export function confirmationText(names, pipelineLabel) {
-  return `Save ${names.length} entities (${names.join(', ')}) to pipeline ${pipelineLabel}? Core Hub stores them now.`;
+export function confirmationText(names, pipelineLabel, updating = []) {
+  const overwrite = updating.length ? ` Already imported, they are updated: ${updating.join(', ')}.` : '';
+  return `Save ${names.length} entities (${names.join(', ')}) to pipeline ${pipelineLabel}? Core Hub stores them now.${overwrite}`;
+}
+
+/** The names among the chosen ones whose save updates an entity the pipeline already holds. */
+export function updatedNames(names, plan) {
+  const existing = new Set(plan.existing || []);
+  return names.filter((name) => existing.has(name));
 }
 
 function cell(text, className) {
@@ -79,7 +91,8 @@ function checksCell(row) {
     lines.push(`describe: ${row.verdict}${proposed}`);
   }
   if (row.valid !== null) lines.push(`validate: ${row.valid ? 'valid' : 'refused'}`);
-  else if (row.hasDraft && row.structureChecked) lines.push('Not preselected: Core Hub did not validate it.');
+  else if (row.hasDraft && row.structureChecked && !row.existing) lines.push('Not preselected: Core Hub did not validate it.');
+  if (row.existing) lines.push('Already imported: saving updates the entity in the pipeline. Not preselected, tick it to update.');
   lines.forEach((line) => {
     const div = document.createElement('div');
     div.textContent = line;
@@ -97,6 +110,12 @@ function renderReport(container, plan, selected) {
     const note = document.createElement('p');
     note.className = 'hint-text';
     note.textContent = 'Core Hub did not check the drafts, so every draft is preselected: structure errors show up only when you save them, and document drafts keep placeholder column types that Core Hub refuses.';
+    container.appendChild(note);
+  }
+  if (plan.existingError) {
+    const note = document.createElement('p');
+    note.className = 'hint-text';
+    note.textContent = `Core Hub could not list the pipeline's entities (${plan.existingError}): a draft already imported may be refused by the keyspace check.`;
     container.appendChild(note);
   }
   const table = document.createElement('table');
@@ -119,7 +138,13 @@ function renderReport(container, plan, selected) {
     box.type = 'checkbox';
     box.disabled = !row.hasDraft;
     box.checked = selected.has(row.name);
-    box.setAttribute('aria-label', `Save ${row.name}`);
+    box.setAttribute('aria-label', row.existing ? `Update ${row.name} (already imported)` : `Save ${row.name}`);
+    if (row.existing) {
+      // a distinct state: ticking it overwrites an entity of the pipeline
+      box.dataset.state = 'update';
+      box.title = 'Already imported: saving updates the entity in the pipeline';
+      tr.classList.add('gs1-existing');
+    }
     box.addEventListener('change', () => {
       if (box.checked) selected.add(row.name);
       else selected.delete(row.name);
@@ -217,7 +242,7 @@ export function initGs1Import({ setMessage, log, confirm = (text) => window.conf
     if (!plan) return;
     const names = (plan.drafts || []).filter((name) => selected.has(name));
     const label = pipeline.options[pipeline.selectedIndex]?.textContent || plan.pipelineId;
-    if (!names.length || !confirm(confirmationText(names, label))) {
+    if (!names.length || !confirm(confirmationText(names, label, updatedNames(names, plan)))) {
       setMessage('Nothing saved.');
       return;
     }
