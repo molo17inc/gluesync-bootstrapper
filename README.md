@@ -300,10 +300,14 @@ For numeric columns:
 
 - `Equal`: Equals
 - `NotEqual`: Not equals
-- `GreaterThan`: Greater than
-- `GreaterThanOrEqual`: Greater than or equal
-- `LessThan`: Less than
-- `LessThanOrEqual`: Less than or equal
+- `Greater`: Greater than
+- `GreaterEqual`: Greater than or equal
+- `Lower`: Less than
+- `LowerEqual`: Less than or equal
+
+Aliases also accepted (YAML ``operation`` or ``operator``): `=`, `eq`, `Equals`,
+`<` / `lt` / `LessThan` → `Lower`, `<=` / `lte` / `LessThanOrEqual` → `LowerEqual`,
+`>` / `gt` / `GreaterThan` → `Greater`, `>=` / `gte` / `GreaterThanOrEqual` → `GreaterEqual`.
 
 For boolean columns:
 
@@ -358,7 +362,7 @@ snapshotDeleteFilter:
       value: "ARCHIVED"
     - column: "PRIORITY"
       type: "number"
-      operation: "GreaterThan"
+      operation: "Greater"
       value: 5
 ```
 
