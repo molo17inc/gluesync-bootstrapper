@@ -163,6 +163,7 @@ class RestoreTests(FunctionCollectionTestCase):
             ("GET", "/"), ("PUT", "/"),
             ("GET", "/publications/job-1"), ("GET", "/publications/job-1"), ("GET", "/publications/job-1"),
             ("POST", "/install"),
+            ("GET", "/"),  # wait_until_functions_exported confirms Hub GET
         ])
         self.assertEqual(collection.puts, [{"sources": self.SOURCES}])
         self.assertEqual(sorted(result["exportedFunctions"]), ["convertDate", "trimAll"])
@@ -175,7 +176,7 @@ class RestoreTests(FunctionCollectionTestCase):
 
         result, _ = self.restore(collection)
 
-        self.assertEqual(collection.requests, [("GET", "/"), ("POST", "/install")])
+        self.assertEqual(collection.requests, [("GET", "/"), ("POST", "/install"), ("GET", "/")])
         self.assertEqual(collection.puts, [])
         self.assertFalse(result["published"])
         self.assertEqual(sorted(result["exportedFunctions"]), ["convertDate", "trimAll"])
@@ -185,7 +186,7 @@ class RestoreTests(FunctionCollectionTestCase):
 
         result, _ = self.restore(collection)
 
-        self.assertEqual(collection.requests, [("GET", "/"), ("POST", "/install")])
+        self.assertEqual(collection.requests, [("GET", "/"), ("POST", "/install"), ("GET", "/")])
         self.assertFalse(result["published"])
         self.assertEqual(sorted(result["exportedFunctions"]), ["convertDate", "trimAll"])
 
@@ -207,6 +208,7 @@ class RestoreTests(FunctionCollectionTestCase):
             ("GET", "/publications/job-1"), ("GET", "/publications/job-1"),                  # it is waited for
             ("PUT", "/"), ("GET", "/publications/job-1"), ("GET", "/publications/job-1"),    # ours
             ("POST", "/install"),
+            ("GET", "/"),  # export-ready confirm
         ])
         self.assertEqual(len(collection.puts), 2)
         self.assertTrue(result["published"])
@@ -278,6 +280,96 @@ class RestoreTests(FunctionCollectionTestCase):
 
         self.assertIsNone(result)
         self.assertEqual(collection.requests, [])
+
+    def test_install_export_lag_is_polled_until_hub_get_exports_functions(self):
+        """Hub may answer install before GET shows installedVersion / exports; restore waits."""
+        collection = FakeFunctionCollections(export_lag=2)
+
+        with mock.patch.dict(os.environ, {"FUNCTION_COLLECTION_POLL_SECONDS": "0.01",
+                                          "FUNCTION_COLLECTION_EXPORT_READY_TIMEOUT_SECONDS": "2"}):
+            result, _ = self.restore(collection)
+
+        self.assertEqual(sorted(result["exportedFunctions"]), ["convertDate", "trimAll"])
+        # Initial GET + PUT + (optional polls) + install + lag GETs + final ready GET
+        self.assertGreaterEqual(collection.requests.count(("GET", "/")), 1 + 2 + 1)
+        self.assertIn(("POST", "/install"), collection.requests)
+
+    def test_export_ready_timeout_names_missing_functions(self):
+        collection = FakeFunctionCollections(export_lag=10 ** 6)
+
+        with mock.patch.dict(os.environ, {"FUNCTION_COLLECTION_POLL_SECONDS": "0.01",
+                                          "FUNCTION_COLLECTION_EXPORT_READY_TIMEOUT_SECONDS": "0.05"}):
+            with self.assertRaises(function_collection.FunctionCollectionError) as raised:
+                self.restore(collection)
+
+        message = str(raised.exception)
+        self.assertIn("did not export", message)
+        self.assertIn("convertDate", message)
+        self.assertNotIn("public static", message)  # never log source
+
+
+class WaitUntilExportedTests(FunctionCollectionTestCase):
+    """wait_until_functions_exported polls until needed CustomFn names are exported."""
+
+    def test_returns_immediately_when_already_exported(self):
+        collection = FakeFunctionCollections.exporting("convertDate", "trimAll")
+        fetch = routed_fetch({"pipe": collection})
+
+        exported = function_collection.wait_until_functions_exported(
+            "tok", "pipe", ["convertDate"], fetch=fetch)
+
+        self.assertEqual(exported, frozenset({"convertDate", "trimAll"}))
+        self.assertEqual(collection.requests, [("GET", "/")])
+
+    def test_polls_through_export_lag_then_succeeds(self):
+        collection = FakeFunctionCollections.exporting("convertDate", export_lag=2)
+        # Force lag by re-installing so _export_lag_remaining is set
+        collection.installed = False
+        fetch = routed_fetch({"pipe": collection})
+        function_collection._install("tok", "pipe", fetch)
+
+        with mock.patch.dict(os.environ, {"FUNCTION_COLLECTION_POLL_SECONDS": "0.01",
+                                          "FUNCTION_COLLECTION_EXPORT_READY_TIMEOUT_SECONDS": "2"}):
+            exported = function_collection.wait_until_functions_exported(
+                "tok", "pipe", ["convertDate"], fetch=fetch)
+
+        self.assertEqual(exported, frozenset({"convertDate"}))
+        self.assertGreaterEqual(collection.requests.count(("GET", "/")), 3)
+
+    def test_timeout_lists_missing_names_without_source(self):
+        collection = FakeFunctionCollections.exporting("otherFn")
+        fetch = routed_fetch({"pipe": collection})
+
+        with mock.patch.dict(os.environ, {"FUNCTION_COLLECTION_POLL_SECONDS": "0.01",
+                                          "FUNCTION_COLLECTION_EXPORT_READY_TIMEOUT_SECONDS": "0.05"}):
+            with self.assertRaises(function_collection.FunctionCollectionError) as raised:
+                function_collection.wait_until_functions_exported(
+                    "tok", "pipe", ["convertDate"], fetch=fetch, require_all=True)
+
+        message = str(raised.exception)
+        self.assertIn("convertDate", message)
+        self.assertNotIn("@GsFunction", message)
+        self.assertNotIn("public static", message)
+
+    def test_require_all_false_returns_partial_after_grace_polls(self):
+        collection = FakeFunctionCollections.exporting("otherFn")
+        fetch = routed_fetch({"pipe": collection})
+
+        exported = function_collection.wait_until_functions_exported(
+            "tok", "pipe", ["convertDate"], fetch=fetch, require_all=False)
+
+        self.assertEqual(exported, frozenset({"otherFn"}))
+        self.assertGreaterEqual(collection.requests.count(("GET", "/")), 3)
+
+    def test_require_all_false_no_install_returns_no_collection_after_grace(self):
+        collection = FakeFunctionCollections()  # nothing published / installed
+        fetch = routed_fetch({"pipe": collection})
+
+        exported = function_collection.wait_until_functions_exported(
+            "tok", "pipe", ["convertDate"], fetch=fetch, require_all=False)
+
+        self.assertIs(exported, function_collection.NO_COLLECTION)
+        self.assertGreaterEqual(collection.requests.count(("GET", "/")), 3)
 
 
 # ---------------------------------------------------------------------------
@@ -585,6 +677,7 @@ class ImportOrderTests(FunctionCollectionTestCase):
         self.assertEqual(timeline(self.events), [
             "COLLECTION GET /", "COLLECTION PUT /", "COLLECTION GET /publications/job-1",
             "COLLECTION GET /publications/job-1", "COLLECTION POST /install",
+            "COLLECTION GET /",  # wait_until_functions_exported confirms Hub exports
             "RUN new-1", "UDF new-1", "COMPLETED",
         ])
         self.assertEqual(self.collections["new-1"].puts, [{"sources": [DATE_FUNCTIONS, HELPERS]}])
@@ -606,7 +699,7 @@ class ImportOrderTests(FunctionCollectionTestCase):
         self.post(self.backup(aaaa1111=[DATE_FUNCTIONS]))
 
         self.assertEqual(self.collections["new-1"].puts, [])
-        self.assertEqual(methods(self.events), [("GET", "/"), ("POST", "/install")])
+        self.assertEqual(methods(self.events), [("GET", "/"), ("POST", "/install"), ("GET", "/")])
         self.assertIn(("RUN", "new-1"), self.events)
 
     def test_a_running_publication_is_waited_for(self):
@@ -618,7 +711,9 @@ class ImportOrderTests(FunctionCollectionTestCase):
         self.assertEqual(len(self.collections["new-1"].puts), 2)
         self.assertEqual(timeline(self.events), [
             "COLLECTION GET /", "COLLECTION PUT /", "COLLECTION GET /publications/job-1", "COLLECTION PUT /",
-            "COLLECTION POST /install", "RUN new-1", "UDF new-1", "COMPLETED",
+            "COLLECTION POST /install",
+            "COLLECTION GET /",  # wait_until_functions_exported confirms Hub exports
+            "RUN new-1", "UDF new-1", "COMPLETED",
         ])
 
     def test_a_refused_collection_stops_the_restore_of_the_pipeline_and_says_why(self):
@@ -760,7 +855,8 @@ class CreateEntitiesRestoreTests(FunctionCollectionTestCase):
         self.assertEqual(timeline(hub.events), [
             "COLLECTION GET /", "COLLECTION PUT /", "COLLECTION GET /publications/job-1",
             "COLLECTION GET /publications/job-1", "COLLECTION POST /install",
-            "COLLECTION GET /",  # the pre-flight check reads the installed collection
+            "COLLECTION GET /",  # restore waits until Hub GET exports the functions
+            "COLLECTION GET /",  # entity CustomFn pre-flight reads the installed collection
             "UDF CUSTOMERS", "ENTITIES",
         ])
         self.assertEqual(hub.function_collection.puts, [{"sources": [DATE_FUNCTIONS]}])
