@@ -3036,7 +3036,12 @@ def _table_properties(run, custom_config, label, duplicate=False):
     source_custom_properties = {**run.schema.global_source_custom_properties, **table_custom_properties.get('source', {})}
     target_custom_properties = {**run.schema.global_target_custom_properties, **table_custom_properties.get('target', {})}
 
+    # Documented place is customProperties.source.partitions (export writes it there).
+    # Also accept a top-level ``partitions:`` on the table so hand-edited YAML does not
+    # silently lose logical partitions.
     partition_config = source_custom_properties.pop('partitions', None)
+    if partition_config is None:
+        partition_config = custom_config.get('partitions')
     partition_column_name, partition_max_partitions = _parse_partition_config(partition_config)
 
     # Store UDF configuration separately (will be added to entityType, not customProperties)
@@ -4640,7 +4645,10 @@ def _send_multi_table_entity(run, index, total_multi_tables, multi_entity):
         logger.debug(json.dumps(multi_entity, indent=2))
 
         _put_entities(ctx, multi_entity)
-        logger.info(f"Successfully created MultiTable entity {index+1}/{total_multi_tables}")
+        if import_options.current().dry_run:
+            logger.info(f"Dry-run: would create MultiTable entity {index+1}/{total_multi_tables}")
+        else:
+            logger.info(f"Successfully created MultiTable entity {index+1}/{total_multi_tables}")
         return True
     except Exception as e:
         error_msg = str(e)
@@ -4703,7 +4711,10 @@ def _send_entity_chunk(run, chunk, chunk_start, chunk_end, total_entities):
         logger.debug(json.dumps(chunk_data, indent=2))
 
         _put_entities(ctx, chunk_data)
-        logger.info(f"Successfully created entities {chunk_start}-{chunk_end}")
+        if import_options.current().dry_run:
+            logger.info(f"Dry-run: would create entities {chunk_start}-{chunk_end}")
+        else:
+            logger.info(f"Successfully created entities {chunk_start}-{chunk_end}")
         return len(chunk), 0
     except Exception as e:
         error_msg = str(e)
