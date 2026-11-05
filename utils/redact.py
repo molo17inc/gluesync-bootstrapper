@@ -38,10 +38,21 @@ def _holds_credential(value: Any) -> bool:
     return not (value is None or isinstance(value, bool))
 
 
+# Keys that carry the secret of a name/value pair: an API key auth ({"type": "ApiKey", "name": ..., "value": ...})
+# or a header whose name is a credential ({"name": "Authorization", "valueTemplate": "Bearer ..."}).
+_PAIR_VALUE_KEYS = ("value", "valueTemplate")
+
+
+def _is_secret_pair(value: dict) -> bool:
+    return str(value.get("type", "")).lower() == "apikey" or _is_sensitive(value.get("name", ""))
+
+
 def redact(value: Any) -> Any:
     """A copy of ``value`` (dicts and lists, at any depth) with every credential hidden."""
     if isinstance(value, dict):
-        return {key: REDACTED if _is_sensitive(key) and _holds_credential(item) else redact(item)
+        secret_pair = _is_secret_pair(value)
+        return {key: REDACTED if (_is_sensitive(key) or (secret_pair and key in _PAIR_VALUE_KEYS))
+                and _holds_credential(item) else redact(item)
                 for key, item in value.items()}
     if isinstance(value, (list, tuple)):
         return [redact(item) for item in value]

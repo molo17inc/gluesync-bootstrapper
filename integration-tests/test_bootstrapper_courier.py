@@ -33,6 +33,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 import courier_support  # noqa: E402
+from entity_mapping import read_entry  # noqa: E402
 from courier_support import (  # noqa: E402
     COLLECTIONS_PATH,
     ENDPOINTS_PATH,
@@ -457,7 +458,9 @@ class CreateEntitiesForCourierTargetTests(unittest.TestCase):
                 target_agent_tag="api-agent-shadow",
             )
 
-        self.assertEqual(result, {"successful": 1, "failed": 0, "total": 1, "errors": []})
+        # create_entities also reports skipped/partial counts: check only the keys this test is about.
+        self.assertEqual({key: result[key] for key in ("successful", "failed", "total", "errors")},
+                         {"successful": 1, "failed": 0, "total": 1, "errors": []})
         entity = captured_puts[0]["entities"][0]
         source_entity, target_entity = entity["agentEntities"]
 
@@ -481,12 +484,13 @@ class CreateEntitiesForCourierTargetTests(unittest.TestCase):
 
         # The mapping matrix is what OutboundHttpWriter.mapToTargetColumns uses to rename
         # `full_name` into the `name` binding: source column id -> discovered binding id.
-        matrix = target_entity["entityType"]["columnsMappingMatrix"]
+        # read_entry decodes both the grouped (2.3+) and the single-pair matrix shape.
+        matrix = [read_entry(m) for m in target_entity["entityType"]["columnsMappingMatrix"]]
         self.assertEqual(
-            sorted((m["sourceColumnIds"], m["targetColumnIds"]) for m in matrix),
+            sorted((source_ids, target_ids) for _, _, source_ids, target_ids in matrix),
             [([1], [3355]), ([2], [3373707]), ([3], [96619420])],
         )
-        self.assertTrue(all(m["sourceTableObjectId"] == 101 and m["targetTableObjectId"] == 777 for m in matrix))
+        self.assertTrue(all((source_table, target_table) == (101, 777) for source_table, target_table, _, _ in matrix))
         self.assertEqual(target_entity["entityType"]["tablesWithUnlockedSchema"], [])
 
         # No CREATE TABLE and no key mapping: the endpoint has its own key (the PATH binding).

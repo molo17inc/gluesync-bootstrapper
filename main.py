@@ -1245,7 +1245,7 @@ def _provision_agents(token, pipeline_id, conf_test):
         agents_to_conf.append(_provision_agent(token, pipeline_id, conf_agent))
 
     logger.info(f"Prepared {len(agents_to_conf)} agents for configuration")
-    logger.debug(f"Filtered agents: {json.dumps(agents_to_conf, indent=2)}")
+    logger.debug(f"Filtered agents: {json.dumps(redact(agents_to_conf), indent=2)}")
     return agents_to_conf
 
 

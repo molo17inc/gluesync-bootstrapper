@@ -47,6 +47,24 @@ class RedactTests(unittest.TestCase):
         self.assertEqual({"includeSecrets": True, "hasApiKey": False, "currentPassword": None},
                          redact({"includeSecrets": True, "hasApiKey": False, "currentPassword": None}))
 
+    def test_courier_auth_and_credential_headers_are_hidden(self):
+        courier = {"collections": [{
+            "name": "demo-api",
+            "auth": {"type": "ApiKey", "location": "HEADER", "name": "X-Key", "value": "sk-live-123"},
+            "endpoints": [{"headers": [
+                {"name": "Authorization", "valueTemplate": "Bearer eyJ.session.token"},
+                {"name": "Content-Type", "valueTemplate": "application/json"},
+            ]}],
+        }, {"name": "basic", "auth": {"type": "Basic", "username": "admin", "password": "hunter2-admin"}},
+           {"name": "bearer", "auth": {"type": "Bearer", "token": "eyJ.session.token"}}]}
+        hidden = redact(courier)["collections"]
+        self.assertEqual({"type": "ApiKey", "location": "HEADER", "name": "X-Key", "value": REDACTED}, hidden[0]["auth"])
+        headers = hidden[0]["endpoints"][0]["headers"]
+        self.assertEqual(REDACTED, headers[0]["valueTemplate"])
+        self.assertEqual("application/json", headers[1]["valueTemplate"])
+        self.assertEqual({"type": "Basic", "username": "admin", "password": REDACTED}, hidden[1]["auth"])
+        self.assertEqual({"type": "Bearer", "token": REDACTED}, hidden[2]["auth"])
+
     def test_the_original_is_not_changed(self):
         body = {"password": "hunter2-admin"}
         redact(body)
