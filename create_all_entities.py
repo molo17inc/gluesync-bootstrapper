@@ -547,7 +547,7 @@ def _discovery_column_for_source(columns, source_name):
 
 
 def _unmatched_mapping_column(source_name, target_name, idx, custom_config, table_name, source_schema, grouped,
-                              names=None, yaml_row=None):
+                              names=None):
     """The source column of a YAML mapping pair whose source discovery did not find.
 
     Reserved Core Hub technical fields (``_TRANSACTION_OPERATION``, …) are produced by the agent only
@@ -585,7 +585,6 @@ def _source_columns_from_mappings(columns, custom_config, relations, table_name,
     row_index = {id(row): idx for idx, row in enumerate(yaml_columns, 1)}
     for relation in relations or []:
         idx = row_index.get(id(relation["row"]), 0)
-        yaml_row = relation.get("row")
         for source_name, target_name in _relation_pairs([relation]):
             # Find the matching column from discovered columns: spelt as the YAML spells it, else
             # case-insensitively, else the reserved-tech canonical spelling (``_RRN_COLUMN`` → ``_RRN``).
@@ -595,7 +594,7 @@ def _source_columns_from_mappings(columns, custom_config, relations, table_name,
                                                 grouped, names)
             else:
                 col_def = _unmatched_mapping_column(source_name, target_name, idx, custom_config, table_name,
-                                                    source_schema, grouped, names, yaml_row=yaml_row)
+                                                    source_schema, grouped, names)
             if col_def is not None:
                 columns_def.append(col_def)
     return columns_def
@@ -5890,7 +5889,7 @@ def _fail_run(error_msg):
     """Log a failure of :func:`main` and leave the failure lockfile; raises it."""
     log_failure(logger, error_msg)
     lockfile_failure()
-    raise Exception(error_msg)
+    raise RuntimeError(error_msg)
 
 
 def _pipeline_agents(token, pipeline_id, source_type, target_type):

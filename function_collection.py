@@ -390,6 +390,103 @@ def _install(token: str, pipeline_id: str, fetch) -> Dict[str, Any]:
     return installed
 
 
+_EXPORT_READY_GRACE_POLLS = 3
+
+
+class _ExportPollState:
+    """Mutable progress of one :func:`wait_until_functions_exported` poll loop."""
+
+    __slots__ = ("incomplete_polls", "no_install_polls", "last_missing", "last_installed", "last_state")
+
+    def __init__(self) -> None:
+        self.incomplete_polls = 0
+        self.no_install_polls = 0
+        self.last_missing: Optional[frozenset] = None
+        self.last_installed: Optional[frozenset] = None
+        self.last_state = "no installed collection"
+
+
+def _export_ready_success(pipeline_id: str, needed_set: frozenset, installed: frozenset):
+    """Log and return ``installed`` when every needed name is already exported."""
+    if needed_set:
+        logger.info(
+            "Function collection of pipeline %s exports the needed function(s): %s",
+            pipeline_id, ", ".join(sorted(needed_set)),
+        )
+    return installed
+
+
+def _handle_incomplete_exports(
+    pipeline_id: str,
+    collection: Optional[Dict[str, Any]],
+    installed: frozenset,
+    missing: frozenset,
+    require_all: bool,
+    state: _ExportPollState,
+):
+    """Update poll state for an installed-but-incomplete collection; return installed or None to keep polling."""
+    state.incomplete_polls += 1
+    state.last_missing = missing
+    state.last_installed = installed
+    state.last_state = (
+        f"installed version {(collection or {}).get('installedVersion')!r} exporting "
+        f"{', '.join(sorted(installed)) or 'no function'}; still missing "
+        f"{', '.join(sorted(missing))}"
+    )
+    if state.incomplete_polls < _EXPORT_READY_GRACE_POLLS:
+        return None
+    if require_all:
+        return "break"
+    logger.warning(
+        "Function collection of pipeline %s is installed but still missing %s after %d polls; "
+        "entity CustomFn checks will refuse unbound columns",
+        pipeline_id, ", ".join(sorted(missing)), state.incomplete_polls,
+    )
+    return installed
+
+
+def _handle_missing_install(pipeline_id: str, needed_set: frozenset, require_all: bool, state: _ExportPollState):
+    """Update poll state when Hub shows no installed collection; return NO_COLLECTION or None / break."""
+    state.incomplete_polls = 0
+    state.no_install_polls += 1
+    state.last_missing = needed_set or None
+    state.last_installed = None
+    state.last_state = "no installed collection yet"
+    if not require_all and state.no_install_polls >= _EXPORT_READY_GRACE_POLLS:
+        logger.warning(
+            "Function collection of pipeline %s has no installed version after %d polls; "
+            "entity CustomFn checks treat it as no collection",
+            pipeline_id, state.no_install_polls,
+        )
+        return NO_COLLECTION
+    return None
+
+
+def _raise_export_ready_timeout(pipeline_id: str, state: _ExportPollState) -> None:
+    """Raise :class:`FunctionCollectionError` after the export-ready deadline expires."""
+    if state.last_missing:
+        raise FunctionCollectionError(
+            f"The function collection of pipeline {pipeline_id} did not export "
+            f"{', '.join(sorted(state.last_missing))} in time ({state.last_state}). Wait for Hub to finish installing, "
+            f"or raise FUNCTION_COLLECTION_EXPORT_READY_TIMEOUT_SECONDS; refuse creating entities that bind "
+            f"CustomFn until the functions are exported"
+        )
+    raise FunctionCollectionError(
+        f"The function collection of pipeline {pipeline_id} was not installed in time ({state.last_state}). "
+        f"Raise FUNCTION_COLLECTION_EXPORT_READY_TIMEOUT_SECONDS, or publish and install the collection before "
+        f"creating entities that bind CustomFn"
+    )
+
+
+def _finish_export_wait(pipeline_id: str, require_all: bool, state: _ExportPollState):
+    """Return the soft pre-flight result, or raise when ``require_all`` still needs every export."""
+    if not require_all:
+        if state.last_installed is not None:
+            return state.last_installed
+        return NO_COLLECTION
+    _raise_export_ready_timeout(pipeline_id, state)
+
+
 def wait_until_functions_exported(token: str, pipeline_id: str, needed: Iterable[str],
                                    fetch=None, *, require_all: bool = True):
     """Poll ``GET`` until the *installed* collection exports every name in ``needed``.
@@ -415,76 +512,32 @@ def wait_until_functions_exported(token: str, pipeline_id: str, needed: Iterable
         "FUNCTION_COLLECTION_EXPORT_READY_TIMEOUT_SECONDS", _DEFAULT_EXPORT_READY_TIMEOUT_SECONDS)
     # Brief grace once Hub already shows installedVersion but not every needed name (export list lag),
     # and (require_all=False only) when Hub never shows installedVersion (pre-flight after restore).
-    _INCOMPLETE_GRACE_POLLS = 3
-    incomplete_polls = 0
-    no_install_polls = 0
-    last_missing: Optional[frozenset] = None
-    last_installed: Optional[frozenset] = None
-    last_state = "no installed collection"
+    state = _ExportPollState()
     while True:
         collection = fetch_function_collection(token, pipeline_id, fetch=fetch)
         installed = installed_function_names(collection)
         if installed is not NO_COLLECTION:
-            no_install_polls = 0
+            state.no_install_polls = 0
             missing = needed_set - installed
             if not missing:
-                if needed_set:
-                    logger.info(
-                        "Function collection of pipeline %s exports the needed function(s): %s",
-                        pipeline_id, ", ".join(sorted(needed_set)),
-                    )
-                return installed
-            incomplete_polls += 1
-            last_missing = missing
-            last_installed = installed
-            last_state = (
-                f"installed version {(collection or {}).get('installedVersion')!r} exporting "
-                f"{', '.join(sorted(installed)) or 'no function'}; still missing "
-                f"{', '.join(sorted(missing))}"
+                return _export_ready_success(pipeline_id, needed_set, installed)
+            outcome = _handle_incomplete_exports(
+                pipeline_id, collection, installed, missing, require_all, state,
             )
-            if incomplete_polls >= _INCOMPLETE_GRACE_POLLS:
-                if require_all:
-                    break
-                logger.warning(
-                    "Function collection of pipeline %s is installed but still missing %s after %d polls; "
-                    "entity CustomFn checks will refuse unbound columns",
-                    pipeline_id, ", ".join(sorted(missing)), incomplete_polls,
-                )
-                return installed
+            if outcome == "break":
+                break
+            if outcome is not None:
+                return outcome
         else:
-            incomplete_polls = 0
-            no_install_polls += 1
-            last_missing = needed_set or None
-            last_installed = None
-            last_state = "no installed collection yet"
-            if not require_all and no_install_polls >= _INCOMPLETE_GRACE_POLLS:
-                logger.warning(
-                    "Function collection of pipeline %s has no installed version after %d polls; "
-                    "entity CustomFn checks treat it as no collection",
-                    pipeline_id, no_install_polls,
-                )
-                return NO_COLLECTION
+            outcome = _handle_missing_install(pipeline_id, needed_set, require_all, state)
+            if outcome is not None:
+                return outcome
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             break
         time.sleep(min(_env_seconds("FUNCTION_COLLECTION_POLL_SECONDS", _DEFAULT_POLL_SECONDS), remaining))
 
-    if not require_all and last_installed is not None:
-        return last_installed
-    if not require_all and last_installed is None:
-        return NO_COLLECTION
-    if last_missing:
-        raise FunctionCollectionError(
-            f"The function collection of pipeline {pipeline_id} did not export "
-            f"{', '.join(sorted(last_missing))} in time ({last_state}). Wait for Hub to finish installing, "
-            f"or raise FUNCTION_COLLECTION_EXPORT_READY_TIMEOUT_SECONDS; refuse creating entities that bind "
-            f"CustomFn until the functions are exported"
-        )
-    raise FunctionCollectionError(
-        f"The function collection of pipeline {pipeline_id} was not installed in time ({last_state}). "
-        f"Raise FUNCTION_COLLECTION_EXPORT_READY_TIMEOUT_SECONDS, or publish and install the collection before "
-        f"creating entities that bind CustomFn"
-    )
+    return _finish_export_wait(pipeline_id, require_all, state)
 
 
 def restore_function_collection(token: str, pipeline_id: str, sources: List[Dict[str, str]],

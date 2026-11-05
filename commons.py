@@ -168,6 +168,39 @@ logger = get_logger()
 
 _ORACLE_AGENT_TAGS: Optional[set[str]] = None
 
+# Agents that ship inside CoreHub and may be missing from agents.json (which CI regenerates from the
+# backoffice catalog). Their category is what agents.json would carry in `type`, so the SQL/NoSQL
+# inference of the bootstrapper, the export and the Automator does not fall back to "SQL" for them.
+# The HTTP agent is object-store-like on both sides: as HTTP Target (Courier outbound) no CREATE TABLE
+# and NoSqlEntity targets, as HTTP Source (Courier inbound) NoSqlEntity sources.
+EMBEDDED_AGENT_CATEGORIES: dict[str, str] = {
+    "api-agent-shadow": "Object Store",
+}
+
+
+def embedded_agent_categories(normalize=None) -> dict[str, str]:
+    """``EMBEDDED_AGENT_CATEGORIES`` with each category passed through ``normalize`` (identity by default)."""
+    if normalize is None:
+        return dict(EMBEDDED_AGENT_CATEGORIES)
+    return {tag: normalize(category) for tag, category in EMBEDDED_AGENT_CATEGORIES.items()}
+
+
+def sql_or_nosql(category: str) -> str:
+    """Agent category (RDBMS, NoSQL, ...) collapsed to the SQL/NoSQL schema type."""
+    return "SQL" if category.strip().upper() == "RDBMS" else "NoSQL"
+
+
+def agent_types_by_tag(items: list) -> dict[str, str]:
+    """SQL/NoSQL type of each agents.json ``data`` entry, keyed by lower-cased ``internalName``."""
+    types: dict[str, str] = {}
+    for entry in items:
+        if not isinstance(entry, dict) or not entry.get("internalName") or not entry.get("type"):
+            continue
+        label = str(entry["type"]).strip()
+        if label:
+            types[str(entry["internalName"]).lower()] = sql_or_nosql(label)
+    return types
+
 
 def get_oracle_agent_tags() -> set[str]:
     """Return a cached set of agent tags that map to Oracle from agents.json."""
