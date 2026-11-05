@@ -46,6 +46,7 @@ from technical_fields import (
 )
 import multi_member
 import create_user_defined_functions as udf_module
+from courier_support import COURIER_AGENT_TAG
 import import_options
 import import_plan
 from pathlib import Path
@@ -274,6 +275,9 @@ def _relation_pairs(relations):
 # Agent tags whose key flags are no primary key: the key rules read no physical key there, as CoreHub does
 # (gluesync-kotlin CheckEntitiesPhysicalKeysSymmetryComponentSetup isPhysicalKeyHonoured).
 _NO_PHYSICAL_KEY_AGENT_TAGS = frozenset({"cassandra", "scylladb"})
+# NoSQL targets whose columns are declared rather than inferred from the documents they hold: the bindings of the
+# HTTP agent carry the type their Courier endpoint was defined with, so discovery keeps them (see _InferredColumn).
+_DECLARED_COLUMNS_NOSQL_AGENT_TAGS = frozenset({COURIER_AGENT_TAG})
 
 
 def _name_relations(relations, columns_def, table_name, target_names=None):
@@ -907,6 +911,11 @@ def _map_target_type(ctx, data_type, target_table_column_types):
                          target_table_column_types=target_table_column_types)
 
 
+def _infers_columns(tag):
+    """Whether the NoSQL target tagged ``tag`` infers its columns from its documents (see _DECLARED_COLUMNS_NOSQL_AGENT_TAGS)."""
+    return str(tag or "").strip().lower() not in _DECLARED_COLUMNS_NOSQL_AGENT_TAGS
+
+
 def _is_physical_key_honoured(tag):
     """Whether the key flags of the agent tagged ``tag`` are a primary key (see _NO_PHYSICAL_KEY_AGENT_TAGS)."""
     return str(tag or "").strip().lower() not in _NO_PHYSICAL_KEY_AGENT_TAGS
@@ -970,7 +979,7 @@ class _TargetBuild:
             folded.setdefault(name.lower(), []).append(name)
         self.known_target_names = [*self.exact, *(n for names in folded.values() if len(names) > 1 for n in names)]
         self.base_target_names = ColumnNames(self.known_target_names)
-        if ctx.target_is_nosql:
+        if ctx.target_is_nosql and _infers_columns(ctx.target_agent_tag):
             self.exact = {name: _InferredColumn(id=c.get('id'), name=name) for name, c in self.exact.items()}
             discovered = None  # inferred types are no types a source type should be kept as
         # Set of dataTypes already present in the target table, for the type-mapping fallback
