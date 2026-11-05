@@ -39,8 +39,13 @@ from field_function_utils import build_field_functions_for_entity_type, normaliz
     produced_target_names
 from entity_mapping import ColumnNames, EntityMappingError, build_entries, derive_keys, drop_forbidden_key_links, \
     encode_entries, find_by_name, group_relations, grouped_only_forms, is_column_mappings, read_entry, yaml_relations
+from technical_fields import (
+    canonical_technical_field_name,
+    is_reserved_technical_field,
+    missing_technical_field_message,
+)
+import multi_member
 import create_user_defined_functions as udf_module
-from courier_support import COURIER_AGENT_TAG
 import import_options
 import import_plan
 from pathlib import Path
@@ -269,9 +274,6 @@ def _relation_pairs(relations):
 # Agent tags whose key flags are no primary key: the key rules read no physical key there, as CoreHub does
 # (gluesync-kotlin CheckEntitiesPhysicalKeysSymmetryComponentSetup isPhysicalKeyHonoured).
 _NO_PHYSICAL_KEY_AGENT_TAGS = frozenset({"cassandra", "scylladb"})
-# NoSQL targets whose columns are declared rather than inferred from the documents they hold: the bindings of the
-# HTTP agent carry the type their Courier endpoint was defined with, so discovery keeps them (see _InferredColumn).
-_DECLARED_COLUMNS_NOSQL_AGENT_TAGS = frozenset({COURIER_AGENT_TAG})
 
 
 def _name_relations(relations, columns_def, table_name, target_names=None):
@@ -533,9 +535,29 @@ def _mapped_source_column(matched_col, target_name, columns_def, custom_config, 
                               _source_is_pk(matched_col, matched_col["name"], custom_config, names))
 
 
+def _discovery_column_for_source(columns, source_name):
+    """The discovered column ``source_name`` names, including reserved-tech doc aliases (``_RRN_COLUMN`` → ``_RRN``)."""
+    matched = find_by_name(columns.get("columns") or [], source_name)
+    if matched is not None:
+        return matched
+    canonical = canonical_technical_field_name(source_name)
+    if canonical and canonical != source_name:
+        return find_by_name(columns.get("columns") or [], canonical)
+    return None
+
+
 def _unmatched_mapping_column(source_name, target_name, idx, custom_config, table_name, source_schema, grouped,
-                              names=None):
-    """The source column of a YAML mapping pair whose source discovery did not find (refused on 2.3)."""
+                              names=None, yaml_row=None):
+    """The source column of a YAML mapping pair whose source discovery did not find.
+
+    Reserved Core Hub technical fields (``_TRANSACTION_OPERATION``, …) are produced by the agent only
+    when listed in ``specificConfiguration.technicalFields``; discovery then returns them. When YAML
+    maps one that discovery omitted, refuse with a clear enable-technicalFields error rather than
+    synthesising a column the agent will not produce. Any other missing source is refused on
+    Gluesync 2.3; older CoreHubs keep the YAML-metadata fallback for non-reserved names.
+    """
+    if is_reserved_technical_field(source_name):
+        raise EntityMappingError(missing_technical_field_message(table_name, source_name))
     if grouped:
         raise EntityMappingError(
             f"Table {table_name}: column {source_name} of the YAML columns is not a column of the source "
@@ -563,15 +585,17 @@ def _source_columns_from_mappings(columns, custom_config, relations, table_name,
     row_index = {id(row): idx for idx, row in enumerate(yaml_columns, 1)}
     for relation in relations or []:
         idx = row_index.get(id(relation["row"]), 0)
+        yaml_row = relation.get("row")
         for source_name, target_name in _relation_pairs([relation]):
-            # Find the matching column from discovered columns: spelt as the YAML spells it, else case-insensitively
-            matched_col = find_by_name(columns["columns"], source_name)
+            # Find the matching column from discovered columns: spelt as the YAML spells it, else
+            # case-insensitively, else the reserved-tech canonical spelling (``_RRN_COLUMN`` → ``_RRN``).
+            matched_col = _discovery_column_for_source(columns, source_name)
             if matched_col:
                 col_def = _mapped_source_column(matched_col, target_name, columns_def, custom_config, table_name,
                                                 grouped, names)
             else:
                 col_def = _unmatched_mapping_column(source_name, target_name, idx, custom_config, table_name,
-                                                    source_schema, grouped, names)
+                                                    source_schema, grouped, names, yaml_row=yaml_row)
             if col_def is not None:
                 columns_def.append(col_def)
     return columns_def
@@ -589,9 +613,11 @@ def _source_columns_from_whitelist(columns, custom_config, relations, table_name
     for yaml_col in yaml_columns:
         # sourceName is the source column name; name is the target column name
         source_col_name = yaml_col.get('sourceName') or yaml_col.get('name')
-        # Find the matching column from discovered columns
-        col = find_by_name(columns["columns"], source_col_name)
+        # Find the matching column from discovered columns (incl. reserved-tech aliases).
+        col = _discovery_column_for_source(columns, source_col_name)
         if col is None:
+            if is_reserved_technical_field(source_col_name):
+                raise EntityMappingError(missing_technical_field_message(table_name, source_col_name))
             logger.warning(f"Column '{source_col_name}' from YAML whitelist not found in discovered columns for table {table_name}")
             unmatched_rows.add(id(yaml_col))
             continue
@@ -601,6 +627,11 @@ def _source_columns_from_whitelist(columns, custom_config, relations, table_name
         # the TARGET column and must never bleed into the source payload.
         # Discovered columns expose their native type under `dataType`.
         # On 2.3 the key rules compare names case-sensitively: the spelling discovery reports (BOP-15).
+        # A source listed by several whitelist rows is one column on 2.3 (1:N fan-out onto distinct
+        # targets), as for mapping rows (:func:`_mapped_source_column`); Hub refuses duplicated
+        # source column names otherwise ("Duplicated entity column names").
+        if grouped and any(c.get("name") == col["name"] for c in columns_def):
+            continue
         columns_def.append(_source_column_def(
             col, col_id, col["name"] if grouped else source_col_name, yaml_col.get('name'),
             _source_is_pk(col, source_col_name, custom_config, names), nullable_default=True,
@@ -767,8 +798,11 @@ def _assemble_source_columns(columns, custom_config, table_name, source_schema, 
     backups and ``relations`` are the YAML relations (:func:`entity_mapping.yaml_relations`, None without a mapping).
 
     ``grouped`` (a Gluesync 2.3 CoreHub): a source listed by several rows is one column, and a YAML source that
-    discovery does not find is refused, since 2.3 refuses an id that is no column of the entity (BS-5). Otherwise a
-    form only 2.3 can store is refused, unless ``check_forms`` is false. Refusals raise
+    discovery does not find is refused, since 2.3 refuses an id that is no column of the entity (BS-5). Reserved
+    Core Hub technical fields (``_TRANSACTION_OPERATION``, …) appear in discovery only when listed in the source
+    agent's ``technicalFields``; when YAML maps one that discovery omitted, refuse with a clear
+    enable-technicalFields error (do not synthesise — the agent will not produce it). Otherwise a form only 2.3
+    can store is refused, unless ``check_forms`` is false. Refusals raise
     :class:`entity_mapping.EntityMappingError`.
     """
     relations = yaml_relations(custom_config.get('columns'), label=table_name)
@@ -823,6 +857,9 @@ def _assemble_source_columns(columns, custom_config, table_name, source_schema, 
     char_set_overrides = _build_char_set_overrides((custom_config or {}).get('columns', []), names)
     _apply_char_set_overrides(columns_def, char_set_overrides, table_name, names)
 
+    if grouped:
+        _refuse_duplicated_entity_column_names(columns_def, table_name, "source")
+
     return columns_def, keys, has_column_mappings, is_column_whitelist, _discovery_type_by_source, relations
 
 
@@ -869,11 +906,6 @@ def _map_target_type(ctx, data_type, target_table_column_types):
     """The target native type of the source native type ``data_type`` (:func:`commons.map_data_type`)."""
     return map_data_type(data_type, ctx.source_node_info, ctx.target_node_info,
                          target_table_column_types=target_table_column_types)
-
-
-def _infers_columns(tag):
-    """Whether the NoSQL target tagged ``tag`` infers its columns from its documents (see _DECLARED_COLUMNS_NOSQL_AGENT_TAGS)."""
-    return str(tag or "").strip().lower() not in _DECLARED_COLUMNS_NOSQL_AGENT_TAGS
 
 
 def _is_physical_key_honoured(tag):
@@ -939,7 +971,7 @@ class _TargetBuild:
             folded.setdefault(name.lower(), []).append(name)
         self.known_target_names = [*self.exact, *(n for names in folded.values() if len(names) > 1 for n in names)]
         self.base_target_names = ColumnNames(self.known_target_names)
-        if ctx.target_is_nosql and _infers_columns(ctx.target_agent_tag):
+        if ctx.target_is_nosql:
             self.exact = {name: _InferredColumn(id=c.get('id'), name=name) for name, c in self.exact.items()}
             discovered = None  # inferred types are no types a source type should be kept as
         # Set of dataTypes already present in the target table, for the type-mapping fallback
@@ -1367,6 +1399,12 @@ def _append_whitelist_target_column(tb, col, yaml_col, grouped):
     discovered_target_col = tb.seen(tb.target_col(target_col_name))
     if grouped:
         target_col_name = _discovered_spelling(discovered_target_col, target_col_name)  # BOP-15, as for mapping rows
+    if tb.has_target_column(target_col_name):
+        raise EntityMappingError(
+            f"Table {tb.pair.table_name}: target column {target_col_name} is listed more than once in the YAML "
+            f"whitelist; CoreHub would refuse the entity with duplicated column names. Give each target a "
+            f"distinct name (Customize auto-rename covers colliding *tables*, not columns)"
+        )
     target_col_id = tb.target_column_id(target_col_name, _preferred_target_id(discovered_target_col, source_col_id))
     resolved_target_type = _whitelist_target_type(tb, col, yaml_col, discovered_target_col)
     # Target columns are serialised with `dataType` (not `type`) in the
@@ -1384,9 +1422,11 @@ def _target_columns_from_whitelist(tb, grouped):
     source_columns = tb.pair.columns["columns"]
     for yaml_col in yaml_columns:
         source_col_name = yaml_col.get('sourceName') or yaml_col.get('name')
-        # Find the matching column from discovered source columns
-        col = find_by_name(source_columns, source_col_name)
+        # Find the matching column from discovered source columns (incl. reserved-tech aliases).
+        col = _discovery_column_for_source(tb.pair.columns, source_col_name)
         if col is None:
+            if is_reserved_technical_field(source_col_name):
+                raise EntityMappingError(missing_technical_field_message(tb.pair.table_name, source_col_name))
             if source_columns:
                 tb.last_column = source_columns[-1]
             logger.warning(f"Column '{source_col_name}' from YAML whitelist not found in discovered columns for table {tb.pair.table_name}")
@@ -1965,6 +2005,23 @@ def _mapping_entries(tb, columns_def, name_relations, has_filter, grouped):
                          grouped=False, unlocked=pair.is_unlocked_schema, label=pair.table_name)
 
 
+def _refuse_duplicated_entity_column_names(columns_def, table_name, side):
+    """Refuse an entity payload whose ``side`` columns repeat a name (Hub: "Duplicated entity column names").
+
+    Detected before Apply/PUT so a partial Hub refusal is avoided. ``side`` is ``"source"`` or ``"target"``.
+    """
+    names = [c.get("name") for c in columns_def or [] if isinstance(c, dict) and c.get("name")]
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+    if not duplicates:
+        return
+    raise EntityMappingError(
+        f"Table {table_name}: {side} column name(s) {', '.join(duplicates)} are duplicated in the entity "
+        f"payload; CoreHub would refuse it with 'Duplicated entity column names'. For a 1:N source fan-out "
+        f"keep one source column onto several distinct targets; Customize auto-rename covers colliding "
+        f"tables only, not columns"
+    )
+
+
 def _refuse_unbound_custom_functions(tb, field_functions):
     """Refuse a table whose ``CustomFn`` columns name a function the installed function collection does not export.
 
@@ -2046,6 +2103,8 @@ def _assemble_target_side(ctx, pair, columns_def, has_filter, discovery_type_by_
     _add_produced_columns(tb, relations, grouped)
     _add_target_only_columns(tb)
     _fill_missing_target_types(tb, columns_def)
+    if grouped:
+        _refuse_duplicated_entity_column_names(tb.columns_def, pair.table_name, "target")
 
     print(f"Columns definition for {pair.table_name}: {columns_def}")
 
@@ -2493,34 +2552,22 @@ def _apply_logical_partitions(token, pipeline_id, partition_requests, skip_error
 
 
 def _build_partition_settings(column_name, table_columns, schema_name, table_name, table_id):
-    """Create PartitionSettings payload for the specified column.
-
-    When the partition column is missing from discovery (or no columns were
-    discovered), warn and return ``None`` so the entity is still created without
-    partitions — matching pre-I7 behaviour for schema-wide partition settings
-    that do not fit every table.
-    """
+    """Create PartitionSettings payload for the specified column."""
 
     if not column_name:
+        return None
+
+    if not table_columns:
+        logger.warning(f"Partition column '{column_name}' requested for {schema_name}.{table_name} but no columns were discovered")
         return None
 
     normalized_column = str(column_name).strip()
     if not normalized_column:
         return None
 
-    if not table_columns:
-        logger.warning(
-            f"Partition column '{normalized_column}' requested for {schema_name}.{table_name} "
-            f"but no columns were discovered; creating the entity without partitions"
-        )
-        return None
-
     matched_column = find_by_name(table_columns, normalized_column)
     if not matched_column:
-        logger.warning(
-            f"Partition column '{normalized_column}' not found in discovery for "
-            f"{schema_name}.{table_name}. Skipping partitionSettings."
-        )
+        logger.warning(f"Partition column '{normalized_column}' not found in discovery for {schema_name}.{table_name}. Skipping partitionSettings.")
         return None
 
     # Use the id field from CoreHub API as the column ID
@@ -2990,12 +3037,7 @@ def _table_properties(run, custom_config, label, duplicate=False):
     source_custom_properties = {**run.schema.global_source_custom_properties, **table_custom_properties.get('source', {})}
     target_custom_properties = {**run.schema.global_target_custom_properties, **table_custom_properties.get('target', {})}
 
-    # Documented place is customProperties.source.partitions (export writes it there).
-    # Also accept a top-level ``partitions:`` on the table so hand-edited YAML does not
-    # silently lose logical partitions.
     partition_config = source_custom_properties.pop('partitions', None)
-    if partition_config is None:
-        partition_config = custom_config.get('partitions')
     partition_column_name, partition_max_partitions = _parse_partition_config(partition_config)
 
     # Store UDF configuration separately (will be added to entityType, not customProperties)
@@ -4599,10 +4641,7 @@ def _send_multi_table_entity(run, index, total_multi_tables, multi_entity):
         logger.debug(json.dumps(multi_entity, indent=2))
 
         _put_entities(ctx, multi_entity)
-        if import_options.current().dry_run:
-            logger.info(f"Dry-run: would create MultiTable entity {index+1}/{total_multi_tables}")
-        else:
-            logger.info(f"Successfully created MultiTable entity {index+1}/{total_multi_tables}")
+        logger.info(f"Successfully created MultiTable entity {index+1}/{total_multi_tables}")
         return True
     except Exception as e:
         error_msg = str(e)
@@ -4665,10 +4704,7 @@ def _send_entity_chunk(run, chunk, chunk_start, chunk_end, total_entities):
         logger.debug(json.dumps(chunk_data, indent=2))
 
         _put_entities(ctx, chunk_data)
-        if import_options.current().dry_run:
-            logger.info(f"Dry-run: would create entities {chunk_start}-{chunk_end}")
-        else:
-            logger.info(f"Successfully created entities {chunk_start}-{chunk_end}")
+        logger.info(f"Successfully created entities {chunk_start}-{chunk_end}")
         return len(chunk), 0
     except Exception as e:
         error_msg = str(e)
@@ -5051,17 +5087,27 @@ def _exported_custom_functions(token, pipeline_id, yaml_config, grouped):
     """The names the pipeline's installed function collection exports, when the YAML has a ``CustomFn`` bound to one.
 
     A CoreHub before Gluesync 2.3 has no function collections and no ``CustomFn``, and a YAML without one has nothing
-    to check: None. A pipeline with no collection installed gives ``function_collection.NO_COLLECTION``. When the
-    collection cannot be read the check is left to CoreHub, which refuses the entity itself.
+    to check: None. Polls Hub briefly (``require_all=False``) so a lagging install after restore is visible; restore
+    itself already waited for exports. A pipeline with no collection installed after that grace gives
+    ``function_collection.NO_COLLECTION``. When the collection cannot be read the check is left to CoreHub, which
+    refuses the entity itself.
     """
-    if not grouped or not function_collection.custom_function_names(yaml_config):
+    needed = function_collection.custom_function_names(yaml_config)
+    if not grouped or not needed:
         return None
     try:
-        return function_collection.installed_function_names(
-            function_collection.fetch_function_collection(token, pipeline_id, fetch=fetch_core_hub))
+        return function_collection.wait_until_functions_exported(
+            token, pipeline_id, needed, fetch=fetch_core_hub, require_all=False)
     except function_collection.FunctionCollectionError as error:
-        logger.warning(f"{error}; the functions the YAML binds are not checked before saving the entities")
-        return None
+        # Timeout / read failure: surface as unbound at entity attach when we still have a partial view,
+        # else leave the check to CoreHub. Prefer a one-shot GET so NO_COLLECTION still warns.
+        logger.warning(f"{error}; retrying a single read of the installed collection before entity CustomFn checks")
+        try:
+            return function_collection.installed_function_names(
+                function_collection.fetch_function_collection(token, pipeline_id, fetch=fetch_core_hub))
+        except function_collection.FunctionCollectionError as read_error:
+            logger.warning(f"{read_error}; the functions the YAML binds are not checked before saving the entities")
+            return None
 
 
 def _start_entity_run(token, pipeline_id, yaml_config, source_schema, target_schema, source_agent_id, target_agent_id,
@@ -5215,6 +5261,9 @@ def create_entities(token, pipeline_id, source_schema, target_schema, tables, so
     if validation_failure is not None:
         return validation_failure
 
+    # IBM i multi-member (``@@``) without enableMultiMember: refuse those keys before any write.
+    _refuse_multi_member_without_flag(run, options)
+
     # Fan-in: target tables several YAML tables feed (union of columns, type conflicts, columns an existing
     # target table lacks). Warnings only: nothing is ALTERed.
     run.yaml_config = yaml_config
@@ -5352,6 +5401,56 @@ def _fan_in_warnings(run, yaml_config, source_schema):
         return []
 
 
+
+def _multi_member_preflight_message(run):
+    """Refuse message when ibm-iseries YAML uses ``@@`` without enableMultiMember; else None.
+
+    Loads the source agent's specificConfiguration via get_pipeline_agents when needed.
+    Non-IBM ``@@`` duplicate-entity keys are ignored. Member-key existence is not checked
+    until Portal names the exact config fields.
+    """
+    keys = multi_member.yaml_multi_member_keys(run.schema.custom_tables, run.schema.whitelist)
+    if not keys:
+        return None
+    tag = run.ctx.source_agent_tag
+    specific = None
+    agents = None
+    # Always load pipeline agents when tag is ibm-iseries or unknown (so bulk paths that
+    # omit the tag still catch IBM i). Skip the Hub round-trip when tag is a known non-IBM.
+    if tag is None or multi_member.is_ibm_iseries_agent(tag):
+        try:
+            agents = get_pipeline_agents(run.ctx.token, run.ctx.pipeline_id)
+        except Exception as error:  # pylint: disable=broad-except
+            logger.debug("enableMultiMember preflight: could not load pipeline agents: %s", error)
+            agents = None
+    return multi_member.multi_member_preflight_message(
+        custom_tables=run.schema.custom_tables,
+        whitelist=run.schema.whitelist,
+        source_agent_tag=tag,
+        specific_configuration=specific,
+        agents=agents,
+        source_agent_id=run.source_agent_id,
+    )
+
+
+def _refuse_multi_member_without_flag(run, options):
+    """Always-on fail-early for ibm-iseries ``@@`` keys when enableMultiMember is off.
+
+    Records the Preview/validation note, refuses each ``@@`` YAML key, and marks those keys
+    processed so the duplicate loop does not try them. Returns the refuse message or None.
+    """
+    message = _multi_member_preflight_message(run)
+    if not message:
+        return None
+    logger.error(message)
+    if message not in options.report.validation_issues:
+        options.report.validation_issues.append(message)
+    for key in multi_member.yaml_multi_member_keys(run.schema.custom_tables, run.schema.whitelist):
+        run.refuse_table(key, message)
+        run.processed_yaml_keys.add(key)
+    return message
+
+
 def _validate_against_discovery(run, tables):
     """The schemas, tables and columns the YAML of this schema names that discovery lacks, with suggestions.
 
@@ -5380,6 +5479,9 @@ def _validate_against_discovery(run, tables):
                           f"{import_options.suggest(source, list(discovered))}")
     if not CREATE_TABLE_IF_NOT_EXISTS and run.target_tables_lookup:
         issues.extend(_missing_target_table_issues(run, yaml_tables))
+    mm_issue = _multi_member_preflight_message(run)
+    if mm_issue and mm_issue not in issues:
+        issues.append(mm_issue)
     return issues
 
 
@@ -5408,8 +5510,21 @@ def _source_column_issues(run, source, config):
         return []
     discovered_columns = [c.get('name') for c in (columns or {}).get('columns') or [] if isinstance(c, dict)]
     names = ColumnNames(discovered_columns)
-    return [f"source column {label}.{name} not found in discovery{import_options.suggest(name, discovered_columns)}"
-            for name in wanted if names.resolve(name) is None]
+    issues = []
+    for name in wanted:
+        if names.resolve(name) is not None:
+            continue
+        canonical = canonical_technical_field_name(name)
+        if canonical and names.resolve(canonical) is not None:
+            continue
+        if is_reserved_technical_field(name):
+            issues.append(missing_technical_field_message(label, name))
+        else:
+            issues.append(
+                f"source column {label}.{name} not found in discovery"
+                f"{import_options.suggest(name, discovered_columns)}"
+            )
+    return issues
 
 
 def _missing_target_table_issues(run, yaml_tables):
@@ -5775,7 +5890,7 @@ def _fail_run(error_msg):
     """Log a failure of :func:`main` and leave the failure lockfile; raises it."""
     log_failure(logger, error_msg)
     lockfile_failure()
-    raise RuntimeError(error_msg)
+    raise Exception(error_msg)
 
 
 def _pipeline_agents(token, pipeline_id, source_type, target_type):
