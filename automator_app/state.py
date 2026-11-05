@@ -29,6 +29,12 @@ from pathlib import Path
 from threading import Lock
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from commons import (
+    make_password_login_refresh,
+    register_token_refresh,
+    clear_token_refresh,
+    reset_refreshed_token,
+)
 from typing import Dict, List, Optional, Any
 
 
@@ -42,10 +48,12 @@ class UploadedFile:
 @dataclass
 class RunStatus:
     run_id: str
-    status: str = "idle"  # idle | running | completed | failed
+    status: str = "idle"  # idle | running | completed | failed | partial
     logs: List[str] = field(default_factory=list)  # plain strings (backward compatible)
     log_entries: List[Dict[str, Any]] = field(default_factory=list)  # structured {ts, level, scope, message}
     error: Optional[str] = None
+    # Best-effort entity summary for the UI (OK / failed / skipped + retry ids).
+    summary: Optional[Dict[str, Any]] = None
 
 _LOG_TZ = ZoneInfo("Europe/Rome")
 _LOG_LEVELS = {"debug", "info", "warning", "error", "critical"}
@@ -93,6 +101,8 @@ class AutomatorState:
         self._lock = Lock()
         self._token: Optional[str] = None
         self._chronos_token: Optional[str] = None
+        self._username: Optional[str] = None
+        self._password: Optional[str] = None  # in-memory only for mid-run 401 refresh (G11)
         self._base_url: Optional[str] = os.getenv("CORE_HUB_URL", "https://localhost")
         self._use_ssl: Optional[bool] = True
         self._skip_verify: Optional[bool] = True
@@ -153,13 +163,19 @@ class AutomatorState:
             import os
             cwd = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             token_file = Path(cwd) / ".gluesync_mcp_token"
-            with open(token_file, "w") as f:
+            # 0600 like admin_credentials.json — never world-readable bearer tokens.
+            fd = os.open(str(token_file), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as f:
                 f.write(f"{token}\n")
                 f.write(f"{base_url}\n")
                 if use_ssl is not None:
                     f.write(f"SSL_ENABLED={use_ssl}\n")
                 if skip_verify is not None:
                     f.write(f"SSL_SKIP_VERIFY={skip_verify}\n")
+            try:
+                os.chmod(token_file, 0o600)
+            except OSError:
+                pass
         except Exception:
             # Silently fail - this is optional
             pass
@@ -183,25 +199,57 @@ class AutomatorState:
         *,
         use_ssl: Optional[bool] = None,
         skip_verify: Optional[bool] = None,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
     ) -> None:
         with self._lock:
             self._token = token
             self._base_url = base_url
             self._use_ssl = use_ssl
             self._skip_verify = skip_verify
+            self._username = username
+            self._password = password
             # Try to obtain an SDK token with subject _bootstrapper for Chronos calls.
             # Falls back to the user token if SDK is unavailable or no license file.
             self._chronos_token = self._try_get_sdk_token(base_url, use_ssl, skip_verify)
             # Write token to file for MCP server (stdio transport)
             self._write_token_file(token, base_url, use_ssl, skip_verify)
+            self._install_token_refresh_locked()
 
     def clear_auth(self) -> None:
         with self._lock:
             self._token = None
             self._chronos_token = None
+            self._username = None
+            self._password = None
             self._corehub_overview = None
             # Remove token file
             self._remove_token_file()
+            clear_token_refresh()
+
+    def _install_token_refresh_locked(self) -> None:
+        """Register mid-run 401 re-login using the in-memory session password (G11)."""
+        username = self._username or "admin"
+        password = self._password
+        if not password:
+            clear_token_refresh()
+            return
+
+        def _refresh() -> Optional[str]:
+            new_token = make_password_login_refresh(
+                username=username, passwords=[password]
+            )()
+            if new_token:
+                self._token = new_token
+                # Keep MCP token file in sync for stdio tools.
+                if self._base_url:
+                    self._write_token_file(
+                        new_token, self._base_url, self._use_ssl, self._skip_verify
+                    )
+            return new_token
+
+        register_token_refresh(_refresh)
+        reset_refreshed_token()
 
     # Upload management --------------------------------------------------
     def register_upload(self, file_path: Path, name: str) -> str:
@@ -239,12 +287,15 @@ class AutomatorState:
             self.current_run.log_entries.append(entry)
             self.current_run.logs.append(message)
 
-    def finalize_run(self, run_id: str, status: str, error: Optional[str] = None) -> None:
+    def finalize_run(self, run_id: str, status: str, error: Optional[str] = None,
+                     summary: Optional[Dict[str, Any]] = None) -> None:
         with self._lock:
             if not self.current_run or self.current_run.run_id != run_id:
                 return
             self.current_run.status = status
             self.current_run.error = error
+            if summary is not None:
+                self.current_run.summary = summary
 
     def run_snapshot(self, run_id: str) -> Optional[Dict[str, Any]]:
         with self._lock:
@@ -256,6 +307,7 @@ class AutomatorState:
                 "logs": list(self.current_run.logs),
                 "logEntries": list(self.current_run.log_entries),
                 "error": self.current_run.error,
+                "summary": self.current_run.summary,
             }
 
     def current_run_snapshot(self) -> Optional[Dict[str, Any]]:
@@ -267,6 +319,7 @@ class AutomatorState:
                 "status": self.current_run.status,
                 "logCount": len(self.current_run.logs),
                 "error": self.current_run.error,
+                "summary": self.current_run.summary,
             }
 
     def get_logs(self, run_id: str) -> Optional[List[str]]:
@@ -369,6 +422,7 @@ class AutomatorState:
                     "logs": list(self.current_run.logs),
                     "logEntries": list(self.current_run.log_entries),
                     "error": self.current_run.error,
+                    "summary": self.current_run.summary,
                 }
 
             data = {

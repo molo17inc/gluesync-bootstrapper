@@ -9,6 +9,7 @@ table. The older payloads are pinned by test_bootstrapper_payload_golden.
 """
 
 import logging
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -211,11 +212,22 @@ class DemoKitTemplatesTests(unittest.TestCase):
 
 class RefusedBeforeTheRequestTests(unittest.TestCase):
     def assert_refused(self, yaml_text, table_name, pattern, **kwargs):
+        # Best-effort (F3): a refused entity never aborts the batch. With
+        # skip_errors=True the overall job still "succeeds"; with False the
+        # job fails after persisting whatever else succeeded — but a lone
+        # refused table still must not be PUT, and the reason must match.
         _, result, entities = run(yaml_text, table_name, **kwargs)
         self.assertEqual(entities, {}, "the refused entity must not be sent")
         self.assertEqual(result["failed"], 1)
-        with self.assertRaisesRegex(Exception, pattern):
-            run(yaml_text, table_name, skip_errors=False, **kwargs)
+        self.assertTrue(any(re.search(pattern, err) for err in result.get("errors") or []),
+                        f"skip_errors=True errors {result.get('errors')!r} should match {pattern!r}")
+        _, result_strict, entities_strict = run(yaml_text, table_name, skip_errors=False, **kwargs)
+        self.assertEqual(entities_strict, {}, "skip_errors=False still must not PUT a refused entity")
+        self.assertEqual(result_strict["failed"], 1)
+        self.assertFalse(result_strict.get("success", True),
+                         "skip_errors=False marks the overall job failed")
+        self.assertTrue(any(re.search(pattern, err) for err in result_strict.get("errors") or []),
+                        f"skip_errors=False errors {result_strict.get('errors')!r} should match {pattern!r}")
 
     def test_explicit_source_key_onto_a_non_key_target_column(self):
         yaml_text = table("""        name: ORDERS_T

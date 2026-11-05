@@ -349,8 +349,13 @@ class ChainRefusalsTests(unittest.TestCase):
         result, entities = run_23(table_name, body, chained=True, version=version)
         self.assertEqual([e for e in entities if e["agentEntities"][0]["type"] == "MultiTable"], [])
         self.assertEqual(len(result["errors"]), 1, result["errors"])
-        self.assertRegex(result["errors"][0], r"^MultiTable chain c1: ")
+        # H1: refusals use picker ids (schema.table), not "MultiTable chain …"
+        self.assertRegex(result["errors"][0], rf"^src\.{table_name}: ")
         self.assertRegex(result["errors"][0], pattern)
+        # Sibling chain member (PARTS) is exposed for Retry without a second error line.
+        ids = [str(x).casefold() for x in (result.get("failedEntityIds") or [])]
+        self.assertIn(f"src.{table_name}".casefold(), ids)
+        self.assertIn("src.parts", ids)
 
     def test_yaml_keys_that_are_not_the_source_primary_key(self):
         self.assert_refused("CUSTOMERS", "name: customers\nkeys: [NAME]\ncolumns:\n  - ID: id\n  - NAME: name",

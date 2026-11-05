@@ -180,7 +180,7 @@ class UnlockedSchemaPayloadTests(unittest.TestCase):
                 chunk_size=50,
             )
 
-        self.assertEqual(result, {"successful": 1, "failed": 0, "total": 1, "errors": []})
+        self.assertEqual({k: result.get(k) for k in ("successful", "failed", "total", "errors")}, {"successful": 1, "failed": 0, "total": 1, "errors": []})
         payload = captured_puts[0]
         entity = payload["entities"][0]
         target_ae = entity["agentEntities"][1]
@@ -195,11 +195,8 @@ class UnlockedSchemaPayloadTests(unittest.TestCase):
         self.assertEqual(len(matrix), 1)
         self.assertEqual({k: v for k, v in matrix[0].items() if "Column" in k}, expected)
 
-    def test_unlocked_schema_without_udf_raises_when_not_skipping_errors(self):
-        """
-        unlockedSchema=true without a UDF must raise ValueError when
-        skip_errors=False.
-        """
+    def test_unlocked_schema_without_udf_fails_entity_when_not_skipping_errors(self):
+        """F3 best-effort: unlockedSchema without UDF records a failed entity (no mid-batch raise)."""
         import create_all_entities
 
         yaml_config = yaml.safe_load(UNLOCKED_SCHEMA_NO_UDF_TEMPLATE)
@@ -216,22 +213,23 @@ class UnlockedSchemaPayloadTests(unittest.TestCase):
              mock.patch.object(create_all_entities, "map_data_type", side_effect=lambda src, *a, **k: src or "varchar"), \
              mock.patch.object(create_all_entities, "fetch_core_hub", return_value={}), \
              mock.patch.object(create_all_entities, "handle_table_creation", return_value=None):
-            with self.assertRaises(ValueError) as cm:
-                create_all_entities.create_entities(
-                    token="tok",
-                    pipeline_id="pipe",
-                    source_schema="demo",
-                    target_schema="public",
-                    tables=[{"name": "ARTICLES", "schema": "demo", "id": 101}],
-                    source_agent_id="src",
-                    target_agent_id="tgt",
-                    source_type="SQL",
-                    target_type="SQL",
-                    yaml_config=yaml_config,
-                    skip_errors=False,
-                    chunk_size=50,
-                )
-        self.assertIn("UDF is mandatory", str(cm.exception))
+            result = create_all_entities.create_entities(
+                token="tok",
+                pipeline_id="pipe",
+                source_schema="demo",
+                target_schema="public",
+                tables=[{"name": "ARTICLES", "schema": "demo", "id": 101}],
+                source_agent_id="src",
+                target_agent_id="tgt",
+                source_type="SQL",
+                target_type="SQL",
+                yaml_config=yaml_config,
+                skip_errors=False,
+                chunk_size=50,
+            )
+        self.assertEqual(result.get("failed"), 1)
+        self.assertFalse(result.get("success"))
+        self.assertTrue(any("UDF is mandatory" in e for e in (result.get("errors") or [])))
 
     def test_unlocked_schema_without_udf_skips_when_skip_errors_true(self):
         """
@@ -269,8 +267,10 @@ class UnlockedSchemaPayloadTests(unittest.TestCase):
                 chunk_size=50,
             )
         self.assertEqual(result["successful"], 0)
-        # No entity was created for the skipped table
-        self.assertEqual(result["total"], 0)
+        self.assertEqual(result["failed"], 1)
+        self.assertEqual(result["total"], 1)
+        self.assertFalse(result.get("success"))  # H5: all-failed is failed even with skip_errors
+        self.assertTrue(any("UDF is mandatory" in e for e in (result.get("errors") or [])))
 
 
 class TargetOnlyColumnsPayloadTests(unittest.TestCase):

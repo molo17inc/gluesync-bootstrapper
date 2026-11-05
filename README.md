@@ -300,10 +300,14 @@ For numeric columns:
 
 - `Equal`: Equals
 - `NotEqual`: Not equals
-- `GreaterThan`: Greater than
-- `GreaterThanOrEqual`: Greater than or equal
-- `LessThan`: Less than
-- `LessThanOrEqual`: Less than or equal
+- `Greater`: Greater than
+- `GreaterEqual`: Greater than or equal
+- `Lower`: Less than
+- `LowerEqual`: Less than or equal
+
+Aliases also accepted (YAML ``operation`` or ``operator``): `=`, `eq`, `Equals`,
+`<` / `lt` / `LessThan` → `Lower`, `<=` / `lte` / `LessThanOrEqual` → `LowerEqual`,
+`>` / `gt` / `GreaterThan` → `Greater`, `>=` / `gte` / `GreaterThanOrEqual` → `GreaterEqual`.
 
 For boolean columns:
 
@@ -358,7 +362,7 @@ snapshotDeleteFilter:
       value: "ARCHIVED"
     - column: "PRIORITY"
       type: "number"
-      operation: "GreaterThan"
+      operation: "Greater"
       value: 5
 ```
 
@@ -1048,6 +1052,19 @@ The passphrase is read from `AI_SETTINGS_PASSPHRASE` (or the variable `--passphr
 #### Not included in the full backup
 
 Core Hub's backup settings (Settings → Backup: the `/backup` routes and the `BACKUP_CONFIGURATION` key) and its recovery key are intentionally neither exported nor imported by the full export, Import All or the Automator. The recovery key is a secret held by a person, and the stored public key would be useless, or worse misleading, on a restored installation. Restore Core Hub's own backups with its offline command (`--restore-backup`, `--reset-connect`), then enable backups again in Settings → Backup.
+
+### GS1 configuration import (`gs1_import.py`)
+
+Moves the entities of a GS1 (Gluesync 1.x) configuration onto a Gluesync 2 pipeline. The converter (`gs1_migration`) turns sql-to-nosql Query and QueryDataModeling entities into Query entities and nosql-to-sql DataModeling entities into document models, and reports what became of every GS1 entity (bucket `FLAT`, `MULTI_LEVEL`, `DOCUMENT_SPLIT` or `UNSUPPORTED`, with the reasons). Secret-looking keys (`password`, `token`, `certificate`...) are removed before the file is read and listed by path. Core Hub then checks every draft: a Query draft is described against the source agent (Core Hub refuses a statement that depends on the moment it runs or a key that is not a plain column, and proposes the keys GS1 took from the FROM table), and every draft is validated as an entity. Nothing is saved until you confirm.
+
+```bash
+export CORE_HUB_URL=https://my-corehub:1717
+export GS1_IMPORT_TOKEN=...            # else a login as admin with DEFAULT_PASSWORD
+python gs1_import.py convert --config gs1-config.json --pipeline <PIPELINE_ID> --output gs1-report.json
+python gs1_import.py import --config gs1-config.json --pipeline <PIPELINE_ID> --entities ORDERS,LINES
+```
+
+`--repository` names the GS1 product (`SQL_TO_NOSQL`, the default, `NOSQL_TO_SQL` or `NOSQL_TO_SQL_SYBASE`), `--source-agent` and `--target-agent` default to the pipeline's agents, and `--root-counts counts.json` (`{"ORDERS": 54321}`) sets each draft's delete window to 1 % of its roots, at least 100. `convert --offline` converts without calling Core Hub, so no structure check runs. `import` asks before saving; `--yes` confirms on the command line. In the Automator, the Import tab has the same flow: pick the file, the pipeline and the GS1 product, *Convert and check*, tick the drafts in the report, then *Save chosen entities* and confirm. See [docs/gs1-import.md](docs/gs1-import.md) for what the converter does with each GS1 setting and the cut-over that follows.
 
 ### Custom backup import (Automator and `import_backup --plan`)
 

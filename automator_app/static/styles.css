@@ -464,6 +464,15 @@ body.is-authenticated .requires-auth {
   color: var(--success);
 }
 
+.status-dry-run {
+  color: var(--warn);
+}
+
+.status-partial {
+  background: #f59e0b;
+  color: #111;
+}
+
 .status-failed {
   color: var(--error);
 }
@@ -1184,4 +1193,61 @@ body.is-authenticated #auth-card {
   align-items: center;
   gap: 0.35rem;
   font-size: 0.8rem;
+}
+
+
+.run-entity-summary {
+  margin: 0.75rem 0;
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  background: #0f172a0d;
+  border: 1px solid #94a3b855;
+  font-size: 0.9rem;
+}
+.run-entity-summary[hidden] { display: none !important; }
+.run-entity-summary h4 { margin: 0 0 0.35rem; font-size: 0.95rem; }
+.run-entity-summary .run-entity-counts { margin: 0 0 0.5rem; }
+.run-entity-summary ul { margin: 0.25rem 0 0.5rem; padding-left: 1.2rem; }
+.run-entity-summary .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85em; }
+
+/* GS1 configuration import report */
+#gs1-report {
+  overflow-x: auto;
+}
+
+.gs1-report {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.gs1-report th,
+.gs1-report td {
+  text-align: left;
+  vertical-align: top;
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.gs1-report th:nth-child(-n + 3),
+.gs1-report td:nth-child(-n + 3) {
+  white-space: nowrap;
+}
+
+.gs1-report td:nth-child(n + 4) {
+  overflow-wrap: anywhere;
+}
+
+.gs1-issues {
+  margin: 0;
+  padding-left: 1rem;
+}
+
+.gs1-issue-error,
+.gs1-unsupported {
+  color: var(--error);
+}
+
+.gs1-issue-warning {
+  color: var(--warn);
 }

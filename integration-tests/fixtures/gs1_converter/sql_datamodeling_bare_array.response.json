@@ -1,0 +1,1 @@
+{"entities":[],"perEntity":[{"gs1Name":"ORDERS","bucket":"UNSUPPORTED","issues":[{"code":"GS1_ENTITY_KIND_NOT_SUPPORTED","severity":"ERROR","message":"ORDERS is a DataModeling entity (1 levels): converted from R5","hint":"Keep the entity on GS1, or rewrite it as a QueryDataModeling entity with one statement per level."}]}],"strippedKeys":[]}

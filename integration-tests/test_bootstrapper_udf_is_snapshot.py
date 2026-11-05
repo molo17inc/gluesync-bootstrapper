@@ -419,12 +419,13 @@ class CompileAndTestRequestTests(unittest.TestCase):
         self.write_udf("UDF_x", java_with())
         self.assertEqual(java_with(), self.compiled_code(self.compile("2.2.5.5")))
 
-    def test_unreadable_version_assumes_the_current_signature(self):
+    def test_unreadable_version_does_not_assume_current_signature(self):
         import requests
 
         self.write_udf("UDF_x", java_with())
         code = self.compiled_code(self.compile(requests.exceptions.ConnectionError("down")))
-        self.assertIn("boolean isSnapshot", code)
+        # G11: unreadable GET /version assumes pre-2.3 unless COREHUB_VERSION override is set.
+        self.assertNotIn("boolean isSnapshot", code)
 
     def test_clashing_variable_fails_before_anything_is_compiled(self):
         self.write_udf("UDF_x", java_with(member="private boolean isSnapshot = false;"))
@@ -458,18 +459,19 @@ class CompileAndTestRequestTests(unittest.TestCase):
             ("2.4.1.0", True),
             ("2.2.11.5 - build abc", False),
             ("2.2.6.0", False),
-            ("NA", True),
-            (None, True),
+            ("NA", False),  # G11: unreadable / non-semver → pre-2.3
+            (None, False),
         ):
             self.commons.reset_corehub_version_cache()
             with self.subTest(version=version):
                 self.assertEqual(grouped, self.commons.corehub_takes_grouped_matrix("tok", fetch=FakeCoreHub(version)))
 
-    def test_unreachable_version_counts_as_a_current_corehub_for_the_matrix(self):
+    def test_unreachable_version_counts_as_legacy_corehub_for_the_matrix(self):
         import requests
 
         corehub = FakeCoreHub(requests.exceptions.ConnectionError("down"))
-        self.assertTrue(self.commons.corehub_takes_grouped_matrix("tok", fetch=corehub))
+        # G11: unreachable GET /version → pre-2.3 (no grouped matrix) unless override set.
+        self.assertFalse(self.commons.corehub_takes_grouped_matrix("tok", fetch=corehub))
 
     def make_test_request(self, **overrides):
         fields = dict(

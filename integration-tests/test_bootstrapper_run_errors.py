@@ -97,14 +97,18 @@ class CreateEntitiesErrorsTests(unittest.TestCase):
 
     def test_a_run_without_failures_has_no_error(self):
         result = run_single("PARTS")
-        self.assertEqual(result, {"successful": 1, "failed": 0, "total": 1, "errors": []})
+        self.assertEqual({k: result[k] for k in ("successful", "failed", "total", "errors") if k in result or k in {"successful": 1, "failed": 0, "total": 1, "errors": []}}, {"successful": 1, "failed": 0, "total": 1, "errors": []})
 
     def test_multitable_refusals_and_failures_are_listed_and_counted(self):
         result = run(CHAINS, ["ORDERS", "PARTS", "CUSTOMERS", "NOPK"],
                      refuse=refuse_entity("src.CUSTOMERS", "MultiTable refused by CoreHub"))
         self.assertEqual(len(result["errors"]), 2)
-        self.assertRegex(errors_naming(result, "refused_chain")[0], "SYNCED_AT")
+        # H1: chain build refusal names the primary member picker id (ORDERS), not chainId.
+        self.assertRegex(errors_naming(result, "src.ORDERS")[0], "SYNCED_AT")
         self.assertIn("MultiTable refused by CoreHub", errors_naming(result, "src.CUSTOMERS")[0])
+        ids = [str(x).casefold() for x in (result.get("failedEntityIds") or [])]
+        self.assertIn("src.orders", ids)
+        self.assertIn("src.parts", ids)  # sibling retry id
         self.assertEqual((result["successful"], result["failed"], result["total"]), (0, 2, 2))
 
     def test_a_created_multitable_entity_counts_as_successful(self):
@@ -162,7 +166,8 @@ class AutomatorRunTests(unittest.TestCase):
     def test_a_run_with_refused_entities_fails_with_their_reasons(self):
         payload = self.run_automator({"successful": 1, "failed": 1, "total": 2, "errors": ["CUSTOMERS: R12.1"]})
         self.assertFalse(payload["success"])
-        self.assertEqual(payload["error"], "CUSTOMERS: R12.1")
+        self.assertIn("CUSTOMERS: R12.1", payload["error"])
+        self.assertIn("failed 1", payload["error"])
 
     def test_a_run_without_failures_succeeds(self):
         payload = self.run_automator({"successful": 1, "failed": 0, "total": 1, "errors": []})

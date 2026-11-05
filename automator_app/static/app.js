@@ -1,5 +1,6 @@
 import { initCustomImport, getCustomImportPasswords } from './custom_import.js';
 import { initEntityImport } from './entity_import.js';
+import { initGs1Import } from './gs1_import.js';
 import { createLogPanel } from './log_panel.js';
 const api = {
   async getState() {
@@ -295,6 +296,67 @@ const ui = (() => {
     statusEl.className = `status status-${status}`;
   }
 
+  function renderRunEntitySummary(summary, { onRetry } = {}) {
+    const host = document.getElementById('run-entity-summary');
+    if (!host) return;
+    host.replaceChildren();
+    if (!summary || (summary.ok == null && summary.failed == null)) {
+      host.hidden = true;
+      return;
+    }
+    const ok = Number(summary.ok || 0);
+    const failed = Number(summary.failed || 0);
+    const skipped = Number(summary.skipped || 0);
+    const h = document.createElement('h4');
+    if (summary.dry_run && failed) {
+      h.textContent = 'Dry-run finished with failures';
+    } else if (summary.dry_run) {
+      h.textContent = 'Dry-run — nothing written';
+    } else if (summary.partial) {
+      h.textContent = 'Partial import — successes are kept';
+    } else if (failed) {
+      h.textContent = 'Import finished with failures';
+    } else {
+      h.textContent = 'Import summary';
+    }
+    const counts = document.createElement('p');
+    counts.className = 'run-entity-counts';
+    counts.textContent = `OK ${ok} · failed ${failed} · skipped ${skipped}`;
+    host.append(h, counts);
+    const failures = summary.failures || [];
+    if (failures.length) {
+      const ul = document.createElement('ul');
+      failures.slice(0, 50).forEach((f) => {
+        const li = document.createElement('li');
+        const name = document.createElement('span');
+        name.className = 'mono';
+        name.textContent = f.entity || '(unknown)';
+        li.append(name, document.createTextNode(` — ${f.reason || ''}`));
+        ul.appendChild(li);
+      });
+      host.appendChild(ul);
+    }
+    const skippedEntities = summary.skippedEntities || [];
+    if (skippedEntities.length) {
+      const p = document.createElement('p');
+      p.className = 'hint-text';
+      p.textContent = `Skipped (already in pipeline): ${skippedEntities.join(', ')}`;
+      host.appendChild(p);
+    }
+    const ids = summary.failedEntityIds || [];
+    if (ids.length && typeof onRetry === 'function') {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'secondary';
+      btn.id = 'retry-failed-entities-btn';
+      btn.textContent = `Retry failed (${ids.length})`;
+      btn.title = 'Re-run only the failed entities with onExisting=skip (idempotent).';
+      btn.addEventListener('click', () => onRetry(ids));
+      host.appendChild(btn);
+    }
+    host.hidden = false;
+  }
+
   function setAuthMessage(message, type = '') {
     authMessageEl.textContent = message;
     authMessageEl.className = `message ${type}`;
@@ -415,6 +477,7 @@ const ui = (() => {
 
   return {
     setStatus,
+    renderRunEntitySummary,
     setAuthMessage,
     setConfigMessage,
     setExportMessage,
@@ -707,6 +770,8 @@ const stateManager = {
   pollHandle: null,
   lastStatus: 'idle',
   corehubSnapshot: null,
+  entityImport: null,
+  lastRunSummary: null,
 
   updateFromState(data) {
     // Toggle global authenticated state for layout/visibility
@@ -779,7 +844,10 @@ const stateManager = {
   handleRunUpdate(run) {
     if (!run) return;
     ui.syncServerLogs(run);
-    ui.setStatus(run.status, run.status.toUpperCase());
+    let statusLabel = String(run.status || '').toUpperCase();
+    if (run.status === 'partial') statusLabel = 'PARTIAL';
+    else if (run.status === 'dry-run') statusLabel = 'DRY-RUN';
+    ui.setStatus(run.status, statusLabel);
     this.lastStatus = run.status;
     if (run.corehubOverview) {
       this.corehubSnapshot = run.corehubOverview;
@@ -790,6 +858,44 @@ const stateManager = {
     if (run.status !== 'running') {
       this.stopPolling();
       ui.setAuthEnabled(true);
+      this.lastRunSummary = run.summary || null;
+      ui.renderRunEntitySummary(run.summary, {
+        onRetry: (ids) => this.retryFailedEntities(ids),
+      });
+      if (run.summary) {
+        const s = run.summary;
+        logActivity(
+          'Config',
+          `Entity import summary: OK ${s.ok || 0}, failed ${s.failed || 0}, skipped ${s.skipped || 0}`
+            + (run.status === 'partial' ? ' (partial — successes kept)' : ''),
+        );
+      }
+    }
+  },
+
+  retryFailedEntities(failedEntityIds) {
+    const ids = failedEntityIds || this.lastRunSummary?.failedEntityIds || [];
+    if (!ids.length) {
+      ui.setConfigMessage('No failed entities to retry', 'error');
+      return;
+    }
+    const skipEl = document.getElementById('skip-errors');
+    if (skipEl) skipEl.checked = true;
+    const prepared = this.entityImport?.prepareRetryFailed?.(ids);
+    if (!prepared) {
+      ui.setConfigMessage('Could not prepare retry (open Customize entity creation)', 'error');
+      return;
+    }
+    ui.setConfigMessage(
+      `Retrying ${ids.length} failed entit${ids.length === 1 ? 'y' : 'ies'} with onExisting=skip…`,
+      'success',
+    );
+    logActivity('Config', `Retry failed entities: ${ids.join(', ')}`);
+    const runBtn = document.getElementById('run-btn');
+    if (runBtn && !runBtn.disabled) {
+      runBtn.click();
+    } else {
+      ui.setConfigMessage('Ready to retry — press Start when the form is ready', 'success');
     }
   },
 };
@@ -1678,8 +1784,9 @@ function bindEvents() {
       }
 
       const customSchemasEnabled = customSchemasCheckbox ? customSchemasCheckbox.checked : false;
-      const sourceSchemaValue = document.getElementById('source-schema').value;
-      const targetSchemaValue = document.getElementById('target-schema').value;
+      // Empty field = no override (same as Duplicate Pipeline). Both empty → YAML pairs (auto).
+      const sourceSchemaValue = (document.getElementById('source-schema')?.value || '').trim();
+      const targetSchemaValue = (document.getElementById('target-schema')?.value || '').trim();
 
       const selectErr = entityImport?.selectionError?.();
       if (selectErr) {
@@ -1699,7 +1806,7 @@ function bindEvents() {
         pipelineId: document.getElementById('pipeline-id').value,
         sourceSchema: customSchemasEnabled ? sourceSchemaValue : '',
         targetSchema: customSchemasEnabled ? targetSchemaValue : '',
-        autoSchemas: !customSchemasEnabled,
+        autoSchemas: !customSchemasEnabled || (!sourceSchemaValue && !targetSchemaValue),
         sourceType: document.getElementById('source-type').value,
         targetType: document.getElementById('target-type').value,
         chunkSize: Number(document.getElementById('chunk-size').value || 50),
@@ -1716,6 +1823,8 @@ function bindEvents() {
       ui.setConfigMessage('Starting…');
       ui.setAuthEnabled(false);
       ui.renderLogs();
+      ui.renderRunEntitySummary(null);
+      stateManager.lastRunSummary = null;
       ui.setStatus('running', 'Running');
       logActivity('Config', `Starting entity creation for pipeline ${payload.pipelineId || '(none)'}…`);
 
@@ -1892,9 +2001,18 @@ function bindEvents() {
         pipelineId: document.getElementById('pipeline-id')?.value,
         yamlFileId: stateManager.yamlFileId,
       }),
+      getSchemaDefaults: () => {
+        if (!customSchemasCheckbox?.checked) return null;
+        return {
+          sourceSchema: (document.getElementById('source-schema')?.value || '').trim(),
+          targetSchema: (document.getElementById('target-schema')?.value || '').trim(),
+        };
+      },
       setMessage: (msg, kind) => ui.setConfigMessage(msg, kind),
       log: logActivity,
     });
+    stateManager.entityImport = entityImport;
+
 
     const configPipelineSelect = document.getElementById('pipeline-id');
     if (configPipelineSelect) {
@@ -1902,6 +2020,12 @@ function bindEvents() {
         refreshEntityImportPicker(entityImport);
       });
     }
+    const onSchemaDefaultsChange = () => {
+      entityImport?.applySchemaDefaults?.();
+    };
+    customSchemasCheckbox?.addEventListener('change', onSchemaDefaultsChange);
+    document.getElementById('source-schema')?.addEventListener('input', onSchemaDefaultsChange);
+    document.getElementById('target-schema')?.addEventListener('input', onSchemaDefaultsChange);
     refreshEntityImportPicker(entityImport);
 
     initCustomImport({
@@ -2269,7 +2393,8 @@ async function loadPipelines() {
   const configSelect = document.getElementById('pipeline-id');
   const bulkSelect = document.getElementById('bulk-pipeline-id');
   const duplicateSelect = document.getElementById('duplicate-pipeline-id');
-  if (!exportSelect && !configSelect && !bulkSelect && !duplicateSelect) return;
+  const gs1Select = document.getElementById('gs1-pipeline-id');
+  if (!exportSelect && !configSelect && !bulkSelect && !duplicateSelect && !gs1Select) return;
 
   try {
     const data = await api.listPipelines();
@@ -2310,6 +2435,7 @@ async function loadPipelines() {
     populateSelect(configSelect);
     populateSelect(bulkSelect);
     populateSelect(duplicateSelect);
+    populateSelect(gs1Select);
   } catch (err) {
     console.error(err);
     ui.setExportMessage(err.message, 'error');
@@ -2503,7 +2629,7 @@ function initMcpSetup() {
     }
   });
 
-  refreshStatus();
+  refreshStatus().catch((err) => console.error('MCP status check failed', err));
 }
 
 initTabs();
@@ -2511,4 +2637,8 @@ bindEvents();
 updateImportButtonsVisibility();
 initMcpSetup();
 initAiSettings();
+initGs1Import({
+  setMessage: (text, type = '') => showMessage(document.getElementById('gs1-import-message'), text, type),
+  log: (message) => logActivity('GS1 import', message),
+});
 initialize();

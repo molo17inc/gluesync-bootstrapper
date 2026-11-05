@@ -305,7 +305,11 @@ class FanInTests(unittest.TestCase):
 
     def test_single_feeder_is_quiet(self):
         one = {"S1": self.YAML["S1"]}
-        self.assertEqual(fan_in.fan_in_warnings(one, "S1", "T", lambda s, t: []), [])
+        # Without an existing-columns probe, a lone feeder has nothing to compare.
+        self.assertEqual(fan_in.fan_in_warnings(one, "S1", "T", None), [])
+        # I1: when the probe reports an existing target missing planned columns, warn even for one feeder.
+        warns = fan_in.fan_in_warnings(one, "S1", "T", lambda s, t: [])
+        self.assertTrue(any("lacks union column" in w for w in warns), warns)
 
 
     def test_same_type_different_params_takes_the_wider(self):

@@ -357,21 +357,50 @@ def _replay_logs(log_callback: Optional[Callable[..., None]], logs: list) -> Non
                 _invoke_log_callback(log_callback, line, level="info", scope="stdout")
 
 
-def _create_entities_outcome(result_payload: Dict[str, Any], logs: list) -> Dict[str, Any]:
-    """Build the response of run_create_entities from the create_all_entities result."""
-    success = bool(result_payload.get("success", True))
-    errors = result_payload.get("errors") or []
+def _create_entities_summary_error(
+    result_payload: Dict[str, Any], errors: list, *, ok: int, failed: int, skipped: int
+) -> Any:
+    """The error text of a failed or partial create_all_entities result, when there is one."""
+    summary_error = result_payload.get("error")
+    if summary_error:
+        return summary_error
     if errors:
-        success = False
+        return f"OK {ok}, failed {failed}, skipped {skipped}. " + "; ".join(errors)
+    if failed or result_payload.get("partial"):
+        return f"OK {ok}, failed {failed}, skipped {skipped}"
+    return summary_error
+
+
+def _create_entities_outcome(result_payload: Dict[str, Any], logs: list) -> Dict[str, Any]:
+    """Build the response of run_create_entities from the create_all_entities result.
+
+    Prefer the create_entities ``success`` / ``partial`` flags (best-effort F3). When
+    those are absent, fall back to "any errors ⇒ failed" for older payloads.
+    """
+    errors = result_payload.get("errors") or []
+    if "success" in result_payload:
+        success = bool(result_payload.get("success"))
+    else:
+        success = not errors
+    ok = int(result_payload.get("successful") or 0)
+    failed = int(result_payload.get("failed") or 0)
+    skipped = int(result_payload.get("skipped") or 0)
     payload: Dict[str, Any] = {
         "success": success,
+        "partial": bool(result_payload.get("partial")),
         "logs": logs,
         "result": result_payload,
+        "successful": ok,
+        "failed": failed,
+        "skipped": skipped,
+        "total": int(result_payload.get("total") or 0),
+        "errors": list(errors),
+        "failures": list(result_payload.get("failures") or []),
+        "skippedEntities": list(result_payload.get("skippedEntities") or []),
+        "failedEntityIds": list(result_payload.get("failedEntityIds") or []),
     }
-    if not success:
-        summary_error = result_payload.get("error")
-        if not summary_error and errors:
-            summary_error = "; ".join(errors)
+    if not success or payload["partial"]:
+        summary_error = _create_entities_summary_error(result_payload, errors, ok=ok, failed=failed, skipped=skipped)
         if summary_error:
             payload["error"] = summary_error
     return payload
@@ -1172,8 +1201,9 @@ def discover_column_metadata_for_table(
             "name": name,
             "type": _discovered(col, "dataType", "type"),
             "dataLength": _discovered(col, "charMaxLength", "dataLength", default=0),
-            "numericPrecision": _discovered(col, "numPrec", "numericPrecision", default=0),
-            "numericScale": _discovered(col, "numScale", "numericScale", default=0),
+            # Null when discovery omitted precision (do not invent 0 → NUMBER(0,0) on Oracle).
+            "numericPrecision": _discovered(col, "numPrec", "numericPrecision", default=None),
+            "numericScale": _discovered(col, "numScale", "numericScale", default=None),
             "isNullable": col.get("isNullable", False),
             "id": col_id,
             "ordinalPosition": ordinal,
@@ -1875,7 +1905,11 @@ def export_pipeline_yaml(
 
     if not skip_schedules:
         jobs = fetch_pipeline_jobs(pipeline_id, token=chronos_token or token)
-        attach_schedules_from_jobs(jobs, entities_by_id, schemas, group_id_to_name)
+        pipe_scheds, grp_scheds = attach_schedules_from_jobs(
+            jobs, entities_by_id, schemas, group_id_to_name
+        )
+    else:
+        pipe_scheds, grp_scheds = [], []
 
     # Backfill null column types that are caused by legacy entities whose
     # DataTypeInterface was not registered for serialisation and therefore
@@ -1889,7 +1923,7 @@ def export_pipeline_yaml(
         schema_cfg.pop("has_duplicates", None)
         # Note: sourceTableName is preserved as it's needed during import
 
-    yaml_data = build_yaml_structure(schemas, groups_by_name)
+    yaml_data = build_yaml_structure(schemas, groups_by_name, pipe_scheds, grp_scheds)
 
     # Embed pipeline identity as a first-class YAML key so imports can
     # resolve the original pipeline without parsing the backup filename.
@@ -2872,10 +2906,9 @@ def export_full_corehub_backup(
                 include_secrets=include_secrets,
                 chronos_token=chronos_token,
             )
-            with io.BytesIO(pipelines_zip_bytes) as inner_buf:
-                with zipfile.ZipFile(inner_buf, "r") as inner_zip:
-                    for name in inner_zip.namelist():
-                        zip_file.writestr(f"pipelines/{name}", inner_zip.read(name))
+            with io.BytesIO(pipelines_zip_bytes) as inner_buf, zipfile.ZipFile(inner_buf, "r") as inner_zip:
+                for name in inner_zip.namelist():
+                    zip_file.writestr(f"pipelines/{name}", inner_zip.read(name))
         except Exception as exc:  # pylint: disable=broad-except
             logger.warning("Failed to include pipelines in full backup: %s", exc)
             zip_file.writestr("pipelines/error.yaml", _dump_to_yaml({"error": str(exc)}).encode("utf-8"))
@@ -3884,6 +3917,35 @@ def import_data_access_policies(
     return _restore_result(counts, report, connections)
 
 
+
+def _zip_member_destination(root: Path, member: str) -> Path:
+    """root / member, refusing a ZIP member path that escapes root (zip slip)."""
+    normalized = member.replace("\\", "/")
+    parts = normalized.split("/")
+    if normalized.startswith("/") or ".." in parts or (parts and ":" in parts[0]):
+        raise ValueError(f"Unsafe path in the backup ZIP, refusing to extract it: {member!r}")
+    dest = (root / normalized).resolve()
+    if not dest.is_relative_to(root.resolve()):
+        raise ValueError(f"Unsafe path in the backup ZIP, refusing to extract it: {member!r}")
+    return dest
+
+
+def _safe_extract_zip(zf: "zipfile.ZipFile", extract_dir: Path) -> None:
+    """Extract every ZIP member under extract_dir with a path-traversal guard."""
+    extract_dir = extract_dir.resolve()
+    for info in zf.infolist():
+        name = info.filename
+        if not name or name.endswith("/"):
+            # Ensure directory members exist without writing file content
+            if name:
+                _zip_member_destination(extract_dir, name).mkdir(parents=True, exist_ok=True)
+            continue
+        dest = _zip_member_destination(extract_dir, name)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with zf.open(info, "r") as src, open(dest, "wb") as out:
+            out.write(src.read())
+
+
 def import_full_corehub_backup(
     *,
     token: str,
@@ -3912,7 +3974,7 @@ def import_full_corehub_backup(
     extract_dir.mkdir(parents=True, exist_ok=True)
     try:
         with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
-            zf.extractall(str(extract_dir))
+            _safe_extract_zip(zf, extract_dir)
 
         connection = {
             "token": token,
@@ -4083,6 +4145,384 @@ def _fetch_agent_credentials(
             exc,
         )
     return fallback_host, fallback_custom
+
+def _pipeline_id_from_list_item(item: Any) -> Optional[str]:
+    if not isinstance(item, dict):
+        return None
+    raw_id = item.get("pipelineId") or item.get("id") or item.get("pipeline_id")
+    return str(raw_id) if raw_id is not None else None
+
+
+def _list_pipeline_ids_for_lookup(
+    *,
+    token: str,
+    prefer_pipeline_id: Optional[str] = None,
+    source_pipeline_only: bool = False,
+) -> list[str]:
+    """Ordered pipeline ids to scan for agent-tag credentials (prefer first).
+
+    When ``source_pipeline_only`` is true, only ``prefer_pipeline_id`` is scanned
+    (role-agnostic cross-dialect fallback must not roam the whole hub).
+    """
+    pipeline_ids: list[str] = []
+    if prefer_pipeline_id:
+        pipeline_ids.append(str(prefer_pipeline_id))
+    if source_pipeline_only:
+        return pipeline_ids
+    try:
+        response = fetch_core_hub(PIPELINES_PATH, token=token)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("Could not list pipelines while resolving agent credentials: %s", exc)
+        return pipeline_ids
+    if not isinstance(response, list):
+        return pipeline_ids
+    for item in response:
+        pid = _pipeline_id_from_list_item(item)
+        if pid and pid not in pipeline_ids:
+            pipeline_ids.append(pid)
+    return pipeline_ids
+
+
+def _host_credentials_usable(host: Any) -> bool:
+    """True when hostCredentials identify a real endpoint (host + username).
+
+    Host-only shells (no username) are not templates — they produced empty/wrong
+    cross-dialect targets (H4). Password may still be supplied by the duplicate request.
+    """
+    if not isinstance(host, dict):
+        return False
+    if not (host.get("host") or host.get("hostname")):
+        return False
+    username = host.get("username") or host.get("user")
+    return bool(username and str(username).strip())
+
+
+def _agent_tag_of(agent: Dict[str, Any]) -> str:
+    return str(agent.get("agentTag") or agent.get("tag") or "").strip()
+
+
+def _agent_type_of(agent: Dict[str, Any]) -> str:
+    return str(agent.get("agentType") or agent.get("type") or "").strip().upper()
+
+
+def _tags_match(left: str, right: str) -> bool:
+    return bool(left) and bool(right) and left.casefold() == right.casefold()
+
+
+def _agent_matches_identity(agent: dict, agent_tag: str, wanted_type: Optional[str]) -> bool:
+    if not isinstance(agent, dict):
+        return False
+    if not _tags_match(_agent_tag_of(agent), agent_tag):
+        return False
+    if not wanted_type:
+        return True
+    got = _agent_type_of(agent)
+    # Empty type on Hub agent: still accept; otherwise require exact identity.
+    return got in ("", wanted_type)
+
+
+def _collect_agents_matching_identity(
+    *,
+    token: str,
+    pipeline_id: str,
+    agent_tag: str,
+    agent_type: Optional[str],
+) -> list[tuple[dict, dict, str, str]]:
+    """Usable (host, custom, pipeline_id, agent_id) for tag (+ optional type), casefolded."""
+    wanted_type = (agent_type or "").strip().upper() or None
+    try:
+        cfg = fetch_core_hub(f"/pipelines/{pipeline_id}/config", token=token)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.debug("Skip pipeline %s while resolving tag %s: %s", pipeline_id, agent_tag, exc)
+        return []
+    if not isinstance(cfg, dict):
+        return []
+    agents = cfg.get("agents") or []
+    if not isinstance(agents, list):
+        return []
+    hits: list[tuple[dict, dict, str, str]] = []
+    for agent in agents:
+        if not _agent_matches_identity(agent, agent_tag, wanted_type):
+            continue
+        host, custom = _fetch_agent_credentials(token=token, pipeline_id=pipeline_id, agent=agent)
+        if not _host_credentials_usable(host):
+            continue
+        agent_id = str(agent.get("agentId") or agent.get("id") or "")
+        hits.append((host, custom or {}, pipeline_id, agent_id))
+    return hits
+
+
+def _agents_matching_identity_present(
+    *,
+    token: str,
+    pipeline_ids: list[str],
+    agent_tag: str,
+    agent_type: Optional[str],
+) -> bool:
+    """True when any agent matches tag (+ optional type), even without a usable username.
+
+    Same-role agents that have no username must still count as "present" so the
+    cross-role fallback does not treat them as "none" and steal another role's host.
+    """
+    wanted_type = (agent_type or "").strip().upper() or None
+    for pipeline_id in pipeline_ids:
+        try:
+            cfg = fetch_core_hub(f"/pipelines/{pipeline_id}/config", token=token)
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.debug("Skip pipeline %s while counting tag %s: %s", pipeline_id, agent_tag, exc)
+            continue
+        if not isinstance(cfg, dict):
+            continue
+        agents = cfg.get("agents") or []
+        if not isinstance(agents, list):
+            continue
+        for agent in agents:
+            if _agent_matches_identity(agent, agent_tag, wanted_type):
+                return True
+    return False
+
+
+def _credential_fingerprint(host: dict) -> tuple:
+    return (
+        str(host.get("host") or host.get("hostname") or "").casefold(),
+        str(host.get("port") or ""),
+        str(host.get("username") or host.get("user") or "").casefold(),
+        str(host.get("databaseName") or host.get("database") or "").casefold(),
+    )
+
+
+def _credentials_are_ambiguous(
+    candidates: list[tuple[dict, dict, str, str]],
+    agent_tag: str,
+    agent_type: Optional[str],
+) -> bool:
+    """True when candidates disagree on host fingerprint; logs and must not guess (H4)."""
+    fingerprints = {_credential_fingerprint(h) for h, _c, _p, _a in candidates}
+    if len(fingerprints) <= 1:
+        return False
+    detail = ", ".join(
+        f"{pid}/{aid}:{_credential_fingerprint(h)}" for h, _c, pid, aid in candidates
+    )
+    logger.warning(
+        "Ambiguous hostCredentials for agent tag %s type %s (%d candidates: %s); "
+        "not guessing — cross-dialect duplicate must pick an unambiguous agent",
+        agent_tag,
+        agent_type or "*",
+        len(candidates),
+        detail,
+    )
+    return True
+
+
+def _log_resolved_credentials(
+    candidates: list[tuple[dict, dict, str, str]],
+    agent_tag: str,
+    agent_type: Optional[str],
+) -> None:
+    _host, _custom, pid, aid = candidates[0]
+    if len(candidates) > 1:
+        logger.info(
+            "Resolved hostCredentials for agent tag %s type %s from %d identical candidates "
+            "(pipeline %s agent %s)",
+            agent_tag,
+            agent_type or "*",
+            len(candidates),
+            pid,
+            aid,
+        )
+        return
+    logger.info(
+        "Resolved hostCredentials for agent tag %s type %s from pipeline %s agent %s",
+        agent_tag,
+        agent_type or "*",
+        pid,
+        aid,
+    )
+
+
+def _lookup_agent_credentials_by_tag(
+    *,
+    token: str,
+    agent_tag: str,
+    prefer_pipeline_id: Optional[str] = None,
+    agent_type: Optional[str] = None,
+    source_pipeline_only: bool = False,
+) -> tuple[str, Optional[dict], Optional[dict], Optional[str]]:
+    """Locate host/custom credentials for ``agent_tag`` (+ optional agentType).
+
+    Returns ``(status, host, custom, pipeline_id)`` where status is:
+    - ``ok`` — unambiguous usable match
+    - ``empty`` — no usable candidate
+    - ``ambiguous`` — several usable candidates disagree on host fingerprint (H4: do not guess)
+
+    Cross-dialect duplicate must not reuse another dialect's host/port (ORA-17904).
+    Tag compare is case-insensitive. ``source_pipeline_only`` limits the scan to
+    ``prefer_pipeline_id`` (role-agnostic fallback).
+    """
+    if not agent_tag:
+        return "empty", None, None, None
+
+    candidates: list[tuple[dict, dict, str, str]] = []
+    for pid in _list_pipeline_ids_for_lookup(
+        token=token,
+        prefer_pipeline_id=prefer_pipeline_id,
+        source_pipeline_only=source_pipeline_only,
+    ):
+        candidates.extend(
+            _collect_agents_matching_identity(
+                token=token, pipeline_id=pid, agent_tag=agent_tag, agent_type=agent_type,
+            )
+        )
+
+    if not candidates:
+        return "empty", None, None, None
+    if _credentials_are_ambiguous(candidates, agent_tag, agent_type):
+        return "ambiguous", None, None, None
+
+    _log_resolved_credentials(candidates, agent_tag, agent_type)
+    host, custom, pid, _aid = candidates[0]
+    return "ok", host, custom, pid
+
+
+def _find_agent_credentials_by_tag(
+    *,
+    token: str,
+    agent_tag: str,
+    prefer_pipeline_id: Optional[str] = None,
+    agent_type: Optional[str] = None,
+) -> tuple[Optional[dict], Optional[dict], Optional[str]]:
+    """Locate host/custom credentials for ``agent_tag`` (+ optional agentType).
+
+    Wrapper over :func:`_lookup_agent_credentials_by_tag` for callers that only need
+    ``(host, custom, pipeline_id)`` — ambiguous and empty both yield ``(None, None, None)``.
+    """
+    _status, host, custom, pid = _lookup_agent_credentials_by_tag(
+        token=token,
+        agent_tag=agent_tag,
+        prefer_pipeline_id=prefer_pipeline_id,
+        agent_type=agent_type,
+    )
+    return host, custom, pid
+
+
+def _credentials_for_duplicate_agent(
+    *,
+    token: str,
+    pipeline_id: str,
+    agent_template: Dict[str, Any],
+    new_tag: str,
+) -> tuple[dict, dict]:
+    """Host/custom credentials to apply when duplicating an agent under ``new_tag``.
+
+    Same tag as the template → credentials from the source pipeline agent (legacy path).
+    Different tag (cross-dialect) → prefer same tag + same agentType (casefold). When that
+    set is empty **and no same-role agent exists even without a username**, fall back to
+    the same tag with any agentType **on the source pipeline only**, and only if that
+    set is a unique fingerprint (so a TARGET ``mysql-cdc`` kit can seed a SOURCE
+    ``mysql-cdc`` without leaving empty hostCredentials — which made Core Hub 2.3 default
+    ``trustServerCertificate=false`` and fail with "Trust store not found"). The
+    role-agnostic hit is logged as a WARNING.
+
+    If the same-role lookup is **ambiguous**, or same-role agents exist without a
+    username, do **not** guess via another role — warn and return empty hostCredentials.
+    Never reuse the wrong-dialect template host/port.
+    """
+    template_tag = _agent_tag_of(agent_template)
+    agent_type = _agent_type_of(agent_template)
+    if _tags_match(template_tag, new_tag):
+        return _fetch_agent_credentials(token=token, pipeline_id=pipeline_id, agent=agent_template)
+
+    status, host, custom, _ = _lookup_agent_credentials_by_tag(
+        token=token,
+        agent_tag=new_tag,
+        prefer_pipeline_id=pipeline_id,
+        agent_type=agent_type or None,
+    )
+    if status == "ok" and host is not None:
+        return host, custom or {}
+    if status == "ambiguous":
+        logger.warning(
+            "Ambiguous same-role hostCredentials for agent tag %s type %s; not falling "
+            "back across roles (would risk picking the wrong host)",
+            new_tag,
+            agent_type or "*",
+        )
+        return {}, {}
+
+    # Same-role empty → role-agnostic fallback only when no same-role agent exists at all
+    # (agents without a username still count as present) and only on the source pipeline.
+    if agent_type:
+        fallback = _role_agnostic_credentials_on_source(
+            token=token, pipeline_id=pipeline_id, agent_tag=new_tag, agent_type=agent_type,
+        )
+        if fallback is not None:
+            return fallback
+
+    logger.warning(
+        "No unambiguous hostCredentials for agent tag %s type %s; leaving hostCredentials "
+        "empty instead of reusing template tag %s from pipeline %s (avoids ORA-17904 / wrong-port)",
+        new_tag,
+        agent_type or "*",
+        template_tag,
+        pipeline_id,
+    )
+    return {}, {}
+
+
+def _role_agnostic_credentials_on_source(
+    *,
+    token: str,
+    pipeline_id: str,
+    agent_tag: str,
+    agent_type: str,
+) -> Optional[tuple[dict, dict]]:
+    """Role-agnostic same-tag credentials on the source pipeline, or None to keep looking.
+
+    Returns ``({}, {})`` when same-role shells block the fallback or the lookup is
+    ambiguous; ``(host, custom)`` on a unique hit; ``None`` when no decision was made.
+    """
+    same_role_pipelines = _list_pipeline_ids_for_lookup(
+        token=token, prefer_pipeline_id=pipeline_id, source_pipeline_only=False,
+    )
+    if _agents_matching_identity_present(
+        token=token,
+        pipeline_ids=same_role_pipelines,
+        agent_tag=agent_tag,
+        agent_type=agent_type,
+    ):
+        logger.warning(
+            "Same-role agent(s) for tag %s type %s exist but have no usable username; "
+            "not falling back across roles",
+            agent_tag,
+            agent_type,
+        )
+        return {}, {}
+
+    fb_status, host, custom, _ = _lookup_agent_credentials_by_tag(
+        token=token,
+        agent_tag=agent_tag,
+        prefer_pipeline_id=pipeline_id,
+        agent_type=None,
+        source_pipeline_only=True,
+    )
+    if fb_status == "ok" and host is not None:
+        logger.warning(
+            "Resolved hostCredentials for agent tag %s via role-agnostic fallback "
+            "on the source pipeline only (wanted type %s; using unambiguous same-tag "
+            "credentials — verify host/user before starting)",
+            agent_tag,
+            agent_type,
+        )
+        return host, custom or {}
+    if fb_status == "ambiguous":
+        logger.warning(
+            "Ambiguous role-agnostic hostCredentials for agent tag %s (wanted type %s); "
+            "leaving hostCredentials empty instead of guessing",
+            agent_tag,
+            agent_type,
+        )
+        return {}, {}
+    return None
 
 
 class PartialPipelineImportError(RuntimeError):
@@ -4632,10 +5072,11 @@ def duplicate_pipeline(
             "Source",
             source_host_override,
             source_port_override,
-            *_fetch_agent_credentials(
+            *_credentials_for_duplicate_agent(
                 token=token,
                 pipeline_id=pipeline_id,
-                agent=source_agent,
+                agent_template=source_agent,
+                new_tag=source_agent_tag,
             ),
         ),
         _convert_agent_payload(
@@ -4645,10 +5086,11 @@ def duplicate_pipeline(
             "Target",
             target_host_override,
             target_port_override,
-            *_fetch_agent_credentials(
+            *_credentials_for_duplicate_agent(
                 token=token,
                 pipeline_id=pipeline_id,
-                agent=target_agent,
+                agent_template=target_agent,
+                new_tag=target_agent_tag,
             ),
         ),
     ]

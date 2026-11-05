@@ -109,7 +109,9 @@ def load_main_functions(config_dir, user_defined_password=DEFAULT_PASSWORD, admi
     return namespace
 
 
-class AdminCredentialsTestCase(unittest.TestCase):
+class AdminCredentialsMixin:
+    """Fixture and helpers shared by the test cases below (mixed into unittest.TestCase)."""
+
     def setUp(self):
         # Other test modules switch logging off with logging.disable when imported: these tests read the log.
         previous = logging.root.manager.disable
@@ -159,7 +161,7 @@ class AdminCredentialsTestCase(unittest.TestCase):
         return self.log_stream.getvalue() + stdout
 
 
-class SaveAfterPasswordChangeTests(AdminCredentialsTestCase):
+class SaveAfterPasswordChangeTests(AdminCredentialsMixin, unittest.TestCase):
     def test_new_credentials_are_saved_next_to_the_token_with_0600(self):
         _, token, _ = self.first_run()
 
@@ -228,7 +230,7 @@ class SaveAfterPasswordChangeTests(AdminCredentialsTestCase):
         self.assertFalse(os.path.exists(self.credentials_file))
 
 
-class NoPasswordInLogsTests(AdminCredentialsTestCase):
+class NoPasswordInLogsTests(AdminCredentialsMixin, unittest.TestCase):
     def test_the_new_password_never_reaches_a_log_or_stdout(self):
         _, _, stdout = self.first_run()
         written = self.everything_written(stdout)
@@ -250,7 +252,7 @@ class NoPasswordInLogsTests(AdminCredentialsTestCase):
         self.assertNotIn(DEFAULT_PASSWORD, written)
 
 
-class RerunLoginTests(AdminCredentialsTestCase):
+class RerunLoginTests(AdminCredentialsMixin, unittest.TestCase):
     def test_a_rerun_logs_in_with_the_saved_password_first(self):
         self.first_run()
         self.hub.restart()
@@ -310,7 +312,7 @@ class RerunLoginTests(AdminCredentialsTestCase):
 TESTER_PASSWORD = "Tester-Pa55word!"
 
 
-class AdminPasswordTests(AdminCredentialsTestCase):
+class AdminPasswordTests(AdminCredentialsMixin, unittest.TestCase):
     """ADMIN_PASSWORD: the password a tester wants, set at the password change and saved like a random one."""
 
     def test_admin_password_is_set_saved_and_not_logged(self):
@@ -409,7 +411,7 @@ class AdminPasswordTests(AdminCredentialsTestCase):
             self.assertNotIn(secret, message)
 
 
-class RoundTripAfterBootstrapperTests(AdminCredentialsTestCase):
+class RoundTripAfterBootstrapperTests(AdminCredentialsMixin, unittest.TestCase):
     """The Automator round trip authenticates with what the bootstrapper saved."""
 
     def authenticate(self):

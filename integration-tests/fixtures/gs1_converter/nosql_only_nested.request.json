@@ -1,0 +1,1 @@
+{"config":{"sourceEntities":{"Holders":{"dataModeling":[{"level":1,"name":"Holders","tables":[{"table":"Holders","tableType":"NESTED","parentField":"x","fields":{"a":"A"}}]}]}}},"pipelineId":"pipeline","sourceAgentId":"couchbase-dcp","targetAgentId":"mssql","rootCounts":{},"repository":"NOSQL_TO_SQL"}

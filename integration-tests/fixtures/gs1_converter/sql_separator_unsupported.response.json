@@ -1,0 +1,1 @@
+{"entities":[],"perEntity":[{"gs1Name":"ORDERS","bucket":"UNSUPPORTED","issues":[{"code":"GS1_SEPARATOR_NOT_SUPPORTED","severity":"ERROR","message":"The entitiesKeyMapping separator '|' of ORDERS is not one GS2 renders","hint":"Keep the entity on GS1, or change its separator to one GS2 renders and rewrite its documents."}]}],"strippedKeys":[]}
