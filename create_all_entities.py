@@ -2484,22 +2484,34 @@ def _apply_logical_partitions(token, pipeline_id, partition_requests, skip_error
 
 
 def _build_partition_settings(column_name, table_columns, schema_name, table_name, table_id):
-    """Create PartitionSettings payload for the specified column."""
+    """Create PartitionSettings payload for the specified column.
+
+    When the partition column is missing from discovery (or no columns were
+    discovered), warn and return ``None`` so the entity is still created without
+    partitions — matching pre-I7 behaviour for schema-wide partition settings
+    that do not fit every table.
+    """
 
     if not column_name:
-        return None
-
-    if not table_columns:
-        logger.warning(f"Partition column '{column_name}' requested for {schema_name}.{table_name} but no columns were discovered")
         return None
 
     normalized_column = str(column_name).strip()
     if not normalized_column:
         return None
 
+    if not table_columns:
+        logger.warning(
+            f"Partition column '{normalized_column}' requested for {schema_name}.{table_name} "
+            f"but no columns were discovered; creating the entity without partitions"
+        )
+        return None
+
     matched_column = find_by_name(table_columns, normalized_column)
     if not matched_column:
-        logger.warning(f"Partition column '{normalized_column}' not found in discovery for {schema_name}.{table_name}. Skipping partitionSettings.")
+        logger.warning(
+            f"Partition column '{normalized_column}' not found in discovery for "
+            f"{schema_name}.{table_name}. Skipping partitionSettings."
+        )
         return None
 
     # Use the id field from CoreHub API as the column ID
@@ -4573,7 +4585,10 @@ def _send_multi_table_entity(run, index, total_multi_tables, multi_entity):
         logger.debug(json.dumps(multi_entity, indent=2))
 
         _put_entities(ctx, multi_entity)
-        logger.info(f"Successfully created MultiTable entity {index+1}/{total_multi_tables}")
+        if import_options.current().dry_run:
+            logger.info(f"Dry-run: would create MultiTable entity {index+1}/{total_multi_tables}")
+        else:
+            logger.info(f"Successfully created MultiTable entity {index+1}/{total_multi_tables}")
         return True
     except Exception as e:
         error_msg = str(e)
@@ -4636,7 +4651,10 @@ def _send_entity_chunk(run, chunk, chunk_start, chunk_end, total_entities):
         logger.debug(json.dumps(chunk_data, indent=2))
 
         _put_entities(ctx, chunk_data)
-        logger.info(f"Successfully created entities {chunk_start}-{chunk_end}")
+        if import_options.current().dry_run:
+            logger.info(f"Dry-run: would create entities {chunk_start}-{chunk_end}")
+        else:
+            logger.info(f"Successfully created entities {chunk_start}-{chunk_end}")
         return len(chunk), 0
     except Exception as e:
         error_msg = str(e)
@@ -5743,7 +5761,7 @@ def _fail_run(error_msg):
     """Log a failure of :func:`main` and leave the failure lockfile; raises it."""
     log_failure(logger, error_msg)
     lockfile_failure()
-    raise Exception(error_msg)
+    raise RuntimeError(error_msg)
 
 
 def _pipeline_agents(token, pipeline_id, source_type, target_type):

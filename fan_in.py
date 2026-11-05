@@ -215,24 +215,51 @@ def peers_of(yaml_config, target_schema, target_table, default_target=None) -> L
 
 def fan_in_warnings(yaml_config, source_schema, default_target=None,
                     existing_columns: Optional[Callable[[str, str], Optional[List[str]]]] = None) -> List[str]:
-    """Warnings for each target table fed by 2+ YAML tables, one of which belongs to ``source_schema``.
+    """Warnings for target tables fed by YAML tables that belong to ``source_schema``.
+
+    Multi-feeder (2+) targets always get type-conflict warnings. When
+    ``existing_columns`` is provided, **single-feeder** targets whose YAML lists
+    columns are checked too so an existing physical table that lacks mapped
+    columns is not skipped silently (I1). Tables with no listed columns skip the
+    lookup (large plans must not pay one GET per table).
 
     ``existing_columns(target_schema, target_table)`` gives the columns of an existing target table (None when
     the table does not exist or cannot be read).
     """
     warnings = []
     for feeds in (f for _key, f in sorted(target_feeders(yaml_config, default_target).items())):
-        if len(feeds) < 2 or not any(s == source_schema for s, _k, _c in feeds):
+        if not any(s == source_schema for s, _k, _c in feeds):
             continue
-        labels = ", ".join(f"{s}.{k}" for s, k, _c in feeds)
-        spelled_schema, spelled_table = _spelled_target(yaml_config, feeds, default_target)
-        prefix = f"fan-in {spelled_schema}.{spelled_table} (fed by {labels})"
-        union = union_columns(feeds)
-        warnings.extend(_type_conflict_warnings(prefix, union, type_conflicts(feeds)))
-        if existing_columns is not None:
-            warnings.extend(_missing_columns_warnings(prefix, union,
-                                                      existing_columns(spelled_schema, spelled_table)))
+        warnings.extend(
+            _warnings_for_target_feeds(yaml_config, feeds, default_target, existing_columns)
+        )
     return warnings
+
+
+def _warnings_for_target_feeds(yaml_config, feeds, default_target, existing_columns) -> List[str]:
+    """Type-conflict / missing-column warnings for one fan-in or single-feeder target."""
+    multi = len(feeds) >= 2
+    union = union_columns(feeds)
+    # Single-feeder: only when a lookup is available AND the YAML lists columns
+    # (otherwise a large plan pays one sequential GET per table for nothing).
+    if not multi and (existing_columns is None or not union):
+        return []
+    labels = ", ".join(f"{s}.{k}" for s, k, _c in feeds)
+    spelled_schema, spelled_table = _spelled_target(yaml_config, feeds, default_target)
+    if multi:
+        prefix = f"fan-in {spelled_schema}.{spelled_table} (fed by {labels})"
+    else:
+        prefix = f"existing target {spelled_schema}.{spelled_table} (from {labels})"
+    out: List[str] = []
+    if multi:
+        out.extend(_type_conflict_warnings(prefix, union, type_conflicts(feeds)))
+    if existing_columns is not None and union:
+        out.extend(
+            _missing_columns_warnings(
+                prefix, union, existing_columns(spelled_schema, spelled_table)
+            )
+        )
+    return out
 
 
 def _spelled_target(yaml_config, feeds, default_target) -> Tuple[Any, str]:

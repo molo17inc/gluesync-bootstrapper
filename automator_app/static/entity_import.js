@@ -1151,7 +1151,15 @@ export function initEntityImport({ root, getContext, setMessage, log, getSchemaD
       });
       const preview = await jsonOrThrow(res, 'Preview failed');
       renderPreviewTable(preview);
-      log?.('Config', `Entity plan preview: ${preview.entityCount} entities`);
+      if (preview.listingError || preview.conflictsUnknown) {
+        setMessage?.(
+          'Could not list existing entities — alreadyExists/conflicts are unknown. '
+            + 'Confirm skip/replace before creating.',
+          'error',
+        );
+      }
+      log?.('Config', `Entity plan preview: ${preview.entityCount} entities`
+        + (preview.listingError ? ' (listingError)' : ''));
     } catch (previewErr) {
       clearPreview();
       setMessage?.(previewErr.message, 'error');

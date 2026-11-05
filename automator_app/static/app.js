@@ -308,7 +308,11 @@ const ui = (() => {
     const failed = Number(summary.failed || 0);
     const skipped = Number(summary.skipped || 0);
     const h = document.createElement('h4');
-    if (summary.partial) {
+    if (summary.dry_run && failed) {
+      h.textContent = 'Dry-run finished with failures';
+    } else if (summary.dry_run) {
+      h.textContent = 'Dry-run — nothing written';
+    } else if (summary.partial) {
       h.textContent = 'Partial import — successes are kept';
     } else if (failed) {
       h.textContent = 'Import finished with failures';
@@ -840,7 +844,9 @@ const stateManager = {
   handleRunUpdate(run) {
     if (!run) return;
     ui.syncServerLogs(run);
-    const statusLabel = run.status === 'partial' ? 'PARTIAL' : String(run.status || '').toUpperCase();
+    let statusLabel = String(run.status || '').toUpperCase();
+    if (run.status === 'partial') statusLabel = 'PARTIAL';
+    else if (run.status === 'dry-run') statusLabel = 'DRY-RUN';
     ui.setStatus(run.status, statusLabel);
     this.lastStatus = run.status;
     if (run.corehubOverview) {

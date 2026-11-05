@@ -4155,11 +4155,18 @@ def _list_pipeline_ids_for_lookup(
     *,
     token: str,
     prefer_pipeline_id: Optional[str] = None,
+    source_pipeline_only: bool = False,
 ) -> list[str]:
-    """Ordered pipeline ids to scan for agent-tag credentials (prefer first)."""
+    """Ordered pipeline ids to scan for agent-tag credentials (prefer first).
+
+    When ``source_pipeline_only`` is true, only ``prefer_pipeline_id`` is scanned
+    (role-agnostic cross-dialect fallback must not roam the whole hub).
+    """
     pipeline_ids: list[str] = []
     if prefer_pipeline_id:
         pipeline_ids.append(str(prefer_pipeline_id))
+    if source_pipeline_only:
+        return pipeline_ids
     try:
         response = fetch_core_hub(PIPELINES_PATH, token=token)
     except Exception as exc:  # pylint: disable=broad-except
@@ -4243,6 +4250,36 @@ def _collect_agents_matching_identity(
     return hits
 
 
+def _agents_matching_identity_present(
+    *,
+    token: str,
+    pipeline_ids: list[str],
+    agent_tag: str,
+    agent_type: Optional[str],
+) -> bool:
+    """True when any agent matches tag (+ optional type), even without a usable username.
+
+    Same-role agents that have no username must still count as "present" so the
+    cross-role fallback does not treat them as "none" and steal another role's host.
+    """
+    wanted_type = (agent_type or "").strip().upper() or None
+    for pipeline_id in pipeline_ids:
+        try:
+            cfg = fetch_core_hub(f"/pipelines/{pipeline_id}/config", token=token)
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.debug("Skip pipeline %s while counting tag %s: %s", pipeline_id, agent_tag, exc)
+            continue
+        if not isinstance(cfg, dict):
+            continue
+        agents = cfg.get("agents") or []
+        if not isinstance(agents, list):
+            continue
+        for agent in agents:
+            if _agent_matches_identity(agent, agent_tag, wanted_type):
+                return True
+    return False
+
+
 def _credential_fingerprint(host: dict) -> tuple:
     return (
         str(host.get("host") or host.get("hostname") or "").casefold(),
@@ -4301,6 +4338,50 @@ def _log_resolved_credentials(
     )
 
 
+def _lookup_agent_credentials_by_tag(
+    *,
+    token: str,
+    agent_tag: str,
+    prefer_pipeline_id: Optional[str] = None,
+    agent_type: Optional[str] = None,
+    source_pipeline_only: bool = False,
+) -> tuple[str, Optional[dict], Optional[dict], Optional[str]]:
+    """Locate host/custom credentials for ``agent_tag`` (+ optional agentType).
+
+    Returns ``(status, host, custom, pipeline_id)`` where status is:
+    - ``ok`` — unambiguous usable match
+    - ``empty`` — no usable candidate
+    - ``ambiguous`` — several usable candidates disagree on host fingerprint (H4: do not guess)
+
+    Cross-dialect duplicate must not reuse another dialect's host/port (ORA-17904).
+    Tag compare is case-insensitive. ``source_pipeline_only`` limits the scan to
+    ``prefer_pipeline_id`` (role-agnostic fallback).
+    """
+    if not agent_tag:
+        return "empty", None, None, None
+
+    candidates: list[tuple[dict, dict, str, str]] = []
+    for pid in _list_pipeline_ids_for_lookup(
+        token=token,
+        prefer_pipeline_id=prefer_pipeline_id,
+        source_pipeline_only=source_pipeline_only,
+    ):
+        candidates.extend(
+            _collect_agents_matching_identity(
+                token=token, pipeline_id=pid, agent_tag=agent_tag, agent_type=agent_type,
+            )
+        )
+
+    if not candidates:
+        return "empty", None, None, None
+    if _credentials_are_ambiguous(candidates, agent_tag, agent_type):
+        return "ambiguous", None, None, None
+
+    _log_resolved_credentials(candidates, agent_tag, agent_type)
+    host, custom, pid, _aid = candidates[0]
+    return "ok", host, custom, pid
+
+
 def _find_agent_credentials_by_tag(
     *,
     token: str,
@@ -4310,29 +4391,15 @@ def _find_agent_credentials_by_tag(
 ) -> tuple[Optional[dict], Optional[dict], Optional[str]]:
     """Locate host/custom credentials for ``agent_tag`` (+ optional agentType).
 
-    Cross-dialect duplicate must not reuse another dialect's host/port (ORA-17904).
-    Tag compare is case-insensitive. When several pipelines expose the same
-    tag+type with *different* hosts, warn and return ``(None, None, None)`` —
-    never first-match guess (H4).
+    Wrapper over :func:`_lookup_agent_credentials_by_tag` for callers that only need
+    ``(host, custom, pipeline_id)`` — ambiguous and empty both yield ``(None, None, None)``.
     """
-    if not agent_tag:
-        return None, None, None
-
-    candidates: list[tuple[dict, dict, str, str]] = []
-    for pid in _list_pipeline_ids_for_lookup(token=token, prefer_pipeline_id=prefer_pipeline_id):
-        candidates.extend(
-            _collect_agents_matching_identity(
-                token=token, pipeline_id=pid, agent_tag=agent_tag, agent_type=agent_type,
-            )
-        )
-
-    if not candidates:
-        return None, None, None
-    if _credentials_are_ambiguous(candidates, agent_tag, agent_type):
-        return None, None, None
-
-    _log_resolved_credentials(candidates, agent_tag, agent_type)
-    host, custom, pid, _aid = candidates[0]
+    _status, host, custom, pid = _lookup_agent_credentials_by_tag(
+        token=token,
+        agent_tag=agent_tag,
+        prefer_pipeline_id=prefer_pipeline_id,
+        agent_type=agent_type,
+    )
     return host, custom, pid
 
 
@@ -4346,23 +4413,48 @@ def _credentials_for_duplicate_agent(
     """Host/custom credentials to apply when duplicating an agent under ``new_tag``.
 
     Same tag as the template → credentials from the source pipeline agent (legacy path).
-    Different tag (cross-dialect) → look up a live agent with the same tag + agentType
-    (casefold). On zero or ambiguous hits, return empty hostCredentials (do not reuse
-    the wrong-dialect template host/port).
+    Different tag (cross-dialect) → prefer same tag + same agentType (casefold). When that
+    set is empty **and no same-role agent exists even without a username**, fall back to
+    the same tag with any agentType **on the source pipeline only**, and only if that
+    set is a unique fingerprint (so a TARGET ``mysql-cdc`` kit can seed a SOURCE
+    ``mysql-cdc`` without leaving empty hostCredentials — which made Core Hub 2.3 default
+    ``trustServerCertificate=false`` and fail with "Trust store not found"). The
+    role-agnostic hit is logged as a WARNING.
+
+    If the same-role lookup is **ambiguous**, or same-role agents exist without a
+    username, do **not** guess via another role — warn and return empty hostCredentials.
+    Never reuse the wrong-dialect template host/port.
     """
     template_tag = _agent_tag_of(agent_template)
     agent_type = _agent_type_of(agent_template)
     if _tags_match(template_tag, new_tag):
         return _fetch_agent_credentials(token=token, pipeline_id=pipeline_id, agent=agent_template)
 
-    host, custom, _ = _find_agent_credentials_by_tag(
+    status, host, custom, _ = _lookup_agent_credentials_by_tag(
         token=token,
         agent_tag=new_tag,
         prefer_pipeline_id=pipeline_id,
         agent_type=agent_type or None,
     )
-    if host is not None:
+    if status == "ok" and host is not None:
         return host, custom or {}
+    if status == "ambiguous":
+        logger.warning(
+            "Ambiguous same-role hostCredentials for agent tag %s type %s; not falling "
+            "back across roles (would risk picking the wrong host)",
+            new_tag,
+            agent_type or "*",
+        )
+        return {}, {}
+
+    # Same-role empty → role-agnostic fallback only when no same-role agent exists at all
+    # (agents without a username still count as present) and only on the source pipeline.
+    if agent_type:
+        fallback = _role_agnostic_credentials_on_source(
+            token=token, pipeline_id=pipeline_id, agent_tag=new_tag, agent_type=agent_type,
+        )
+        if fallback is not None:
+            return fallback
 
     logger.warning(
         "No unambiguous hostCredentials for agent tag %s type %s; leaving hostCredentials "
@@ -4373,6 +4465,62 @@ def _credentials_for_duplicate_agent(
         pipeline_id,
     )
     return {}, {}
+
+
+def _role_agnostic_credentials_on_source(
+    *,
+    token: str,
+    pipeline_id: str,
+    agent_tag: str,
+    agent_type: str,
+) -> Optional[tuple[dict, dict]]:
+    """Role-agnostic same-tag credentials on the source pipeline, or None to keep looking.
+
+    Returns ``({}, {})`` when same-role shells block the fallback or the lookup is
+    ambiguous; ``(host, custom)`` on a unique hit; ``None`` when no decision was made.
+    """
+    same_role_pipelines = _list_pipeline_ids_for_lookup(
+        token=token, prefer_pipeline_id=pipeline_id, source_pipeline_only=False,
+    )
+    if _agents_matching_identity_present(
+        token=token,
+        pipeline_ids=same_role_pipelines,
+        agent_tag=agent_tag,
+        agent_type=agent_type,
+    ):
+        logger.warning(
+            "Same-role agent(s) for tag %s type %s exist but have no usable username; "
+            "not falling back across roles",
+            agent_tag,
+            agent_type,
+        )
+        return {}, {}
+
+    fb_status, host, custom, _ = _lookup_agent_credentials_by_tag(
+        token=token,
+        agent_tag=agent_tag,
+        prefer_pipeline_id=pipeline_id,
+        agent_type=None,
+        source_pipeline_only=True,
+    )
+    if fb_status == "ok" and host is not None:
+        logger.warning(
+            "Resolved hostCredentials for agent tag %s via role-agnostic fallback "
+            "on the source pipeline only (wanted type %s; using unambiguous same-tag "
+            "credentials — verify host/user before starting)",
+            agent_tag,
+            agent_type,
+        )
+        return host, custom or {}
+    if fb_status == "ambiguous":
+        logger.warning(
+            "Ambiguous role-agnostic hostCredentials for agent tag %s (wanted type %s); "
+            "leaving hostCredentials empty instead of guessing",
+            agent_tag,
+            agent_type,
+        )
+        return {}, {}
+    return None
 
 
 class PartialPipelineImportError(RuntimeError):
