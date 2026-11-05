@@ -1251,3 +1251,8 @@ body.is-authenticated #auth-card {
 .gs1-issue-warning {
   color: var(--warn);
 }
+
+/* a draft the pipeline already holds: saving it updates that entity */
+.gs1-report tr.gs1-existing td:first-child {
+  box-shadow: inset 3px 0 0 var(--warn);
+}

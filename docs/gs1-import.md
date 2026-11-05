@@ -11,10 +11,16 @@ pipeline. It runs from the command line (`gs1_import.py`) or from the Automator 
    (`POST /pipelines/{id}/config/entities/validate`). A document-split draft (`NOSQL_TO_SQL`) is first typed from the
    agents' discovery (`GET .../discovery/columns?tableschema=&tablename=` for its collection and each of its tables:
    the converter's placeholder types are not types Core Hub accepts); a column discovery does not know keeps the
-   draft's type and is listed in a `GS1_COLUMNS_NOT_DISCOVERED` warning. Nothing is written.
+   draft's type and is listed in a `GS1_COLUMNS_NOT_DISCOVERED` warning. The pipeline's entities are read first
+   (`GET /pipelines/{id}/entities`): a draft whose entity name the pipeline already holds takes that entity's
+   `entityId` and, per side (matched by agent), its `agentEntityId`, so the validation and the save update it
+   instead of comparing it with itself (Core Hub's keyspace check refuses two entities writing one id prefix,
+   `DOCUMENT_KEYSPACE_SHARED`). Such a draft is reported as *already imported, will be updated*. Nothing is written.
 3. **Save** the drafts you choose with `PUT /pipelines/{id}/config/entities`, once you confirm.
    The drafts Core Hub checked and found valid are chosen by default; one it refused, could not reach or did not
-   validate is left out until you pick it. Without the check (`--offline`, *Convert only*) every draft is chosen.
+   validate is left out until you pick it, and so is an already imported one: saving it overwrites that entity, so
+   a plain re-run (`import --yes` included) saves only the new drafts. Name it with `--entities`, or tick it in the
+   page (its checkbox is marked *Update*, and the confirmation lists the entities it updates). Without the check (`--offline`, *Convert only*) every draft is chosen.
 
 ## What the converter drafts
 
@@ -76,7 +82,7 @@ python gs1_import.py import --config gs1-config.json --pipeline <PIPELINE_ID> [-
 | `--root-counts` | JSON file: GS1 entity name -> number of roots |
 | `--output` | writes the report, the drafts and Core Hub's checks |
 | `convert --offline` | no Core Hub call (needs `--source-agent` and `--target-agent`) |
-| `import --entities` | the drafts to save (default: the drafts Core Hub checked and found valid; the others are listed and can be named here) |
+| `import --entities` | the drafts to save (default: the drafts Core Hub checked and found valid and not already imported; the others are listed and can be named here, which updates an already imported entity) |
 | `import --yes` | confirms the save; without it the command asks, and saves nothing when it cannot ask |
 
 ## After the import

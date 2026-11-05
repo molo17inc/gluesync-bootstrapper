@@ -44,6 +44,29 @@ class FakeCoreHub:
         self.validated = []
         # (agent id, schema, table) -> the columns the agent's discovery answers; an unknown table has none
         self.discovered = {}
+        # the entities the pipeline holds (what GET /entities lists, as {entity})
+        self.stored = []
+
+    @staticmethod
+    def _target(entity):
+        return next(side for side in entity["agentEntities"] if side["type"] == "NoSqlEntity")
+
+    def _keyspace_issues(self, entity):
+        """Core Hub's DataModelEntityValidator.keyspaceIssues: another entity writing the same collection with the
+        same id prefix refuses this one, unless it is this entity (a non-blank entityId that matches)."""
+        target = self._target(entity)
+        prefix = target["keyMapping"]["prefix"]
+        issues = []
+        for other in self.stored:
+            if entity.get("entityId") and other["entityId"] == entity["entityId"]:
+                continue
+            other_target = self._target(other)
+            if other_target["entityObject"]["collection"] == target["entityObject"]["collection"] \
+                    and other_target["keyMapping"]["prefix"] == prefix:
+                issues.append({"severity": "ERROR", "code": "DOCUMENT_KEYSPACE_SHARED", "message": (
+                    f"Entity {other['entityName']} also writes {target['entityObject']['collection']} and both write "
+                    f"ids starting with '{prefix}'.")})
+        return issues
 
     def __call__(self, path, method="GET", token=None, body=None, **_kwargs):
         self.calls.append((method, path))
@@ -75,8 +98,13 @@ class FakeCoreHub:
             query = parse_qs(urlparse(path).query)
             key = (path.split("/agents/")[1].split("/")[0], query["tableschema"][0], query["tablename"][0])
             return {"columns": json.loads(json.dumps(self.discovered.get(key, [])))}
+        if path == f"/pipelines/{PIPELINE}/entities":
+            return [{"entity": json.loads(json.dumps(entity))} for entity in self.stored]
         if path.endswith("/config/entities/validate"):
             self.validated.extend(body["entities"])
+            issues = [issue for entity in body["entities"] for issue in self._keyspace_issues(entity)]
+            if issues:
+                return {"valid": False, "issues": issues}
             return {"valid": True, "issues": [{"severity": "WARNING", "message": "fine", "entityName": "x"}]}
         if path == f"/pipelines/{PIPELINE}/config/entities" and method == "PUT":
             self.saved.append(body)
@@ -344,6 +372,120 @@ def test_a_document_split_is_validated_and_its_errors_refuse_it(hub):
     assert plan["drafts"] == {}
 
 
+# ---------- an entity the pipeline already holds ----------
+
+def _store_orders(hub):
+    """The pipeline holds ORDERS, as a first import saved it: the draft with the ids Core Hub gave it."""
+    draft = gs1_import.plan_import("tok", _request())["drafts"]["ORDERS"]
+    draft["entityId"] = "ent-orders"
+    for index, side in enumerate(draft["agentEntities"]):
+        side["entityId"] = "ent-orders"
+        side["agentEntityId"] = f"ae-orders-{index}"
+    hub.stored.append(draft)
+    hub.validated.clear()
+    hub.calls.clear()
+    return draft
+
+
+def _sent(entity_name, bodies):
+    return [e for e in bodies if e["entityName"] == entity_name]
+
+
+def test_a_reimported_entity_takes_the_ids_of_the_saved_one_and_is_not_refused(hub):
+    _store_orders(hub)
+
+    plan = gs1_import.plan_import("tok", _request())
+
+    assert ("GET", f"/pipelines/{PIPELINE}/entities") in hub.calls
+    check = plan["checks"]["ORDERS"]["validate"]
+    assert check["valid"] is True, check
+    assert "DOCUMENT_KEYSPACE_SHARED" not in json.dumps(plan["checks"])
+    [sent] = _sent("ORDERS", hub.validated)
+    assert sent["entityId"] == "ent-orders"
+    assert [(s["entityId"], s["agentEntityId"]) for s in sent["agentEntities"]] == [
+        ("ent-orders", "ae-orders-0"), ("ent-orders", "ae-orders-1")]
+    assert plan["drafts"]["ORDERS"] == sent, "the draft to save is the one that was validated"
+    assert plan["existing"] == {"ORDERS": "ent-orders"}
+    assert plan["drafts"]["KEYED"]["entityId"] == "", "a new entity keeps no id"
+    assert plan["report"]["entities"][0]["entityId"] == "", "the converter's report is left as converted"
+
+
+def test_the_fake_core_hub_refuses_a_draft_without_the_id_like_core_hub_does(hub):
+    stored = _store_orders(hub)
+    blank = gs1_import.plan_import(None, _request(), check=False)["drafts"]["ORDERS"]
+
+    answer = hub("/pipelines/pipe-1/config/entities/validate", method="POST", body={"entities": [blank]})
+    same = hub("/pipelines/pipe-1/config/entities/validate", method="POST", body={"entities": [stored]})
+
+    assert [i["code"] for i in answer["issues"]] == ["DOCUMENT_KEYSPACE_SHARED"]
+    assert same["valid"] is True
+
+
+def test_sides_are_matched_by_agent_even_when_core_hub_lists_them_in_another_order(hub):
+    stored = _store_orders(hub)
+    stored["agentEntities"].reverse()
+
+    plan = gs1_import.plan_import("tok", _request())
+
+    by_agent = {s["agentId"]: s["agentEntityId"] for s in plan["drafts"]["ORDERS"]["agentEntities"]}
+    assert by_agent == {"mssql-cdc": "ae-orders-0", "couchbase": "ae-orders-1"}
+
+
+def test_an_existing_entity_is_reported_and_not_chosen_by_default(hub):
+    _store_orders(hub)
+
+    plan = gs1_import.plan_import("tok", _request())
+
+    assert gs1_import.default_names(plan) == ["KEYED"]
+    lines = gs1_import.summarize(plan)
+    assert "ORDERS: FLAT (draft)" in lines
+    assert any(line.startswith("  already imported, will be updated (entityId ent-orders)") for line in lines)
+    assert not any("already imported" in line for line in lines if line.startswith("KEYED"))
+    assert gs1_import.updated_names(plan, ["ORDERS", "KEYED"]) == ["ORDERS"]
+
+
+def test_a_failing_entity_listing_is_reported_and_the_drafts_stay_new(hub):
+    def failing(path, **kwargs):
+        if path == f"/pipelines/{PIPELINE}/entities":
+            raise RuntimeError("CoreHub request GET failed: 500")
+        return hub(path, **kwargs)
+
+    with mock.patch.object(gs1_import, "fetch_core_hub", failing):
+        plan = gs1_import.plan_import("tok", _request())
+
+    assert "500" in plan["existingError"]
+    assert plan["existing"] == {}
+    assert any("could not list the pipeline's entities" in line for line in gs1_import.summarize(plan))
+
+
+def test_a_reimported_document_draft_takes_the_ids_too(hub):
+    _discover_the_holders(hub)
+    first = gs1_import.plan_import("tok", _document_request())["drafts"]["Holders"]
+    first["entityId"] = "ent-holders"
+    for index, side in enumerate(first["agentEntities"]):
+        side["entityId"] = "ent-holders"
+        side["agentEntityId"] = f"ae-holders-{index}"
+    hub.stored.append(first)
+    hub.validated.clear()
+
+    plan = gs1_import.plan_import("tok", _document_request())
+
+    [sent] = hub.validated
+    assert sent["entityId"] == "ent-holders"
+    assert [s["agentEntityId"] for s in sent["agentEntities"]] == ["ae-holders-0", "ae-holders-1"]
+    assert plan["existing"] == {"Holders": "ent-holders"}
+    assert gs1_import.default_names(plan) == []
+
+
+def test_offline_does_not_list_the_pipeline_entities(hub):
+    _store_orders(hub)
+
+    plan = gs1_import.plan_import(None, _request(), check=False)
+
+    assert hub.calls == []
+    assert plan["existing"] == {}
+
+
 # ---------- command line ----------
 
 def _write_config(tmp_path):
@@ -390,6 +532,49 @@ def test_cli_import_yes_confirms_every_draft(hub, tmp_path):
 
     assert code == 0
     assert [[e["entityName"] for e in body["entities"]] for body in hub.saved] == [["ORDERS", "KEYED"]]
+
+
+def _saved_ids(hub):
+    return [(e["entityName"], e["entityId"], [a["agentEntityId"] for a in e["agentEntities"]])
+            for body in hub.saved for e in body["entities"]]
+
+
+def test_cli_reimport_with_yes_saves_only_the_new_drafts(hub, tmp_path, capsys):
+    _store_orders(hub)
+
+    code = gs1_import.main(["--token", "tok", "import", "--config", _write_config(tmp_path), "--pipeline", PIPELINE, "--yes"])
+
+    assert code == 0
+    assert [[e["entityName"] for e in body["entities"]] for body in hub.saved] == [["KEYED"]]
+    out = capsys.readouterr().out
+    assert "ORDERS: FLAT (draft)" in out
+    assert "already imported, will be updated" in out
+    assert "Not saved by default: ORDERS (already imported, will be updated)" in out
+    assert "DOCUMENT_KEYSPACE_SHARED" not in out
+
+
+def test_cli_reimport_updates_an_existing_entity_when_it_is_named(hub, tmp_path, capsys):
+    _store_orders(hub)
+
+    code = gs1_import.main(["--token", "tok", "import", "--config", _write_config(tmp_path), "--pipeline", PIPELINE,
+                            "--entities", "ORDERS", "--yes"])
+
+    assert code == 0
+    assert _saved_ids(hub) == [("ORDERS", "ent-orders", ["ae-orders-0", "ae-orders-1"])]
+    assert "Updated, already imported: ORDERS" in capsys.readouterr().out
+
+
+def test_cli_reimport_asks_with_the_names_it_updates(hub, tmp_path):
+    _store_orders(hub)
+    asked = []
+
+    with mock.patch.object(gs1_import, "_confirm", side_effect=lambda prompt: asked.append(prompt) or False):
+        code = gs1_import.main(["--token", "tok", "import", "--config", _write_config(tmp_path), "--pipeline", PIPELINE,
+                                "--entities", "ORDERS,KEYED"])
+
+    assert code == 2
+    assert "Already imported, updated: ORDERS." in asked[0]
+    assert hub.saved == []
 
 
 def _refusing_keyed(hub, valid_for=None, fail=False):
@@ -475,6 +660,22 @@ def test_route_convert_reports_and_keeps_the_plan(client, hub):
     assert plan["checks"]["ORDERS"]["validate"]["valid"] is True
     assert plan["strippedKeys"] == ["sourcePassword"]
     assert hub.saved == []
+
+
+def test_route_reimport_lists_the_existing_drafts_and_updates_only_the_chosen_ones(client, hub):
+    _store_orders(hub)
+
+    plan = _convert(client).json()
+    nothing = client.post("/api/gs1/save", json={"planId": plan["planId"], "entities": ["KEYED"], "confirmed": True})
+    updated = client.post("/api/gs1/save", json={"planId": plan["planId"], "entities": ["ORDERS"], "confirmed": True})
+
+    assert plan["existing"] == ["ORDERS"]
+    assert plan["checks"]["ORDERS"]["validate"]["valid"] is True
+    assert "DOCUMENT_KEYSPACE_SHARED" not in json.dumps(plan)
+    assert nothing.json()["updated"] == []
+    assert updated.json()["updated"] == ["ORDERS"]
+    assert "already imported, updated: ORDERS" in updated.json()["message"]
+    assert _saved_ids(hub) == [("KEYED", "", ["", ""]), ("ORDERS", "ent-orders", ["ae-orders-0", "ae-orders-1"])]
 
 
 def test_route_save_needs_the_confirmation(client, hub):

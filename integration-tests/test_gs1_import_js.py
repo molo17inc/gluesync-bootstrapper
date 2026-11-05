@@ -10,7 +10,7 @@ from pathlib import Path
 JS = Path(__file__).resolve().parent.parent / "automator_app" / "static" / "gs1_import.js"
 
 SCRIPT = r"""
-import { issueText, reportRows, defaultSelection, confirmationText } from './gs1_import.mjs';
+import { issueText, reportRows, defaultSelection, confirmationText, updatedNames } from './gs1_import.mjs';
 
 function assert(condition, message) {
   if (!condition) { console.error('FAIL: ' + message); process.exit(1); }
@@ -55,6 +55,21 @@ const offlineRows = reportRows({ ...plan, structureChecked: false, checks: {} })
 assert(offlineRows.every((row) => !row.structureChecked), 'offline rows say they were not checked');
 assert(JSON.stringify(defaultSelection(offlineRows)) === JSON.stringify(['ORDERS', 'LINES', 'UNCHECKED', 'BLIND']),
   'offline: every draft is preselected, as before');
+const held = reportRows({ ...plan, existing: ['ORDERS', 'LINES'] });
+assert(held[0].existing && held[1].existing && !held[2].existing, 'a draft the pipeline holds is marked');
+assert(JSON.stringify(defaultSelection(held)) === JSON.stringify([]),
+  'an existing draft is never preselected, even valid: ' + JSON.stringify(defaultSelection(held)));
+assert(JSON.stringify(defaultSelection(reportRows({ ...plan, existing: ['LINES'] }))) === JSON.stringify(['ORDERS']),
+  'the others keep their preselection');
+const heldOffline = reportRows({ ...plan, structureChecked: false, checks: {}, existing: ['ORDERS'] });
+assert(!defaultSelection(heldOffline).includes('ORDERS') && defaultSelection(heldOffline).includes('LINES'),
+  'existing is left out offline too');
+assert(reportRows(plan).every((row) => row.existing === false), 'no existing without the list');
+assert(JSON.stringify(updatedNames(['ORDERS', 'LINES'], { existing: ['ORDERS'] })) === JSON.stringify(['ORDERS']), 'updated');
+assert(JSON.stringify(updatedNames(['ORDERS'], {})) === '[]', 'updated: no list');
+const asked = confirmationText(['ORDERS', 'LINES'], 'Pipe (p1)', ['ORDERS']);
+assert(asked.includes('Already imported, they are updated: ORDERS.'), asked);
+assert(!confirmationText(['LINES'], 'Pipe (p1)').includes('Already imported'), 'no note without updates');
 const line = issueText(plan.perEntity[4].issues[0]);
 assert(line === 'ERROR NON_DETERMINISTIC_QUERY [RECENT/1:45]: GETDATE', line);
 assert(issueText({ code: 'C', severity: 'WARNING', message: 'm' }) === 'WARNING C: m', 'no location');
