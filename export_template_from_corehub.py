@@ -30,7 +30,8 @@ from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
 
 import yaml
 
-from commons import fetch_core_hub, get_table_columns, is_length_type, is_temporal_type, catalog_type_for_agent_tag
+from commons import fetch_core_hub, get_table_columns, is_length_type, is_temporal_type, catalog_type_for_agent_tag, \
+    embedded_agent_categories, agent_types_by_tag, sql_or_nosql
 from field_function_utils import apply_field_functions_to_column_mappings, normalize_expression_for_yaml
 from entity_mapping import read_entry, relations_of, yaml_rows
 from utils.chronos_client import ChronosClient
@@ -118,7 +119,8 @@ def _load_agent_type_catalog() -> Dict[str, str]:
     if _AGENT_TYPE_BY_NAME is not None:
         return _AGENT_TYPE_BY_NAME
 
-    mapping: Dict[str, str] = {}
+    # Embedded agents first: an agents.json entry with the same tag overrides them.
+    mapping: Dict[str, str] = embedded_agent_categories(sql_or_nosql)
 
     try:
         base_dir = Path(__file__).resolve().parent
@@ -135,21 +137,7 @@ def _load_agent_type_catalog() -> Dict[str, str]:
             _AGENT_TYPE_BY_NAME = mapping
             return mapping
 
-        for entry in items:
-            if not isinstance(entry, dict):
-                continue
-            name = entry.get("internalName")
-            kind = entry.get("type")
-            if not name or not kind:
-                continue
-            label = str(kind).strip().upper()
-            if not label:
-                continue
-            if label == "RDBMS":
-                normalized = "SQL"
-            else:
-                normalized = "NoSQL"
-            mapping[str(name).lower()] = normalized
+        mapping.update(agent_types_by_tag(items))
     except Exception as exc:  # pylint: disable=broad-except
         logger.exception("Failed to load agents.json catalog for type inference: %s", exc)
         mapping = {}

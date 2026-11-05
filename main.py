@@ -43,10 +43,13 @@ from utils.log import get_logger, create_log_file, log_success, log_failure, loc
 from utils.gluesync_sdk_client import initialize_gluesync_sdk, get_token, get_gluesync_client
 from utils.core_hub_client import CoreHubClient
 from utils.transactions_audit_client import TransactionsAuditClient
-from commons import extract_schemas_from_yaml, extract_all_schemas_from_yaml, extract_schema_types_from_yaml, configure_core_hub, catalog_type_for_agent_tag
+from commons import extract_schemas_from_yaml, extract_all_schemas_from_yaml, extract_schema_types_from_yaml, configure_core_hub, catalog_type_for_agent_tag, \
+    embedded_agent_categories, agent_types_by_tag, sql_or_nosql
 from commons import sign_in_required_warnings
 from commons import admin_credentials_path, admin_password_problem, load_admin_password, login_password_candidates, save_admin_credentials
 from utils.redact import redact
+from courier_support import courier_block, CourierConfigError
+from courier_inbound_support import provision_courier_agent
 
 def _connect_requested(argv):
     """True for the kit command: python main.py --connect-import PATH --connect-setup."""
@@ -181,7 +184,8 @@ def _load_agent_type_catalog_for_bootstrapper() -> dict[str, str]:
     if _AGENT_TYPE_BY_NAME_BOOT is not None:
         return _AGENT_TYPE_BY_NAME_BOOT
 
-    mapping: dict[str, str] = {}
+    # Embedded agents first: an agents.json entry with the same tag overrides them.
+    mapping: dict[str, str] = embedded_agent_categories(sql_or_nosql)
 
     try:
         base_dir = Path(__file__).resolve().parent
@@ -198,21 +202,7 @@ def _load_agent_type_catalog_for_bootstrapper() -> dict[str, str]:
             _AGENT_TYPE_BY_NAME_BOOT = mapping
             return mapping
 
-        for entry in items:
-            if not isinstance(entry, dict):
-                continue
-            name = entry.get("internalName")
-            kind = entry.get("type")
-            if not name or not kind:
-                continue
-            label = str(kind).strip().upper()
-            if not label:
-                continue
-            if label == "RDBMS":
-                normalized = "SQL"
-            else:
-                normalized = "NoSQL"
-            mapping[str(name).lower()] = normalized
+        mapping.update(agent_types_by_tag(items))
     except Exception as exc:  # pylint: disable=broad-except
         logger.exception("Failed to load agents.json catalog for type inference in bootstrapper: %s", exc)
         mapping = {}
@@ -967,6 +957,21 @@ if True:
                 # Log the error using the enhanced logging framework
                 log_failure(logger, f"Failed to start sync for entity {entityName}")
 
+def _prepare_courier_agent(token: str, pipeline_id: str, agent: dict, custom_host_credentials: dict) -> dict:
+    """Courier provisioning of an HTTP Source / HTTP Target agent; returns its (possibly defaulted) customHostCredentials.
+
+    The definitions the agent discovers must exist before it is configured (see
+    courier_inbound_support.provision_courier_agent). Any other agent is returned unchanged.
+    """
+    try:
+        prepared = provision_courier_agent(token, pipeline_id, agent, fetch=fetch_core_hub, logger=logger)
+    except CourierConfigError as courier_error:
+        log_failure(logger, str(courier_error))
+        lockfile_failure()
+        raise
+    return custom_host_credentials if prepared is None else prepared
+
+
 def _parse_args():
     """Parse the command line arguments of the bootstrapper."""
     parser = argparse.ArgumentParser(description='Gluesync Bootstrapper')
@@ -1225,6 +1230,8 @@ def _provision_agent(token, pipeline_id, conf_agent):
         'customHostCredentials': conf_agent.get('customHostCredentials', {}),
         'specificConfiguration': conf_agent.get('specificConfiguration', {}),
         'entities': conf_agent.get('entities', []),
+        # HTTP Source / HTTP Target only: Courier definitions to create before the agent is configured.
+        'courier': courier_block(conf_agent),
     }
 
 
@@ -1238,7 +1245,7 @@ def _provision_agents(token, pipeline_id, conf_test):
         agents_to_conf.append(_provision_agent(token, pipeline_id, conf_agent))
 
     logger.info(f"Prepared {len(agents_to_conf)} agents for configuration")
-    logger.debug(f"Filtered agents: {json.dumps(agents_to_conf, indent=2)}")
+    logger.debug(f"Filtered agents: {json.dumps(redact(agents_to_conf), indent=2)}")
     return agents_to_conf
 
 
@@ -1248,6 +1255,8 @@ def _upload_agent_credentials(token, pipeline_id, agent):
     custom_host_credentials = agent['customHostCredentials']
     certificate_path = host_credentials.pop('certificatePath', None)
     certificate_type = host_credentials.pop('certificateType', None)
+
+    custom_host_credentials = _prepare_courier_agent(token, pipeline_id, agent, custom_host_credentials)
 
     # Upload certificate first (if present)
     if certificate_path and certificate_type:
