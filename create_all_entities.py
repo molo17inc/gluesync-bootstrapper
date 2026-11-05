@@ -5450,6 +5450,37 @@ def _refuse_multi_member_without_flag(run, options):
     return message
 
 
+def _empty_discovery_issues(run, tolerant):
+    """Issues when discovery returned no tables for this source schema."""
+    if tolerant:
+        return []
+    return [f"source schema {run.source_schema}: discovery lists no table"]
+
+
+def _yaml_vs_discovery_table_issues(run, yaml_tables, discovered, tolerant):
+    """Per-YAML-table discovery mismatches (missing table or missing columns)."""
+    issues = []
+    discovered_names = ColumnNames(discovered.keys())
+    for source, config, key in yaml_tables.values():
+        matched = discovered_names.resolve(source)
+        if matched is None:
+            if not tolerant:
+                issues.append(
+                    f"source table {run.source_schema}.{source} (YAML {key}) not found in discovery"
+                    f"{import_options.suggest(source, list(discovered))}"
+                )
+            continue
+        lookup = matched if matched in discovered else source
+        issues.extend(_source_column_issues(run, lookup, config))
+    return issues
+
+
+def _append_unique_issue(issues, message):
+    """Append ``message`` when truthy and not already listed."""
+    if message and message not in issues:
+        issues.append(message)
+
+
 def _validate_against_discovery(run, tables):
     """The schemas, tables and columns the YAML of this schema names that discovery lacks, with suggestions.
 
@@ -5466,21 +5497,11 @@ def _validate_against_discovery(run, tables):
     discovered = _discovered_by_name(tables)
     tolerant = options.allow_offline_entities or options.allow_missing_tables
     if not discovered:
-        return [] if tolerant else [f"source schema {run.source_schema}: discovery lists no table"]
-    issues = []
-    discovered_names = ColumnNames(discovered.keys())
-    for source, config, key in yaml_tables.values():
-        matched = discovered_names.resolve(source)
-        if matched is not None:
-            issues.extend(_source_column_issues(run, matched if matched in discovered else source, config))
-        elif not tolerant:
-            issues.append(f"source table {run.source_schema}.{source} (YAML {key}) not found in discovery"
-                          f"{import_options.suggest(source, list(discovered))}")
+        return _empty_discovery_issues(run, tolerant)
+    issues = _yaml_vs_discovery_table_issues(run, yaml_tables, discovered, tolerant)
     if not CREATE_TABLE_IF_NOT_EXISTS and run.target_tables_lookup:
         issues.extend(_missing_target_table_issues(run, yaml_tables))
-    mm_issue = _multi_member_preflight_message(run)
-    if mm_issue and mm_issue not in issues:
-        issues.append(mm_issue)
+    _append_unique_issue(issues, _multi_member_preflight_message(run))
     return issues
 
 
@@ -5493,6 +5514,24 @@ def _discovered_by_name(tables):
             discovered[name] = table
             discovered.setdefault(_bare_table_name(name), table)
     return discovered
+
+
+def _missing_column_issue(label, name, discovered_columns):
+    """One discovery miss for a YAML source column (reserved technical or ordinary)."""
+    if is_reserved_technical_field(name):
+        return missing_technical_field_message(label, name)
+    return (
+        f"source column {label}.{name} not found in discovery"
+        f"{import_options.suggest(name, discovered_columns)}"
+    )
+
+
+def _column_covered_by_discovery(names, name):
+    """Whether discovery lists ``name`` or its canonical reserved technical alias."""
+    if names.resolve(name) is not None:
+        return True
+    canonical = canonical_technical_field_name(name)
+    return bool(canonical) and names.resolve(canonical) is not None
 
 
 def _source_column_issues(run, source, config):
@@ -5509,21 +5548,11 @@ def _source_column_issues(run, source, config):
         return []
     discovered_columns = [c.get('name') for c in (columns or {}).get('columns') or [] if isinstance(c, dict)]
     names = ColumnNames(discovered_columns)
-    issues = []
-    for name in wanted:
-        if names.resolve(name) is not None:
-            continue
-        canonical = canonical_technical_field_name(name)
-        if canonical and names.resolve(canonical) is not None:
-            continue
-        if is_reserved_technical_field(name):
-            issues.append(missing_technical_field_message(label, name))
-        else:
-            issues.append(
-                f"source column {label}.{name} not found in discovery"
-                f"{import_options.suggest(name, discovered_columns)}"
-            )
-    return issues
+    return [
+        _missing_column_issue(label, name, discovered_columns)
+        for name in wanted
+        if not _column_covered_by_discovery(names, name)
+    ]
 
 
 def _missing_target_table_issues(run, yaml_tables):

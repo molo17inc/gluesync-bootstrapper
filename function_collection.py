@@ -392,6 +392,11 @@ def _install(token: str, pipeline_id: str, fetch) -> Dict[str, Any]:
 
 _EXPORT_READY_GRACE_POLLS = 3
 
+# Poll-step outcomes for :func:`wait_until_functions_exported` (flat loop, low cognitive complexity).
+_POLL_CONTINUE = "continue"
+_POLL_BREAK = "break"
+_POLL_RETURN = "return"
+
 
 class _ExportPollState:
     """Mutable progress of one :func:`wait_until_functions_exported` poll loop."""
@@ -416,15 +421,13 @@ def _export_ready_success(pipeline_id: str, needed_set: frozenset, installed: fr
     return installed
 
 
-def _handle_incomplete_exports(
-    pipeline_id: str,
+def _record_incomplete_exports(
     collection: Optional[Dict[str, Any]],
     installed: frozenset,
     missing: frozenset,
-    require_all: bool,
     state: _ExportPollState,
-):
-    """Update poll state for an installed-but-incomplete collection; return installed or None to keep polling."""
+) -> None:
+    """Update poll state after Hub reports an installed collection that still lacks needed names."""
     state.incomplete_polls += 1
     state.last_missing = missing
     state.last_installed = installed
@@ -433,33 +436,78 @@ def _handle_incomplete_exports(
         f"{', '.join(sorted(installed)) or 'no function'}; still missing "
         f"{', '.join(sorted(missing))}"
     )
+
+
+def _incomplete_exports_outcome(
+    pipeline_id: str,
+    installed: frozenset,
+    missing: frozenset,
+    require_all: bool,
+    state: _ExportPollState,
+):
+    """After grace: ``(_POLL_BREAK, None)``, ``(_POLL_RETURN, installed)``, or ``(_POLL_CONTINUE, None)``."""
     if state.incomplete_polls < _EXPORT_READY_GRACE_POLLS:
-        return None
+        return _POLL_CONTINUE, None
     if require_all:
-        return "break"
+        return _POLL_BREAK, None
     logger.warning(
         "Function collection of pipeline %s is installed but still missing %s after %d polls; "
         "entity CustomFn checks will refuse unbound columns",
         pipeline_id, ", ".join(sorted(missing)), state.incomplete_polls,
     )
-    return installed
+    return _POLL_RETURN, installed
 
 
-def _handle_missing_install(pipeline_id: str, needed_set: frozenset, require_all: bool, state: _ExportPollState):
-    """Update poll state when Hub shows no installed collection; return NO_COLLECTION or None / break."""
+def _missing_install_outcome(
+    pipeline_id: str, needed_set: frozenset, require_all: bool, state: _ExportPollState,
+):
+    """When Hub shows no installed collection: ``(_POLL_RETURN, NO_COLLECTION)`` or ``(_POLL_CONTINUE, None)``."""
     state.incomplete_polls = 0
     state.no_install_polls += 1
     state.last_missing = needed_set or None
     state.last_installed = None
     state.last_state = "no installed collection yet"
-    if not require_all and state.no_install_polls >= _EXPORT_READY_GRACE_POLLS:
-        logger.warning(
-            "Function collection of pipeline %s has no installed version after %d polls; "
-            "entity CustomFn checks treat it as no collection",
-            pipeline_id, state.no_install_polls,
-        )
-        return NO_COLLECTION
-    return None
+    if require_all or state.no_install_polls < _EXPORT_READY_GRACE_POLLS:
+        return _POLL_CONTINUE, None
+    logger.warning(
+        "Function collection of pipeline %s has no installed version after %d polls; "
+        "entity CustomFn checks treat it as no collection",
+        pipeline_id, state.no_install_polls,
+    )
+    return _POLL_RETURN, NO_COLLECTION
+
+
+def _poll_when_installed(
+    pipeline_id: str,
+    collection: Optional[Dict[str, Any]],
+    installed: frozenset,
+    needed_set: frozenset,
+    require_all: bool,
+    state: _ExportPollState,
+):
+    """One poll step when Hub already shows an installed collection."""
+    state.no_install_polls = 0
+    missing = needed_set - installed
+    if not missing:
+        return _POLL_RETURN, _export_ready_success(pipeline_id, needed_set, installed)
+    _record_incomplete_exports(collection, installed, missing, state)
+    return _incomplete_exports_outcome(pipeline_id, installed, missing, require_all, state)
+
+
+def _export_poll_step(
+    token: str,
+    pipeline_id: str,
+    needed_set: frozenset,
+    require_all: bool,
+    state: _ExportPollState,
+    fetch,
+):
+    """One GET + decide: ``(_POLL_CONTINUE|_POLL_BREAK|_POLL_RETURN, value)``."""
+    collection = fetch_function_collection(token, pipeline_id, fetch=fetch)
+    installed = installed_function_names(collection)
+    if installed is NO_COLLECTION:
+        return _missing_install_outcome(pipeline_id, needed_set, require_all, state)
+    return _poll_when_installed(pipeline_id, collection, installed, needed_set, require_all, state)
 
 
 def _raise_export_ready_timeout(pipeline_id: str, state: _ExportPollState) -> None:
@@ -480,11 +528,20 @@ def _raise_export_ready_timeout(pipeline_id: str, state: _ExportPollState) -> No
 
 def _finish_export_wait(pipeline_id: str, require_all: bool, state: _ExportPollState):
     """Return the soft pre-flight result, or raise when ``require_all`` still needs every export."""
-    if not require_all:
-        if state.last_installed is not None:
-            return state.last_installed
-        return NO_COLLECTION
-    _raise_export_ready_timeout(pipeline_id, state)
+    if require_all:
+        _raise_export_ready_timeout(pipeline_id, state)
+    if state.last_installed is not None:
+        return state.last_installed
+    return NO_COLLECTION
+
+
+def _sleep_until_next_export_poll(deadline: float) -> bool:
+    """Sleep until the next poll, or return False when the deadline has passed."""
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return False
+    time.sleep(min(_env_seconds("FUNCTION_COLLECTION_POLL_SECONDS", _DEFAULT_POLL_SECONDS), remaining))
+    return True
 
 
 def wait_until_functions_exported(token: str, pipeline_id: str, needed: Iterable[str],
@@ -514,28 +571,13 @@ def wait_until_functions_exported(token: str, pipeline_id: str, needed: Iterable
     # and (require_all=False only) when Hub never shows installedVersion (pre-flight after restore).
     state = _ExportPollState()
     while True:
-        collection = fetch_function_collection(token, pipeline_id, fetch=fetch)
-        installed = installed_function_names(collection)
-        if installed is not NO_COLLECTION:
-            state.no_install_polls = 0
-            missing = needed_set - installed
-            if not missing:
-                return _export_ready_success(pipeline_id, needed_set, installed)
-            outcome = _handle_incomplete_exports(
-                pipeline_id, collection, installed, missing, require_all, state,
-            )
-            if outcome == "break":
-                break
-            if outcome is not None:
-                return outcome
-        else:
-            outcome = _handle_missing_install(pipeline_id, needed_set, require_all, state)
-            if outcome is not None:
-                return outcome
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
+        action, value = _export_poll_step(token, pipeline_id, needed_set, require_all, state, fetch)
+        if action is _POLL_RETURN:
+            return value
+        if action is _POLL_BREAK:
             break
-        time.sleep(min(_env_seconds("FUNCTION_COLLECTION_POLL_SECONDS", _DEFAULT_POLL_SECONDS), remaining))
+        if not _sleep_until_next_export_poll(deadline):
+            break
 
     return _finish_export_wait(pipeline_id, require_all, state)
 
