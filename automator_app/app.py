@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import contextvars
 import copy
 import operator
 import functools
@@ -64,8 +63,7 @@ from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 import commons
-from commons import (extract_all_schemas_from_yaml, extract_schema_types_from_yaml,
-                     get_table_columns, load_yaml_config)
+from commons import extract_all_schemas_from_yaml, extract_schema_types_from_yaml, load_yaml_config
 from . import corehub
 from .gs1_routes import register_gs1_routes
 import ai_settings
@@ -102,51 +100,19 @@ def _install_log_redaction() -> None:
 
 _install_log_redaction()
 
-# One import at a time across backup Import/preview AND entity Customize /api/run (I5).
+# One backup import (or import preview) at a time: a second one is answered 409.
 _IMPORT_LOCK = threading.Lock()
-IMPORT_BUSY = "Another import, preview, or entity run is in progress; try again when it has finished."
+IMPORT_BUSY = "Another backup import or preview is running; try again when it has finished."
 
 
 @contextlib.contextmanager
 def _exclusive_import():
-    # Entity Customize holds _IMPORT_LOCK for the whole run; also refuse when state says running.
-    if state.current_run is not None and getattr(state.current_run, "status", None) == "running":
-        raise HTTPException(status_code=409, detail=IMPORT_BUSY)
     if not _IMPORT_LOCK.acquire(blocking=False):
         raise HTTPException(status_code=409, detail=IMPORT_BUSY)
     try:
         yield
     finally:
         _IMPORT_LOCK.release()
-
-
-# One ZipFile per backup-import/preview job (I9): avoid re-parsing BytesIO(contents) per stage.
-_ZIP_SCOPE: contextvars.ContextVar = contextvars.ContextVar("backup_zip_scope", default=None)
-
-
-@contextlib.contextmanager
-def _backup_zip_scope(contents: bytes):
-    """Open the backup ZIP once for the duration of an import/preview job."""
-    zf = zipfile.ZipFile(io.BytesIO(contents))
-    token = _ZIP_SCOPE.set((id(contents), zf))
-    try:
-        yield zf
-    finally:
-        _ZIP_SCOPE.reset(token)
-        with contextlib.suppress(Exception):
-            zf.close()
-
-
-@contextlib.contextmanager
-def _open_backup_zip(contents: bytes):
-    """Reuse the scoped ZipFile when ``contents`` is the same object; else open briefly."""
-    cached = _ZIP_SCOPE.get()
-    if cached is not None and cached[0] == id(contents):
-        yield cached[1]
-        return
-    with zipfile.ZipFile(io.BytesIO(contents)) as zf:
-        yield zf
-
 
 LOGIN_REQUIRED = "Log in to a Core Hub first"
 AUTH_REQUIRED = "Authentication required"
@@ -434,7 +400,7 @@ class StateResponse(BaseModel):
     skip_verify: Optional[bool] = Field(None, alias="skipVerify")
     enable_scheduling: bool = Field(..., alias="enableScheduling")
     create_tables: bool = Field(..., alias="createTables")
-    run: Optional[dict] = None
+    run: Optional[dict]
     duplicate: Optional[dict] = None
     corehub_overview: Optional[dict] = Field(None, alias="corehubOverview")
 
@@ -458,16 +424,12 @@ class RunSnapshot(BaseModel):
 
 
 class ApiMessage(BaseModel):
-    model_config = ConfigDict(validate_by_name=True)
-
     success: bool = True
     message: Optional[str] = None
     logs: Optional[list[str]] = None
     planUsed: Optional[Dict[str, Any]] = None
     # Things to do after a successful call, never failures (a restored connection that needs a sign-in)
     warnings: Optional[list[str]] = None
-    # Set when the call was a dry-run (I2 bulk path): never imply a real "completed" write.
-    dry_run: Optional[bool] = Field(None, alias="dryRun")
 
 
 class AiSettingsExportRequest(BaseModel):
@@ -988,7 +950,7 @@ def _is_entity_yaml(lower: str) -> bool:
 def _extract_upload_members(contents: bytes, extract_dir: Path) -> Optional[Path]:
     """Extract the YAML, UDF and function collection source files of an uploaded ZIP; return the primary YAML, if any."""
     yaml_path: Optional[Path] = None
-    with _open_backup_zip(contents) as zf:
+    with zipfile.ZipFile(io.BytesIO(contents)) as zf:
         for member in zf.namelist():
             if _is_macos_metadata(member):
                 continue
@@ -1296,9 +1258,9 @@ def _bulk_schema_types(request: BulkCreateRequest) -> tuple[str, str]:
     return source_type, target_type
 
 
+def _bulk_create_entities(request: BulkCreateRequest) -> ApiMessage:
+    _require_session()
 
-def _bulk_prefs(request: BulkCreateRequest) -> tuple[bool, bool]:
-    """Resolve enable_scheduling / create_tables from the request or session prefs."""
     prefs = state.preferences()
     enable_scheduling = request.enable_scheduling
     if enable_scheduling is None:
@@ -1306,34 +1268,7 @@ def _bulk_prefs(request: BulkCreateRequest) -> tuple[bool, bool]:
     create_tables = request.create_tables
     if create_tables is None:
         create_tables = prefs["createTables"]
-    return bool(enable_scheduling), bool(create_tables)
 
-
-def _bulk_effective_create_tables(create_tables: bool, target_type: str) -> bool:
-    """Disable DDL for NoSQL / object-store / streaming targets."""
-    if target_type and target_type.upper() == 'NOSQL':
-        logger.info("Target is NoSQL - disabling table creation")
-        return False
-    return bool(create_tables)
-
-
-def _bulk_result_message(ok: bool, dry: bool, result: dict) -> str:
-    """User-facing bulk create / dry-run summary line."""
-    if dry:
-        return (
-            "Bulk entity dry-run finished (no writes)"
-            if ok else (result.get("error") or "Bulk entity dry-run reported failures")
-        )
-    return (
-        "Bulk entity creation completed successfully"
-        if ok else (result.get("error") or "Bulk entity creation failed")
-    )
-
-
-def _bulk_create_entities(request: BulkCreateRequest) -> ApiMessage:
-    _require_session()
-
-    enable_scheduling, create_tables = _bulk_prefs(request)
     plan = _load_entity_plan_or_400(request.plan)
     enable_scheduling, create_tables, _restore_fc = _entity_plan_flags(
         plan, request.pipeline_id, enable_scheduling=enable_scheduling, create_tables=create_tables,
@@ -1349,7 +1284,13 @@ def _bulk_create_entities(request: BulkCreateRequest) -> ApiMessage:
         )
 
     source_type, target_type = _bulk_schema_types(request)
-    effective_create_tables = _bulk_effective_create_tables(create_tables, target_type)
+
+    # Disable table creation for NoSQL / object-store / streaming targets (same as run_create_entities /
+    # duplicate pipeline — agents.json catalog type, not the request's SQL/NoSQL hint alone).
+    effective_create_tables = bool(create_tables)
+    if target_type and target_type.upper() == 'NOSQL':
+        logger.info("Target is NoSQL - disabling table creation")
+        effective_create_tables = False
 
     pipeline = import_plan.entity_pipeline(plan, request.pipeline_id)
     import_opts = _entity_run_import_options(plan, pipeline, dry_run=bool(request.dry_run))
@@ -1385,18 +1326,12 @@ def _bulk_create_entities(request: BulkCreateRequest) -> ApiMessage:
 
     ok = result.get("success", False)
     logs = result.get("logs") or []
-    for line in logs:
-        logger.info("[bulk-create] %s", line)
+    if logs:
+        for line in logs:
+            logger.info("[bulk-create] %s", line)
 
-    dry = bool(request.dry_run) or bool(result.get("dry_run"))
-    return ApiMessage(
-        success=ok,
-        message=_bulk_result_message(ok, dry, result),
-        logs=logs,
-        planUsed=plan.to_dict() if not plan.empty else None,
-        dryRun=True if dry else None,
-    )
-
+    msg = "Bulk entity creation completed successfully" if ok else result.get("error") or "Bulk entity creation failed"
+    return ApiMessage(success=ok, message=msg, logs=logs, planUsed=plan.to_dict() if not plan.empty else None)
 
 
 def _template_schema_types(pipeline_id: str) -> tuple[Any, Any]:
@@ -1411,7 +1346,7 @@ def _template_schema_types(pipeline_id: str) -> tuple[Any, Any]:
             use_ssl=state.use_ssl,
             skip_verify=state.skip_verify,
         )
-    except Exception:  # pylint: disable=broad-except
+    except Exception as exc:  # pylint: disable=broad-except
         logger.exception(
             "Failed to infer schema types for bulk template on pipeline %s", pipeline_id
         )
@@ -1995,7 +1930,7 @@ def _merge_agents_configs(names: list[str], texts: list[str]) -> str:
 def _read_agents_config_text(contents: bytes, operation: str, logs: Optional[list[str]] = None) -> str:
     """Text of the agents-config.yaml of a backup ZIP; 400 when there is none or the ZIP is invalid."""
     try:
-        with _open_backup_zip(contents) as zf:
+        with zipfile.ZipFile(io.BytesIO(contents)) as zf:
             names = zf.namelist()
             if logs is not None:
                 logs.append(f"Archive contains {len(names)} entries.")
@@ -2055,7 +1990,7 @@ def _extract_import_udf_sources(contents: bytes) -> Optional[Path]:
     try:
         udf_root = new_session_dir("import")
 
-        with _open_backup_zip(contents) as zf_udf:
+        with zipfile.ZipFile(io.BytesIO(contents)) as zf_udf:
             for member in zf_udf.namelist():
                 # Skip macOS resource-fork entries; only extract recognized UDF
                 # source extensions found under udf-* folders
@@ -2132,7 +2067,7 @@ def _find_notification_config(contents: bytes) -> Optional[Dict[str, Any]]:
     Prefer a dedicated global-config.yaml file; otherwise fall back to a
     globalNotifications key embedded in any per-pipeline YAML.
     """
-    with _open_backup_zip(contents) as zf_gc:
+    with zipfile.ZipFile(io.BytesIO(contents)) as zf_gc:
         notification_cfg = _global_config_notifications(zf_gc)
 
         # Fallback: scan per-pipeline YAMLs for an embedded globalNotifications key
@@ -2144,7 +2079,7 @@ def _find_notification_config(contents: bytes) -> Optional[Dict[str, Any]]:
 def _find_config_by_stem(contents: bytes, stem: str) -> Any:
     """Parsed content of the first readable backup ZIP member named stem (any folder, any extension)."""
     found = None
-    with _open_backup_zip(contents) as zf:
+    with zipfile.ZipFile(io.BytesIO(contents)) as zf:
         for name in zf.namelist():
             if _member_stem(name) == stem:
                 try:
@@ -2285,10 +2220,7 @@ def _record_restore_result(errors: list[str], label: str, result: Dict[str, Any]
 def _agent_matches(candidate: Any, a_type: Any, a_tag: Any, a_id: Any) -> bool:
     if not isinstance(candidate, dict):
         return False
-    if candidate.get("agentType") != a_type:
-        return False
-    cand_tag = candidate.get("agentTag")
-    if str(cand_tag or "").casefold() != str(a_tag or "").casefold():
+    if candidate.get("agentType") != a_type or candidate.get("agentTag") != a_tag:
         return False
     if not a_id:
         return True
@@ -2300,17 +2232,16 @@ def _find_mapped_agent(agents_list: list, a_type: Any, a_tag: Any, a_id: Any) ->
     """The agents-config.yaml agent a per-pipeline agents mapping entry points at."""
     # Prefer matching by agentId when present to avoid merging distinct
     # agents that share the same tag/type. Fall back to tag/type only
-    # for backwards compatibility with older exports. Tag compare is casefold (I3).
+    # for backwards compatibility with older exports.
     match = next((a for a in agents_list if _agent_matches(a, a_type, a_tag, a_id)), None)
     if not match and a_id is not None:
-        tag_fold = str(a_tag or "").casefold()
         match = next(
             (
                 a
                 for a in agents_list
                 if isinstance(a, dict)
                 and a.get("agentType") == a_type
-                and str(a.get("agentTag") or "").casefold() == tag_fold
+                and a.get("agentTag") == a_tag
             ),
             None,
         )
@@ -2351,7 +2282,7 @@ def _dedupe_agents(selected: list[dict]) -> list[dict]:
     seen_local: set[tuple] = set()
     deduped: list[dict] = []
     for a in selected:
-        key = (a.get("agentType"), str(a.get("agentTag") or "").casefold())
+        key = (a.get("agentType"), a.get("agentTag"))
         if key in seen_local:
             continue
         seen_local.add(key)
@@ -2467,7 +2398,7 @@ def _upload_archive_certificate(job: _ArchiveImport, name: str, agent_cfg: dict,
     cert_type = agent_cfg.get("_certificate_type")
     agent_id = agent_cfg.get("_agent_id")
     # Extract certificate from ZIP
-    with _open_backup_zip(job.contents) as zf_cert:
+    with zipfile.ZipFile(io.BytesIO(job.contents)) as zf_cert:
         cert_data = _read_archive_certificate(zf_cert, name, cert_path, agent_id, job.errors)
         if cert_data is None:
             return
@@ -2953,11 +2884,43 @@ def _finish_imported_pipeline(name: str, new_pipeline_id: Any, new_pipeline_name
         _mark_configuration_completed(new_pipeline_id, new_pipeline_name)
 
 
-def _restore_imported_function_collection(job: _ArchiveImport, name: str, old_pipeline_id: Optional[str], new_pipeline_id: Any) -> bool:
-    """Publish and install the function collection of the backup on the new pipeline; False when CoreHub refuses it."""
+_MISSING_FUNCTION_COLLECTION_NOTE = (
+    "backup has no function-collection/; CustomFn may refuse unless the collection is already "
+    "installed on the pipeline"
+)
+
+
+def _yaml_names_custom_fn(yaml_text: Any) -> bool:
+    """True when the planned/imported YAML binds at least one CustomFn."""
+    if yaml_text is None or yaml_text == "":
+        return False
+    try:
+        config = yaml.safe_load(yaml_text) if isinstance(yaml_text, str) else yaml_text
+    except Exception:  # pylint: disable=broad-except
+        return False
+    return bool(function_collection.custom_function_names(config))
+
+
+def _note_missing_function_collection(job: _ArchiveImport, name: str, yaml_text: Any = None) -> None:
+    """Soft note when the backup has no function-collection/ but YAML uses CustomFn (do not hard-block)."""
+    if not _yaml_names_custom_fn(yaml_text):
+        return
+    note = f"{name}: {_MISSING_FUNCTION_COLLECTION_NOTE}"
+    if note not in job.notes:
+        job.notes.append(note)
+
+
+def _restore_imported_function_collection(job: _ArchiveImport, name: str, old_pipeline_id: Optional[str],
+                                          new_pipeline_id: Any, yaml_text: Any = None) -> bool:
+    """Publish and install the function collection of the backup on the new pipeline; False when CoreHub refuses it.
+
+    When the backup has no ``function-collection/`` folder and the YAML names CustomFn, append a soft
+    ``job.notes`` warning (collection may already be installed on the pipeline — Import All is not blocked).
+    """
     try:
         directory = function_collection.find_function_collection_dir([job.udf_root], old_pipeline_id)
         if directory is None:
+            _note_missing_function_collection(job, name, yaml_text)
             return True
         function_collection.restore_function_collection(
             state.token,
@@ -3007,15 +2970,21 @@ def _planned_yaml_text(job: _ArchiveImport, name: str, yaml_text: str,
 
 
 def _restore_planned_function_collection(job: _ArchiveImport, name: str, old_pipeline_id: Any, new_pipeline_id: Any,
-                                         pipeline_plan: Optional[import_plan.PipelinePlan]) -> bool:
+                                         pipeline_plan: Optional[import_plan.PipelinePlan],
+                                         yaml_text: Any = None) -> bool:
     """The function collection restore, unless the plan leaves it out (then only a note)."""
     if pipeline_plan is not None and not job.plan.part(pipeline_plan, "functionCollection"):
-        if job.udf_root is not None and function_collection.find_function_collection_dir(
-                [job.udf_root], old_pipeline_id) is not None:
+        directory = None
+        if job.udf_root is not None:
+            directory = function_collection.find_function_collection_dir([job.udf_root], old_pipeline_id)
+        if directory is not None:
             job.notes.append(f"{name}: function collection not restored (plan: functionCollection off); entities "
                              "calling its functions are refused unless it is already installed on the pipeline")
+        else:
+            # Plan skipped restore and the backup has no folder: still warn when YAML uses CustomFn.
+            _note_missing_function_collection(job, name, yaml_text)
         return True
-    return _restore_imported_function_collection(job, name, old_pipeline_id, new_pipeline_id)
+    return _restore_imported_function_collection(job, name, old_pipeline_id, new_pipeline_id, yaml_text=yaml_text)
 
 
 def _import_base_name(meta: Any, embedded_name: Optional[str], old_pipeline_id: Any, pipeline_plan: Any) -> Any:
@@ -3099,13 +3068,15 @@ def _import_archive_pipeline(job: _ArchiveImport, name: str, stem_no_ext: str, y
     # Upload certificates for agents if specified
     _upload_pipeline_certificates(job, name, agents_for_pipeline, new_pipeline_id)
 
-    yaml_path = _materialize_import_yaml(job, name, _planned_yaml_text(job, name, yaml_text, pipeline_plan))
+    planned_yaml = _planned_yaml_text(job, name, yaml_text, pipeline_plan)
+    yaml_path = _materialize_import_yaml(job, name, planned_yaml)
     if yaml_path is None:
         return
 
     # The function collection goes in before any UDF is compiled and any entity is saved: the UDFs may call its
     # classes and the entities bind its functions. A refused collection stops the restore of this pipeline.
-    if not _restore_planned_function_collection(job, name, old_pipeline_id, new_pipeline_id, pipeline_plan):
+    if not _restore_planned_function_collection(job, name, old_pipeline_id, new_pipeline_id, pipeline_plan,
+                                                yaml_text=planned_yaml):
         return
 
     if pipeline_plan is None:
@@ -3116,29 +3087,13 @@ def _import_archive_pipeline(job: _ArchiveImport, name: str, stem_no_ext: str, y
 
 
 def _existing_pipeline_agent(existing_agents: list, backup_agent: dict) -> Optional[dict]:
-    """The agent of an existing pipeline that stands for one backup agent.
-
-    Same agentType; agentTag compared case-insensitively (preferred). When only one
-    same-type agent is bound, accept it even when the backup tag differs — restores
-    pre-I3 resume behaviour while keeping casefold tag match as the preferred path.
-    """
+    """The agent of an existing pipeline that stands for one backup agent: same agentType (and tag when two)."""
     a_type = str(backup_agent.get("agentType") or "").upper()
     same_type = [a for a in existing_agents if str(a.get("agentType") or "").upper() == a_type]
-    if not same_type:
-        return None
+    if len(same_type) <= 1:
+        return same_type[0] if same_type else None
     tag = backup_agent.get("agentTag")
-    tag_fold = str(tag).casefold() if tag else ""
-    if tag_fold:
-        matched = next(
-            (a for a in same_type if str(a.get("agentTag") or "").casefold() == tag_fold),
-            None,
-        )
-        if matched is not None:
-            return matched
-    # No casefold match (or no backup tag): accept a single bound agent of the right type.
-    if len(same_type) == 1:
-        return same_type[0]
-    return None
+    return next((a for a in same_type if tag and a.get("agentTag") == tag), None)
 
 
 _BOUND_AGENT_ID = re.compile(r"\(id=([^)]+)\)$")
@@ -3248,10 +3203,12 @@ def _resumed_pipeline_name(config: Dict[str, Any], meta: Optional[Dict[str, Any]
 
 
 def _resume_function_collection(job: _ArchiveImport, name: str, old_pipeline_id: Any, pipeline_id: str,
-                                pipeline_plan: Optional[import_plan.PipelinePlan]) -> None:
+                                pipeline_plan: Optional[import_plan.PipelinePlan],
+                                yaml_text: Any = None) -> None:
     """The collection may already be installed by the first import: a refusal here is reported, not fatal."""
     errors_before = len(job.errors)
-    if not _restore_planned_function_collection(job, name, old_pipeline_id, pipeline_id, pipeline_plan):
+    if not _restore_planned_function_collection(job, name, old_pipeline_id, pipeline_id, pipeline_plan,
+                                                yaml_text=yaml_text):
         refused = job.errors[errors_before:]
         del job.errors[errors_before:]
         job.notes.extend(f"{line} (resume: continuing, the collection may already be installed)" for line in refused)
@@ -3286,10 +3243,11 @@ def _resume_archive_pipeline(job: _ArchiveImport, name: str, stem_no_ext: str, y
         return
     _resume_specific_configuration(job, name, agents_for_pipeline, existing_agents, pipeline_id)
 
-    yaml_path = _materialize_import_yaml(job, name, _planned_yaml_text(job, name, yaml_text, pipeline_plan))
+    planned_yaml = _planned_yaml_text(job, name, yaml_text, pipeline_plan)
+    yaml_path = _materialize_import_yaml(job, name, planned_yaml)
     if yaml_path is None:
         return
-    _resume_function_collection(job, name, old_pipeline_id, pipeline_id, pipeline_plan)
+    _resume_function_collection(job, name, old_pipeline_id, pipeline_id, pipeline_plan, yaml_text=planned_yaml)
     if pipeline_plan is None:
         _create_imported_entities(job, name, yaml_path, pipeline_id, pipeline_name, default_on_existing="skip")
     else:
@@ -3317,7 +3275,7 @@ def _resume_candidates(job: _ArchiveImport, members: list[tuple[str, str, str]])
 def _archive_pipeline_members(contents: bytes, errors: Optional[list[str]] = None) -> list[tuple[str, str, str]]:
     """``(member name, stem, YAML text)`` of each per-pipeline YAML of a backup ZIP."""
     members: list[tuple[str, str, str]] = []
-    with _open_backup_zip(contents) as zf:
+    with zipfile.ZipFile(io.BytesIO(contents)) as zf:
         for name in zf.namelist():
             stem_no_ext = _pipeline_yaml_stem(name)
             if stem_no_ext is None:
@@ -3610,7 +3568,7 @@ def _run_archive_import(contents: bytes, agent_overrides_text: Optional[str] = N
     ``plan`` (a custom import, this run only; None or empty: Import All), ``agent_passwords`` ({backup pipeline
     id: {agentTag|agentId: password}}, kept in memory) and ``plan_env`` (where passwordRef "env:NAME" is read).
     One import at a time: 409 while another runs."""
-    with _exclusive_import(), _backup_zip_scope(contents):
+    with _exclusive_import():
         return _run_archive_import_locked(contents, agent_overrides_text, resume_pipeline_id,
                                           resume_source_pipeline_id, plan, agent_passwords, plan_env)
 
@@ -3909,7 +3867,7 @@ def _validate_pipeline_yaml(
 
 def _validate_archive_pipelines(contents: bytes, reserved_names: set[str], logs: list[str], errors: list[str]) -> None:
     """Validate each per-pipeline YAML can be parsed and has schemas."""
-    with _open_backup_zip(contents) as zf:
+    with zipfile.ZipFile(io.BytesIO(contents)) as zf:
         for name in zf.namelist():
             stem_no_ext = _pipeline_yaml_stem(name)
             if stem_no_ext is None:
@@ -4243,11 +4201,6 @@ def _yaml_parts(config: Any) -> Dict[str, int]:
 def _analyze_archive(contents: bytes, apply_overrides: bool = False) -> Dict[str, Any]:
     """What a backup holds, for the Customize step: pipelines, tables, agents (no password) and the draft plan.
     ``apply_overrides`` (the dry run): report the passwords the agent overrides would give as given."""
-    with _backup_zip_scope(contents):
-        return _analyze_archive_body(contents, apply_overrides)
-
-
-def _analyze_archive_body(contents: bytes, apply_overrides: bool = False) -> Dict[str, Any]:
     agents_text = _read_agents_config_text(contents, "analyze")
     agents_config, agents_list = _parse_agents_config(agents_text, "analyze", allow_masked=True)
     override_errors: list[str] = []
@@ -4548,18 +4501,6 @@ def _bulk_yaml_for_plan(plan: import_plan.ImportPlan, pipeline: import_plan.Pipe
     return entity_plan_runtime.apply_overrides_to_bulk_yaml(bulk_yaml, plan, pipeline.old_id)
 
 
-def _validate_entity_plan_for_run(yaml_path: Path, plan: import_plan.ImportPlan,
-                                  pipeline_id: str) -> None:
-    """In-memory plan shape checks for /api/run start (I4). Does not write a temp YAML."""
-    if plan.empty:
-        return
-    yaml_config = load_yaml_config(str(yaml_path))
-    pipeline = import_plan.entity_pipeline(plan, pipeline_id)
-    import_plan.check_names(yaml_config, pipeline)
-    import_plan.check_target_collisions(pipeline, pipeline_id)
-    entity_plan_runtime.prepare_yaml(yaml_config, plan, pipeline_id)
-
-
 def _prepare_entity_yaml_for_run(yaml_path: Path, plan: import_plan.ImportPlan,
                                  pipeline_id: str) -> tuple[Path, list[str], Any, Optional[Path]]:
     """Apply the entity plan to the uploaded YAML. Returns (path_to_use, notes, pipeline, temp_or_None).
@@ -4635,7 +4576,7 @@ def _locked_preview(contents: bytes, plan: import_plan.ImportPlan,
     owner = object()
     import_plan.SECRETS.add(owner, list(import_plan.secret_values(passwords)) + _env_secret_values(plan, None))
     try:
-        with _exclusive_import(), _backup_zip_scope(contents):
+        with _exclusive_import():
             return _preview_import(contents, plan, passwords)
     finally:
         import_plan.SECRETS.discard(owner)
@@ -4828,8 +4769,6 @@ def _empty_entity_run_aggregate() -> dict:
 
 def _merge_entity_run_result(aggregate: dict, result: dict) -> None:
     """Accumulate one schema-pair create_entities outcome into the run aggregate."""
-    if result.get("dry_run"):
-        aggregate["dry_run"] = True
     if not result.get("success"):
         aggregate["success"] = False
     if result.get("partial"):
@@ -4889,8 +4828,6 @@ def _finalize_entity_run_aggregate(aggregate: dict) -> dict:
         "failedEntityIds": ids,
         "partial": bool(aggregate.get("partial")),
     }
-    if aggregate.get("dry_run"):
-        summary["dry_run"] = True
     aggregate["summary"] = summary
     if failed or not aggregate.get("success"):
         aggregate["error"] = _entity_run_error_text(aggregate, ok=ok, failed=failed, skipped=skipped)
@@ -5041,17 +4978,8 @@ def _first_not_none(value: Any, default: Any) -> Any:
 
 
 def _entity_run_status(result: dict) -> str:
-    """The final run status of an entity creation result.
-
-    A dry-run must never report ``completed`` (I2): writes were blocked.
-    A dry-run that hit errors reports ``failed``, not ``dry-run``.
-    """
-    failed = int(result.get("failed") or 0)
-    if result.get("dry_run"):
-        if not result.get("success") or failed > 0 or result.get("error"):
-            return "failed"
-        return "dry-run"
-    if result.get("partial") or (int(result.get("successful") or 0) > 0 and failed > 0):
+    """The final run status of an entity creation result."""
+    if result.get("partial") or (int(result.get("successful") or 0) > 0 and int(result.get("failed") or 0) > 0):
         return "partial"
     if result.get("success"):
         return "completed"
@@ -5059,22 +4987,6 @@ def _entity_run_status(result: dict) -> str:
 
 
 async def _execute_run(run_id: str, request: RunRequest) -> None:
-    """Run entity creation; always leave the run out of ``running`` (I5 lock + state)."""
-    try:
-        await _execute_run_body(run_id, request)
-    except Exception as exc:  # pylint: disable=broad-except
-        logger.exception("Entity run %s raised", run_id)
-        cur = state.current_run
-        if cur is not None and cur.run_id == run_id and getattr(cur, "status", None) == "running":
-            state.finalize_run(run_id, "failed", str(exc) or "Entity run raised")
-        raise
-    finally:
-        cur = state.current_run
-        if cur is not None and cur.run_id == run_id and getattr(cur, "status", None) == "running":
-            state.finalize_run(run_id, "failed", "Entity run ended without a final status")
-
-
-async def _execute_run_body(run_id: str, request: RunRequest) -> None:
     token = state.token
     base_url = state.base_url
     if not token or not base_url:
@@ -5154,29 +5066,19 @@ def _start_run(request: RunRequest) -> ApiMessage:
     plan = _load_entity_plan_or_400(request.plan)
     if not state.get_upload_path(request.yaml_file_id):
         raise HTTPException(status_code=400, detail=UPLOADED_YAML_NOT_FOUND)
-    # Cheap shape check in memory only (I4): no discarded temp YAML on start.
+    # Cheap shape check: apply against the uploaded YAML so include/unknown tables fail fast.
     try:
         yaml_path = state.get_upload_path(request.yaml_file_id)
-        _validate_entity_plan_for_run(yaml_path, plan, request.pipeline_id)
+        _prepare_entity_yaml_for_run(yaml_path, plan, request.pipeline_id)
     except import_plan.PlanError as exc:
         raise HTTPException(status_code=400, detail=f"Entity import plan: {exc}") from exc
 
-    # Share the backup-import mutex so entity Customize and ZIP import cannot overlap (I5).
-    if not _IMPORT_LOCK.acquire(blocking=False):
-        raise HTTPException(status_code=409, detail=IMPORT_BUSY)
     try:
         run_status = state.start_run()
     except RuntimeError as exc:
-        _IMPORT_LOCK.release()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-    async def _execute_and_release():
-        try:
-            await _execute_run(run_status.run_id, request)
-        finally:
-            _IMPORT_LOCK.release()
-
-    task = asyncio.create_task(_execute_and_release())
+    task = asyncio.create_task(_execute_run(run_status.run_id, request))
     _BACKGROUND_TASKS.add(task)
     task.add_done_callback(_BACKGROUND_TASKS.discard)
     return ApiMessage(message="Entity creation started", planUsed=plan.to_dict() if not plan.empty else None)
@@ -5234,11 +5136,12 @@ async def upload_certificate(
         ) from e
 
 
-def _existing_entity_sources(pipeline_id: str):
-    """``{(schema, table)}`` already in the pipeline, plus optional listing error (I6/F8).
+def _existing_entity_sources(pipeline_id: str) -> set:
+    """``{(schema, table)}`` already in the pipeline. GET-only; empty set when listing fails.
 
-    GET-only. On listing failure returns ``(set(), error_text)`` so preview can set
-    ``listingError`` / ``conflictsUnknown`` instead of silently claiming a clean slate.
+    Core Hub lists entities as ``{"entity": {...}}`` with source tables under
+    ``agentEntities`` (and ``tables`` for MultiTable). Match the backup-import
+    path: unwrap via create_all_entities helpers so alreadyExists is correct.
     """
     import create_all_entities  # pylint: disable=import-outside-toplevel
     try:
@@ -5247,14 +5150,14 @@ def _existing_entity_sources(pipeline_id: str):
         )
     except Exception as exc:  # pylint: disable=broad-except
         logger.info("Entity preview: could not list existing entities: %s", exc)
-        return set(), str(exc)
+        return set()
     sources = set()
     for item in listing if isinstance(listing, list) else []:
         entity = create_all_entities._listing_entity(item)  # pylint: disable=protected-access
         sources.update(
             create_all_entities._all_source_tables_of(entity)  # pylint: disable=protected-access
         )
-    return sources, None
+    return sources
 
 
 def _yaml_config_for_entity_preview(body: EntityPlanBody):
@@ -5284,50 +5187,19 @@ def entity_plan_draft(body: EntityPlanBody) -> Dict[str, Any]:
     return import_plan.draft_entity(yaml_config, body.pipeline_id)
 
 
-def _preview_existing_columns_lookup(pipeline_id: str):
-    """GET-only target-column lookup for preview existing-table warnings (I1), or None."""
-    try:
-        agents = corehub.fetch_core_hub(f"/pipelines/{pipeline_id}/agents", token=state.token)
-    except Exception:  # pylint: disable=broad-except
-        return None
-    target = next(
-        (a for a in (agents or []) if isinstance(a, dict)
-         and str(a.get("agentType") or "").upper() == "TARGET"),
-        None,
-    )
-    if not target:
-        return None
-    agent_id = target.get("agentId") or target.get("id")
-    if not agent_id:
-        return None
-
-    def existing_columns(schema, table):
-        try:
-            found = get_table_columns(state.token, pipeline_id, agent_id, schema, table)
-        except Exception:  # pylint: disable=broad-except
-            return None
-        cols = [c.get("name") for c in (found or {}).get("columns") or [] if isinstance(c, dict)]
-        return cols if cols else None
-
-    return existing_columns
-
-
 async def entity_plan_preview(body: EntityPlanBody) -> Dict[str, Any]:
     """Read-only preview of an entity Customize plan. Core Hub is GET-only (existing entities)."""
     _require_session()
     plan = _load_entity_plan_or_400(body.plan)
     yaml_config = _yaml_config_for_entity_preview(body)
     try:
-        existing, listing_error = await run_in_threadpool(_existing_entity_sources, body.pipeline_id)
-        existing_columns = await run_in_threadpool(_preview_existing_columns_lookup, body.pipeline_id)
+        existing = await run_in_threadpool(_existing_entity_sources, body.pipeline_id)
         return await run_in_threadpool(
             entity_plan_runtime.preview_payload,
             yaml_config=yaml_config,
             plan=plan,
             pipeline_id=body.pipeline_id,
             existing_sources=existing,
-            existing_columns=existing_columns,
-            listing_error=listing_error,
         )
     except import_plan.PlanError as exc:
         raise HTTPException(status_code=400, detail=f"Entity import plan: {exc}") from exc
