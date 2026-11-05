@@ -53,6 +53,10 @@ def set_core_hub_client(client: CoreHubClient):
     core_hub_client = client
 
 
+# Last (base_url, use_ssl, skip_verify) applied by configure_core_hub; skip rebuild when unchanged.
+_COREHUB_CONFIG_KEY: Optional[Tuple[str, Optional[bool], Optional[bool]]] = None
+
+
 def configure_core_hub(base_url: str, *, use_ssl: Optional[bool] = None, skip_verify: Optional[bool] = None) -> CoreHubClient:
     """
     Configure the CoreHub client with runtime options.
@@ -65,6 +69,17 @@ def configure_core_hub(base_url: str, *, use_ssl: Optional[bool] = None, skip_ve
     Returns:
         CoreHubClient: The configured client instance.
     """
+    global _COREHUB_CONFIG_KEY
+
+    key = (base_url, use_ssl, skip_verify)
+    if (
+        core_hub_client is not None
+        and _COREHUB_CONFIG_KEY == key
+        and getattr(core_hub_client, "base_url", None) is not None
+    ):
+        # Same Automator session / same Hub: avoid "Reconfiguring…" spam and token reset
+        # on every /api/bulk/target-tables call.
+        return core_hub_client
 
     logger.info("Reconfiguring CoreHub client: base_url=%s, use_ssl=%s, skip_verify=%s", base_url, use_ssl, skip_verify)
     os.environ['CORE_HUB_URL'] = base_url
@@ -76,6 +91,9 @@ def configure_core_hub(base_url: str, *, use_ssl: Optional[bool] = None, skip_ve
     client = CoreHubClient(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
     set_core_hub_client(client)
     reset_refreshed_token()
+    _COREHUB_CONFIG_KEY = key
+    # Hub endpoint change invalidates any cached pipeline configs.
+    reset_pipeline_config_cache()
     return client
 
 
@@ -149,39 +167,6 @@ def set_scheduling_enabled(enabled: bool):
 logger = get_logger()
 
 _ORACLE_AGENT_TAGS: Optional[set[str]] = None
-
-# Agents that ship inside CoreHub and may be missing from agents.json (which CI regenerates from the
-# backoffice catalog). Their category is what agents.json would carry in `type`, so the SQL/NoSQL
-# inference of the bootstrapper, the export and the Automator does not fall back to "SQL" for them.
-# The HTTP agent is object-store-like on both sides: as HTTP Target (Courier outbound) no CREATE TABLE
-# and NoSqlEntity targets, as HTTP Source (Courier inbound) NoSqlEntity sources.
-EMBEDDED_AGENT_CATEGORIES: dict[str, str] = {
-    "api-agent-shadow": "Object Store",
-}
-
-
-def embedded_agent_categories(normalize=None) -> dict[str, str]:
-    """``EMBEDDED_AGENT_CATEGORIES`` with each category passed through ``normalize`` (identity by default)."""
-    if normalize is None:
-        return dict(EMBEDDED_AGENT_CATEGORIES)
-    return {tag: normalize(category) for tag, category in EMBEDDED_AGENT_CATEGORIES.items()}
-
-
-def sql_or_nosql(category: str) -> str:
-    """Agent category (RDBMS, NoSQL, ...) collapsed to the SQL/NoSQL schema type."""
-    return "SQL" if category.strip().upper() == "RDBMS" else "NoSQL"
-
-
-def agent_types_by_tag(items: list) -> dict[str, str]:
-    """SQL/NoSQL type of each agents.json ``data`` entry, keyed by lower-cased ``internalName``."""
-    types: dict[str, str] = {}
-    for entry in items:
-        if not isinstance(entry, dict) or not entry.get("internalName") or not entry.get("type"):
-            continue
-        label = str(entry["type"]).strip()
-        if label:
-            types[str(entry["internalName"]).lower()] = sql_or_nosql(label)
-    return types
 
 
 def get_oracle_agent_tags() -> set[str]:
@@ -601,13 +586,44 @@ def generate_short_guid():
     return str(uuid.uuid4()).split('-')[0]
 
 
-def get_pipeline_config(token, pipeline_id):
-    return fetch_core_hub(f"/pipelines/{pipeline_id}/config", token=token, params={"include_secrets": "true"})
+# Short-lived cache of GET /pipelines/{id}/config (often multi-MB with entities+secrets).
+# Discovery (list_target_tables → get_pipeline_agents) was re-downloading this on every call.
+_PIPELINE_CONFIG_CACHE: Dict[Tuple[Any, ...], Tuple[float, Any]] = {}
+_PIPELINE_CONFIG_CACHE_TTL_SEC = 30.0
+_PIPELINE_CONFIG_CACHE_LOCK = threading.Lock()
+
+
+def reset_pipeline_config_cache():
+    """Drop cached pipeline configs (tests, Hub switch, or after a mutating import)."""
+    with _PIPELINE_CONFIG_CACHE_LOCK:
+        _PIPELINE_CONFIG_CACHE.clear()
+
+
+def get_pipeline_config(token, pipeline_id, *, include_secrets: bool = True, use_cache: bool = True):
+    """Fetch pipeline config; optionally reuse a short TTL cache for discovery-heavy paths."""
+    base = getattr(core_hub_client, "base_url", CORE_HUB_URL)
+    cache_key = (base, str(pipeline_id), bool(include_secrets))
+    now = time.monotonic()
+    if use_cache:
+        with _PIPELINE_CONFIG_CACHE_LOCK:
+            hit = _PIPELINE_CONFIG_CACHE.get(cache_key)
+            if hit is not None:
+                stored_at, payload = hit
+                if now - stored_at <= _PIPELINE_CONFIG_CACHE_TTL_SEC:
+                    return payload
+    params = {"include_secrets": "true" if include_secrets else "false"}
+    payload = fetch_core_hub(f"/pipelines/{pipeline_id}/config", token=token, params=params)
+    if use_cache:
+        with _PIPELINE_CONFIG_CACHE_LOCK:
+            _PIPELINE_CONFIG_CACHE[cache_key] = (now, payload)
+    return payload
 
 
 def get_pipeline_agents(token, pipeline_id):
+    # Keep include_secrets=true for Core Hub <2.3 param compatibility; the short TTL cache
+    # stops discovery from re-downloading the multi-MB config on every target-tables call.
     config = get_pipeline_config(token, pipeline_id)
-    return config.get('agents', {})
+    return config.get("agents", {}) if isinstance(config, dict) else {}
 
 
 def get_agent_tables(token, pipeline_id, agent_id, schema_name):
@@ -1581,96 +1597,15 @@ def _build_filter_column(column_name, matched_column, fallback_type, table_id,
     return filter_column
 
 
-# SQL-ish / alias spellings customers and hand-edited YAML use → CoreHub @SerialName
-# values from gluesync-kotlin commons-model EntityType.kt (Filter.Operation):
-# Equal, Greater, Lower, GreaterEqual, LowerEqual, NotEqual, In, NotIn, IsNull, IsNotNull, Regex.
-_FILTER_OPERATION_ALIASES = {
-    "=": "Equal",
-    "==": "Equal",
-    "eq": "Equal",
-    "equals": "Equal",
-    "!=": "NotEqual",
-    "<>": "NotEqual",
-    "ne": "NotEqual",
-    "notequals": "NotEqual",
-    "not_equal": "NotEqual",
-    ">": "Greater",
-    "gt": "Greater",
-    "greaterthan": "Greater",
-    ">=": "GreaterEqual",
-    "gte": "GreaterEqual",
-    "greaterequals": "GreaterEqual",
-    "greaterthanorequal": "GreaterEqual",
-    "<": "Lower",
-    "lt": "Lower",
-    "lessthan": "Lower",
-    "<=": "LowerEqual",
-    "lte": "LowerEqual",
-    "lessequals": "LowerEqual",
-    "lessthanorequal": "LowerEqual",
-    "in": "In",
-    "notin": "NotIn",
-    "not_in": "NotIn",
-    "isnull": "IsNull",
-    "is_null": "IsNull",
-    "isnotnull": "IsNotNull",
-    "is_not_null": "IsNotNull",
-}
-
-# Canonical CoreHub names that README historically mis-documented as *Than*.
-_FILTER_OPERATION_CANONICAL = {
-    "greaterthan": "Greater",
-    "greaterthanorequal": "GreaterEqual",
-    "lessthan": "Lower",
-    "lessthanorequal": "LowerEqual",
-    "less": "Lower",
-    "lessequal": "LowerEqual",
-}
-
-
-def _normalize_filter_operation(raw):
-    """CoreHub filter operation @SerialName of a YAML ``operation`` / ``operator`` value.
-
-    Accepts documented CoreHub names (``Equal``, ``Lower``, ``GreaterEqual``, …),
-    common aliases (``Equals``, ``eq``, ``LessThan``), and SQL-ish symbols
-    (``=``, ``!=``, ``<``, ``>=``). Maps ``Less*`` → ``Lower*`` and
-    ``GreaterThan*`` → ``Greater*`` to match EntityType.kt. Returns ``None`` when empty.
-    """
-    if raw is None:
-        return None
-    text = str(raw).strip()
-    if not text:
-        return None
-    aliased = _FILTER_OPERATION_ALIASES.get(text) or _FILTER_OPERATION_ALIASES.get(text.lower())
-    if aliased:
-        return aliased
-    canon = _FILTER_OPERATION_CANONICAL.get(text.lower())
-    if canon:
-        return canon
-    # Preserve CoreHub camel-case spellings (Equal, NotEqual, GreaterEqual, Lower, …).
-    return text
-
-
-def _filter_operation_from_clause(clause):
-    """The operation type of a YAML filter clause: ``operation``, else ``operator``."""
-    if not isinstance(clause, dict):
-        return None
-    if "operation" in clause and clause.get("operation") not in (None, ""):
-        return _normalize_filter_operation(clause.get("operation"))
-    if "operator" in clause and clause.get("operator") not in (None, ""):
-        return _normalize_filter_operation(clause.get("operator"))
-    return None
-
-
 def _build_filter_clause(clause, columns_info, table_id, source_node_info, target_node_info):
     """Convert one YAML filter clause; return None when the clause must be skipped."""
-    operation_type = _filter_operation_from_clause(clause)
-    # Skip invalid clauses (need a column and an operation/operator).
-    if not isinstance(clause, dict) or "column" not in clause or not operation_type:
+    # Skip invalid clauses
+    if 'column' not in clause or 'operation' not in clause:
         print(f"Warning: Skipping invalid filter clause: {clause}")
         return None
 
     column_name = clause['column']
+    operation_type = clause['operation']
 
     # Find the matching column from discovery
     matched_column = _find_discovered_column(columns_info, column_name)
