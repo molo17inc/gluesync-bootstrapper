@@ -167,6 +167,28 @@ def enabled_technical_field_names(agent: Optional[Mapping[str, Any]]) -> Optiona
     return frozenset(names)
 
 
+def _named_source(value: Any) -> Optional[str]:
+    """Return ``value`` when it is a non-empty source-column name string, else None."""
+    if isinstance(value, str) and value:
+        return value
+    return None
+
+
+def _sources_from_expression(row: Mapping[str, Any]):
+    """Yield source names referenced by ``SourceColumnArg`` entries inside a YAML expression row."""
+    expression = row.get("expression")
+    if not isinstance(expression, Mapping):
+        return
+    for arg in expression.get("arguments") or []:
+        if not isinstance(arg, Mapping):
+            continue
+        if arg.get("type") != "SourceColumnArg":
+            continue
+        name = _named_source(arg.get("name"))
+        if name is not None:
+            yield name
+
+
 def _yaml_rows_naming_sources(custom_config: Optional[Mapping[str, Any]]):
     """Yield ``(source_name, yaml_row)`` for every source a YAML columns section names.
 
@@ -181,19 +203,47 @@ def _yaml_rows_naming_sources(custom_config: Optional[Mapping[str, Any]]):
         if not isinstance(row, Mapping):
             continue
         for key in ("source", "sourceName"):
-            name = row.get(key)
-            if isinstance(name, str) and name:
+            name = _named_source(row.get(key))
+            if name is not None:
                 yield name, row
-        expression = row.get("expression")
-        if not isinstance(expression, Mapping):
+        for name in _sources_from_expression(row):
+            yield name, row
+
+
+def _pending_reserved_from_yaml(
+    custom_config: Optional[Mapping[str, Any]],
+    present: set,
+    enabled_technical_fields: Optional[frozenset],
+    table_name: str,
+) -> dict[str, Mapping[str, Any]]:
+    """Canonical reserved names the YAML maps that discovery omitted; refuse when agent disabled them."""
+    from entity_mapping import EntityMappingError  # local: avoid import cycle at module load
+
+    pending: dict[str, Mapping[str, Any]] = {}
+    for name, row in _yaml_rows_naming_sources(custom_config):
+        canonical = canonical_technical_field_name(name)
+        if canonical is None or canonical in present or canonical in pending:
             continue
-        for arg in expression.get("arguments") or []:
-            if not isinstance(arg, Mapping):
-                continue
-            if arg.get("type") == "SourceColumnArg":
-                name = arg.get("name")
-                if isinstance(name, str) and name:
-                    yield name, row
+        if enabled_technical_fields is not None and canonical not in enabled_technical_fields:
+            raise EntityMappingError(missing_technical_field_message(table_name or "?", name))
+        pending[canonical] = row
+    return pending
+
+
+def _append_pending_tech_columns(
+    discovered: list,
+    present: set,
+    pending: Mapping[str, Mapping[str, Any]],
+) -> None:
+    """Synthesise and append each pending reserved technical column onto ``discovered``."""
+    next_position = max((c.get("position") or 0 for c in discovered if isinstance(c, Mapping)), default=0) + 1
+    for name, row in pending.items():
+        tech = reserved_technical_column(name, position=next_position, yaml_row=row)
+        if tech is None:
+            continue
+        discovered.append(tech)
+        present.add(name)
+        next_position = max(next_position, (tech.get("position") or 0) + 1)
 
 
 def merge_reserved_technical_columns(
@@ -214,31 +264,15 @@ def merge_reserved_technical_columns(
     When ``None`` (agent config unread), known reserved names are synthesised so unit tests and
     offline paths still work.
     """
-    from entity_mapping import EntityMappingError  # local: avoid import cycle at module load
-
     if columns is None:
         columns = {"columns": []}
     discovered = columns.setdefault("columns", [])
     if not isinstance(discovered, list):
         columns["columns"] = discovered = []
     present = {c.get("name") for c in discovered if isinstance(c, Mapping)}
-    pending: dict[str, Mapping[str, Any]] = {}
-    for name, row in _yaml_rows_naming_sources(custom_config):
-        canonical = canonical_technical_field_name(name)
-        if canonical is None:
-            continue
-        if canonical in present or canonical in pending:
-            continue
-        if enabled_technical_fields is not None and canonical not in enabled_technical_fields:
-            raise EntityMappingError(missing_technical_field_message(table_name or "?", name))
-        pending[canonical] = row
-    next_position = max((c.get("position") or 0 for c in discovered if isinstance(c, Mapping)), default=0) + 1
-    for name, row in pending.items():
-        tech = reserved_technical_column(name, position=next_position, yaml_row=row)
-        if tech is None:
-            continue
-        discovered.append(tech)
-        present.add(name)
-        next_position = max(next_position, (tech.get("position") or 0) + 1)
+    pending = _pending_reserved_from_yaml(
+        custom_config, present, enabled_technical_fields, table_name,
+    )
+    _append_pending_tech_columns(discovered, present, pending)
     return columns
 

@@ -400,7 +400,7 @@ class StateResponse(BaseModel):
     skip_verify: Optional[bool] = Field(None, alias="skipVerify")
     enable_scheduling: bool = Field(..., alias="enableScheduling")
     create_tables: bool = Field(..., alias="createTables")
-    run: Optional[dict]
+    run: Optional[dict] = None
     duplicate: Optional[dict] = None
     corehub_overview: Optional[dict] = Field(None, alias="corehubOverview")
 
@@ -1346,7 +1346,7 @@ def _template_schema_types(pipeline_id: str) -> tuple[Any, Any]:
             use_ssl=state.use_ssl,
             skip_verify=state.skip_verify,
         )
-    except Exception as exc:  # pylint: disable=broad-except
+    except Exception:  # pylint: disable=broad-except
         logger.exception(
             "Failed to infer schema types for bulk template on pipeline %s", pipeline_id
         )

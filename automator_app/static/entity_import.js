@@ -1111,8 +1111,11 @@ export function initEntityImport({ root, getContext, setMessage, log, getSchemaD
       // Cap banner text: multi-schema fan-in can produce dozens of long notes.
       const shown = notes.slice(0, 3);
       const extra = notes.length - shown.length;
-      const banner = shown.join(' · ')
-        + (extra > 0 ? ` · …and ${extra} more fan-in note${extra === 1 ? '' : 's'} (see Preview)` : '');
+      let banner = shown.join(' · ');
+      if (extra > 0) {
+        const noteLabel = extra === 1 ? 'note' : 'notes';
+        banner += ` · …and ${extra} more fan-in ${noteLabel} (see Preview)`;
+      }
       setMessage?.(banner, 'info');
     }
     return ctx;
@@ -1198,12 +1201,12 @@ export function initEntityImport({ root, getContext, setMessage, log, getSchemaD
       const preview = await jsonOrThrow(res, 'Preview failed');
       renderPreviewTable(preview);
       const noteCount = (preview.notes || []).length;
-      setMessage?.(
-        noteCount
-          ? `Preview ready: ${preview.entityCount} entities (${noteCount} note${noteCount === 1 ? '' : 's'})`
-          : `Preview ready: ${preview.entityCount} entities`,
-        'success',
-      );
+      let previewMsg = `Preview ready: ${preview.entityCount} entities`;
+      if (noteCount) {
+        const noteLabel = noteCount === 1 ? 'note' : 'notes';
+        previewMsg += ` (${noteCount} ${noteLabel})`;
+      }
+      setMessage?.(previewMsg, 'success');
       log?.('Config', `Entity plan preview: ${preview.entityCount} entities`);
     } catch (previewErr) {
       clearPreview();

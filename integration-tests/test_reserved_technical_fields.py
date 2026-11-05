@@ -295,7 +295,7 @@ class EntityPayloadReservedTechFieldTests(unittest.TestCase):
         self.assertEqual(len(op_cols), 1)
         self.assertEqual(op_cols[0]["id"], EXPECTED_OPERATION_ID)
         tgt_names = {c["name"] for c in target["columns"]}
-        self.assertTrue({"CREATED_BY", "OP_FLAG"} <= tgt_names)
+        self.assertLessEqual({"CREATED_BY", "OP_FLAG"}, tgt_names)
 
     def test_missing_tech_field_refuses_entity_on_23(self):
         yaml_text = _table(f"""        columns:
