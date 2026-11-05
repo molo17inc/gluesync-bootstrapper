@@ -14,6 +14,9 @@ runs), ``GET /publications/{jobId}`` and ``POST /install``.
 Two settings, read when a publication starts: ``FUNCTION_COLLECTION_POLL_SECONDS`` (seconds between two reads of a
 publication job, default 2) and ``FUNCTION_COLLECTION_PUBLICATION_TIMEOUT_SECONDS`` (how long a restore waits for
 publications, 409 waits included, default 1800: a publication also recompiles every UDF of the pipeline).
+``FUNCTION_COLLECTION_EXPORT_READY_TIMEOUT_SECONDS`` (default 120) is how long a restore waits after install for Hub
+``GET`` to report the needed functions as exported (some Hubs lag behind the install response). Entity CustomFn
+pre-flight uses a short grace of polls (``require_all=False``) because restore already waited.
 ``FUNCTION_COLLECTION_PATH`` names a directory of sources a standalone run publishes (see ``create_all_entities``).
 """
 
@@ -39,6 +42,7 @@ _INSTALL_PATH = _COLLECTION_PATH + "/install"
 
 _DEFAULT_POLL_SECONDS = 2.0
 _DEFAULT_PUBLICATION_TIMEOUT_SECONDS = 1800.0
+_DEFAULT_EXPORT_READY_TIMEOUT_SECONDS = 120.0
 
 _RUNNING = "Running"
 _COMPLETED = "Completed"
@@ -386,12 +390,205 @@ def _install(token: str, pipeline_id: str, fetch) -> Dict[str, Any]:
     return installed
 
 
+_EXPORT_READY_GRACE_POLLS = 3
+
+# Poll-step outcomes for :func:`wait_until_functions_exported` (flat loop, low cognitive complexity).
+_POLL_CONTINUE = "continue"
+_POLL_BREAK = "break"
+_POLL_RETURN = "return"
+
+
+class _ExportPollState:
+    """Mutable progress of one :func:`wait_until_functions_exported` poll loop."""
+
+    __slots__ = ("incomplete_polls", "no_install_polls", "last_missing", "last_installed", "last_state")
+
+    def __init__(self) -> None:
+        self.incomplete_polls = 0
+        self.no_install_polls = 0
+        self.last_missing: Optional[frozenset] = None
+        self.last_installed: Optional[frozenset] = None
+        self.last_state = "no installed collection"
+
+
+def _export_ready_success(pipeline_id: str, needed_set: frozenset, installed: frozenset):
+    """Log and return ``installed`` when every needed name is already exported."""
+    if needed_set:
+        logger.info(
+            "Function collection of pipeline %s exports the needed function(s): %s",
+            pipeline_id, ", ".join(sorted(needed_set)),
+        )
+    return installed
+
+
+def _record_incomplete_exports(
+    collection: Optional[Dict[str, Any]],
+    installed: frozenset,
+    missing: frozenset,
+    state: _ExportPollState,
+) -> None:
+    """Update poll state after Hub reports an installed collection that still lacks needed names."""
+    state.incomplete_polls += 1
+    state.last_missing = missing
+    state.last_installed = installed
+    state.last_state = (
+        f"installed version {(collection or {}).get('installedVersion')!r} exporting "
+        f"{', '.join(sorted(installed)) or 'no function'}; still missing "
+        f"{', '.join(sorted(missing))}"
+    )
+
+
+def _incomplete_exports_outcome(
+    pipeline_id: str,
+    installed: frozenset,
+    missing: frozenset,
+    require_all: bool,
+    state: _ExportPollState,
+):
+    """After grace: ``(_POLL_BREAK, None)``, ``(_POLL_RETURN, installed)``, or ``(_POLL_CONTINUE, None)``."""
+    if state.incomplete_polls < _EXPORT_READY_GRACE_POLLS:
+        return _POLL_CONTINUE, None
+    if require_all:
+        return _POLL_BREAK, None
+    logger.warning(
+        "Function collection of pipeline %s is installed but still missing %s after %d polls; "
+        "entity CustomFn checks will refuse unbound columns",
+        pipeline_id, ", ".join(sorted(missing)), state.incomplete_polls,
+    )
+    return _POLL_RETURN, installed
+
+
+def _missing_install_outcome(
+    pipeline_id: str, needed_set: frozenset, require_all: bool, state: _ExportPollState,
+):
+    """When Hub shows no installed collection: ``(_POLL_RETURN, NO_COLLECTION)`` or ``(_POLL_CONTINUE, None)``."""
+    state.incomplete_polls = 0
+    state.no_install_polls += 1
+    state.last_missing = needed_set or None
+    state.last_installed = None
+    state.last_state = "no installed collection yet"
+    if require_all or state.no_install_polls < _EXPORT_READY_GRACE_POLLS:
+        return _POLL_CONTINUE, None
+    logger.warning(
+        "Function collection of pipeline %s has no installed version after %d polls; "
+        "entity CustomFn checks treat it as no collection",
+        pipeline_id, state.no_install_polls,
+    )
+    return _POLL_RETURN, NO_COLLECTION
+
+
+def _poll_when_installed(
+    pipeline_id: str,
+    collection: Optional[Dict[str, Any]],
+    installed: frozenset,
+    needed_set: frozenset,
+    require_all: bool,
+    state: _ExportPollState,
+):
+    """One poll step when Hub already shows an installed collection."""
+    state.no_install_polls = 0
+    missing = needed_set - installed
+    if not missing:
+        return _POLL_RETURN, _export_ready_success(pipeline_id, needed_set, installed)
+    _record_incomplete_exports(collection, installed, missing, state)
+    return _incomplete_exports_outcome(pipeline_id, installed, missing, require_all, state)
+
+
+def _export_poll_step(
+    token: str,
+    pipeline_id: str,
+    needed_set: frozenset,
+    require_all: bool,
+    state: _ExportPollState,
+    fetch,
+):
+    """One GET + decide: ``(_POLL_CONTINUE|_POLL_BREAK|_POLL_RETURN, value)``."""
+    collection = fetch_function_collection(token, pipeline_id, fetch=fetch)
+    installed = installed_function_names(collection)
+    if installed is NO_COLLECTION:
+        return _missing_install_outcome(pipeline_id, needed_set, require_all, state)
+    return _poll_when_installed(pipeline_id, collection, installed, needed_set, require_all, state)
+
+
+def _raise_export_ready_timeout(pipeline_id: str, state: _ExportPollState) -> None:
+    """Raise :class:`FunctionCollectionError` after the export-ready deadline expires."""
+    if state.last_missing:
+        raise FunctionCollectionError(
+            f"The function collection of pipeline {pipeline_id} did not export "
+            f"{', '.join(sorted(state.last_missing))} in time ({state.last_state}). Wait for Hub to finish installing, "
+            f"or raise FUNCTION_COLLECTION_EXPORT_READY_TIMEOUT_SECONDS; refuse creating entities that bind "
+            f"CustomFn until the functions are exported"
+        )
+    raise FunctionCollectionError(
+        f"The function collection of pipeline {pipeline_id} was not installed in time ({state.last_state}). "
+        f"Raise FUNCTION_COLLECTION_EXPORT_READY_TIMEOUT_SECONDS, or publish and install the collection before "
+        f"creating entities that bind CustomFn"
+    )
+
+
+def _finish_export_wait(pipeline_id: str, require_all: bool, state: _ExportPollState):
+    """Return the soft pre-flight result, or raise when ``require_all`` still needs every export."""
+    if require_all:
+        _raise_export_ready_timeout(pipeline_id, state)
+    if state.last_installed is not None:
+        return state.last_installed
+    return NO_COLLECTION
+
+
+def _sleep_until_next_export_poll(deadline: float) -> bool:
+    """Sleep until the next poll, or return False when the deadline has passed."""
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return False
+    time.sleep(min(_env_seconds("FUNCTION_COLLECTION_POLL_SECONDS", _DEFAULT_POLL_SECONDS), remaining))
+    return True
+
+
+def wait_until_functions_exported(token: str, pipeline_id: str, needed: Iterable[str],
+                                   fetch=None, *, require_all: bool = True):
+    """Poll ``GET`` until the *installed* collection exports every name in ``needed``.
+
+    Returns the frozenset of exported names, or :data:`NO_COLLECTION` when ``require_all`` is False and Hub
+    never shows an installed version within the short grace (entity CustomFn pre-flight). An empty ``needed``
+    only waits until some version is installed (``installedVersion`` set), then returns whatever it exports
+    (possibly empty).
+
+    Hub lag after ``POST /install`` often means a few GETs still show no ``installedVersion``; with
+    ``require_all=True`` (restore) that case waits up to ``FUNCTION_COLLECTION_EXPORT_READY_TIMEOUT_SECONDS``
+    (default 120). Entity pre-flight uses ``require_all=False``: restore already waited, so only a short grace
+    of polls is used when Hub still shows nothing installed (then ``NO_COLLECTION``) or when an installed
+    collection is still missing some of ``needed`` (then the partial set, so unbound checks run). With
+    ``require_all=True``, an installed-but-incomplete collection also uses that short grace then raises.
+
+    Safe to call again after a successful wait (idempotent). Never logs source code or secrets — only function
+    names and pipeline id. Callers that know the Hub is older than 2.3 should not call this.
+    """
+    fetch = fetch or commons.fetch_core_hub
+    needed_set = frozenset(str(name) for name in needed if name)
+    deadline = time.monotonic() + _env_seconds(
+        "FUNCTION_COLLECTION_EXPORT_READY_TIMEOUT_SECONDS", _DEFAULT_EXPORT_READY_TIMEOUT_SECONDS)
+    # Brief grace once Hub already shows installedVersion but not every needed name (export list lag),
+    # and (require_all=False only) when Hub never shows installedVersion (pre-flight after restore).
+    state = _ExportPollState()
+    while True:
+        action, value = _export_poll_step(token, pipeline_id, needed_set, require_all, state, fetch)
+        if action is _POLL_RETURN:
+            return value
+        if action is _POLL_BREAK:
+            break
+        if not _sleep_until_next_export_poll(deadline):
+            break
+
+    return _finish_export_wait(pipeline_id, require_all, state)
+
+
 def restore_function_collection(token: str, pipeline_id: str, sources: List[Dict[str, str]],
                                 fetch=None) -> Optional[Dict[str, Any]]:
     """Publish ``sources`` as the function collection of a pipeline and install it.
 
     Does nothing (None) for no sources and for a CoreHub before 2.3. A pipeline that already has a published
-    collection with these very sources is not published again, only installed. Raises
+    collection with these very sources is not published again, only installed. After install, waits until Hub
+    ``GET`` reports those exported functions (see :func:`wait_until_functions_exported`). Raises
     :class:`FunctionCollectionError` when CoreHub refuses the collection, naming every finding, or on a timeout.
     Returns ``{"version", "exportedFunctions", "published"}`` (``published`` is False when the sources were there).
     """
@@ -425,6 +622,10 @@ def restore_function_collection(token: str, pipeline_id: str, sources: List[Dict
     if installed.get("restartedEntities"):
         logger.info("Installing the function collection restarted %d entit(ies): %s",
                     len(installed["restartedEntities"]), ", ".join(map(str, installed["restartedEntities"])))
+    # Install can return before GET shows installedVersion / exportedFunctions; wait so entity CustomFn
+    # pre-flight and Hub itself see the same exports (never logs source code).
+    ready = wait_until_functions_exported(token, pipeline_id, names, fetch=fetch)
+    names = sorted(ready)
     return {"version": installed.get("version"), "exportedFunctions": names, "published": published_now}
 
 

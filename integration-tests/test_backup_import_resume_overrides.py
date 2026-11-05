@@ -171,7 +171,7 @@ class ResumeTests(unittest.TestCase):
                 return {"pipelineName": "Synth1MSSQL", "agents": bound}
             return {}
 
-        def collection(job, name, *_a):
+        def collection(job, name, *_a, **_k):
             if not function_collection_ok:
                 job.errors.append("function collection refused: already exists")
                 return False

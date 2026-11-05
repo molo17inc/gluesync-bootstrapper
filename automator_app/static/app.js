@@ -308,11 +308,7 @@ const ui = (() => {
     const failed = Number(summary.failed || 0);
     const skipped = Number(summary.skipped || 0);
     const h = document.createElement('h4');
-    if (summary.dry_run && failed) {
-      h.textContent = 'Dry-run finished with failures';
-    } else if (summary.dry_run) {
-      h.textContent = 'Dry-run — nothing written';
-    } else if (summary.partial) {
+    if (summary.partial) {
       h.textContent = 'Partial import — successes are kept';
     } else if (failed) {
       h.textContent = 'Import finished with failures';
@@ -844,9 +840,7 @@ const stateManager = {
   handleRunUpdate(run) {
     if (!run) return;
     ui.syncServerLogs(run);
-    let statusLabel = String(run.status || '').toUpperCase();
-    if (run.status === 'partial') statusLabel = 'PARTIAL';
-    else if (run.status === 'dry-run') statusLabel = 'DRY-RUN';
+    const statusLabel = run.status === 'partial' ? 'PARTIAL' : String(run.status || '').toUpperCase();
     ui.setStatus(run.status, statusLabel);
     this.lastStatus = run.status;
     if (run.corehubOverview) {
@@ -2020,10 +2014,22 @@ function bindEvents() {
         refreshEntityImportPicker(entityImport);
       });
     }
+    // Debounce input so typing a Target schema does not re-render 77–2000 picker rows per keystroke
+    // (each re-render re-arms discovery focus handlers and can amplify target-tables GETs).
+    let schemaDefaultsTimer = null;
     const onSchemaDefaultsChange = () => {
+      if (schemaDefaultsTimer) clearTimeout(schemaDefaultsTimer);
+      schemaDefaultsTimer = setTimeout(() => {
+        schemaDefaultsTimer = null;
+        entityImport?.applySchemaDefaults?.();
+      }, 200);
+    };
+    const onSchemaDefaultsChangeImmediate = () => {
+      if (schemaDefaultsTimer) clearTimeout(schemaDefaultsTimer);
+      schemaDefaultsTimer = null;
       entityImport?.applySchemaDefaults?.();
     };
-    customSchemasCheckbox?.addEventListener('change', onSchemaDefaultsChange);
+    customSchemasCheckbox?.addEventListener('change', onSchemaDefaultsChangeImmediate);
     document.getElementById('source-schema')?.addEventListener('input', onSchemaDefaultsChange);
     document.getElementById('target-schema')?.addEventListener('input', onSchemaDefaultsChange);
     refreshEntityImportPicker(entityImport);

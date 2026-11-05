@@ -53,6 +53,10 @@ def set_core_hub_client(client: CoreHubClient):
     core_hub_client = client
 
 
+# Last (base_url, use_ssl, skip_verify) applied by configure_core_hub; skip rebuild when unchanged.
+_COREHUB_CONFIG_KEY: Optional[Tuple[str, Optional[bool], Optional[bool]]] = None
+
+
 def configure_core_hub(base_url: str, *, use_ssl: Optional[bool] = None, skip_verify: Optional[bool] = None) -> CoreHubClient:
     """
     Configure the CoreHub client with runtime options.
@@ -65,6 +69,17 @@ def configure_core_hub(base_url: str, *, use_ssl: Optional[bool] = None, skip_ve
     Returns:
         CoreHubClient: The configured client instance.
     """
+    global _COREHUB_CONFIG_KEY
+
+    key = (base_url, use_ssl, skip_verify)
+    if (
+        core_hub_client is not None
+        and _COREHUB_CONFIG_KEY == key
+        and getattr(core_hub_client, "base_url", None) is not None
+    ):
+        # Same Automator session / same Hub: avoid "Reconfiguring…" spam and token reset
+        # on every /api/bulk/target-tables call.
+        return core_hub_client
 
     logger.info("Reconfiguring CoreHub client: base_url=%s, use_ssl=%s, skip_verify=%s", base_url, use_ssl, skip_verify)
     os.environ['CORE_HUB_URL'] = base_url
@@ -76,6 +91,9 @@ def configure_core_hub(base_url: str, *, use_ssl: Optional[bool] = None, skip_ve
     client = CoreHubClient(base_url, use_ssl=use_ssl, skip_verify=skip_verify)
     set_core_hub_client(client)
     reset_refreshed_token()
+    _COREHUB_CONFIG_KEY = key
+    # Hub endpoint change invalidates any cached pipeline configs.
+    reset_pipeline_config_cache()
     return client
 
 
@@ -601,13 +619,44 @@ def generate_short_guid():
     return str(uuid.uuid4()).split('-')[0]
 
 
-def get_pipeline_config(token, pipeline_id):
-    return fetch_core_hub(f"/pipelines/{pipeline_id}/config", token=token, params={"include_secrets": "true"})
+# Short-lived cache of GET /pipelines/{id}/config (often multi-MB with entities+secrets).
+# Discovery (list_target_tables → get_pipeline_agents) was re-downloading this on every call.
+_PIPELINE_CONFIG_CACHE: Dict[Tuple[Any, ...], Tuple[float, Any]] = {}
+_PIPELINE_CONFIG_CACHE_TTL_SEC = 30.0
+_PIPELINE_CONFIG_CACHE_LOCK = threading.Lock()
+
+
+def reset_pipeline_config_cache():
+    """Drop cached pipeline configs (tests, Hub switch, or after a mutating import)."""
+    with _PIPELINE_CONFIG_CACHE_LOCK:
+        _PIPELINE_CONFIG_CACHE.clear()
+
+
+def get_pipeline_config(token, pipeline_id, *, include_secrets: bool = True, use_cache: bool = True):
+    """Fetch pipeline config; optionally reuse a short TTL cache for discovery-heavy paths."""
+    base = getattr(core_hub_client, "base_url", CORE_HUB_URL)
+    cache_key = (base, str(pipeline_id), bool(include_secrets))
+    now = time.monotonic()
+    if use_cache:
+        with _PIPELINE_CONFIG_CACHE_LOCK:
+            hit = _PIPELINE_CONFIG_CACHE.get(cache_key)
+            if hit is not None:
+                stored_at, payload = hit
+                if now - stored_at <= _PIPELINE_CONFIG_CACHE_TTL_SEC:
+                    return payload
+    params = {"include_secrets": "true" if include_secrets else "false"}
+    payload = fetch_core_hub(f"/pipelines/{pipeline_id}/config", token=token, params=params)
+    if use_cache:
+        with _PIPELINE_CONFIG_CACHE_LOCK:
+            _PIPELINE_CONFIG_CACHE[cache_key] = (now, payload)
+    return payload
 
 
 def get_pipeline_agents(token, pipeline_id):
+    # Keep include_secrets=true for Core Hub <2.3 param compatibility; the short TTL cache
+    # stops discovery from re-downloading the multi-MB config on every target-tables call.
     config = get_pipeline_config(token, pipeline_id)
-    return config.get('agents', {})
+    return config.get("agents", {}) if isinstance(config, dict) else {}
 
 
 def get_agent_tables(token, pipeline_id, agent_id, schema_name):

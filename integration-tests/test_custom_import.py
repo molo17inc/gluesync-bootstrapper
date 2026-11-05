@@ -102,7 +102,7 @@ class Hub:
                                  "compileUdfs": entities.compile_udfs, "choices": entities.plan_choices})
         return True
 
-    def collection(self, job, name, *args):
+    def collection(self, job, name, *args, **kwargs):
         self.collections.append(name)
         return True
 

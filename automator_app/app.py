@@ -1296,7 +1296,6 @@ def _bulk_schema_types(request: BulkCreateRequest) -> tuple[str, str]:
     return source_type, target_type
 
 
-
 def _bulk_prefs(request: BulkCreateRequest) -> tuple[bool, bool]:
     """Resolve enable_scheduling / create_tables from the request or session prefs."""
     prefs = state.preferences()
@@ -1396,7 +1395,6 @@ def _bulk_create_entities(request: BulkCreateRequest) -> ApiMessage:
         planUsed=plan.to_dict() if not plan.empty else None,
         dryRun=True if dry else None,
     )
-
 
 
 def _template_schema_types(pipeline_id: str) -> tuple[Any, Any]:
@@ -2953,11 +2951,43 @@ def _finish_imported_pipeline(name: str, new_pipeline_id: Any, new_pipeline_name
         _mark_configuration_completed(new_pipeline_id, new_pipeline_name)
 
 
-def _restore_imported_function_collection(job: _ArchiveImport, name: str, old_pipeline_id: Optional[str], new_pipeline_id: Any) -> bool:
-    """Publish and install the function collection of the backup on the new pipeline; False when CoreHub refuses it."""
+_MISSING_FUNCTION_COLLECTION_NOTE = (
+    "backup has no function-collection/; CustomFn may refuse unless the collection is already "
+    "installed on the pipeline"
+)
+
+
+def _yaml_names_custom_fn(yaml_text: Any) -> bool:
+    """True when the planned/imported YAML binds at least one CustomFn."""
+    if yaml_text is None or yaml_text == "":
+        return False
+    try:
+        config = yaml.safe_load(yaml_text) if isinstance(yaml_text, str) else yaml_text
+    except Exception:  # pylint: disable=broad-except
+        return False
+    return bool(function_collection.custom_function_names(config))
+
+
+def _note_missing_function_collection(job: _ArchiveImport, name: str, yaml_text: Any = None) -> None:
+    """Soft note when the backup has no function-collection/ but YAML uses CustomFn (do not hard-block)."""
+    if not _yaml_names_custom_fn(yaml_text):
+        return
+    note = f"{name}: {_MISSING_FUNCTION_COLLECTION_NOTE}"
+    if note not in job.notes:
+        job.notes.append(note)
+
+
+def _restore_imported_function_collection(job: _ArchiveImport, name: str, old_pipeline_id: Optional[str],
+                                          new_pipeline_id: Any, yaml_text: Any = None) -> bool:
+    """Publish and install the function collection of the backup on the new pipeline; False when CoreHub refuses it.
+
+    When the backup has no ``function-collection/`` folder and the YAML names CustomFn, append a soft
+    ``job.notes`` warning (collection may already be installed on the pipeline — Import All is not blocked).
+    """
     try:
         directory = function_collection.find_function_collection_dir([job.udf_root], old_pipeline_id)
         if directory is None:
+            _note_missing_function_collection(job, name, yaml_text)
             return True
         function_collection.restore_function_collection(
             state.token,
@@ -3007,15 +3037,21 @@ def _planned_yaml_text(job: _ArchiveImport, name: str, yaml_text: str,
 
 
 def _restore_planned_function_collection(job: _ArchiveImport, name: str, old_pipeline_id: Any, new_pipeline_id: Any,
-                                         pipeline_plan: Optional[import_plan.PipelinePlan]) -> bool:
+                                         pipeline_plan: Optional[import_plan.PipelinePlan],
+                                         yaml_text: Any = None) -> bool:
     """The function collection restore, unless the plan leaves it out (then only a note)."""
     if pipeline_plan is not None and not job.plan.part(pipeline_plan, "functionCollection"):
-        if job.udf_root is not None and function_collection.find_function_collection_dir(
-                [job.udf_root], old_pipeline_id) is not None:
+        directory = None
+        if job.udf_root is not None:
+            directory = function_collection.find_function_collection_dir([job.udf_root], old_pipeline_id)
+        if directory is not None:
             job.notes.append(f"{name}: function collection not restored (plan: functionCollection off); entities "
                              "calling its functions are refused unless it is already installed on the pipeline")
+        else:
+            # Plan skipped restore and the backup has no folder: still warn when YAML uses CustomFn.
+            _note_missing_function_collection(job, name, yaml_text)
         return True
-    return _restore_imported_function_collection(job, name, old_pipeline_id, new_pipeline_id)
+    return _restore_imported_function_collection(job, name, old_pipeline_id, new_pipeline_id, yaml_text=yaml_text)
 
 
 def _import_base_name(meta: Any, embedded_name: Optional[str], old_pipeline_id: Any, pipeline_plan: Any) -> Any:
@@ -3099,13 +3135,15 @@ def _import_archive_pipeline(job: _ArchiveImport, name: str, stem_no_ext: str, y
     # Upload certificates for agents if specified
     _upload_pipeline_certificates(job, name, agents_for_pipeline, new_pipeline_id)
 
-    yaml_path = _materialize_import_yaml(job, name, _planned_yaml_text(job, name, yaml_text, pipeline_plan))
+    planned_yaml = _planned_yaml_text(job, name, yaml_text, pipeline_plan)
+    yaml_path = _materialize_import_yaml(job, name, planned_yaml)
     if yaml_path is None:
         return
 
     # The function collection goes in before any UDF is compiled and any entity is saved: the UDFs may call its
     # classes and the entities bind its functions. A refused collection stops the restore of this pipeline.
-    if not _restore_planned_function_collection(job, name, old_pipeline_id, new_pipeline_id, pipeline_plan):
+    if not _restore_planned_function_collection(job, name, old_pipeline_id, new_pipeline_id, pipeline_plan,
+                                                yaml_text=planned_yaml):
         return
 
     if pipeline_plan is None:
@@ -3248,10 +3286,12 @@ def _resumed_pipeline_name(config: Dict[str, Any], meta: Optional[Dict[str, Any]
 
 
 def _resume_function_collection(job: _ArchiveImport, name: str, old_pipeline_id: Any, pipeline_id: str,
-                                pipeline_plan: Optional[import_plan.PipelinePlan]) -> None:
+                                pipeline_plan: Optional[import_plan.PipelinePlan],
+                                yaml_text: Any = None) -> None:
     """The collection may already be installed by the first import: a refusal here is reported, not fatal."""
     errors_before = len(job.errors)
-    if not _restore_planned_function_collection(job, name, old_pipeline_id, pipeline_id, pipeline_plan):
+    if not _restore_planned_function_collection(job, name, old_pipeline_id, pipeline_id, pipeline_plan,
+                                                yaml_text=yaml_text):
         refused = job.errors[errors_before:]
         del job.errors[errors_before:]
         job.notes.extend(f"{line} (resume: continuing, the collection may already be installed)" for line in refused)
@@ -3286,10 +3326,11 @@ def _resume_archive_pipeline(job: _ArchiveImport, name: str, stem_no_ext: str, y
         return
     _resume_specific_configuration(job, name, agents_for_pipeline, existing_agents, pipeline_id)
 
-    yaml_path = _materialize_import_yaml(job, name, _planned_yaml_text(job, name, yaml_text, pipeline_plan))
+    planned_yaml = _planned_yaml_text(job, name, yaml_text, pipeline_plan)
+    yaml_path = _materialize_import_yaml(job, name, planned_yaml)
     if yaml_path is None:
         return
-    _resume_function_collection(job, name, old_pipeline_id, pipeline_id, pipeline_plan)
+    _resume_function_collection(job, name, old_pipeline_id, pipeline_id, pipeline_plan, yaml_text=planned_yaml)
     if pipeline_plan is None:
         _create_imported_entities(job, name, yaml_path, pipeline_id, pipeline_name, default_on_existing="skip")
     else:
@@ -4828,8 +4869,6 @@ def _empty_entity_run_aggregate() -> dict:
 
 def _merge_entity_run_result(aggregate: dict, result: dict) -> None:
     """Accumulate one schema-pair create_entities outcome into the run aggregate."""
-    if result.get("dry_run"):
-        aggregate["dry_run"] = True
     if not result.get("success"):
         aggregate["success"] = False
     if result.get("partial"):
@@ -4889,8 +4928,6 @@ def _finalize_entity_run_aggregate(aggregate: dict) -> dict:
         "failedEntityIds": ids,
         "partial": bool(aggregate.get("partial")),
     }
-    if aggregate.get("dry_run"):
-        summary["dry_run"] = True
     aggregate["summary"] = summary
     if failed or not aggregate.get("success"):
         aggregate["error"] = _entity_run_error_text(aggregate, ok=ok, failed=failed, skipped=skipped)
@@ -5041,11 +5078,7 @@ def _first_not_none(value: Any, default: Any) -> Any:
 
 
 def _entity_run_status(result: dict) -> str:
-    """The final run status of an entity creation result.
-
-    A dry-run must never report ``completed`` (I2): writes were blocked.
-    A dry-run that hit errors reports ``failed``, not ``dry-run``.
-    """
+    """The final run status of an entity creation result."""
     failed = int(result.get("failed") or 0)
     if result.get("dry_run"):
         if not result.get("success") or failed > 0 or result.get("error"):

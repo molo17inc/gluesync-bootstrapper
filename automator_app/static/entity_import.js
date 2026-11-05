@@ -474,6 +474,10 @@ export function initEntityImport({ root, getContext, setMessage, log, getSchemaD
 
   let targetSchemas = []; // discovery cache
   const tablesBySchema = new Map(); // schema -> string[]
+  /** In-flight discovery promises so concurrent focus/armDiscovery callers share one Hub GET. */
+  const tablesInflight = new Map(); // schema -> Promise<string[]>
+  let schemasInflight = null; // Promise<string[]> | null
+  let discoveryPipelineId = null; // last pipelineId whose discovery caches belong to
   const columnWarnById = new Map(); // id -> warn string
   let discoveryOk = true;
   // Picker render generation: bump to cancel an in-flight chunked render (select-all / filter / reload).
@@ -621,36 +625,68 @@ export function initEntityImport({ root, getContext, setMessage, log, getSchemaD
     clearPreview();
   }
 
+  let discoveryGen = 0; // bumped when caches are invalidated (pipeline change)
+
+  function resetDiscoveryCaches(pipelineId) {
+    if (discoveryPipelineId === pipelineId) return;
+    discoveryPipelineId = pipelineId || null;
+    discoveryGen += 1;
+    tablesBySchema.clear();
+    tablesInflight.clear();
+    targetSchemas = [];
+    schemasInflight = null;
+  }
+
   async function ensureTargetSchemas(pipelineId) {
+    resetDiscoveryCaches(pipelineId);
     if (targetSchemas.length) return targetSchemas;
-    try {
-      const res = await fetch(`/api/bulk/target-schemas?pipelineId=${encodeURIComponent(pipelineId)}`);
-      const body = await jsonOrThrow(res, 'Could not list target schemas');
-      targetSchemas = body.schemas || [];
-      discoveryOk = true;
-    } catch (err) {
-      discoveryOk = false;
-      targetSchemas = [];
-      log?.('Config', `Target schema discovery failed: ${err.message}`);
-    }
-    return targetSchemas;
+    if (schemasInflight) return schemasInflight;
+    const gen = discoveryGen;
+    schemasInflight = (async () => {
+      try {
+        const res = await fetch(`/api/bulk/target-schemas?pipelineId=${encodeURIComponent(pipelineId)}`);
+        const body = await jsonOrThrow(res, 'Could not list target schemas');
+        if (gen !== discoveryGen) return targetSchemas;
+        targetSchemas = body.schemas || [];
+        discoveryOk = true;
+      } catch (err) {
+        if (gen === discoveryGen) {
+          discoveryOk = false;
+          targetSchemas = [];
+        }
+        log?.('Config', `Target schema discovery failed: ${err.message}`);
+      } finally {
+        if (gen === discoveryGen) schemasInflight = null;
+      }
+      return targetSchemas;
+    })();
+    return schemasInflight;
   }
 
   async function ensureTargetTables(pipelineId, schema = '') {
+    resetDiscoveryCaches(pipelineId);
     const key = schema || '';
     if (tablesBySchema.has(key)) return tablesBySchema.get(key);
-    try {
-      const qs = new URLSearchParams({ pipelineId, schema: key });
-      const res = await fetch(`/api/bulk/target-tables?${qs}`);
-      const body = await jsonOrThrow(res, 'Could not list target tables');
-      const tables = body.tables || [];
-      tablesBySchema.set(key, tables);
-      return tables;
-    } catch (err) {
-      log?.('Config', `Target table discovery failed for ${key}: ${err.message}`);
-      tablesBySchema.set(key, []);
-      return [];
-    }
+    if (tablesInflight.has(key)) return tablesInflight.get(key);
+    const gen = discoveryGen;
+    const pending = (async () => {
+      try {
+        const qs = new URLSearchParams({ pipelineId, schema: key });
+        const res = await fetch(`/api/bulk/target-tables?${qs}`);
+        const body = await jsonOrThrow(res, 'Could not list target tables');
+        const tables = body.tables || [];
+        if (gen === discoveryGen) tablesBySchema.set(key, tables);
+        return tables;
+      } catch (err) {
+        log?.('Config', `Target table discovery failed for ${key}: ${err.message}`);
+        if (gen === discoveryGen) tablesBySchema.set(key, []);
+        return [];
+      } finally {
+        if (gen === discoveryGen) tablesInflight.delete(key);
+      }
+    })();
+    tablesInflight.set(key, pending);
+    return pending;
   }
 
   async function fetchColumnNames(path, qs, label) {
@@ -1042,8 +1078,8 @@ export function initEntityImport({ root, getContext, setMessage, log, getSchemaD
       selectedIds = new Set(loadedEntities.map((e) => e.id));
       targetOverrides.clear();
       columnWarnById.clear();
-      tablesBySchema.clear();
-      targetSchemas = [];
+      // Keep table/schema discovery for the same pipeline; only drop on pipeline change.
+      resetDiscoveryCaches(ctx.pipelineId);
       await ensureTargetSchemas(ctx.pipelineId);
       clearPreview();
       renderPicker();
@@ -1071,7 +1107,17 @@ export function initEntityImport({ root, getContext, setMessage, log, getSchemaD
       return null;
     }
     const notes = selectionNotes(panel, loadedEntities, selectedIds, targetOverrides, schemaDefaults());
-    if (notes.length) setMessage?.(notes.join(' · '), 'info');
+    if (notes.length) {
+      // Cap banner text: multi-schema fan-in can produce dozens of long notes.
+      const shown = notes.slice(0, 3);
+      const extra = notes.length - shown.length;
+      let banner = shown.join(' · ');
+      if (extra > 0) {
+        const noteLabel = extra === 1 ? 'note' : 'notes';
+        banner += ` · …and ${extra} more fan-in ${noteLabel} (see Preview)`;
+      }
+      setMessage?.(banner, 'info');
+    }
     return ctx;
   };
 
@@ -1143,6 +1189,9 @@ export function initEntityImport({ root, getContext, setMessage, log, getSchemaD
     const ctx = requireImportReady();
     if (!ctx) return;
     const plan = currentPlan();
+    const previewBtn = btnRow.querySelector('#entity-plan-preview-btn');
+    if (previewBtn) previewBtn.disabled = true;
+    setMessage?.('Previewing…', 'info');
     try {
       const res = await fetch('/api/entities/plan/preview', {
         method: 'POST',
@@ -1151,18 +1200,19 @@ export function initEntityImport({ root, getContext, setMessage, log, getSchemaD
       });
       const preview = await jsonOrThrow(res, 'Preview failed');
       renderPreviewTable(preview);
-      if (preview.listingError || preview.conflictsUnknown) {
-        setMessage?.(
-          'Could not list existing entities — alreadyExists/conflicts are unknown. '
-            + 'Confirm skip/replace before creating.',
-          'error',
-        );
+      const noteCount = (preview.notes || []).length;
+      let previewMsg = `Preview ready: ${preview.entityCount} entities`;
+      if (noteCount) {
+        const noteLabel = noteCount === 1 ? 'note' : 'notes';
+        previewMsg += ` (${noteCount} ${noteLabel})`;
       }
-      log?.('Config', `Entity plan preview: ${preview.entityCount} entities`
-        + (preview.listingError ? ' (listingError)' : ''));
+      setMessage?.(previewMsg, 'success');
+      log?.('Config', `Entity plan preview: ${preview.entityCount} entities`);
     } catch (previewErr) {
       clearPreview();
       setMessage?.(previewErr.message, 'error');
+    } finally {
+      if (previewBtn) previewBtn.disabled = false;
     }
   });
 

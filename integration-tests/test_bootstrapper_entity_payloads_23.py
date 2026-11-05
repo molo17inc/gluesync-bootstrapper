@@ -169,6 +169,48 @@ class GroupedPayloadTests(unittest.TestCase):
         self.assertEqual([c["name"] for c in source["columns"]], ["ID", "NAME"])
         self.assertEqual(keyed(source["columns"]), ["ID"])
 
+    def test_whitelist_same_source_onto_several_targets_is_one_source_column(self):
+        """1:N whitelist fan-out (same sourceName, distinct targets) must not duplicate the source column.
+
+        Hub 2.3 refuses "Duplicated entity column names" when the same source is listed twice; mappings
+        already dedupe when grouped — whitelist must match.
+        """
+        yaml_text = table("""        name: parts_out
+        columns:
+          - {name: part_id, sourceName: PART_ID, type: int}
+          - {name: label, sourceName: LABEL, type: varchar}
+          - name: label_code
+            sourceName: LABEL
+            type: varchar
+            expression:
+              type: CustomFn
+              functionName: concat
+              arguments:
+                - {type: SourceColumnArg, name: LABEL}
+""", "PARTS")
+        _, result, entities = run(yaml_text, "PARTS")
+        self.assertEqual(result["failed"], 0, result)
+        entity = entities["src.PARTS"]
+        source, target = sides(entity)
+        self.assertEqual([c["name"] for c in source["columns"]], ["PART_ID", "LABEL"])
+        self.assertEqual([c["name"] for c in target["columns"]], ["part_id", "label", "label_code"])
+        self.assertEqual(matrix(entity), [
+            (["PART_ID"], ["part_id"]),
+            (["LABEL"], ["label", "label_code"]),
+        ])
+
+    def test_whitelist_duplicate_target_name_is_refused_before_put(self):
+        yaml_text = table("""        name: parts_out
+        columns:
+          - {name: label, sourceName: PART_ID, type: int}
+          - {name: label, sourceName: LABEL, type: varchar}
+""", "PARTS")
+        _, result, entities = run(yaml_text, "PARTS")
+        self.assertEqual(entities, {}, "duplicated target must not be PUT")
+        self.assertEqual(result["failed"], 1)
+        self.assertTrue(any("duplicated" in e.lower() or "listed more than once" in e.lower()
+                            for e in result.get("errors") or []))
+
     def test_target_key_of_a_udf_entity_is_produced_by_the_udf(self):
         yaml_text = table("""        name: ORDERS_T
         columns:
