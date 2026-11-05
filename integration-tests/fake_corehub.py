@@ -85,14 +85,15 @@ class FakeFunctionCollections:
     ``published`` holds the sources of the published version (None: nothing published, GET answers 404); a
     publication exports the ``@GsFunction`` methods of the sources it is given. ``busy`` publications refuse the next
     PUTs with a 409 and the running job; ``polls`` is how many reads of a job answer Running before it ends;
-    ``rejection`` (or ``failure``) makes publications end refused. ``requests`` records ``(method, path)`` of every
-    call, in order, and ``log`` receives the same entries when given, to tell the order from other routes' calls.
+    ``rejection`` (or ``failure``) makes publications end refused. ``export_lag`` is how many GETs after install
+    still hide the installed exports (Hub lag). ``requests`` records ``(method, path)`` of every call, in order,
+    and ``log`` receives the same entries when given, to tell the order from other routes' calls.
     """
 
     ROOT = "/config/function-collection"
 
     def __init__(self, sources=None, *, installed=True, busy=0, polls=0, rejection=None, failure=None, log=None,
-                 get_error=None):
+                 get_error=None, export_lag=0):
         self.published = copy.deepcopy(sources)
         self.installed = installed and sources is not None
         self.busy = busy
@@ -100,6 +101,10 @@ class FakeFunctionCollections:
         self.rejection = rejection
         self.failure = failure
         self.get_error = get_error
+        # After POST /install, the next ``export_lag`` GETs still answer with no installedVersion /
+        # empty exportedFunctions (Hub lag). Install response itself always lists the exports.
+        self.export_lag = export_lag
+        self._export_lag_remaining = 0
         self.requests = []
         self.log = log if log is not None else self.requests
         self.puts = []
@@ -152,10 +157,14 @@ class FakeFunctionCollections:
                 raise _refusal(path, self.get_error, 500, method="GET")
             if self.published is None:
                 raise _refusal(path, "No function collection published for this pipeline", 404, method="GET")
+            visible = self.installed
+            if visible and self._export_lag_remaining > 0:
+                self._export_lag_remaining -= 1
+                visible = False
             return {
-                "version": f"v{self.version}", "installedVersion": f"v{self.version}" if self.installed else None,
+                "version": f"v{self.version}", "installedVersion": f"v{self.version}" if visible else None,
                 "sources": copy.deepcopy(self.published),
-                "exportedFunctions": self._exported(self.published) if self.installed else [],
+                "exportedFunctions": self._exported(self.published) if visible else [],
                 "invocationStats": {},
             }
         if method == "PUT" and not suffix:
@@ -184,6 +193,7 @@ class FakeFunctionCollections:
             return {"result": "NothingPublished", "exportedFunctions": [], "restartedEntities": []}
         result = "AlreadyInstalled" if self.installed else "Installed"
         self.installed = True
+        self._export_lag_remaining = self.export_lag
         return {"result": result, "version": f"v{self.version}", "exportedFunctions": self._exported(self.published),
                 "restartedEntities": []}
 

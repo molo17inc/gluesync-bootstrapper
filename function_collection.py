@@ -14,6 +14,9 @@ runs), ``GET /publications/{jobId}`` and ``POST /install``.
 Two settings, read when a publication starts: ``FUNCTION_COLLECTION_POLL_SECONDS`` (seconds between two reads of a
 publication job, default 2) and ``FUNCTION_COLLECTION_PUBLICATION_TIMEOUT_SECONDS`` (how long a restore waits for
 publications, 409 waits included, default 1800: a publication also recompiles every UDF of the pipeline).
+``FUNCTION_COLLECTION_EXPORT_READY_TIMEOUT_SECONDS`` (default 120) is how long a restore waits after install for Hub
+``GET`` to report the needed functions as exported (some Hubs lag behind the install response). Entity CustomFn
+pre-flight uses a short grace of polls (``require_all=False``) because restore already waited.
 ``FUNCTION_COLLECTION_PATH`` names a directory of sources a standalone run publishes (see ``create_all_entities``).
 """
 
@@ -39,6 +42,7 @@ _INSTALL_PATH = _COLLECTION_PATH + "/install"
 
 _DEFAULT_POLL_SECONDS = 2.0
 _DEFAULT_PUBLICATION_TIMEOUT_SECONDS = 1800.0
+_DEFAULT_EXPORT_READY_TIMEOUT_SECONDS = 120.0
 
 _RUNNING = "Running"
 _COMPLETED = "Completed"
@@ -386,12 +390,110 @@ def _install(token: str, pipeline_id: str, fetch) -> Dict[str, Any]:
     return installed
 
 
+def wait_until_functions_exported(token: str, pipeline_id: str, needed: Iterable[str],
+                                   fetch=None, *, require_all: bool = True):
+    """Poll ``GET`` until the *installed* collection exports every name in ``needed``.
+
+    Returns the frozenset of exported names, or :data:`NO_COLLECTION` when ``require_all`` is False and Hub
+    never shows an installed version within the short grace (entity CustomFn pre-flight). An empty ``needed``
+    only waits until some version is installed (``installedVersion`` set), then returns whatever it exports
+    (possibly empty).
+
+    Hub lag after ``POST /install`` often means a few GETs still show no ``installedVersion``; with
+    ``require_all=True`` (restore) that case waits up to ``FUNCTION_COLLECTION_EXPORT_READY_TIMEOUT_SECONDS``
+    (default 120). Entity pre-flight uses ``require_all=False``: restore already waited, so only a short grace
+    of polls is used when Hub still shows nothing installed (then ``NO_COLLECTION``) or when an installed
+    collection is still missing some of ``needed`` (then the partial set, so unbound checks run). With
+    ``require_all=True``, an installed-but-incomplete collection also uses that short grace then raises.
+
+    Safe to call again after a successful wait (idempotent). Never logs source code or secrets — only function
+    names and pipeline id. Callers that know the Hub is older than 2.3 should not call this.
+    """
+    fetch = fetch or commons.fetch_core_hub
+    needed_set = frozenset(str(name) for name in needed if name)
+    deadline = time.monotonic() + _env_seconds(
+        "FUNCTION_COLLECTION_EXPORT_READY_TIMEOUT_SECONDS", _DEFAULT_EXPORT_READY_TIMEOUT_SECONDS)
+    # Brief grace once Hub already shows installedVersion but not every needed name (export list lag),
+    # and (require_all=False only) when Hub never shows installedVersion (pre-flight after restore).
+    _INCOMPLETE_GRACE_POLLS = 3
+    incomplete_polls = 0
+    no_install_polls = 0
+    last_missing: Optional[frozenset] = None
+    last_installed: Optional[frozenset] = None
+    last_state = "no installed collection"
+    while True:
+        collection = fetch_function_collection(token, pipeline_id, fetch=fetch)
+        installed = installed_function_names(collection)
+        if installed is not NO_COLLECTION:
+            no_install_polls = 0
+            missing = needed_set - installed
+            if not missing:
+                if needed_set:
+                    logger.info(
+                        "Function collection of pipeline %s exports the needed function(s): %s",
+                        pipeline_id, ", ".join(sorted(needed_set)),
+                    )
+                return installed
+            incomplete_polls += 1
+            last_missing = missing
+            last_installed = installed
+            last_state = (
+                f"installed version {(collection or {}).get('installedVersion')!r} exporting "
+                f"{', '.join(sorted(installed)) or 'no function'}; still missing "
+                f"{', '.join(sorted(missing))}"
+            )
+            if incomplete_polls >= _INCOMPLETE_GRACE_POLLS:
+                if require_all:
+                    break
+                logger.warning(
+                    "Function collection of pipeline %s is installed but still missing %s after %d polls; "
+                    "entity CustomFn checks will refuse unbound columns",
+                    pipeline_id, ", ".join(sorted(missing)), incomplete_polls,
+                )
+                return installed
+        else:
+            incomplete_polls = 0
+            no_install_polls += 1
+            last_missing = needed_set or None
+            last_installed = None
+            last_state = "no installed collection yet"
+            if not require_all and no_install_polls >= _INCOMPLETE_GRACE_POLLS:
+                logger.warning(
+                    "Function collection of pipeline %s has no installed version after %d polls; "
+                    "entity CustomFn checks treat it as no collection",
+                    pipeline_id, no_install_polls,
+                )
+                return NO_COLLECTION
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(_env_seconds("FUNCTION_COLLECTION_POLL_SECONDS", _DEFAULT_POLL_SECONDS), remaining))
+
+    if not require_all and last_installed is not None:
+        return last_installed
+    if not require_all and last_installed is None:
+        return NO_COLLECTION
+    if last_missing:
+        raise FunctionCollectionError(
+            f"The function collection of pipeline {pipeline_id} did not export "
+            f"{', '.join(sorted(last_missing))} in time ({last_state}). Wait for Hub to finish installing, "
+            f"or raise FUNCTION_COLLECTION_EXPORT_READY_TIMEOUT_SECONDS; refuse creating entities that bind "
+            f"CustomFn until the functions are exported"
+        )
+    raise FunctionCollectionError(
+        f"The function collection of pipeline {pipeline_id} was not installed in time ({last_state}). "
+        f"Raise FUNCTION_COLLECTION_EXPORT_READY_TIMEOUT_SECONDS, or publish and install the collection before "
+        f"creating entities that bind CustomFn"
+    )
+
+
 def restore_function_collection(token: str, pipeline_id: str, sources: List[Dict[str, str]],
                                 fetch=None) -> Optional[Dict[str, Any]]:
     """Publish ``sources`` as the function collection of a pipeline and install it.
 
     Does nothing (None) for no sources and for a CoreHub before 2.3. A pipeline that already has a published
-    collection with these very sources is not published again, only installed. Raises
+    collection with these very sources is not published again, only installed. After install, waits until Hub
+    ``GET`` reports those exported functions (see :func:`wait_until_functions_exported`). Raises
     :class:`FunctionCollectionError` when CoreHub refuses the collection, naming every finding, or on a timeout.
     Returns ``{"version", "exportedFunctions", "published"}`` (``published`` is False when the sources were there).
     """
@@ -425,6 +527,10 @@ def restore_function_collection(token: str, pipeline_id: str, sources: List[Dict
     if installed.get("restartedEntities"):
         logger.info("Installing the function collection restarted %d entit(ies): %s",
                     len(installed["restartedEntities"]), ", ".join(map(str, installed["restartedEntities"])))
+    # Install can return before GET shows installedVersion / exportedFunctions; wait so entity CustomFn
+    # pre-flight and Hub itself see the same exports (never logs source code).
+    ready = wait_until_functions_exported(token, pipeline_id, names, fetch=fetch)
+    names = sorted(ready)
     return {"version": installed.get("version"), "exportedFunctions": names, "published": published_now}
 
 
