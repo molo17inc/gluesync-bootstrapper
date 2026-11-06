@@ -99,6 +99,10 @@ class GenerateCreateTargetTableStatementRequest(BaseModel):
     # CoreHub gives an array column that arrives without its element type the one of the source column.
     sourceSchema: Optional[str] = None
     sourceTable: Optional[str] = None
+    # CoreHub 2.3.2.0+ rewrites the column names to the target's conventional case (Oracle and SAP HANA upper) unless
+    # this is false. The entities the bootstrapper then writes name the columns as it sent them, so it keeps them.
+    # A target that accepts a single case is still normalized; an older CoreHub ignores the field.
+    applyDefaultCase: bool = False
 
 class CreateTableRequest(BaseModel):
     statement: str

@@ -5,6 +5,9 @@ The create-table statement request names the source table the target table is cr
 CoreHub fills the element type of an array column that arrives without it from the source column of the same
 name, so a bare ``array`` type is not generated on a PostgreSQL-family target. The request carries
 ``sourceSchema`` and ``sourceTable`` for it; they are left out (not null) when the source table is unknown.
+
+It also sends ``applyDefaultCase`` false: CoreHub 2.3.2.0+ would otherwise rewrite the column names of an Oracle or
+SAP HANA table to upper case, and the entities and tests that follow name the columns as the bootstrapper sent them.
 """
 
 import logging
@@ -61,7 +64,13 @@ class GenerateCreateTableStatementBodyTests(unittest.TestCase):
         body = self._body(_request())
         self.assertNotIn("sourceSchema", body)
         self.assertNotIn("sourceTable", body)
-        self.assertEqual(body, {"columns": []})
+        self.assertEqual(body, {"columns": [], "applyDefaultCase": False})
+
+    def test_the_column_names_are_kept_as_sent(self):
+        column = create_all_tables.Column(id=1, tableId=0, position=1, name="first_name", dataType="varchar")
+        body = self._body(create_all_tables.GenerateCreateTargetTableStatementRequest(columns=[column]))
+        self.assertIs(body["applyDefaultCase"], False)
+        self.assertEqual(body["columns"][0]["name"], "first_name")
 
     def test_a_source_schema_alone_is_sent_as_given(self):
         body = self._body(_request(sourceSchema="public"))
