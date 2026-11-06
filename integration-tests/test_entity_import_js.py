@@ -11,7 +11,7 @@ SCRIPT = r"""
 import {
   buildEntityPlan, planIsEmpty, selectionError, selectionNotes, resolveTarget, targetDiffersFromDefault,
   autoRenameDuplicateTargets,
-  columnMismatchNote, inferTargetMode, preferDiscoverySpelling, entityIdSubtitle, groupPickerRows,
+  columnMismatchNote, inferTargetMode, classifyTargetModes, preferDiscoverySpelling, entityIdSubtitle, groupPickerRows,
   advancedMatches, effectiveSelectedIds,
 } from './entity_import.mjs';
 
@@ -133,6 +133,16 @@ assert(inferTargetMode('cust_primary', ['cust_primary', 'other']) === 'existing'
 assert(inferTargetMode('CUST_PRIMARY', ['cust_primary']) === 'existing', 'infer casefold');
 assert(inferTargetMode('brand_new_table', ['cust_primary']) === 'new', 'infer new');
 assert(inferTargetMode('', ['cust_primary']) === 'new', 'infer empty');
+
+// classifyTargetModes: per-schema discovery drives "table exists" vs "new table"
+const modes = classifyTargetModes([
+  { id: 'a', targetSchema: 'OSAPSYNC', targetTable: 'customers' },
+  { id: 'b', targetSchema: 'OSAPSYNC', targetTable: 'NOT_THERE' },
+  { id: 'c', targetSchema: 'UNKNOWN', targetTable: 'X' },
+], new Map([['OSAPSYNC', ['CUSTOMERS', 'DRIVERS']]]));
+assert(modes.get('a') === 'existing', 'classify existing');
+assert(modes.get('b') === 'new', 'classify new');
+assert(modes.get('c') === null, 'classify unknown schema keeps provisional');
 
 // columnMismatchNote
 assert(columnMismatchNote(null, ['a']) === 'Column check unverified (discovery unavailable).', 'unverif null');
