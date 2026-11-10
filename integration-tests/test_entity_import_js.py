@@ -143,6 +143,12 @@ const modes = classifyTargetModes([
 assert(modes.get('a') === 'existing', 'classify existing');
 assert(modes.get('b') === 'new', 'classify new');
 assert(modes.get('c') === null, 'classify unknown schema keeps provisional');
+// Re-resolving after the user edits a row classifies against the NEW target, not the one from before discovery.
+const editedEntity = { id: 'e1', targetSchema: 'OLD', targetTable: 'T1' };
+const editedOv = new Map([['e1', { targetSchema: 'OSAPSYNC', targetTable: 'drivers' }]]);
+const editedModes = classifyTargetModes(
+  [{ id: 'e1', ...resolveTarget(editedEntity, editedOv, null) }], { OSAPSYNC: ['DRIVERS'] });
+assert(editedModes.get('e1') === 'existing', 'classify uses current override and plain-object lists');
 
 // columnMismatchNote
 assert(columnMismatchNote(null, ['a']) === 'Column check unverified (discovery unavailable).', 'unverif null');

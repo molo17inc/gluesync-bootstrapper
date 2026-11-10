@@ -706,13 +706,16 @@ export function initEntityImport({ root, getContext, setMessage, log, getSchemaD
   /**
    * Resolve "table exists" vs "new table" for every loaded entity: one target-tables GET per
    * distinct schema (cached), never per row. Failures keep the provisional badge (Core Hub <2.3).
+   * Discovery is awaited, so targets are re-resolved at write time and a changed pipeline or a
+   * replaced entity list drops the result.
    */
   async function refreshTargetModes(pipelineId) {
     if (!pipelineId || !loadedEntities.length) return;
-    const targets = loadedEntities.map((entity) => ({
+    const entitiesAtStart = loadedEntities;
+    const resolveAll = () => loadedEntities.map((entity) => ({
       id: entity.id, ...resolveTarget(entity, targetOverrides, schemaDefaults()),
     }));
-    const schemas = [...new Set(targets.map((t) => t.targetSchema || ''))];
+    const schemas = [...new Set(resolveAll().map((t) => t.targetSchema || ''))];
     const lists = new Map();
     await Promise.all(schemas.map(async (schema) => {
       try {
@@ -722,7 +725,8 @@ export function initEntityImport({ root, getContext, setMessage, log, getSchemaD
         log?.('Config', `Target table discovery failed for ${schema}: ${err.message}`);
       }
     }));
-    classifyTargetModes(targets, lists).forEach((mode, id) => {
+    if (loadedEntities !== entitiesAtStart || getContext()?.pipelineId !== pipelineId) return;
+    classifyTargetModes(resolveAll(), lists).forEach((mode, id) => {
       if (!mode) return;
       const prev = targetOverrides.get(id) || {};
       if (prev.mode !== mode) targetOverrides.set(id, { ...prev, mode });
@@ -913,9 +917,8 @@ export function initEntityImport({ root, getContext, setMessage, log, getSchemaD
       discoveryArmed = true;
       loadTables(resolved.targetTable);
     };
-    // Show a provisional badge from override/entity without hitting Hub.
-    const provisionalMode = resolved.mode
-      || (entity.alreadyExists ? 'existing' : 'new');
+    // Show a provisional badge from the override (resolveTarget always gives 'existing' or 'new') without hitting Hub.
+    const provisionalMode = resolved.mode;
     modeBadge.replaceChildren(badge(
       provisionalMode === 'existing' ? 'table exists' : 'new table',
       provisionalMode === 'existing' ? 'existing' : 'new',
@@ -1290,6 +1293,11 @@ export function initEntityImport({ root, getContext, setMessage, log, getSchemaD
         }
       }
       renderPicker();
+      // The global Target changed: re-check which tables exist there (best-effort).
+      const pipelineId = getContext()?.pipelineId;
+      refreshTargetModes(pipelineId).catch((err) => {
+        log?.('Config', `Target mode refresh failed: ${err.message}`);
+      });
     },
     planPayload() {
       const err = selectionError(panel, loadedEntities, selectedIds, targetOverrides, schemaDefaults());
