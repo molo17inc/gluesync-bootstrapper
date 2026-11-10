@@ -11,7 +11,7 @@ SCRIPT = r"""
 import {
   buildEntityPlan, planIsEmpty, selectionError, selectionNotes, resolveTarget, targetDiffersFromDefault,
   autoRenameDuplicateTargets,
-  columnMismatchNote, inferTargetMode, preferDiscoverySpelling, entityIdSubtitle, groupPickerRows,
+  columnMismatchNote, inferTargetMode, classifyTargetModes, preferDiscoverySpelling, entityIdSubtitle, groupPickerRows,
   advancedMatches, effectiveSelectedIds,
 } from './entity_import.mjs';
 
@@ -133,6 +133,22 @@ assert(inferTargetMode('cust_primary', ['cust_primary', 'other']) === 'existing'
 assert(inferTargetMode('CUST_PRIMARY', ['cust_primary']) === 'existing', 'infer casefold');
 assert(inferTargetMode('brand_new_table', ['cust_primary']) === 'new', 'infer new');
 assert(inferTargetMode('', ['cust_primary']) === 'new', 'infer empty');
+
+// classifyTargetModes: per-schema discovery drives "table exists" vs "new table"
+const modes = classifyTargetModes([
+  { id: 'a', targetSchema: 'OSAPSYNC', targetTable: 'customers' },
+  { id: 'b', targetSchema: 'OSAPSYNC', targetTable: 'NOT_THERE' },
+  { id: 'c', targetSchema: 'UNKNOWN', targetTable: 'X' },
+], new Map([['OSAPSYNC', ['CUSTOMERS', 'DRIVERS']]]));
+assert(modes.get('a') === 'existing', 'classify existing');
+assert(modes.get('b') === 'new', 'classify new');
+assert(modes.get('c') === null, 'classify unknown schema keeps provisional');
+// Re-resolving after the user edits a row classifies against the NEW target, not the one from before discovery.
+const editedEntity = { id: 'e1', targetSchema: 'OLD', targetTable: 'T1' };
+const editedOv = new Map([['e1', { targetSchema: 'OSAPSYNC', targetTable: 'drivers' }]]);
+const editedModes = classifyTargetModes(
+  [{ id: 'e1', ...resolveTarget(editedEntity, editedOv, null) }], { OSAPSYNC: ['DRIVERS'] });
+assert(editedModes.get('e1') === 'existing', 'classify uses current override and plain-object lists');
 
 // columnMismatchNote
 assert(columnMismatchNote(null, ['a']) === 'Column check unverified (discovery unavailable).', 'unverif null');

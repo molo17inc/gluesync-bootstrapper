@@ -2735,18 +2735,56 @@ def _record_offline_outcome(job: _ArchiveImport, entities: _PipelineEntities, sr
     # What Core Hub refused is already in job.errors, with its message (entity creation error ...).
 
 
-def _mark_configuration_completed(new_pipeline_id: Any, new_pipeline_name: Any) -> None:
-    """Mark pipeline as configuration completed to remove from draft status."""
+def _mark_configuration_completed(new_pipeline_id: Any, new_pipeline_name: Any, *, description: Any = None) -> bool:
+    """PUT the pipeline so Core Hub recomputes its Draft status (it needs at least one source and one target agent
+    with a connection). `configurationCompleted` is only kept for older hubs; newer ones ignore it.
+
+    Core Hub stores `description` from the body, so pass the pipeline's current one to avoid wiping it.
+    Returns True on success, False when the call failed (logged, never raised).
+    """
+    body: Dict[str, Any] = {"configurationCompleted": True, "name": new_pipeline_name}
+    if description is not None:
+        body["description"] = description
     try:
         corehub.fetch_core_hub(
             f"/pipelines/{new_pipeline_id}",
             method="PUT",
             token=state.token,
-            body={"configurationCompleted": True, "name": new_pipeline_name},
+            body=body,
         )
         logger.info("Marked pipeline %s (%s) as configuration completed", new_pipeline_name, new_pipeline_id)
+        return True
     except Exception as exc:  # pylint: disable=broad-except
         logger.warning("Failed to mark pipeline %s as configuration completed: %s", new_pipeline_id, exc)
+        return False
+
+
+def _complete_pipeline_after_entity_import(pipeline_id: Any, result: dict, *, dry_run: bool) -> bool:
+    """Take the target pipeline out of Draft after a real entity YAML import that created/updated entities.
+
+    Skipped on dry-run or when no entity succeeded. Reads the pipeline first to keep its name and description (the
+    PUT stores both from the body) and to avoid a needless PUT when it is already completed. The PUT makes Core Hub
+    recompute Draft from the agents' connections. Never fails the import (Core Hub <2.3 safe); returns True only
+    when the PUT succeeded.
+    """
+    if dry_run or result.get("dry_run") or not pipeline_id:
+        return False
+    if int(result.get("successful") or 0) <= 0:
+        return False
+    try:
+        details = corehub.fetch_core_hub(f"/pipelines/{pipeline_id}", token=state.token)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("Could not read pipeline %s to mark it configuration completed: %s", pipeline_id, exc)
+        return False
+    if not isinstance(details, dict):
+        return False
+    if details.get("configurationCompleted") is True:
+        return False
+    name = details.get("name")
+    if not isinstance(name, str) or not name:
+        logger.warning("Pipeline %s has no name; not marking it configuration completed", pipeline_id)
+        return False
+    return _mark_configuration_completed(pipeline_id, name, description=details.get("description"))
 
 
 def _attempt_entities_when_pending() -> bool:
@@ -5174,6 +5212,13 @@ async def _execute_run_body(run_id: str, request: RunRequest) -> None:
                     planned_temp.unlink(missing_ok=True)
 
     result = await loop.run_in_executor(None, _run_sync)
+    # Blocking Core Hub GET/PUT: keep them off the event loop.
+    completed = await loop.run_in_executor(
+        None,
+        lambda: _complete_pipeline_after_entity_import(request.pipeline_id, result, dry_run=bool(request.dry_run)),
+    )
+    if completed:
+        _log_callback(f"Pipeline {request.pipeline_id} updated so Core Hub re-evaluates its Draft status")
 
     summary = result.get("summary")
     state.finalize_run(run_id, _entity_run_status(result), result.get("error"), summary=summary)

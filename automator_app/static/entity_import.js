@@ -53,6 +53,20 @@ export function inferTargetMode(targetTable, existingTables) {
   return hit ? 'existing' : 'new';
 }
 
+/**
+ * Classify entities as existing/new from per-schema target table lists.
+ * Schemas missing from the map (discovery failed / older Hub) yield null so the caller keeps its current badge.
+ */
+export function classifyTargetModes(targets, tablesBySchemaMap) {
+  const out = new Map();
+  (targets || []).forEach(({ id, targetSchema, targetTable }) => {
+    const key = targetSchema || '';
+    const tables = tablesBySchemaMap instanceof Map ? tablesBySchemaMap.get(key) : tablesBySchemaMap?.[key];
+    out.set(id, Array.isArray(tables) ? inferTargetMode(targetTable, tables) : null);
+  });
+  return out;
+}
+
 /** Prefer the discovery spelling when a case-insensitive match hits (Oracle / quoted ids). */
 export function preferDiscoverySpelling(targetTable, existingTables) {
   const name = String(targetTable || '').trim();
@@ -689,6 +703,41 @@ export function initEntityImport({ root, getContext, setMessage, log, getSchemaD
     return pending;
   }
 
+  /**
+   * Resolve "table exists" vs "new table" for every loaded entity: one target-tables GET per
+   * distinct schema (cached), never per row. Failures keep the provisional badge (Core Hub <2.3).
+   * Discovery is awaited, so targets are re-resolved at write time and a changed pipeline or a
+   * replaced entity list drops the result.
+   */
+  async function refreshTargetModes(pipelineId) {
+    if (!pipelineId || !loadedEntities.length) return;
+    const entitiesAtStart = loadedEntities;
+    const resolveAll = () => loadedEntities.map((entity) => ({
+      id: entity.id, ...resolveTarget(entity, targetOverrides, schemaDefaults()),
+    }));
+    const schemas = [...new Set(resolveAll().map((t) => t.targetSchema || ''))];
+    const lists = new Map();
+    await Promise.all(schemas.map(async (schema) => {
+      try {
+        const tables = await ensureTargetTables(pipelineId, schema);
+        if (tables?.length) lists.set(schema, tables);
+      } catch (err) {
+        log?.('Config', `Target table discovery failed for ${schema}: ${err.message}`);
+      }
+    }));
+    if (loadedEntities !== entitiesAtStart || getContext()?.pipelineId !== pipelineId) return;
+    classifyTargetModes(resolveAll(), lists).forEach((mode, id) => {
+      if (!mode) return;
+      const prev = targetOverrides.get(id) || {};
+      if (prev.mode !== mode) targetOverrides.set(id, { ...prev, mode });
+      const host = panel.querySelector(`[data-mode-badge-for="${CSS.escape(String(id))}"]`);
+      host?.replaceChildren(badge(
+        mode === 'existing' ? 'table exists' : 'new table',
+        mode === 'existing' ? 'existing' : 'new',
+      ));
+    });
+  }
+
   async function fetchColumnNames(path, qs, label) {
     // Discovery may be unavailable on Core Hub <2.3 or NoSQL — caller treats null as "unverified".
     try {
@@ -868,9 +917,8 @@ export function initEntityImport({ root, getContext, setMessage, log, getSchemaD
       discoveryArmed = true;
       loadTables(resolved.targetTable);
     };
-    // Show a provisional badge from override/entity without hitting Hub.
-    const provisionalMode = resolved.mode
-      || (entity.alreadyExists ? 'existing' : 'new');
+    // Show a provisional badge from the override (resolveTarget always gives 'existing' or 'new') without hitting Hub.
+    const provisionalMode = resolved.mode;
     modeBadge.replaceChildren(badge(
       provisionalMode === 'existing' ? 'table exists' : 'new table',
       provisionalMode === 'existing' ? 'existing' : 'new',
@@ -1084,6 +1132,9 @@ export function initEntityImport({ root, getContext, setMessage, log, getSchemaD
       clearPreview();
       renderPicker();
       log?.('Config', `Loaded ${loadedEntities.length} entities for picker`);
+      refreshTargetModes(ctx.pipelineId).catch((err) => {
+        log?.('Config', `Target mode refresh failed: ${err.message}`);
+      });
     } catch (err) {
       loadedEntities = [];
       selectedIds = null;
@@ -1193,6 +1244,8 @@ export function initEntityImport({ root, getContext, setMessage, log, getSchemaD
     if (previewBtn) previewBtn.disabled = true;
     setMessage?.('Previewing…', 'info');
     try {
+      // Same discovery as Customize so Preview badges match (best-effort).
+      await refreshTargetModes(ctx.pipelineId).catch(() => {});
       const res = await fetch('/api/entities/plan/preview', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1240,6 +1293,11 @@ export function initEntityImport({ root, getContext, setMessage, log, getSchemaD
         }
       }
       renderPicker();
+      // The global Target changed: re-check which tables exist there (best-effort).
+      const pipelineId = getContext()?.pipelineId;
+      refreshTargetModes(pipelineId).catch((err) => {
+        log?.('Config', `Target mode refresh failed: ${err.message}`);
+      });
     },
     planPayload() {
       const err = selectionError(panel, loadedEntities, selectedIds, targetOverrides, schemaDefaults());
