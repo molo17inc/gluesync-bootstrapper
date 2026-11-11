@@ -37,8 +37,11 @@ Ids are kept, so a restore updates the same definitions instead of creating new 
   on. On another Core Hub, add a ``tokens`` entry to the block (or create a token) before restoring a collection.
 - The secret of an outbound collection's auth: Core Hub never returns it. A restore onto the Core Hub that stores
   the collection keeps the stored secret; onto another one the secret has to be entered in the block.
-- Header values of outbound endpoints, unless ``include_secrets`` (a SUPER_ADMIN only): Core Hub masks them, and a
-  restore sends the mask back, which keeps the stored value.
+- Header values of outbound endpoints, unless ``include_secrets`` (a SUPER_ADMIN only): Core Hub masks them. A
+  restore sends the mask back, which keeps the stored value on the Core Hub that stores the endpoint, on the same
+  origin; anywhere else Core Hub has no value to keep, so the restore refuses the block until the values are typed in.
+- An HTTP Source endpoint serves one pipeline: the Automator does not restore it into another pipeline while the one
+  it serves still exists, and the round trip does not cover a pipeline with an HTTP Source.
 
 Command line, for every Courier agent of a pipeline (JSON on stdout, ``{agentType:agentTag:agentId: block}``)::
 

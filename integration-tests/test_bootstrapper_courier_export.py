@@ -43,9 +43,15 @@ class StatefulCoreHub:
         self.store = {path: {} for path in (INBOUND_COLLECTIONS_PATH, INBOUND_ENDPOINTS_PATH, COLLECTIONS_PATH, ENDPOINTS_PATH)}
         self.tokens = []
         self.endpoint_params = []
+        self.pipelines = [{"pipelineId": PIPELINE}, {"pipelineId": RESTORED_PIPELINE}]
+        self.writes = []
 
     def __call__(self, path, method="GET", token=None, body=None, params=None, headers=None):
         params = params or {}
+        if method != "GET":
+            self.writes.append((method, path))
+        if path == "/pipelines":
+            return copy.deepcopy(self.pipelines)
         if path == API_TOKENS_PATH:
             if method == "GET":
                 return copy.deepcopy(self.tokens)
@@ -168,15 +174,63 @@ class InboundExportTests(unittest.TestCase):
         self.assertNotIn("sql", [e["name"] for c in block["collections"] for e in c["endpoints"]])
         self.assertIsNone(export_courier_block("jwt", "another-pipeline", source_agent(), fetch=self.hub))
 
-    def test_a_restore_from_the_export_gives_the_same_export_and_creates_no_token(self):
+    def test_a_restore_onto_the_pipeline_it_was_exported_from_gives_the_same_export_and_creates_no_token(self):
         exported = export_courier_block("jwt", PIPELINE, source_agent(), fetch=self.hub)
 
-        provision_courier_agent("jwt", RESTORED_PIPELINE, source_agent(RESTORED_AGENT, courier=copy.deepcopy(exported)),
-                                fetch=self.hub)
+        provision_courier_agent("jwt", PIPELINE, source_agent(courier=copy.deepcopy(exported)), fetch=self.hub,
+                                keep_other_pipelines=True)
 
-        self.assertEqual(export_courier_block("jwt", RESTORED_PIPELINE, source_agent(RESTORED_AGENT), fetch=self.hub), exported)
+        self.assertEqual(export_courier_block("jwt", PIPELINE, source_agent(), fetch=self.hub), exported)
         self.assertEqual(len(self.hub.tokens), 2, "the restore creates no token and revokes none")
         self.assertEqual(len(self.hub.store[INBOUND_COLLECTIONS_PATH]), 2, "the same collections are updated in place")
+
+    def test_a_restore_into_another_pipeline_never_takes_the_endpoints_of_a_live_one(self):
+        exported = export_courier_block("jwt", PIPELINE, source_agent(), fetch=self.hub)
+        writes_before = len(self.hub.writes)
+
+        with self.assertRaises(CourierConfigError) as raised:
+            provision_courier_agent("jwt", RESTORED_PIPELINE, source_agent(RESTORED_AGENT, courier=copy.deepcopy(exported)),
+                                    fetch=self.hub, keep_other_pipelines=True)
+
+        self.assertIn("'shop/orders' (pipeline p1)", str(raised.exception))
+        self.assertEqual(len(self.hub.writes), writes_before, "refused before anything is written")
+        self.assertEqual(export_courier_block("jwt", PIPELINE, source_agent(), fetch=self.hub), exported,
+                         "the original pipeline keeps its endpoints")
+
+    def test_a_restore_takes_the_endpoints_of_a_deleted_pipeline_or_of_a_live_one_with_force(self):
+        exported = export_courier_block("jwt", PIPELINE, source_agent(), fetch=self.hub)
+        self.hub.pipelines = [{"pipelineId": RESTORED_PIPELINE}]
+
+        provision_courier_agent("jwt", RESTORED_PIPELINE, source_agent(RESTORED_AGENT, courier=copy.deepcopy(exported)),
+                                fetch=self.hub, keep_other_pipelines=True)
+        self.assertIsNone(export_courier_block("jwt", PIPELINE, source_agent(), fetch=self.hub))
+
+        self.hub.pipelines = [{"pipelineId": PIPELINE}, {"pipelineId": RESTORED_PIPELINE}]
+        back = copy.deepcopy(exported)
+        back["force"] = True
+        provision_courier_agent("jwt", PIPELINE, source_agent(courier=back), fetch=self.hub, keep_other_pipelines=True)
+        self.assertEqual(export_courier_block("jwt", PIPELINE, source_agent(), fetch=self.hub), exported)
+
+    def test_a_bootstrapper_run_moves_the_endpoints_to_its_new_pipeline_and_says_so(self):
+        exported = export_courier_block("jwt", PIPELINE, source_agent(), fetch=self.hub)
+
+        log = mock.Mock()
+        provision_courier_agent("jwt", RESTORED_PIPELINE, source_agent(RESTORED_AGENT, courier=copy.deepcopy(exported)),
+                                fetch=self.hub, logger=log)
+
+        moved = [c.args for c in log.warning.call_args_list if "moves from pipeline" in c.args[0]]
+        self.assertEqual([(a[1], a[2], a[3]) for a in moved], [("shop", "orders", PIPELINE), ("billing", "invoices", PIPELINE)])
+        self.assertEqual(export_courier_block("jwt", RESTORED_PIPELINE, source_agent(RESTORED_AGENT), fetch=self.hub), exported)
+
+    def test_an_endpoint_renamed_in_the_ui_is_found_by_the_id_of_the_block(self):
+        exported = export_courier_block("jwt", PIPELINE, source_agent(), fetch=self.hub)
+        orders_id = exported["collections"][0]["endpoints"][0]["id"]
+        self.hub.store[INBOUND_ENDPOINTS_PATH][orders_id]["name"] = "orders-renamed"
+
+        with self.assertRaises(CourierConfigError):
+            provision_courier_agent("jwt", RESTORED_PIPELINE, source_agent(RESTORED_AGENT, courier=copy.deepcopy(exported)),
+                                    fetch=self.hub, keep_other_pipelines=True)
+        self.assertEqual(self.hub.store[INBOUND_ENDPOINTS_PATH][orders_id]["pipelineId"], PIPELINE)
 
 
 class OutboundExportTests(unittest.TestCase):
@@ -212,6 +266,29 @@ class OutboundExportTests(unittest.TestCase):
         endpoint = next(e for e in self.hub.store[ENDPOINTS_PATH].values() if e["name"] == "customers")
         self.assertEqual(endpoint["headers"][0]["valueTemplate"], "key-123")
         self.assertEqual(export_courier_block("jwt", RESTORED_PIPELINE, target_agent("demo-api"), fetch=self.hub), exported)
+
+    def test_a_restore_of_masked_header_values_where_core_hub_has_none_to_keep_is_refused(self):
+        exported = export_courier_block("jwt", PIPELINE, target_agent("demo-api"), fetch=self.hub)
+        exported["collections"][0]["auth"]["token"] = SECRET  # the auth secret typed in: only the header is missing
+
+        other_hub = StatefulCoreHub()
+        with self.assertRaises(CourierConfigError) as raised:
+            provision_courier_agent("jwt", PIPELINE, target_agent("demo-api", courier=copy.deepcopy(exported)), fetch=other_hub)
+        self.assertIn("header 'X-Api-Key' is masked", str(raised.exception))
+        self.assertEqual(other_hub.writes, [], "refused before anything is written")
+
+        moved = copy.deepcopy(exported)
+        moved["collections"][0]["baseUrl"] = "https://elsewhere.example.com"
+        moved["force"] = True
+        with self.assertRaises(CourierConfigError) as raised:
+            provision_courier_agent("jwt", PIPELINE, target_agent("demo-api", courier=moved), fetch=self.hub)
+        self.assertIn("moves to another origin", str(raised.exception))
+
+        same_origin = copy.deepcopy(exported)
+        same_origin["collections"][0]["baseUrl"] = "http://api.example.com:80/v2"
+        provision_courier_agent("jwt", PIPELINE, target_agent("demo-api", courier=same_origin), fetch=self.hub)
+        endpoint = next(e for e in self.hub.store[ENDPOINTS_PATH].values() if e["name"] == "customers")
+        self.assertEqual(endpoint["headers"][0]["valueTemplate"], "key-123", "same origin: the stored value is kept")
 
     def test_a_restore_onto_another_core_hub_asks_for_the_secret(self):
         exported = export_courier_block("jwt", PIPELINE, target_agent("demo-api"), fetch=self.hub)
@@ -342,6 +419,7 @@ class AutomatorCourierTests(unittest.TestCase):
 
         self.assertEqual(custom, {"outboundCollection": "demo-api"})
         self.assertEqual(provision.call_args.args[2]["agentId"], "new-id")
+        self.assertTrue(provision.call_args.kwargs["keep_other_pipelines"], "a restore never takes a live pipeline's endpoints")
 
     def test_an_agent_without_a_block_is_left_as_it_is(self):
         with mock.patch.object(corehub, "provision_courier_agent") as provision:
@@ -364,6 +442,24 @@ class RoundTripCourierTests(unittest.TestCase):
         self.assertNotIn("courier", restored["agents"][1], "nothing exported for it: nothing restored")
         self.assertEqual(restored["agents"][2]["hostCredentials"]["certificatePath"], "/kit/certs/ca.pem")
         self.assertIn("tokens", kit["agents"][0]["courier"], "the kit config is left untouched")
+
+    def test_a_pipeline_with_an_http_source_is_skipped_before_the_restore(self):
+        with self.assertRaises(rt.RoundTripSkipped) as raised:
+            rt.refuse_http_source_round_trip({agent_key(source_agent()): {"collections": []}}, PIPELINE)
+        self.assertIn("SOURCE:courier-agent", str(raised.exception))
+        rt.refuse_http_source_round_trip({agent_key(target_agent()): {"collections": []}}, PIPELINE)
+        rt.refuse_http_source_round_trip({}, PIPELINE)
+
+    def test_a_skipped_round_trip_passes_and_says_so_in_junit(self):
+        with tempfile.TemporaryDirectory() as out, \
+                mock.patch.object(rt, "export_and_restore", side_effect=rt.RoundTripSkipped("an HTTP Source")):
+            code = rt.run(PIPELINE, Path(out), "token.json", 10, "suite")
+            junit = (Path(out) / "junit.xml").read_text(encoding="utf-8")
+        self.assertEqual(code, 0)
+        self.assertIn('<skipped message="an HTTP Source"/>', junit)
+        with tempfile.TemporaryDirectory() as out, \
+                mock.patch.object(rt, "export_and_restore", side_effect=rt.RoundTripError("boom")):
+            self.assertEqual(rt.run(PIPELINE, Path(out), "token.json", 10, "suite"), 1)
 
     def test_the_courier_check(self):
         block = {"SOURCE:courier-agent": {"collections": [{"name": "shop"}]}}

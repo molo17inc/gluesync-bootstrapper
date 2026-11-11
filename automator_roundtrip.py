@@ -337,6 +337,7 @@ class Check:
         self.name = name
         self.description = description
         self.passed = True
+        self.skipped = False
         self.message = ""
         self.diff: List[str] = []
 
@@ -346,11 +347,17 @@ class Check:
         if diff:
             self.diff = diff
 
+    def skip(self, message: str) -> None:
+        """Not run, for a reason that is no failure of the round trip (it stays passed)."""
+        self.skipped = True
+        self.message = message
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "name": self.name,
             "description": self.description,
             "passed": self.passed,
+            "skipped": self.skipped,
             "message": self.message,
             "diffLines": len(self.diff),
         }
@@ -562,6 +569,8 @@ def junit_xml(suite_name: str, checks: List[Check], duration: float) -> str:
             if len(c.diff) > MAX_DIFF_LINES:
                 body += f"\n... {len(c.diff) - MAX_DIFF_LINES} more lines in {c.name}.diff"
             lines.append(f"    <failure message={quoteattr(c.message)}>{escape(body)}</failure>")
+        elif c.skipped:
+            lines.append(f"    <skipped message={quoteattr(c.message)}/>")
         else:
             lines.append(f"    <system-out>{escape(c.message)}</system-out>")
         lines.append("  </testcase>")
@@ -799,6 +808,27 @@ def capture(token: str, pipeline_id: str, out_dir: Path, label: str) -> Dict[str
     return side
 
 
+class RoundTripSkipped(RoundTripError):
+    """The pipeline cannot be round-tripped on its own Core Hub: reported as skipped, not as a failure."""
+
+
+def refuse_http_source_round_trip(blocks: Dict[str, Dict[str, Any]], pipeline_id: str) -> None:
+    """Raises ``RoundTripSkipped`` when the pipeline has an HTTP Source with inbound endpoints.
+
+    An inbound endpoint serves one pipeline, and two endpoints of a collection cannot share a route: the copy restored
+    next to the original on this Core Hub would take the original's endpoints away (or be refused with a 409 once
+    entities read them). Said up front, before anything is restored, instead of failing halfway or breaking the
+    original pipeline; the kit's own tests still cover the HTTP Source.
+    """
+    sources = sorted(key for key in blocks if key.upper().startswith("SOURCE:"))
+    if sources:
+        raise RoundTripSkipped(
+            f"pipeline {pipeline_id} has an HTTP Source with inbound endpoints ({', '.join(sources)}): an inbound endpoint "
+            "serves one pipeline, so a copy cannot be restored next to the original on the same Core Hub, and the round "
+            "trip does not cover this pipeline (the original is left untouched)."
+        )
+
+
 def write_courier_restore_config(blocks: Dict[str, Dict[str, Any]], out_dir: Path) -> Optional[Path]:
     """``restore-config.json``: the kit config with the exported Courier blocks; None when there is none to restore."""
     if not blocks:
@@ -823,6 +853,7 @@ def export_and_restore(
     pipeline = original["pipeline"] if isinstance(original["pipeline"], dict) else {}
     restore_name = f"{pipeline.get('name') or pipeline_id}{ROUND_TRIP_SUFFIX}"
     collection_dir = out_dir / "original-function-collection" if original.get("functionCollection") else None
+    refuse_http_source_round_trip(original.get("courier") or {}, pipeline_id)
     config_path = write_courier_restore_config(original.get("courier") or {}, out_dir)
     restored_id, error = restore_export(out_dir / "original-export.yaml", restore_name, out_dir, timeout,
                                         function_collection_dir=collection_dir, config_path=config_path)
@@ -842,7 +873,7 @@ def write_results(out_dir: Path, pipeline_id: str, suite_name: str, checks: List
     for c in checks:
         if c.diff:
             (out_dir / f"{c.name}.diff").write_text("\n".join(c.diff) + "\n", encoding="utf-8")
-        logger.info(f"[{'PASS' if c.passed else 'FAIL'}] {c.name}: {c.message}")
+        logger.info(f"[{'SKIP' if c.skipped else 'PASS' if c.passed else 'FAIL'}] {c.name}: {c.message}")
     write_json(out_dir / "report.json", {
         "pipelineId": pipeline_id,
         "passed": passed,
@@ -861,6 +892,8 @@ def run(pipeline_id: str, out_dir: Path, token_file: str, timeout: int, suite_na
     try:
         original, restored, step.message = export_and_restore(pipeline_id, out_dir, token_file, timeout)
         checks.extend(run_checks(original, restored, kit_declares_schedules()))
+    except RoundTripSkipped as exc:
+        step.skip(str(exc))
     except RoundTripError as exc:
         step.fail(str(exc))
     return write_results(out_dir, pipeline_id, suite_name, checks, time.time() - started)

@@ -4776,12 +4776,15 @@ def _restore_courier_block(token, pipeline_id, agent_id, conf_agent, custom_host
     """Provisions the ``courier`` block of an HTTP agent, as the bootstrapper does; returns its customHostCredentials.
 
     The collections and endpoints keep the ids of the backup, so a restore onto the same Core Hub updates them. An
-    agent without a block is returned unchanged. A refused block raises ``CourierConfigError`` with what to fix.
+    HTTP Source endpoint that still serves another pipeline is not taken away from it: the restore is refused instead
+    (a copy of a live pipeline needs its collections renamed). An agent without a block is returned unchanged. A
+    refused block raises ``CourierConfigError`` with what to fix.
     """
     if not conf_agent.get("courier"):
         return custom_host_credentials
     agent = {**conf_agent, "agentId": str(agent_id), "customHostCredentials": dict(custom_host_credentials or {})}
-    provisioned = provision_courier_agent(token, pipeline_id, agent, fetch=fetch_core_hub, logger=logger)
+    provisioned = provision_courier_agent(token, pipeline_id, agent, fetch=fetch_core_hub, logger=logger,
+                                          keep_other_pipelines=True)
     return custom_host_credentials if provisioned is None else provisioned
 
 

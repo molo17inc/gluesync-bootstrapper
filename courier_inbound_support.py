@@ -99,6 +99,7 @@ from courier_support import (
 INBOUND_COLLECTIONS_PATH = "/api-agent/inbound/collections"
 INBOUND_ENDPOINTS_PATH = "/api-agent/inbound/endpoints"
 API_TOKENS_PATH = "/api-tokens"
+PIPELINES_PATH = "/pipelines"
 # The field of a token that narrows it to inbound collections (Core Hub with gluesync-kotlin !2954).
 COLLECTION_SCOPES_KEY = "collectionScopes"
 INBOUND_COLLECTION_KEY = "inboundCollection"
@@ -386,12 +387,21 @@ def _by_name(items: Any) -> Dict[str, Dict[str, Any]]:
     return {str(i["name"]): i for i in items if isinstance(i, dict) and i.get("name") is not None}
 
 
-def _plan_inbound_endpoints(collection_cfg: Dict[str, Any], collection: Dict[str, Any], stored_endpoints: Dict[str, Dict[str, Any]],
+def _by_id(items: Any) -> Dict[str, Dict[str, Any]]:
+    if not isinstance(items, list):
+        return {}
+    return {str(i["id"]): i for i in items if isinstance(i, dict) and i.get("id") is not None}
+
+
+def _plan_inbound_endpoints(collection_cfg: Dict[str, Any], collection: Dict[str, Any], stored_endpoints: List[Dict[str, Any]],
                             pipeline_id: str, agent_id: str, errors: List[str]) -> List[Dict[str, Any]]:
     endpoints: List[Dict[str, Any]] = []
     names: set = set()
+    stored_by_name, stored_by_id = _by_name(stored_endpoints), _by_id(stored_endpoints)
     for endpoint_cfg in collection_cfg.get("endpoints") or []:
-        stored = stored_endpoints.get(_text((endpoint_cfg or {}).get("name")))
+        cfg = endpoint_cfg if isinstance(endpoint_cfg, dict) else {}
+        # By name, else by the id the block carries (an export keeps ids; the endpoint may have been renamed in the UI).
+        stored = stored_by_name.get(_text(cfg.get("name"))) or stored_by_id.get(_text(cfg.get("id")))
         endpoint = normalize_inbound_endpoint(
             endpoint_cfg, collection["id"], pipeline_id, agent_id, existing_id=stored.get("id") if stored else None
         )
@@ -399,7 +409,13 @@ def _plan_inbound_endpoints(collection_cfg: Dict[str, Any], collection: Dict[str
             errors.append(f"endpoint '{endpoint['name']}' of collection '{collection['name']}' is declared twice")
         names.add(endpoint["name"])
         errors.extend(validate_inbound_endpoint(endpoint))
-        endpoints.append({"definition": endpoint, "exists": stored is not None})
+        endpoints.append({
+            "definition": endpoint,
+            "exists": stored is not None,
+            # The pipeline that serves the stored endpoint now: an update with another pipeline takes it away from it.
+            "storedPipelineId": _text(stored.get("pipelineId")) if stored else "",
+            "storedAgentId": _text(stored.get("agentId")) if stored else "",
+        })
     if not endpoints:
         errors.append(f"collection '{collection['name']}' declares no endpoint")
     return endpoints
@@ -422,7 +438,7 @@ def _plan_collections(collections_cfg: List[Any], existing_collections: Any,
         names.add(collection["name"])
         base_paths.add(collection["basePath"])
         errors.extend(validate_inbound_collection(collection))
-        stored_endpoints = _by_name(existing_endpoints_for(collection["id"])) if (existing_endpoints_for and stored) else {}
+        stored_endpoints = existing_endpoints_for(collection["id"]) if (existing_endpoints_for and stored) else []
         endpoints = _plan_inbound_endpoints(collection_cfg, collection, stored_endpoints, pipeline_id, agent_id, errors)
         plan.append({"collection": collection, "exists": stored is not None, "endpoints": endpoints})
     return plan
@@ -580,13 +596,60 @@ def _upsert_collection(call: FetchFn, token: str, item: Dict[str, Any], token_id
     return collection["name"]
 
 
+def _moved_endpoints(plan: Dict[str, Any], pipeline_id: str) -> List[Dict[str, Any]]:
+    """Planned updates of stored endpoints that another pipeline serves now, each with its collection's name."""
+    return [
+        {**endpoint_item, "collectionName": item["collection"]["name"]}
+        for item in plan["collections"] for endpoint_item in item["endpoints"]
+        if endpoint_item["exists"] and endpoint_item["storedPipelineId"]
+        and endpoint_item["storedPipelineId"] != str(pipeline_id)
+    ]
+
+
+def _live_pipeline_ids(call: FetchFn, token: str) -> set:
+    pipelines = call(PIPELINES_PATH, method="GET", token=token)
+    if not isinstance(pipelines, list):
+        return set()
+    ids = (p.get("pipelineId") or p.get("id") or p.get("pipeline_id") for p in pipelines if isinstance(p, dict))
+    return {str(pipeline_id) for pipeline_id in ids if pipeline_id is not None}
+
+
+def _check_moved_endpoints(call: FetchFn, token: str, plan: Dict[str, Any], pipeline_id: str,
+                           keep_other_pipelines: bool, log: logging.Logger) -> None:
+    """An inbound endpoint serves one pipeline: saving it for ``pipeline_id`` takes it away from the one it serves.
+
+    A bootstrapper run creates a new pipeline every time, so a re-run after a failed one moves the endpoints on purpose
+    (warned about). A restore (``keep_other_pipelines``) refuses before anything is written while that pipeline still
+    exists: a restored copy would leave the original without its endpoints. ``force`` moves them anyway.
+    """
+    moved = _moved_endpoints(plan, pipeline_id)
+    if not moved:
+        return
+    if keep_other_pipelines and not plan["force"]:
+        live = _live_pipeline_ids(call, token)
+        taken = [m for m in moved if m["storedPipelineId"] in live]
+        if taken:
+            raise CourierConfigError(
+                "The HTTP Source endpoints "
+                + ", ".join(f"'{m['collectionName']}/{m['definition']['name']}' (pipeline {m['storedPipelineId']})" for m in taken)
+                + f" serve another pipeline, and pipeline {pipeline_id} would take them away from it: an inbound endpoint "
+                "serves one pipeline. Restore onto the Core Hub where the original pipeline is gone, give the collections of "
+                "the 'courier' block another name and basePath, or set \"force\": true to move them."
+            )
+    for m in moved:
+        log.warning("Inbound endpoint '%s/%s' moves from pipeline %s (agent %s) to pipeline %s",
+                    m["collectionName"], m["definition"]["name"], m["storedPipelineId"], m["storedAgentId"], pipeline_id)
+
+
 def provision_inbound(token: str, courier_cfg: Dict[str, Any], pipeline_id: str, agent_id: str,
-                      fetch: Optional[FetchFn] = None, logger: Optional[logging.Logger] = None) -> List[str]:
+                      fetch: Optional[FetchFn] = None, logger: Optional[logging.Logger] = None,
+                      keep_other_pipelines: bool = False) -> List[str]:
     """Creates or updates the inbound collections, endpoints and tokens of an HTTP Source in CoreHub.
 
     Tokens come first so that their ids can join the allowlist of the collections they are for.
     Returns the collection names, in configuration order. Raises ``CourierConfigError`` on an invalid
-    configuration, and whatever ``fetch`` raises on a CoreHub failure.
+    configuration, and whatever ``fetch`` raises on a CoreHub failure. ``keep_other_pipelines`` (a restore)
+    refuses to move an endpoint away from a pipeline that still exists (see ``_check_moved_endpoints``).
     """
     log = logger or _logger
     call = fetch or _default_fetch()
@@ -597,6 +660,7 @@ def provision_inbound(token: str, courier_cfg: Dict[str, Any], pipeline_id: str,
         return call(INBOUND_ENDPOINTS_PATH, method="GET", token=token, params={"collectionId": collection_id})
 
     plan = plan_inbound_definitions(courier_cfg, pipeline_id, agent_id, existing_collections, existing_endpoints_for)
+    _check_moved_endpoints(call, token, plan, pipeline_id, keep_other_pipelines, log)
 
     collection_ids_by_name = {item["collection"]["name"]: item["collection"]["id"] for item in plan["collections"]}
     token_ids_by_collection = _rotate_tokens(call, token, plan["tokens"], pipeline_id, agent_id, collection_ids_by_name, log)
@@ -629,7 +693,8 @@ def apply_inbound_defaults(agent: Dict[str, Any], collection_names: List[str],
 
 
 def provision_courier_agent(token: str, pipeline_id: str, agent: Dict[str, Any], fetch: Optional[FetchFn] = None,
-                            logger: Optional[logging.Logger] = None) -> Optional[Dict[str, Any]]:
+                            logger: Optional[logging.Logger] = None,
+                            keep_other_pipelines: bool = False) -> Optional[Dict[str, Any]]:
     """Creates the Courier definitions of an HTTP Source or HTTP Target agent entry and fills its defaults.
 
     The agent discovers them (collection = schema, endpoint = table, binding = column), so they must
@@ -653,7 +718,8 @@ def provision_courier_agent(token: str, pipeline_id: str, agent: Dict[str, Any],
         )
         return None
     if source:
-        names = provision_inbound(token, agent["courier"], pipeline_id, agent["agentId"], fetch=fetch, logger=log)
+        names = provision_inbound(token, agent["courier"], pipeline_id, agent["agentId"], fetch=fetch, logger=log,
+                                  keep_other_pipelines=keep_other_pipelines)
         apply_inbound_defaults(agent, names, logger=log)
     else:
         names = provision_courier(token, agent["courier"], fetch=fetch, logger=log)

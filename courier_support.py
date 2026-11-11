@@ -104,6 +104,8 @@ CLIENT_MANAGED_HEADERS = ("host", "content-length", "transfer-encoding", "connec
 # The query parameter a collection save repeats with to move to another origin anyway
 # (gluesync-kotlin EndpointService.LEAVING_HEADERS_UNBOUND).
 FORCE_PARAM = "force"
+# What CoreHub shows in place of a header value (gluesync-kotlin HeaderDefinition.MASKED_VALUE).
+MASKED_HEADER_VALUE = "********"
 
 # Stable ids for definitions created by the bootstrapper: the same name always gets the same
 # id, so a re-run that cannot read the existing definitions still upserts instead of duplicating.
@@ -385,8 +387,46 @@ def _by_name(items: Any) -> Dict[str, Dict[str, Any]]:
     return result
 
 
+def _origin(url: str) -> tuple:
+    """Scheme, host and port of ``url`` (default port filled in): what a header value is bound to."""
+    try:
+        parsed = urlparse(str(url or "").strip())
+        port = parsed.port
+    except ValueError:
+        return ("", "", None)
+    scheme = parsed.scheme.lower()
+    return scheme, (parsed.hostname or "").lower(), port or {"http": 80, "https": 443}.get(scheme)
+
+
+def _masked_header_errors(endpoint: Dict[str, Any], stored_endpoint: Optional[Dict[str, Any]],
+                          stored_base_url: Optional[str], base_url: str) -> List[str]:
+    """Header values sent as the mask that CoreHub has no value to keep for.
+
+    CoreHub keeps the stored value of a header sent back as ``MASKED_HEADER_VALUE``, only for a stored endpoint that
+    has that header, and only while the collection stays on the origin the value was entered for (gluesync-kotlin
+    ``EndpointDefinition.withHeaderValuesFrom`` / ``headerProblems``); otherwise it refuses the endpoint. An export
+    without ``include_secrets`` masks every header value, so restoring it anywhere else needs the values typed in.
+    """
+    masked = [h["name"] for h in endpoint.get("headers") or [] if h.get("valueTemplate") == MASKED_HEADER_VALUE]
+    if not masked:
+        return []
+    stored_names = {h.get("name") for h in (stored_endpoint or {}).get("headers") or [] if isinstance(h, dict)}
+    moves = stored_base_url is not None and _origin(stored_base_url) != _origin(base_url)
+    if stored_endpoint is None:
+        why = "CoreHub stores no value for it (an export leaves header values out unless include_secrets)"
+    elif moves:
+        why = "the collection moves to another origin, and the stored value is not sent there"
+    else:
+        missing = [name for name in masked if name not in stored_names]
+        if not missing:
+            return []
+        masked, why = missing, "the stored endpoint has no such header"
+    return [f"header '{name}' is masked ({MASKED_HEADER_VALUE}) and {why}: enter its value" for name in masked]
+
+
 def _plan_endpoints(collection_cfg: Dict[str, Any], collection: Dict[str, Any],
-                    stored_endpoints: Dict[str, Dict[str, Any]], errors: List[str]) -> List[Dict[str, Any]]:
+                    stored_endpoints: Dict[str, Dict[str, Any]], errors: List[str],
+                    stored_base_url: Optional[str] = None) -> List[Dict[str, Any]]:
     endpoints: List[Dict[str, Any]] = []
     endpoint_names: set = set()
     for endpoint_cfg in collection_cfg.get("endpoints") or []:
@@ -400,6 +440,10 @@ def _plan_endpoints(collection_cfg: Dict[str, Any], collection: Dict[str, Any],
             errors.append(f"endpoint '{endpoint['name']}' of collection '{collection['name']}' is declared twice")
         endpoint_names.add(endpoint["name"])
         errors.extend(validate_endpoint(endpoint))
+        errors.extend(
+            f"endpoint '{endpoint['name']}': {e}"
+            for e in _masked_header_errors(endpoint, stored_endpoint, stored_base_url, collection.get("baseUrl") or "")
+        )
         endpoints.append({"definition": endpoint, "exists": stored_endpoint is not None})
     if not endpoints:
         errors.append(f"collection '{collection['name']}' declares no endpoint")
@@ -480,7 +524,8 @@ def plan_courier_definitions(courier_cfg: Dict[str, Any], existing_collections: 
         errors.extend(validate_collection(collection, keeps_stored_secret=stored is not None))
 
         stored_endpoints = _by_name(existing_endpoints_for(collection["id"])) if (existing_endpoints_for and stored) else {}
-        endpoints = _plan_endpoints(collection_cfg, collection, stored_endpoints, errors)
+        endpoints = _plan_endpoints(collection_cfg, collection, stored_endpoints, errors,
+                                    stored_base_url=stored.get("baseUrl") if stored else None)
         plan.append({"collection": collection, "exists": stored is not None, "endpoints": endpoints})
 
     if errors:
