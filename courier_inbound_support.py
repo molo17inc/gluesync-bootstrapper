@@ -99,6 +99,8 @@ from courier_support import (
 INBOUND_COLLECTIONS_PATH = "/api-agent/inbound/collections"
 INBOUND_ENDPOINTS_PATH = "/api-agent/inbound/endpoints"
 API_TOKENS_PATH = "/api-tokens"
+# The field of a token that narrows it to inbound collections (Core Hub with gluesync-kotlin !2954).
+COLLECTION_SCOPES_KEY = "collectionScopes"
 INBOUND_COLLECTION_KEY = "inboundCollection"
 HTTPS_AGENT_PERMISSION = "gluesync.https_agent"
 # CoreHub's code for a collection no active token can call (gluesync-kotlin CourierRouteSupport.MISSING_TOKEN_CODE).
@@ -478,20 +480,42 @@ def write_token_file(path: str, content: Dict[str, Any]) -> None:
         handle.write("\n")
 
 
+def _create_token(call: FetchFn, auth: str, body: Dict[str, Any], log: logging.Logger) -> Any:
+    """POSTs a token with collection scopes; on a Core Hub that has none, the token is created without them.
+
+    A Core Hub older than token collection scopes (gluesync-kotlin !2954) either refuses the unknown field (400),
+    and the token is created again without it, or ignores it and answers without one. Either way the token is then
+    not narrowed to its collections: the allowlist of those collections is all that keeps it out of the others.
+    """
+    try:
+        created = call(API_TOKENS_PATH, method="POST", token=auth, body=body)
+    except Exception as error:
+        if status_of(error) != 400 or COLLECTION_SCOPES_KEY not in error_text(error):
+            raise
+        created = call(API_TOKENS_PATH, method="POST", token=auth,
+                       body={k: v for k, v in body.items() if k != COLLECTION_SCOPES_KEY})
+    if isinstance(created, dict) and COLLECTION_SCOPES_KEY not in created:
+        log.warning(
+            "This Core Hub does not scope Personal API Tokens to collections: token '%s' can also call the inbound "
+            "collections whose allowlist is off. Turn the allowlist on for those, or upgrade Core Hub.", body["name"]
+        )
+    return created
+
+
 def _rotate_token(call: FetchFn, auth: str, token: Dict[str, Any], existing_tokens: Any, pipeline_id: str,
                   agent_id: str, collection_ids: List[str], log: logging.Logger) -> str:
     for stale in existing_tokens if isinstance(existing_tokens, list) else []:
         if isinstance(stale, dict) and stale.get("name") == token["name"] and stale.get("active"):
             log.info("Revoking the previous Personal API Token '%s' (id=%s)", token["name"], stale.get("id"))
             call(f"{API_TOKENS_PATH}/{stale['id']}/revoke", method="POST", token=auth)
-    created = call(API_TOKENS_PATH, method="POST", token=auth, body={
+    created = _create_token(call, auth, {
         "name": token["name"],
         "expiresInDays": token["expiresInDays"],
         "scopes": [{"pipelineId": pipeline_id, "agentId": agent_id}],
         "permissionScopes": [HTTPS_AGENT_PERMISSION],
         # The collections it is for, and no other one.
-        "collectionScopes": collection_ids,
-    })
+        COLLECTION_SCOPES_KEY: collection_ids,
+    }, log)
     if not isinstance(created, dict) or not created.get("id") or not created.get("token"):
         raise RuntimeError(f"CoreHub did not return the Personal API Token '{token['name']}'")
     write_token_file(token["outputFile"], {

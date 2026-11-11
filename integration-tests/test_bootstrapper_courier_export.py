@@ -230,6 +230,93 @@ class OutboundExportTests(unittest.TestCase):
         self.assertEqual(list(blocks), ["TARGET:courier-agent"])
 
 
+def corehub_error(status, body=""):
+    """What ``fetch_core_hub`` raises: a RuntimeError caused by the HTTP error that carries the response."""
+    http_error = Exception(f"{status} Client Error")
+    http_error.response = mock.Mock(status_code=status, text=body)
+    try:
+        raise RuntimeError(f"CoreHub request failed: {http_error} | Response: {body}") from http_error
+    except RuntimeError as wrapped:
+        return wrapped
+
+
+class OlderCoreHubTests(unittest.TestCase):
+    """A Core Hub without token collection scopes, or without a Courier route, is handled, not failed on."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.config = {"collections": inbound_config(self.tmp.name)["collections"][:1],
+                       "tokens": [{"name": "shop-client", "outputFile": f"{self.tmp.name}/shop.json"}]}
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _token_posts(self, hub):
+        return [body for method, path, body in hub.posts if path == API_TOKENS_PATH]
+
+    def test_a_core_hub_refusing_collection_scopes_gets_the_token_without_them(self):
+        hub = StatefulCoreHub()
+        hub.posts = []
+        answer = hub.__call__
+
+        def refusing(path, method="GET", token=None, body=None, params=None, headers=None):
+            if method == "POST":
+                hub.posts.append((method, path, copy.deepcopy(body)))
+                if path == API_TOKENS_PATH and "collectionScopes" in body:
+                    raise corehub_error(400, "Encountered an unknown key 'collectionScopes' at path: $")
+            return answer(path, method=method, token=token, body=body, params=params, headers=headers)
+
+        log = mock.Mock()
+        provision_courier_agent("jwt", PIPELINE, source_agent(courier=self.config), fetch=refusing, logger=log)
+
+        first, second = self._token_posts(hub)
+        self.assertIn("collectionScopes", first)
+        self.assertNotIn("collectionScopes", second)
+        self.assertEqual(len(hub.tokens), 1)
+        self.assertIn("does not scope Personal API Tokens", log.warning.call_args_list[-1].args[0])
+
+    def test_a_core_hub_ignoring_collection_scopes_is_warned_about_and_one_honouring_them_is_not(self):
+        log = mock.Mock()
+        provision_courier_agent("jwt", PIPELINE, source_agent(courier=self.config), fetch=StatefulCoreHub(), logger=log)
+        self.assertTrue(any("does not scope" in c.args[0] for c in log.warning.call_args_list))
+
+        honouring = StatefulCoreHub()
+        answer = honouring.__call__
+
+        def scoped(path, method="GET", token=None, body=None, params=None, headers=None):
+            created = answer(path, method=method, token=token, body=body, params=params, headers=headers)
+            if method == "POST" and path == API_TOKENS_PATH:
+                created["collectionScopes"] = body["collectionScopes"]
+            return created
+
+        log = mock.Mock()
+        provision_courier_agent("jwt", PIPELINE, source_agent(courier=self.config), fetch=scoped, logger=log)
+        self.assertFalse(any("does not scope" in c.args[0] for c in log.warning.call_args_list))
+
+    def test_another_token_refusal_is_not_retried(self):
+        def failing(path, method="GET", **kwargs):
+            if method == "POST" and path == API_TOKENS_PATH:
+                raise corehub_error(400, "Token name cannot be blank")
+            return [] if method == "GET" else kwargs.get("body")
+
+        with self.assertRaises(RuntimeError):
+            provision_courier_agent("jwt", PIPELINE, source_agent(courier=self.config), fetch=failing)
+
+    def test_no_courier_route_exports_nothing_and_another_failure_is_raised(self):
+        def missing(path, method="GET", **kwargs):
+            raise corehub_error(404, "Not Found")
+
+        self.assertIsNone(export_courier_block("jwt", PIPELINE, source_agent(), fetch=missing))
+        self.assertIsNone(export_courier_block("jwt", PIPELINE, target_agent(), fetch=missing))
+        self.assertEqual(export_pipeline_courier("jwt", PIPELINE, [source_agent(), target_agent()], fetch=missing), {})
+
+        def broken(path, method="GET", **kwargs):
+            raise corehub_error(500, "boom")
+
+        with self.assertRaises(RuntimeError):
+            export_courier_block("jwt", PIPELINE, target_agent(), fetch=broken)
+
+
 class AutomatorCourierTests(unittest.TestCase):
     def test_the_backup_carries_the_courier_block_of_an_http_agent(self):
         backup = mock.Mock(token="jwt", include_secrets=False, seen_agents=set(), agents=[])

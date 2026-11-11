@@ -62,6 +62,7 @@ from courier_support import (
     ENDPOINTS_PATH,
     OUTBOUND_COLLECTION_KEY,
     is_courier_agent,
+    status_of,
 )
 from courier_inbound_support import (
     INBOUND_COLLECTIONS_PATH,
@@ -95,6 +96,17 @@ def _binding(binding: Dict[str, Any]) -> Dict[str, Any]:
     if exported.get("required") is True:
         exported.pop("required")  # the default
     return _without_empty(exported)
+
+
+def _collections(call: FetchFn, token: str, path: str) -> Optional[List[Dict[str, Any]]]:
+    """The collections at ``path``; None on a Core Hub that has no such route (404): it predates that Courier side."""
+    try:
+        return _list(call(path, method="GET", token=token))
+    except Exception as error:
+        if status_of(error) != 404:
+            raise
+        _logger.warning("This Core Hub has no %s: its Courier definitions are not exported", path)
+        return None
 
 
 def custom_credentials_of(agent: Dict[str, Any]) -> Dict[str, Any]:
@@ -139,8 +151,11 @@ def _inbound_collection(collection: Dict[str, Any], endpoints: List[Dict[str, An
 
 def export_inbound_block(call: FetchFn, token: str, pipeline_id: str, agent_id: str) -> Optional[Dict[str, Any]]:
     """The inbound collections holding a pipeline endpoint of HTTP Source ``agent_id``, with those endpoints; None if none."""
+    stored_collections = _collections(call, token, INBOUND_COLLECTIONS_PATH)
+    if stored_collections is None:
+        return None
     collections: List[Dict[str, Any]] = []
-    for collection in _list(call(INBOUND_COLLECTIONS_PATH, method="GET", token=token)):
+    for collection in stored_collections:
         stored = _list(call(INBOUND_ENDPOINTS_PATH, method="GET", token=token, params={"collectionId": collection.get("id")}))
         endpoints = [
             _inbound_endpoint(e) for e in stored
@@ -183,8 +198,11 @@ def export_outbound_block(call: FetchFn, token: str, agent: Dict[str, Any], incl
     """The outbound collection the HTTP Target sends to (every one when it names none), with its endpoints; None if none."""
     wanted = str(custom_credentials_of(agent).get(OUTBOUND_COLLECTION_KEY) or "").strip()
     params_extra = {"include_secrets": "true"} if include_secrets else {}
+    stored_collections = _collections(call, token, COLLECTIONS_PATH)
+    if stored_collections is None:
+        return None
     collections: List[Dict[str, Any]] = []
-    for collection in _list(call(COLLECTIONS_PATH, method="GET", token=token)):
+    for collection in stored_collections:
         if wanted and wanted not in (collection.get("name"), collection.get("id")):
             continue
         stored = _list(call(ENDPOINTS_PATH, method="GET", token=token,
