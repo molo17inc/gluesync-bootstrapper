@@ -259,9 +259,13 @@ _AUTH_REQUIRED_FIELDS = {
     "Bearer": ("token",),
     "ApiKey": ("name", "value"),
 }
+# The secret field of each auth type: CoreHub never returns it, and keeps the stored one when it is sent empty.
+_AUTH_SECRET_FIELDS = {"password", "token", "value"}
 
 
-def validate_collection(collection: Dict[str, Any]) -> List[str]:
+def validate_collection(collection: Dict[str, Any], keeps_stored_secret: bool = False) -> List[str]:
+    """Errors of ``collection``; ``keeps_stored_secret`` when CoreHub already stores it, so a left-out secret keeps
+    the stored one (an exported collection has none: CoreHub never returns it)."""
     errors: List[str] = []
     if not collection.get("name"):
         errors.append("name is required")
@@ -271,6 +275,8 @@ def validate_collection(collection: Dict[str, Any]) -> List[str]:
         errors.append("baseUrl must not contain credentials (user:pass@): set them in auth")
     auth = collection.get("auth") or {"type": "None"}
     for field in _AUTH_REQUIRED_FIELDS.get(auth.get("type"), ()):
+        if keeps_stored_secret and field in _AUTH_SECRET_FIELDS:
+            continue
         if not str(auth.get(field) or "").strip():
             errors.append(f"auth.{field} is required")
     return [f"collection '{collection.get('name')}': {e}" for e in errors]
@@ -471,7 +477,7 @@ def plan_courier_definitions(courier_cfg: Dict[str, Any], existing_collections: 
         if collection["name"] in seen_names:
             errors.append(f"collection '{collection['name']}' is declared twice")
         seen_names.add(collection["name"])
-        errors.extend(validate_collection(collection))
+        errors.extend(validate_collection(collection, keeps_stored_secret=stored is not None))
 
         stored_endpoints = _by_name(existing_endpoints_for(collection["id"])) if (existing_endpoints_for and stored) else {}
         endpoints = _plan_endpoints(collection_cfg, collection, stored_endpoints, errors)
