@@ -481,19 +481,14 @@ def write_token_file(path: str, content: Dict[str, Any]) -> None:
 
 
 def _create_token(call: FetchFn, auth: str, body: Dict[str, Any], log: logging.Logger) -> Any:
-    """POSTs a token with collection scopes; on a Core Hub that has none, the token is created without them.
+    """POSTs a token with collection scopes, and warns when the Core Hub did not keep them.
 
-    A Core Hub older than token collection scopes (gluesync-kotlin !2954) either refuses the unknown field (400),
-    and the token is created again without it, or ignores it and answers without one. Either way the token is then
-    not narrowed to its collections: the allowlist of those collections is all that keeps it out of the others.
+    A Core Hub older than token collection scopes (gluesync-kotlin !2954) ignores the unknown field (its JSON reads
+    with ignoreUnknownKeys) and answers without one: the token is then not narrowed to its collections, and the
+    allowlist of those collections is all that keeps it out of the others. A refusal is never retried without the
+    scopes: on a Core Hub that has them, a 400 is a real error, and dropping the scopes would widen the token.
     """
-    try:
-        created = call(API_TOKENS_PATH, method="POST", token=auth, body=body)
-    except Exception as error:
-        if status_of(error) != 400 or COLLECTION_SCOPES_KEY not in error_text(error):
-            raise
-        created = call(API_TOKENS_PATH, method="POST", token=auth,
-                       body={k: v for k, v in body.items() if k != COLLECTION_SCOPES_KEY})
+    created = call(API_TOKENS_PATH, method="POST", token=auth, body=body)
     if isinstance(created, dict) and COLLECTION_SCOPES_KEY not in created:
         log.warning(
             "This Core Hub does not scope Personal API Tokens to collections: token '%s' can also call the inbound "

@@ -254,7 +254,7 @@ class OlderCoreHubTests(unittest.TestCase):
     def _token_posts(self, hub):
         return [body for method, path, body in hub.posts if path == API_TOKENS_PATH]
 
-    def test_a_core_hub_refusing_collection_scopes_gets_the_token_without_them(self):
+    def test_a_refused_collection_scope_is_raised_and_never_retried_without_it(self):
         hub = StatefulCoreHub()
         hub.posts = []
         answer = hub.__call__
@@ -263,17 +263,16 @@ class OlderCoreHubTests(unittest.TestCase):
             if method == "POST":
                 hub.posts.append((method, path, copy.deepcopy(body)))
                 if path == API_TOKENS_PATH and "collectionScopes" in body:
-                    raise corehub_error(400, "Encountered an unknown key 'collectionScopes' at path: $")
+                    raise corehub_error(400, "Collection scopes need the gluesync.https_agent permission scope")
             return answer(path, method=method, token=token, body=body, params=params, headers=headers)
 
-        log = mock.Mock()
-        provision_courier_agent("jwt", PIPELINE, source_agent(courier=self.config), fetch=refusing, logger=log)
+        with self.assertRaises(RuntimeError):
+            provision_courier_agent("jwt", PIPELINE, source_agent(courier=self.config), fetch=refusing)
 
-        first, second = self._token_posts(hub)
-        self.assertIn("collectionScopes", first)
-        self.assertNotIn("collectionScopes", second)
-        self.assertEqual(len(hub.tokens), 1)
-        self.assertIn("does not scope Personal API Tokens", log.warning.call_args_list[-1].args[0])
+        # One POST, with the scopes: no unscoped token is minted in its place.
+        (only,) = self._token_posts(hub)
+        self.assertIn("collectionScopes", only)
+        self.assertEqual(len(hub.tokens), 0)
 
     def test_a_core_hub_ignoring_collection_scopes_is_warned_about_and_one_honouring_them_is_not(self):
         log = mock.Mock()
