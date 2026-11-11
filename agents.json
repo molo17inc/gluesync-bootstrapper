@@ -1514,7 +1514,7 @@
         },
         {
             "id": 13062,
-            "internalName": "api-agent-shadow",
+            "internalName": "courier-agent",
             "databaseName": "HTTP Target",
             "databaseSupportedTechnology": "REST / HTTP endpoints defined in Courier (Endpoint Builder)",
             "databaseMinimumSupportedVersion": null,
@@ -1533,7 +1533,7 @@
             "internalDocIntroFileName": "http-target-intro",
             "internalDocTargetFileName": "http-target-target",
             "internalDocSourceFileName": "http-source-source",
-            "dockerHubRepoName": "gluesync-api-agent-shadow",
+            "dockerHubRepoName": "gluesync-courier-agent",
             "supportedEnvironmentVariables": "[{\n    \"key\": \"TYPE\",\n    \"displayName\": \"Type\",\n    \"type\": \"String\",\n    \"default\": \"target\",\n    \"isOptional\": false,\n    \"possibleValues\": [\"source\", \"target\"]\n}\n]",
             "internalDocChangelogFileName": "http-target-agent-changelog",
             "_id": "%5B13062%5D",
