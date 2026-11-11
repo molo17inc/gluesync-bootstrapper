@@ -424,13 +424,15 @@ class EmbeddedAgentCategoryTests(unittest.TestCase):
         self.assertEqual(catalog.get("kafka"), "EVENT STREAMING")
         self.assertEqual(corehub._normalize_agent_category(catalog.get("courier-agent")), "NoSQL")
 
-    def test_agents_json_catalog_lists_the_http_agent_as_source_and_target_object_store(self):
+    def test_agents_json_catalog_lists_the_http_agent_as_a_non_sql_source_and_target(self):
         import json
+        import commons
 
         with (PROJECT_ROOT / "agents.json").open(encoding="utf-8") as fh:
             entries = json.load(fh)["data"]
         entry = next(e for e in entries if e.get("internalName") == "courier-agent")
-        self.assertEqual(entry["type"], "Object Store")
+        # Whatever category the portal catalog gives it, it must not be RDBMS: no CREATE TABLE, NoSqlEntity entities.
+        self.assertEqual(commons.sql_or_nosql(entry["type"]), "NoSQL")
         self.assertTrue(entry["isTarget"])
         self.assertTrue(entry["isSource"])
 
