@@ -416,8 +416,9 @@ class ProvisionInboundTests(unittest.TestCase):
             endpoints_by_collection={"stored-shop": [{"id": "stored-orders", "name": "orders"}]},
             refuse_put_with=corehub_error(409, '{"message":"Entity orders reads this endpoint"}'),
         )
+        config = inbound_config()
         with self.assertRaises(CourierConfigError) as raised:
-            provision_inbound("jwt", inbound_config(), PIPELINE, AGENT, fetch=hub)
+            provision_inbound("jwt", config, PIPELINE, AGENT, fetch=hub)
         self.assertIn('"force": true', str(raised.exception))
 
     def test_a_create_of_a_stored_id_is_repeated_as_an_update(self):
@@ -447,8 +448,9 @@ class ProvisionInboundTests(unittest.TestCase):
                     raise corehub_error(400, '{"message":"This collection needs an active Personal API Token","code":"MISSING_TOKEN"}')
                 return super().__call__(path, method=method, **kwargs)
 
+        config, hub = inbound_config(), NoToken()
         with self.assertRaises(CourierConfigError) as raised:
-            provision_inbound("jwt", inbound_config(), PIPELINE, AGENT, fetch=NoToken())
+            provision_inbound("jwt", config, PIPELINE, AGENT, fetch=hub)
         self.assertIn("courier.tokens", str(raised.exception))
         self.assertIn(HTTPS_AGENT_PERMISSION, str(raised.exception))
 

@@ -187,10 +187,10 @@ class InboundExportTests(unittest.TestCase):
     def test_a_restore_into_another_pipeline_never_takes_the_endpoints_of_a_live_one(self):
         exported = export_courier_block("jwt", PIPELINE, source_agent(), fetch=self.hub)
         writes_before = len(self.hub.writes)
+        restored = source_agent(RESTORED_AGENT, courier=copy.deepcopy(exported))
 
         with self.assertRaises(CourierConfigError) as raised:
-            provision_courier_agent("jwt", RESTORED_PIPELINE, source_agent(RESTORED_AGENT, courier=copy.deepcopy(exported)),
-                                    fetch=self.hub, keep_other_pipelines=True)
+            provision_courier_agent("jwt", RESTORED_PIPELINE, restored, fetch=self.hub, keep_other_pipelines=True)
 
         self.assertIn("'shop/orders' (pipeline p1)", str(raised.exception))
         self.assertEqual(len(self.hub.writes), writes_before, "refused before anything is written")
@@ -226,10 +226,10 @@ class InboundExportTests(unittest.TestCase):
         exported = export_courier_block("jwt", PIPELINE, source_agent(), fetch=self.hub)
         orders_id = exported["collections"][0]["endpoints"][0]["id"]
         self.hub.store[INBOUND_ENDPOINTS_PATH][orders_id]["name"] = "orders-renamed"
+        restored = source_agent(RESTORED_AGENT, courier=copy.deepcopy(exported))
 
         with self.assertRaises(CourierConfigError):
-            provision_courier_agent("jwt", RESTORED_PIPELINE, source_agent(RESTORED_AGENT, courier=copy.deepcopy(exported)),
-                                    fetch=self.hub, keep_other_pipelines=True)
+            provision_courier_agent("jwt", RESTORED_PIPELINE, restored, fetch=self.hub, keep_other_pipelines=True)
         self.assertEqual(self.hub.store[INBOUND_ENDPOINTS_PATH][orders_id]["pipelineId"], PIPELINE)
 
 
@@ -272,16 +272,18 @@ class OutboundExportTests(unittest.TestCase):
         exported["collections"][0]["auth"]["token"] = SECRET  # the auth secret typed in: only the header is missing
 
         other_hub = StatefulCoreHub()
+        agent = target_agent("demo-api", courier=copy.deepcopy(exported))
         with self.assertRaises(CourierConfigError) as raised:
-            provision_courier_agent("jwt", PIPELINE, target_agent("demo-api", courier=copy.deepcopy(exported)), fetch=other_hub)
+            provision_courier_agent("jwt", PIPELINE, agent, fetch=other_hub)
         self.assertIn("header 'X-Api-Key' is masked", str(raised.exception))
         self.assertEqual(other_hub.writes, [], "refused before anything is written")
 
         moved = copy.deepcopy(exported)
         moved["collections"][0]["baseUrl"] = "https://elsewhere.example.com"
         moved["force"] = True
+        agent = target_agent("demo-api", courier=moved)
         with self.assertRaises(CourierConfigError) as raised:
-            provision_courier_agent("jwt", PIPELINE, target_agent("demo-api", courier=moved), fetch=self.hub)
+            provision_courier_agent("jwt", PIPELINE, agent, fetch=self.hub)
         self.assertIn("moves to another origin", str(raised.exception))
 
         same_origin = copy.deepcopy(exported)
@@ -293,8 +295,9 @@ class OutboundExportTests(unittest.TestCase):
     def test_a_restore_onto_another_core_hub_asks_for_the_secret(self):
         exported = export_courier_block("jwt", PIPELINE, target_agent("demo-api"), fetch=self.hub)
 
+        agent, other_hub = target_agent("demo-api", courier=exported), StatefulCoreHub()
         with self.assertRaises(CourierConfigError) as raised:
-            provision_courier_agent("jwt", PIPELINE, target_agent("demo-api", courier=exported), fetch=StatefulCoreHub())
+            provision_courier_agent("jwt", PIPELINE, agent, fetch=other_hub)
         self.assertIn("auth.token is required", str(raised.exception))
 
     def test_a_non_http_agent_has_no_block(self):
@@ -343,8 +346,9 @@ class OlderCoreHubTests(unittest.TestCase):
                     raise corehub_error(400, "Collection scopes need the gluesync.https_agent permission scope")
             return answer(path, method=method, token=token, body=body, params=params, headers=headers)
 
+        agent = source_agent(courier=self.config)
         with self.assertRaises(RuntimeError):
-            provision_courier_agent("jwt", PIPELINE, source_agent(courier=self.config), fetch=refusing)
+            provision_courier_agent("jwt", PIPELINE, agent, fetch=refusing)
 
         # One POST, with the scopes: no unscoped token is minted in its place.
         (only,) = self._token_posts(hub)
@@ -375,8 +379,9 @@ class OlderCoreHubTests(unittest.TestCase):
                 raise corehub_error(400, "Token name cannot be blank")
             return [] if method == "GET" else kwargs.get("body")
 
+        agent = source_agent(courier=self.config)
         with self.assertRaises(RuntimeError):
-            provision_courier_agent("jwt", PIPELINE, source_agent(courier=self.config), fetch=failing)
+            provision_courier_agent("jwt", PIPELINE, agent, fetch=failing)
 
     def test_no_courier_route_exports_nothing_and_another_failure_is_raised(self):
         def missing(path, method="GET", **kwargs):
@@ -389,8 +394,9 @@ class OlderCoreHubTests(unittest.TestCase):
         def broken(path, method="GET", **kwargs):
             raise corehub_error(500, "boom")
 
+        agent = target_agent()
         with self.assertRaises(RuntimeError):
-            export_courier_block("jwt", PIPELINE, target_agent(), fetch=broken)
+            export_courier_block("jwt", PIPELINE, agent, fetch=broken)
 
 
 class AutomatorCourierTests(unittest.TestCase):
@@ -444,8 +450,9 @@ class RoundTripCourierTests(unittest.TestCase):
         self.assertIn("tokens", kit["agents"][0]["courier"], "the kit config is left untouched")
 
     def test_a_pipeline_with_an_http_source_is_skipped_before_the_restore(self):
+        blocks = {agent_key(source_agent()): {"collections": []}}
         with self.assertRaises(rt.RoundTripSkipped) as raised:
-            rt.refuse_http_source_round_trip({agent_key(source_agent()): {"collections": []}}, PIPELINE)
+            rt.refuse_http_source_round_trip(blocks, PIPELINE)
         self.assertIn("SOURCE:courier-agent", str(raised.exception))
         rt.refuse_http_source_round_trip({agent_key(target_agent()): {"collections": []}}, PIPELINE)
         rt.refuse_http_source_round_trip({}, PIPELINE)

@@ -322,8 +322,9 @@ class ProvisionCourierErrorTests(unittest.TestCase):
                     raise refusal
                 return super().__call__(path, method=method, **kwargs)
 
+        hub = Refusing(**self.STORED)
         with self.assertRaises(CourierConfigError) as raised:
-            provision_courier("jwt", COURIER_CONFIG, fetch=Refusing(**self.STORED))
+            provision_courier("jwt", COURIER_CONFIG, fetch=hub)
         self.assertIn('"force": true', str(raised.exception))
 
     def test_other_refusals_of_a_collection_propagate(self):
@@ -335,8 +336,9 @@ class ProvisionCourierErrorTests(unittest.TestCase):
                     raise refusal
                 return super().__call__(path, method=method, **kwargs)
 
+        hub = Refusing(**self.STORED)
         with self.assertRaises(RuntimeError) as raised:
-            provision_courier("jwt", COURIER_CONFIG, fetch=Refusing(**self.STORED))
+            provision_courier("jwt", COURIER_CONFIG, fetch=hub)
         self.assertIs(raised.exception, refusal)
 
     def test_force_moves_the_collection_and_sends_every_header_value_again(self):
