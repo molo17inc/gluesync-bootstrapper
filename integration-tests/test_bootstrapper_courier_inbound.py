@@ -319,6 +319,7 @@ class ProvisionInboundTests(unittest.TestCase):
             "expiresInDays": 7,
             "scopes": [{"pipelineId": PIPELINE, "agentId": AGENT}],
             "permissionScopes": [HTTPS_AGENT_PERMISSION],
+            "collectionScopes": [hub.calls[3][2]["id"]],
         })
         collection = hub.calls[3][2]
         self.assertTrue(collection["allowlistEnabled"])
@@ -331,6 +332,23 @@ class ProvisionInboundTests(unittest.TestCase):
             "token": "gsp_plaintext", "tokenId": "token-new", "name": "shop-client", "pipelineId": PIPELINE, "agentId": AGENT,
         })
         self.assertEqual(stat.S_IMODE(os.stat(self.token_file).st_mode), 0o600)
+
+    def test_a_token_is_scoped_to_the_collections_it_is_for_only(self):
+        config = inbound_config(self.token_file)
+        billing = copy.deepcopy(config["collections"][0])
+        billing["name"] = "billing"
+        billing["basePath"] = "billing"
+        config["collections"].append(billing)
+        config["tokens"][0]["collections"] = ["billing"]
+        hub = FakeCoreHub()
+
+        provision_inbound("jwt", config, PIPELINE, AGENT, fetch=hub)
+
+        created = next(body for method, path, body, _ in hub.calls if method == "POST" and path == API_TOKENS_PATH)
+        saved = {body["name"]: body for method, path, body, _ in hub.calls if method == "POST" and path == INBOUND_COLLECTIONS_PATH}
+        self.assertEqual(created["collectionScopes"], [saved["billing"]["id"]])
+        self.assertEqual(saved["billing"]["allowedTokenIds"], ["token-new"])
+        self.assertNotIn("token-new", saved["shop"]["allowedTokenIds"])
 
     def test_plaintext_never_reaches_the_log(self):
         hub = FakeCoreHub()

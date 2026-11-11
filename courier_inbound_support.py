@@ -58,7 +58,9 @@ Personal API Tokens clients call them with::
 Collections and endpoints are matched by name and updated in place when they already exist.
 A token is created on every run (CoreHub shows its plaintext only once), after revoking the
 active tokens with the same name, and its plaintext is written to ``outputFile`` only. A token
-carries the ``gluesync.https_agent`` permission scope and is scoped to the pipeline and the agent.
+carries the ``gluesync.https_agent`` permission scope and is scoped to the pipeline and the agent,
+and to the collections it is for (``collections``, every configured one by default): it calls no
+other inbound collection.
 
 CoreHub saves an inbound collection only while an active token with that scope can call it, so the
 tokens are created first and join the allowlist of the collections they are for. Without a token
@@ -477,7 +479,7 @@ def write_token_file(path: str, content: Dict[str, Any]) -> None:
 
 
 def _rotate_token(call: FetchFn, auth: str, token: Dict[str, Any], existing_tokens: Any, pipeline_id: str,
-                  agent_id: str, log: logging.Logger) -> str:
+                  agent_id: str, collection_ids: List[str], log: logging.Logger) -> str:
     for stale in existing_tokens if isinstance(existing_tokens, list) else []:
         if isinstance(stale, dict) and stale.get("name") == token["name"] and stale.get("active"):
             log.info("Revoking the previous Personal API Token '%s' (id=%s)", token["name"], stale.get("id"))
@@ -487,6 +489,8 @@ def _rotate_token(call: FetchFn, auth: str, token: Dict[str, Any], existing_toke
         "expiresInDays": token["expiresInDays"],
         "scopes": [{"pipelineId": pipeline_id, "agentId": agent_id}],
         "permissionScopes": [HTTPS_AGENT_PERMISSION],
+        # The collections it is for, and no other one.
+        "collectionScopes": collection_ids,
     })
     if not isinstance(created, dict) or not created.get("id") or not created.get("token"):
         raise RuntimeError(f"CoreHub did not return the Personal API Token '{token['name']}'")
@@ -520,14 +524,16 @@ def _upsert_endpoint(call: FetchFn, auth: str, item: Dict[str, Any], force: bool
 
 
 def _rotate_tokens(call: FetchFn, token: str, token_defs: List[Dict[str, Any]], pipeline_id: str, agent_id: str,
-                   log: logging.Logger) -> Dict[str, List[str]]:
-    """Rotates the configured tokens and returns their ids by the name of each collection they are for."""
+                   collection_ids_by_name: Dict[str, str], log: logging.Logger) -> Dict[str, List[str]]:
+    """Rotates the configured tokens, each scoped to the collections it is for, and returns their ids by the name
+    of each of those collections."""
     token_ids_by_collection: Dict[str, List[str]] = {}
     if not token_defs:
         return token_ids_by_collection
     existing_tokens = call(API_TOKENS_PATH, method="GET", token=token)
     for token_def in token_defs:
-        token_id = _rotate_token(call, token, token_def, existing_tokens, pipeline_id, agent_id, log)
+        collection_ids = [collection_ids_by_name[name] for name in token_def["collections"]]
+        token_id = _rotate_token(call, token, token_def, existing_tokens, pipeline_id, agent_id, collection_ids, log)
         for name in token_def["collections"]:
             token_ids_by_collection.setdefault(name, []).append(token_id)
     return token_ids_by_collection
@@ -573,7 +579,8 @@ def provision_inbound(token: str, courier_cfg: Dict[str, Any], pipeline_id: str,
 
     plan = plan_inbound_definitions(courier_cfg, pipeline_id, agent_id, existing_collections, existing_endpoints_for)
 
-    token_ids_by_collection = _rotate_tokens(call, token, plan["tokens"], pipeline_id, agent_id, log)
+    collection_ids_by_name = {item["collection"]["name"]: item["collection"]["id"] for item in plan["collections"]}
+    token_ids_by_collection = _rotate_tokens(call, token, plan["tokens"], pipeline_id, agent_id, collection_ids_by_name, log)
 
     names: List[str] = []
     for item in plan["collections"]:
