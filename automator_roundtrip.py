@@ -873,7 +873,11 @@ def write_results(out_dir: Path, pipeline_id: str, suite_name: str, checks: List
     for c in checks:
         if c.diff:
             (out_dir / f"{c.name}.diff").write_text("\n".join(c.diff) + "\n", encoding="utf-8")
-        logger.info(f"[{'SKIP' if c.skipped else 'PASS' if c.passed else 'FAIL'}] {c.name}: {c.message}")
+        if c.skipped:
+            label = "SKIP"
+        else:
+            label = "PASS" if c.passed else "FAIL"
+        logger.info(f"[{label}] {c.name}: {c.message}")
     write_json(out_dir / "report.json", {
         "pipelineId": pipeline_id,
         "passed": passed,
