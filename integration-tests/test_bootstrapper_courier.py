@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Unit tests for the HTTP Target (``api-agent-shadow``, Courier outbound) support of the bootstrapper.
+Unit tests for the HTTP Target (``courier-agent``, Courier outbound) support of the bootstrapper.
 
 They cover, without a running CoreHub:
 
@@ -113,17 +113,18 @@ class FakeCoreHub:
 
 class CourierAgentDetectionTests(unittest.TestCase):
     def test_detects_the_http_target_by_tag_or_internal_name(self):
-        self.assertTrue(is_courier_agent({"agentTag": "api-agent-shadow"}))
-        self.assertTrue(is_courier_agent({"agentTag": "my-http-target", "agentInternalName": "API-Agent-Shadow"}))
+        self.assertTrue(is_courier_agent({"agentTag": "courier-agent"}))
+        self.assertTrue(is_courier_agent({"agentTag": "my-http-target", "agentInternalName": "Courier-Agent"}))
+        self.assertFalse(is_courier_agent({"agentTag": "api-agent-shadow"}), "the tag before the HTTP agents were renamed")
         self.assertFalse(is_courier_agent({"agentTag": "kafka"}))
         self.assertFalse(is_courier_agent(None))
 
     def test_courier_block_is_a_deep_copy(self):
-        agent = {"agentTag": "api-agent-shadow", "courier": {"collections": [{"name": "x"}]}}
+        agent = {"agentTag": "courier-agent", "courier": {"collections": [{"name": "x"}]}}
         block = courier_block(agent)
         block["collections"][0]["name"] = "changed"
         self.assertEqual(agent["courier"]["collections"][0]["name"], "x")
-        self.assertIsNone(courier_block({"agentTag": "api-agent-shadow"}))
+        self.assertIsNone(courier_block({"agentTag": "courier-agent"}))
 
 
 class CourierPlanTests(unittest.TestCase):
@@ -228,6 +229,12 @@ class CourierPlanTests(unittest.TestCase):
         self._assert_rejected(base(pathTemplate="x/{id}", bindings=[{"name": "id", "location": "PATH"}]), "must start with '/'")
         self._assert_rejected(base(httpVerb="FETCH"), "httpVerb 'FETCH' is not one of")
         self._assert_rejected({"collections": "nope"}, "'courier.collections' must be a non-empty list")
+        self._assert_rejected({"collections": [{"name": "c", "baseUrl": "http://user:pass@api", "endpoints": [{"name": "e"}]}]},
+                              "baseUrl must not contain credentials")
+        self._assert_rejected(base(headers=[{"name": "X Bad", "value": "v"}]), "header name 'X Bad' is not valid")
+        self._assert_rejected(base(headers=[{"name": "Content-Length", "value": "1"}]),
+                              "header 'Content-Length' cannot be set: the HTTP client manages it")
+        self._assert_rejected(base(headers=[{"name": "", "value": "v"}]), "header name is required")
 
     def test_operation_placeholder_is_allowed_without_a_binding(self):
         config = {"collections": [{"name": "c", "baseUrl": "http://api", "endpoints": [
@@ -292,20 +299,96 @@ class ProvisionCourierTests(unittest.TestCase):
         self.assertEqual([m for m, _, _, _ in hub.calls], ["GET"], "only the read of the existing collections happened")
 
 
+def corehub_error(status, body=""):
+    """What ``fetch_core_hub`` raises: a RuntimeError caused by the HTTP error that carries the response."""
+    http_error = Exception(f"{status} Client Error")
+    http_error.response = mock.Mock(status_code=status, text=body)
+    try:
+        raise RuntimeError(f"CoreHub request failed: {http_error} | Response: {body}") from http_error
+    except RuntimeError as wrapped:
+        return wrapped
+
+
+class ProvisionCourierErrorTests(unittest.TestCase):
+    STORED = {"collections": [{"id": "stored-col", "name": "demo-api"}],
+              "endpoints_by_collection": {"stored-col": [{"id": "stored-customers", "name": "customers"}]}}
+
+    def test_an_origin_move_refused_by_corehub_explains_force(self):
+        refusal = corehub_error(400, '{"message":"... Repeat with force=true to move the collection anyway ..."}')
+
+        class Refusing(FakeCoreHub):
+            def __call__(self, path, method="GET", **kwargs):
+                if method == "PUT" and path.startswith(COLLECTIONS_PATH):
+                    raise refusal
+                return super().__call__(path, method=method, **kwargs)
+
+        hub = Refusing(**self.STORED)
+        with self.assertRaises(CourierConfigError) as raised:
+            provision_courier("jwt", COURIER_CONFIG, fetch=hub)
+        self.assertIn('"force": true', str(raised.exception))
+
+    def test_other_refusals_of_a_collection_propagate(self):
+        refusal = corehub_error(400, '{"message":"auth.token is required"}')
+
+        class Refusing(FakeCoreHub):
+            def __call__(self, path, method="GET", **kwargs):
+                if method == "PUT" and path.startswith(COLLECTIONS_PATH):
+                    raise refusal
+                return super().__call__(path, method=method, **kwargs)
+
+        hub = Refusing(**self.STORED)
+        with self.assertRaises(RuntimeError) as raised:
+            provision_courier("jwt", COURIER_CONFIG, fetch=hub)
+        self.assertIs(raised.exception, refusal)
+
+    def test_force_moves_the_collection_and_sends_every_header_value_again(self):
+        config = copy.deepcopy(COURIER_CONFIG)
+        config["force"] = True
+        hub = FakeCoreHub(**self.STORED)
+
+        provision_courier("jwt", config, fetch=hub)
+
+        collection_put = next(c for c in hub.calls if c[0] == "PUT" and c[1].startswith(COLLECTIONS_PATH))
+        self.assertEqual(collection_put[3], {"force": "true"})
+        customers = next(c for c in hub.calls if c[0] == "PUT" and c[1] == f"{ENDPOINTS_PATH}/stored-customers")
+        self.assertEqual([h["valueTemplate"] for h in customers[2]["headers"]], ["{__operation}", "{tenant}"])
+
+    def test_a_create_of_an_id_stored_under_another_name_is_repeated_as_an_update(self):
+        class Conflicting(FakeCoreHub):
+            def __call__(self, path, method="GET", **kwargs):
+                if method == "POST" and path == COLLECTIONS_PATH:
+                    super().__call__(path, method=method, **kwargs)
+                    raise corehub_error(409, '{"message":"A collection with this id already exists"}')
+                return super().__call__(path, method=method, **kwargs)
+
+        hub = Conflicting()
+        provision_courier("jwt", COURIER_CONFIG, fetch=hub)
+
+        collection_id = stable_id("collection", "demo-api")
+        self.assertEqual(hub.calls[1][:2], ("POST", COLLECTIONS_PATH))
+        self.assertEqual(hub.calls[2][:2], ("PUT", f"{COLLECTIONS_PATH}/{collection_id}"))
+
+    def test_status_and_text_are_read_through_the_wrapping_runtime_error(self):
+        error = corehub_error(409, "conflict body")
+        self.assertEqual(courier_support.status_of(error), 409)
+        self.assertIn("conflict body", courier_support.error_text(error))
+        self.assertIsNone(courier_support.status_of(RuntimeError("no response")))
+
+
 class OutboundCollectionDefaultTests(unittest.TestCase):
     def test_single_collection_fills_outbound_collection(self):
-        agent = {"agentTag": "api-agent-shadow", "customHostCredentials": {}}
+        agent = {"agentTag": "courier-agent", "customHostCredentials": {}}
         apply_courier_defaults(agent, ["demo-api"])
         self.assertEqual(agent["customHostCredentials"], {"outboundCollection": "demo-api"})
 
     def test_explicit_outbound_collection_is_kept(self):
-        agent = {"agentTag": "api-agent-shadow", "customHostCredentials": {"outboundCollection": "other", "inboundPort": 8090}}
+        agent = {"agentTag": "courier-agent", "customHostCredentials": {"outboundCollection": "other", "inboundPort": 8090}}
         apply_courier_defaults(agent, ["demo-api"])
         self.assertEqual(agent["customHostCredentials"]["outboundCollection"], "other")
         self.assertEqual(agent["customHostCredentials"]["inboundPort"], 8090)
 
     def test_several_collections_leave_it_unset(self):
-        agent = {"agentTag": "api-agent-shadow"}
+        agent = {"agentTag": "courier-agent"}
         apply_courier_defaults(agent, ["a", "b"])
         self.assertEqual(agent["customHostCredentials"], {})
 
@@ -314,8 +397,8 @@ class EmbeddedAgentCategoryTests(unittest.TestCase):
     def test_commons_exposes_the_http_target_as_object_store(self):
         import commons
 
-        self.assertEqual(commons.EMBEDDED_AGENT_CATEGORIES["api-agent-shadow"], "Object Store")
-        self.assertEqual(commons.embedded_agent_categories(str.upper), {"api-agent-shadow": "OBJECT STORE"})
+        self.assertEqual(commons.EMBEDDED_AGENT_CATEGORIES["courier-agent"], "Object Store")
+        self.assertEqual(commons.embedded_agent_categories(str.upper), {"courier-agent": "OBJECT STORE"})
 
     def test_export_inference_knows_the_http_target_without_agents_json(self):
         import export_template_from_corehub as export
@@ -324,7 +407,7 @@ class EmbeddedAgentCategoryTests(unittest.TestCase):
              mock.patch.object(Path, "exists", return_value=False):
             catalog = export._load_agent_type_catalog()
         export._AGENT_TYPE_BY_NAME = None
-        self.assertEqual(catalog.get("api-agent-shadow"), "NoSQL")
+        self.assertEqual(catalog.get("courier-agent"), "NoSQL")
 
     def test_automator_inference_treats_the_http_target_as_nosql(self):
         import json
@@ -341,15 +424,17 @@ class EmbeddedAgentCategoryTests(unittest.TestCase):
             catalog = corehub._load_agent_type_catalog()
         corehub._AGENT_TYPE_BY_NAME = None
         self.assertEqual(catalog.get("kafka"), "EVENT STREAMING")
-        self.assertEqual(corehub._normalize_agent_category(catalog.get("api-agent-shadow")), "NoSQL")
+        self.assertEqual(corehub._normalize_agent_category(catalog.get("courier-agent")), "NoSQL")
 
-    def test_agents_json_catalog_lists_the_http_agent_as_source_and_target_object_store(self):
+    def test_agents_json_catalog_lists_the_http_agent_as_a_non_sql_source_and_target(self):
         import json
+        import commons
 
         with (PROJECT_ROOT / "agents.json").open(encoding="utf-8") as fh:
             entries = json.load(fh)["data"]
-        entry = next(e for e in entries if e.get("internalName") == "api-agent-shadow")
-        self.assertEqual(entry["type"], "Object Store")
+        entry = next(e for e in entries if e.get("internalName") == "courier-agent")
+        # Whatever category the portal catalog gives it, it must not be RDBMS: no CREATE TABLE, NoSqlEntity entities.
+        self.assertEqual(commons.sql_or_nosql(entry["type"]), "NoSQL")
         self.assertTrue(entry["isTarget"])
         self.assertTrue(entry["isSource"])
 
@@ -455,7 +540,7 @@ class CreateEntitiesForCourierTargetTests(unittest.TestCase):
                 yaml_config=yaml_config,
                 chunk_size=50,
                 source_agent_tag="postgresql-cdc",
-                target_agent_tag="api-agent-shadow",
+                target_agent_tag="courier-agent",
             )
 
         # create_entities also reports skipped/partial counts: check only the keys this test is about.

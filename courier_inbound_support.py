@@ -10,7 +10,7 @@
 #    Contact MOLO17 at <info@molo17.com> for licensing terms and conditions.
 #
 # Copyright (C) 2026 MOLO17. All rights reserved.
-"""Support for the HTTP Source agent (``api-agent-shadow`` as SOURCE, the Courier inbound side).
+"""Support for the HTTP Source agent (``courier-agent`` as SOURCE, the Courier inbound side).
 
 The HTTP Source serves Courier *inbound* write endpoints on its own listener (``inboundPort``,
 8090 by default): every CREATE / UPDATE / DELETE request is bound into one pipeline row, queued
@@ -25,7 +25,7 @@ Personal API Tokens clients call them with::
 
     {
       "agentType": "SOURCE",
-      "agentTag": "api-agent-shadow",
+      "agentTag": "courier-agent",
       "hostCredentials": {"connectionName": "HTTP Source"},
       "customHostCredentials": {"inboundPort": 8090},
       "courier": {
@@ -57,11 +57,19 @@ Personal API Tokens clients call them with::
 
 Collections and endpoints are matched by name and updated in place when they already exist.
 A token is created on every run (CoreHub shows its plaintext only once), after revoking the
-active tokens with the same name, and its plaintext is written to ``outputFile`` only.
+active tokens with the same name, and its plaintext is written to ``outputFile`` only. A token
+carries the ``gluesync.https_agent`` permission scope and is scoped to the pipeline and the agent,
+and to the collections it is for (``collections``, every configured one by default): it calls no
+other inbound collection.
+
+CoreHub saves an inbound collection only while an active token with that scope can call it, so the
+tokens are created first and join the allowlist of the collections they are for. Without a token
+in ``courier.tokens``, a collection is saved only when such a token already exists in CoreHub.
+``blockedTokenIds`` lists tokens that may never call a collection.
 
 The payloads mirror ``InboundEndpointCollection`` / ``InboundEndpoint`` of
-``gluesync-kotlin/api-agent`` and the checks of ``InboundEndpointValidator`` for pipeline
-endpoints, so that a wrong configuration fails here with a readable message.
+``gluesync-kotlin/commons`` and the checks of ``InboundEndpointValidator`` (``courier`` module)
+for pipeline endpoints, so that a wrong configuration fails here with a readable message.
 """
 
 from __future__ import annotations
@@ -82,14 +90,22 @@ from courier_support import (
     is_courier_agent,
     normalize_binding,
     provision_courier,
+    error_text,
+    save_definition,
     stable_id,
+    status_of,
 )
 
 INBOUND_COLLECTIONS_PATH = "/api-agent/inbound/collections"
 INBOUND_ENDPOINTS_PATH = "/api-agent/inbound/endpoints"
 API_TOKENS_PATH = "/api-tokens"
+PIPELINES_PATH = "/pipelines"
+# The field of a token that narrows it to inbound collections (Core Hub with gluesync-kotlin !2954).
+COLLECTION_SCOPES_KEY = "collectionScopes"
 INBOUND_COLLECTION_KEY = "inboundCollection"
-ENDPOINT_INBOUND_PERMISSION = "gluesync.endpoint_inbound"
+HTTPS_AGENT_PERMISSION = "gluesync.https_agent"
+# CoreHub's code for a collection no active token can call (gluesync-kotlin CourierRouteSupport.MISSING_TOKEN_CODE).
+MISSING_TOKEN_CODE = "MISSING_TOKEN"
 
 # Pipeline endpoints: the operation each verb fits (InboundEndpointValidator.VERBS_BY_OPERATION).
 # PATCH is refused on a pipeline endpoint: a row carries every binding and replaces the target row.
@@ -101,7 +117,8 @@ ROW_OPERATIONS = ("Insert", "Update", "Delete")
 SEQUENCE_COLUMN = "_seq"
 CREDENTIAL_HEADERS = ("authorization", "proxy-authorization", "cookie")
 HEADER_NAME_PATTERN = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
-BASE_PATH_PATTERN = re.compile(r"^[A-Za-z0-9._~-]+(/[A-Za-z0-9._~-]+)*$")
+# One segment: the runtime routes match `/{basePath}/...` against the first segment of the request path only.
+BASE_PATH_PATTERN = re.compile(r"^[A-Za-z0-9._~-]+$")
 NUMBER_PATTERN = re.compile(r"^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$")
 
 FetchFn = Callable[..., Any]
@@ -110,7 +127,7 @@ _logger = logging.getLogger(__name__)
 
 
 def is_http_source_agent(agent: Optional[Dict[str, Any]]) -> bool:
-    """True when the configured agent is the HTTP Source (``api-agent-shadow`` as SOURCE)."""
+    """True when the configured agent is the HTTP Source (``courier-agent`` as SOURCE)."""
     return is_courier_agent(agent) and str(agent.get("agentType") or "").strip().upper() == "SOURCE"
 
 
@@ -139,6 +156,7 @@ def normalize_inbound_collection(collection: Any, existing_id: Optional[str] = N
         "tags": list(collection.get("tags") or []),
         "allowlistEnabled": bool(collection.get("allowlist", collection.get("allowlistEnabled", False))),
         "allowedTokenIds": _string_list(collection.get("allowedTokenIds")),
+        "blockedTokenIds": _string_list(collection.get("blockedTokenIds")),
     }
 
 
@@ -190,8 +208,11 @@ def validate_inbound_collection(collection: Dict[str, Any]) -> List[str]:
         errors.append(NAME_REQUIRED)
     if not BASE_PATH_PATTERN.match(collection.get("basePath") or ""):
         errors.append(
-            f"basePath {collection.get('basePath')!r} is not valid: use letters, digits, '.', '_', '~', '-' separated by '/'"
+            f"basePath {collection.get('basePath')!r} is not valid: one segment of letters, digits, '.', '_', '~', '-', without '/'"
         )
+    both = sorted(set(collection.get("allowedTokenIds") or []) & set(collection.get("blockedTokenIds") or []))
+    if both:
+        errors.append(f"a token cannot be both allowed and blocked: {', '.join(both)}")
     return [f"collection '{collection.get('name')}': {e}" for e in errors]
 
 
@@ -366,12 +387,21 @@ def _by_name(items: Any) -> Dict[str, Dict[str, Any]]:
     return {str(i["name"]): i for i in items if isinstance(i, dict) and i.get("name") is not None}
 
 
-def _plan_inbound_endpoints(collection_cfg: Dict[str, Any], collection: Dict[str, Any], stored_endpoints: Dict[str, Dict[str, Any]],
+def _by_id(items: Any) -> Dict[str, Dict[str, Any]]:
+    if not isinstance(items, list):
+        return {}
+    return {str(i["id"]): i for i in items if isinstance(i, dict) and i.get("id") is not None}
+
+
+def _plan_inbound_endpoints(collection_cfg: Dict[str, Any], collection: Dict[str, Any], stored_endpoints: List[Dict[str, Any]],
                             pipeline_id: str, agent_id: str, errors: List[str]) -> List[Dict[str, Any]]:
     endpoints: List[Dict[str, Any]] = []
     names: set = set()
+    stored_by_name, stored_by_id = _by_name(stored_endpoints), _by_id(stored_endpoints)
     for endpoint_cfg in collection_cfg.get("endpoints") or []:
-        stored = stored_endpoints.get(_text((endpoint_cfg or {}).get("name")))
+        cfg = endpoint_cfg if isinstance(endpoint_cfg, dict) else {}
+        # By name, else by the id the block carries (an export keeps ids; the endpoint may have been renamed in the UI).
+        stored = stored_by_name.get(_text(cfg.get("name"))) or stored_by_id.get(_text(cfg.get("id")))
         endpoint = normalize_inbound_endpoint(
             endpoint_cfg, collection["id"], pipeline_id, agent_id, existing_id=stored.get("id") if stored else None
         )
@@ -379,7 +409,13 @@ def _plan_inbound_endpoints(collection_cfg: Dict[str, Any], collection: Dict[str
             errors.append(f"endpoint '{endpoint['name']}' of collection '{collection['name']}' is declared twice")
         names.add(endpoint["name"])
         errors.extend(validate_inbound_endpoint(endpoint))
-        endpoints.append({"definition": endpoint, "exists": stored is not None})
+        endpoints.append({
+            "definition": endpoint,
+            "exists": stored is not None,
+            # The pipeline that serves the stored endpoint now: an update with another pipeline takes it away from it.
+            "storedPipelineId": _text(stored.get("pipelineId")) if stored else "",
+            "storedAgentId": _text(stored.get("agentId")) if stored else "",
+        })
     if not endpoints:
         errors.append(f"collection '{collection['name']}' declares no endpoint")
     return endpoints
@@ -402,7 +438,7 @@ def _plan_collections(collections_cfg: List[Any], existing_collections: Any,
         names.add(collection["name"])
         base_paths.add(collection["basePath"])
         errors.extend(validate_inbound_collection(collection))
-        stored_endpoints = _by_name(existing_endpoints_for(collection["id"])) if (existing_endpoints_for and stored) else {}
+        stored_endpoints = existing_endpoints_for(collection["id"]) if (existing_endpoints_for and stored) else []
         endpoints = _plan_inbound_endpoints(collection_cfg, collection, stored_endpoints, pipeline_id, agent_id, errors)
         plan.append({"collection": collection, "exists": stored is not None, "endpoints": endpoints})
     return plan
@@ -460,18 +496,37 @@ def write_token_file(path: str, content: Dict[str, Any]) -> None:
         handle.write("\n")
 
 
+def _create_token(call: FetchFn, auth: str, body: Dict[str, Any], log: logging.Logger) -> Any:
+    """POSTs a token with collection scopes, and warns when the Core Hub did not keep them.
+
+    A Core Hub older than token collection scopes (gluesync-kotlin !2954) ignores the unknown field (its JSON reads
+    with ignoreUnknownKeys) and answers without one: the token is then not narrowed to its collections, and the
+    allowlist of those collections is all that keeps it out of the others. A refusal is never retried without the
+    scopes: on a Core Hub that has them, a 400 is a real error, and dropping the scopes would widen the token.
+    """
+    created = call(API_TOKENS_PATH, method="POST", token=auth, body=body)
+    if isinstance(created, dict) and COLLECTION_SCOPES_KEY not in created:
+        log.warning(
+            "This Core Hub does not scope Personal API Tokens to collections: token '%s' can also call the inbound "
+            "collections whose allowlist is off. Turn the allowlist on for those, or upgrade Core Hub.", body["name"]
+        )
+    return created
+
+
 def _rotate_token(call: FetchFn, auth: str, token: Dict[str, Any], existing_tokens: Any, pipeline_id: str,
-                  agent_id: str, log: logging.Logger) -> str:
+                  agent_id: str, collection_ids: List[str], log: logging.Logger) -> str:
     for stale in existing_tokens if isinstance(existing_tokens, list) else []:
         if isinstance(stale, dict) and stale.get("name") == token["name"] and stale.get("active"):
             log.info("Revoking the previous Personal API Token '%s' (id=%s)", token["name"], stale.get("id"))
             call(f"{API_TOKENS_PATH}/{stale['id']}/revoke", method="POST", token=auth)
-    created = call(API_TOKENS_PATH, method="POST", token=auth, body={
+    created = _create_token(call, auth, {
         "name": token["name"],
         "expiresInDays": token["expiresInDays"],
         "scopes": [{"pipelineId": pipeline_id, "agentId": agent_id}],
-        "permissionScopes": [ENDPOINT_INBOUND_PERMISSION],
-    })
+        "permissionScopes": [HTTPS_AGENT_PERMISSION],
+        # The collections it is for, and no other one.
+        COLLECTION_SCOPES_KEY: collection_ids,
+    }, log)
     if not isinstance(created, dict) or not created.get("id") or not created.get("token"):
         raise RuntimeError(f"CoreHub did not return the Personal API Token '{token['name']}'")
     write_token_file(token["outputFile"], {
@@ -486,23 +541,16 @@ def _rotate_token(call: FetchFn, auth: str, token: Dict[str, Any], existing_toke
     return created["id"]
 
 
-def _status_of(error: Exception) -> Optional[int]:
-    response = getattr(error, "response", None)
-    return getattr(response, "status_code", None)
-
-
 def _upsert_endpoint(call: FetchFn, auth: str, item: Dict[str, Any], force: bool, log: logging.Logger) -> None:
     endpoint = item["definition"]
-    if not item["exists"]:
-        log.info("Creating inbound endpoint '%s' (%s %s)", endpoint["name"], endpoint["httpVerb"], endpoint["path"])
-        call(INBOUND_ENDPOINTS_PATH, method="POST", token=auth, body=endpoint)
-        return
-    log.info("Updating inbound endpoint '%s' (%s %s)", endpoint["name"], endpoint["httpVerb"], endpoint["path"])
+    log.info("%s inbound endpoint '%s' (%s %s)", "Updating" if item["exists"] else "Creating",
+             endpoint["name"], endpoint["httpVerb"], endpoint["path"])
     try:
-        call(f"{INBOUND_ENDPOINTS_PATH}/{endpoint['id']}", method="PUT", token=auth, body=endpoint,
-             params={"force": "true"} if force else None)
+        # A create whose id CoreHub already stores (409) is repeated as an update, with the same force.
+        save_definition(call, auth, INBOUND_ENDPOINTS_PATH, endpoint["id"], endpoint, item["exists"],
+                        params={"force": "true"} if force else None)
     except Exception as error:
-        if _status_of(error) == 409:
+        if status_of(error) == 409:
             raise CourierConfigError(
                 f"Inbound endpoint '{endpoint['name']}' is read by entities of another pipeline and CoreHub refused "
                 "to change it. Set \"force\": true in the 'courier' block to change it anyway (those entities break)."
@@ -511,14 +559,16 @@ def _upsert_endpoint(call: FetchFn, auth: str, item: Dict[str, Any], force: bool
 
 
 def _rotate_tokens(call: FetchFn, token: str, token_defs: List[Dict[str, Any]], pipeline_id: str, agent_id: str,
-                   log: logging.Logger) -> Dict[str, List[str]]:
-    """Rotates the configured tokens and returns their ids by the name of each collection they are for."""
+                   collection_ids_by_name: Dict[str, str], log: logging.Logger) -> Dict[str, List[str]]:
+    """Rotates the configured tokens, each scoped to the collections it is for, and returns their ids by the name
+    of each of those collections."""
     token_ids_by_collection: Dict[str, List[str]] = {}
     if not token_defs:
         return token_ids_by_collection
     existing_tokens = call(API_TOKENS_PATH, method="GET", token=token)
     for token_def in token_defs:
-        token_id = _rotate_token(call, token, token_def, existing_tokens, pipeline_id, agent_id, log)
+        collection_ids = [collection_ids_by_name[name] for name in token_def["collections"]]
+        token_id = _rotate_token(call, token, token_def, existing_tokens, pipeline_id, agent_id, collection_ids, log)
         for name in token_def["collections"]:
             token_ids_by_collection.setdefault(name, []).append(token_id)
     return token_ids_by_collection
@@ -529,24 +579,77 @@ def _upsert_collection(call: FetchFn, token: str, item: Dict[str, Any], token_id
     """Creates or updates one planned inbound collection, its allowlist joined by the tokens for it; returns its name."""
     collection = dict(item["collection"])
     collection["allowedTokenIds"] = collection["allowedTokenIds"] + token_ids_by_collection.get(collection["name"], [])
-    if item["exists"]:
-        log.info("Updating inbound collection '%s' (basePath=%s)", collection["name"], collection["basePath"])
-        call(f"{INBOUND_COLLECTIONS_PATH}/{collection['id']}", method="PUT", token=token, body=collection)
-    else:
-        log.info("Creating inbound collection '%s' (basePath=%s)", collection["name"], collection["basePath"])
-        call(INBOUND_COLLECTIONS_PATH, method="POST", token=token, body=collection)
+    log.info("%s inbound collection '%s' (basePath=%s)", "Updating" if item["exists"] else "Creating",
+             collection["name"], collection["basePath"])
+    try:
+        save_definition(call, token, INBOUND_COLLECTIONS_PATH, collection["id"], collection, item["exists"])
+    except Exception as error:
+        if status_of(error) == 400 and MISSING_TOKEN_CODE in error_text(error):
+            raise CourierConfigError(
+                f"Inbound collection '{collection['name']}' was refused: CoreHub saves a collection only while an active "
+                f"Personal API Token with the '{HTTPS_AGENT_PERMISSION}' permission scope, admitted by its allowlist and "
+                "blocklist, can call it. Add one to 'courier.tokens' for this collection."
+            ) from error
+        raise
     if collection["allowlistEnabled"] and not collection["allowedTokenIds"]:
         log.warning("Inbound collection '%s' has its allowlist on and no token on it: every request is refused", collection["name"])
     return collection["name"]
 
 
+def _moved_endpoints(plan: Dict[str, Any], pipeline_id: str) -> List[Dict[str, Any]]:
+    """Planned updates of stored endpoints that another pipeline serves now, each with its collection's name."""
+    return [
+        {**endpoint_item, "collectionName": item["collection"]["name"]}
+        for item in plan["collections"] for endpoint_item in item["endpoints"]
+        if endpoint_item["exists"] and endpoint_item["storedPipelineId"]
+        and endpoint_item["storedPipelineId"] != str(pipeline_id)
+    ]
+
+
+def _live_pipeline_ids(call: FetchFn, token: str) -> set:
+    pipelines = call(PIPELINES_PATH, method="GET", token=token)
+    if not isinstance(pipelines, list):
+        return set()
+    ids = (p.get("pipelineId") or p.get("id") or p.get("pipeline_id") for p in pipelines if isinstance(p, dict))
+    return {str(pipeline_id) for pipeline_id in ids if pipeline_id is not None}
+
+
+def _check_moved_endpoints(call: FetchFn, token: str, plan: Dict[str, Any], pipeline_id: str,
+                           keep_other_pipelines: bool, log: logging.Logger) -> None:
+    """An inbound endpoint serves one pipeline: saving it for ``pipeline_id`` takes it away from the one it serves.
+
+    A bootstrapper run creates a new pipeline every time, so a re-run after a failed one moves the endpoints on purpose
+    (warned about). A restore (``keep_other_pipelines``) refuses before anything is written while that pipeline still
+    exists: a restored copy would leave the original without its endpoints. ``force`` moves them anyway.
+    """
+    moved = _moved_endpoints(plan, pipeline_id)
+    if not moved:
+        return
+    if keep_other_pipelines and not plan["force"]:
+        live = _live_pipeline_ids(call, token)
+        taken = [m for m in moved if m["storedPipelineId"] in live]
+        if taken:
+            raise CourierConfigError(
+                "The HTTP Source endpoints "
+                + ", ".join(f"'{m['collectionName']}/{m['definition']['name']}' (pipeline {m['storedPipelineId']})" for m in taken)
+                + f" serve another pipeline, and pipeline {pipeline_id} would take them away from it: an inbound endpoint "
+                "serves one pipeline. Restore onto the Core Hub where the original pipeline is gone, give the collections of "
+                "the 'courier' block another name and basePath, or set \"force\": true to move them."
+            )
+    for m in moved:
+        log.warning("Inbound endpoint '%s/%s' moves from pipeline %s (agent %s) to pipeline %s",
+                    m["collectionName"], m["definition"]["name"], m["storedPipelineId"], m["storedAgentId"], pipeline_id)
+
+
 def provision_inbound(token: str, courier_cfg: Dict[str, Any], pipeline_id: str, agent_id: str,
-                      fetch: Optional[FetchFn] = None, logger: Optional[logging.Logger] = None) -> List[str]:
+                      fetch: Optional[FetchFn] = None, logger: Optional[logging.Logger] = None,
+                      keep_other_pipelines: bool = False) -> List[str]:
     """Creates or updates the inbound collections, endpoints and tokens of an HTTP Source in CoreHub.
 
     Tokens come first so that their ids can join the allowlist of the collections they are for.
     Returns the collection names, in configuration order. Raises ``CourierConfigError`` on an invalid
-    configuration, and whatever ``fetch`` raises on a CoreHub failure.
+    configuration, and whatever ``fetch`` raises on a CoreHub failure. ``keep_other_pipelines`` (a restore)
+    refuses to move an endpoint away from a pipeline that still exists (see ``_check_moved_endpoints``).
     """
     log = logger or _logger
     call = fetch or _default_fetch()
@@ -557,8 +660,10 @@ def provision_inbound(token: str, courier_cfg: Dict[str, Any], pipeline_id: str,
         return call(INBOUND_ENDPOINTS_PATH, method="GET", token=token, params={"collectionId": collection_id})
 
     plan = plan_inbound_definitions(courier_cfg, pipeline_id, agent_id, existing_collections, existing_endpoints_for)
+    _check_moved_endpoints(call, token, plan, pipeline_id, keep_other_pipelines, log)
 
-    token_ids_by_collection = _rotate_tokens(call, token, plan["tokens"], pipeline_id, agent_id, log)
+    collection_ids_by_name = {item["collection"]["name"]: item["collection"]["id"] for item in plan["collections"]}
+    token_ids_by_collection = _rotate_tokens(call, token, plan["tokens"], pipeline_id, agent_id, collection_ids_by_name, log)
 
     names: List[str] = []
     for item in plan["collections"]:
@@ -588,7 +693,8 @@ def apply_inbound_defaults(agent: Dict[str, Any], collection_names: List[str],
 
 
 def provision_courier_agent(token: str, pipeline_id: str, agent: Dict[str, Any], fetch: Optional[FetchFn] = None,
-                            logger: Optional[logging.Logger] = None) -> Optional[Dict[str, Any]]:
+                            logger: Optional[logging.Logger] = None,
+                            keep_other_pipelines: bool = False) -> Optional[Dict[str, Any]]:
     """Creates the Courier definitions of an HTTP Source or HTTP Target agent entry and fills its defaults.
 
     The agent discovers them (collection = schema, endpoint = table, binding = column), so they must
@@ -612,7 +718,8 @@ def provision_courier_agent(token: str, pipeline_id: str, agent: Dict[str, Any],
         )
         return None
     if source:
-        names = provision_inbound(token, agent["courier"], pipeline_id, agent["agentId"], fetch=fetch, logger=log)
+        names = provision_inbound(token, agent["courier"], pipeline_id, agent["agentId"], fetch=fetch, logger=log,
+                                  keep_other_pipelines=keep_other_pipelines)
         apply_inbound_defaults(agent, names, logger=log)
     else:
         names = provision_courier(token, agent["courier"], fetch=fetch, logger=log)

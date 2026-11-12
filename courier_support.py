@@ -10,7 +10,7 @@
 #    Contact MOLO17 at <info@molo17.com> for licensing terms and conditions.
 #
 # Copyright (C) 2026 MOLO17. All rights reserved.
-"""Support for the HTTP Target agent (``api-agent-shadow``, the Courier outbound target).
+"""Support for the HTTP Target agent (``courier-agent`` as TARGET, the Courier outbound target).
 
 The HTTP Target turns every row the pipeline emits into one HTTP call toward an external REST
 API. What it calls is not a database: it is a *Courier collection* (base URL + authentication)
@@ -24,7 +24,7 @@ toward an HTTP Target can be bootstrapped end to end without touching the Courie
 
     {
       "agentType": "TARGET",
-      "agentTag": "api-agent-shadow",
+      "agentTag": "courier-agent",
       "hostCredentials": {"connectionName": "HTTP Target"},
       "customHostCredentials": {},
       "courier": {
@@ -53,14 +53,19 @@ toward an HTTP Target can be bootstrapped end to end without touching the Courie
     }
 
 Collections and endpoints are matched by name and updated in place when they already exist, so
-running the bootstrapper twice is idempotent. ``customHostCredentials.outboundCollection`` is
+running the bootstrapper twice is idempotent. The header values of an endpoint are sent to the
+origin (scheme, host and port) of the base URL they were entered for only: CoreHub refuses (400) a
+collection update that moves the base URL to another origin while endpoints hold header values for
+the stored one, unless ``"force": true`` is set in the ``courier`` block. The bootstrapper then
+moves the collection and enters every header value again with its endpoint. ``customHostCredentials.outboundCollection`` is
 filled in with the collection name when the configuration declares exactly one collection and
 does not set it.
 
-The payloads mirror the Kotlin models of ``gluesync-kotlin/api-agent`` (``EndpointCollection``,
+The payloads mirror the Kotlin models of ``gluesync-kotlin/commons`` (``EndpointCollection``,
 ``EndpointDefinition``, ``BindingDefinition``, ``HeaderDefinition``, ``CollectionAuth``) and the
-checks of ``EndpointCollectionValidator`` / ``EndpointDefinitionValidator``, so that a wrong
-configuration fails here with a readable message instead of a 400 from CoreHub.
+checks of ``EndpointCollectionValidator`` / ``EndpointDefinitionValidator`` of the ``courier``
+module, so that a wrong configuration fails here with a readable message instead of a 400 from
+CoreHub.
 """
 
 from __future__ import annotations
@@ -72,7 +77,7 @@ import uuid
 from typing import Any, Callable, Dict, Iterable, List, Optional
 from urllib.parse import urlparse
 
-COURIER_AGENT_TAG = "api-agent-shadow"
+COURIER_AGENT_TAG = "courier-agent"
 COURIER_CONFIG_KEY = "courier"
 OUTBOUND_COLLECTION_KEY = "outboundCollection"
 
@@ -92,6 +97,15 @@ OPERATION_BINDING = "__operation"
 
 # Same grammar as the `{placeholder}` names the HTTP Target templates accept.
 NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_.\-]*$")
+# RFC 9110 `token`: what a header name may be made of.
+HEADER_NAME_PATTERN = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
+# Headers the HTTP client sets itself from the request (EndpointDefinitionValidator.CLIENT_MANAGED_HEADERS).
+CLIENT_MANAGED_HEADERS = ("host", "content-length", "transfer-encoding", "connection")
+# The query parameter a collection save repeats with to move to another origin anyway
+# (gluesync-kotlin EndpointService.LEAVING_HEADERS_UNBOUND).
+FORCE_PARAM = "force"
+# What CoreHub shows in place of a header value (gluesync-kotlin HeaderDefinition.MASKED_VALUE).
+MASKED_HEADER_VALUE = "********"
 
 # Stable ids for definitions created by the bootstrapper: the same name always gets the same
 # id, so a re-run that cannot read the existing definitions still upserts instead of duplicating.
@@ -233,22 +247,38 @@ def _is_http_url(value: str) -> bool:
     return parsed.scheme.lower() in {"http", "https"} and bool(parsed.hostname)
 
 
+def _has_user_info(value: str) -> bool:
+    try:
+        parsed = urlparse(value.strip())
+    except ValueError:
+        return False
+    return parsed.username is not None or parsed.password is not None
+
+
 # Credential fields each auth type needs, in the order CoreHub reports them.
 _AUTH_REQUIRED_FIELDS = {
     "Basic": ("username", "password"),
     "Bearer": ("token",),
     "ApiKey": ("name", "value"),
 }
+# The secret field of each auth type: CoreHub never returns it, and keeps the stored one when it is sent empty.
+_AUTH_SECRET_FIELDS = {"password", "token", "value"}
 
 
-def validate_collection(collection: Dict[str, Any]) -> List[str]:
+def validate_collection(collection: Dict[str, Any], keeps_stored_secret: bool = False) -> List[str]:
+    """Errors of ``collection``; ``keeps_stored_secret`` when CoreHub already stores it, so a left-out secret keeps
+    the stored one (an exported collection has none: CoreHub never returns it)."""
     errors: List[str] = []
     if not collection.get("name"):
         errors.append("name is required")
     if not _is_http_url(collection.get("baseUrl") or ""):
         errors.append("baseUrl must be an http:// or https:// URL")
+    elif _has_user_info(collection.get("baseUrl") or ""):
+        errors.append("baseUrl must not contain credentials (user:pass@): set them in auth")
     auth = collection.get("auth") or {"type": "None"}
     for field in _AUTH_REQUIRED_FIELDS.get(auth.get("type"), ()):
+        if keeps_stored_secret and field in _AUTH_SECRET_FIELDS:
+            continue
         if not str(auth.get(field) or "").strip():
             errors.append(f"auth.{field} is required")
     return [f"collection '{collection.get('name')}': {e}" for e in errors]
@@ -322,8 +352,21 @@ def validate_endpoint(endpoint: Dict[str, Any]) -> List[str]:
     errors.extend(_validate_operation_field(endpoint.get("operationField") or "", names))
     errors.extend(_validate_path_placeholders(path_template, names))
     errors.extend(_validate_body(endpoint, bindings))
-    errors.extend("header name is required" for h in endpoint.get("headers") or [] if not str(h.get("name") or "").strip())
+    errors.extend(_validate_headers(endpoint.get("headers") or []))
     return [f"endpoint '{endpoint.get('name')}': {e}" for e in errors]
+
+
+def _validate_headers(headers: List[Dict[str, Any]]) -> List[str]:
+    errors: List[str] = []
+    for header in headers:
+        name = str(header.get("name") or "").strip()
+        if not name:
+            errors.append("header name is required")
+        elif not HEADER_NAME_PATTERN.match(name):
+            errors.append(f"header name '{name}' is not valid")
+        elif name.lower() in CLIENT_MANAGED_HEADERS:
+            errors.append(f"header '{name}' cannot be set: the HTTP client manages it")
+    return errors
 
 
 # ---------------------------------------------------------------------------
@@ -344,8 +387,46 @@ def _by_name(items: Any) -> Dict[str, Dict[str, Any]]:
     return result
 
 
+def _origin(url: str) -> tuple:
+    """Scheme, host and port of ``url`` (default port filled in): what a header value is bound to."""
+    try:
+        parsed = urlparse(str(url or "").strip())
+        port = parsed.port
+    except ValueError:
+        return ("", "", None)
+    scheme = parsed.scheme.lower()
+    return scheme, (parsed.hostname or "").lower(), port or {"http": 80, "https": 443}.get(scheme)
+
+
+def _masked_header_errors(endpoint: Dict[str, Any], stored_endpoint: Optional[Dict[str, Any]],
+                          stored_base_url: Optional[str], base_url: str) -> List[str]:
+    """Header values sent as the mask that CoreHub has no value to keep for.
+
+    CoreHub keeps the stored value of a header sent back as ``MASKED_HEADER_VALUE``, only for a stored endpoint that
+    has that header, and only while the collection stays on the origin the value was entered for (gluesync-kotlin
+    ``EndpointDefinition.withHeaderValuesFrom`` / ``headerProblems``); otherwise it refuses the endpoint. An export
+    without ``include_secrets`` masks every header value, so restoring it anywhere else needs the values typed in.
+    """
+    masked = [h["name"] for h in endpoint.get("headers") or [] if h.get("valueTemplate") == MASKED_HEADER_VALUE]
+    if not masked:
+        return []
+    stored_names = {h.get("name") for h in (stored_endpoint or {}).get("headers") or [] if isinstance(h, dict)}
+    moves = stored_base_url is not None and _origin(stored_base_url) != _origin(base_url)
+    if stored_endpoint is None:
+        why = "CoreHub stores no value for it (an export leaves header values out unless include_secrets)"
+    elif moves:
+        why = "the collection moves to another origin, and the stored value is not sent there"
+    else:
+        missing = [name for name in masked if name not in stored_names]
+        if not missing:
+            return []
+        masked, why = missing, "the stored endpoint has no such header"
+    return [f"header '{name}' is masked ({MASKED_HEADER_VALUE}) and {why}: enter its value" for name in masked]
+
+
 def _plan_endpoints(collection_cfg: Dict[str, Any], collection: Dict[str, Any],
-                    stored_endpoints: Dict[str, Dict[str, Any]], errors: List[str]) -> List[Dict[str, Any]]:
+                    stored_endpoints: Dict[str, Dict[str, Any]], errors: List[str],
+                    stored_base_url: Optional[str] = None) -> List[Dict[str, Any]]:
     endpoints: List[Dict[str, Any]] = []
     endpoint_names: set = set()
     for endpoint_cfg in collection_cfg.get("endpoints") or []:
@@ -359,10 +440,60 @@ def _plan_endpoints(collection_cfg: Dict[str, Any], collection: Dict[str, Any],
             errors.append(f"endpoint '{endpoint['name']}' of collection '{collection['name']}' is declared twice")
         endpoint_names.add(endpoint["name"])
         errors.extend(validate_endpoint(endpoint))
+        errors.extend(
+            f"endpoint '{endpoint['name']}': {e}"
+            for e in _masked_header_errors(endpoint, stored_endpoint, stored_base_url, collection.get("baseUrl") or "")
+        )
         endpoints.append({"definition": endpoint, "exists": stored_endpoint is not None})
     if not endpoints:
         errors.append(f"collection '{collection['name']}' declares no endpoint")
     return endpoints
+
+
+def _causes(error: BaseException) -> Iterable[BaseException]:
+    """``error`` and its causes: ``fetch_core_hub`` raises a RuntimeError whose cause is the HTTP error."""
+    seen: set = set()
+    current: Optional[BaseException] = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        yield current
+        current = current.__cause__ or current.__context__
+
+
+def status_of(error: BaseException) -> Optional[int]:
+    """The HTTP status CoreHub answered with, read from ``error`` or the error it was raised from."""
+    for cause in _causes(error):
+        status = getattr(getattr(cause, "response", None), "status_code", None)
+        if status is not None:
+            return status
+    return None
+
+
+def error_text(error: BaseException) -> str:
+    """Everything ``error`` and its causes say, the body of CoreHub's answer included."""
+    parts: List[str] = []
+    for cause in _causes(error):
+        parts.append(str(cause))
+        try:
+            parts.append(str(getattr(getattr(cause, "response", None), "text", "") or ""))
+        except Exception:  # noqa: BLE001 - a body that cannot be read leaves the message to report
+            pass
+    return " ".join(part for part in parts if part)
+
+
+def save_definition(call: FetchFn, token: str, path: str, item_id: str, body: Dict[str, Any], exists: bool,
+                    params: Optional[Dict[str, str]] = None) -> None:
+    """PUT an existing definition, POST a new one: a POST whose id CoreHub already stores (409) is repeated as a PUT."""
+    if exists:
+        call(f"{path}/{item_id}", method="PUT", token=token, body=body, params=params)
+        return
+    try:
+        call(path, method="POST", token=token, body=body, params=params)
+    except Exception as error:
+        if status_of(error) != 409:
+            raise
+        # Stored under another name (renamed in the UI): the id is the bootstrapper's, so it is updated.
+        call(f"{path}/{item_id}", method="PUT", token=token, body=body, params=params)
 
 
 def plan_courier_definitions(courier_cfg: Dict[str, Any], existing_collections: Any = None,
@@ -390,10 +521,11 @@ def plan_courier_definitions(courier_cfg: Dict[str, Any], existing_collections: 
         if collection["name"] in seen_names:
             errors.append(f"collection '{collection['name']}' is declared twice")
         seen_names.add(collection["name"])
-        errors.extend(validate_collection(collection))
+        errors.extend(validate_collection(collection, keeps_stored_secret=stored is not None))
 
         stored_endpoints = _by_name(existing_endpoints_for(collection["id"])) if (existing_endpoints_for and stored) else {}
-        endpoints = _plan_endpoints(collection_cfg, collection, stored_endpoints, errors)
+        endpoints = _plan_endpoints(collection_cfg, collection, stored_endpoints, errors,
+                                    stored_base_url=stored.get("baseUrl") if stored else None)
         plan.append({"collection": collection, "exists": stored is not None, "endpoints": endpoints})
 
     if errors:
@@ -417,27 +549,38 @@ def provision_courier(token: str, courier_cfg: Dict[str, Any], fetch: Optional[F
         return call(ENDPOINTS_PATH, method="GET", token=token, params={"collectionId": collection_id})
 
     plan = plan_courier_definitions(courier_cfg, existing_collections, existing_endpoints_for)
+    force = bool(courier_cfg.get(FORCE_PARAM, False))
 
     names: List[str] = []
     for item in plan:
         collection = item["collection"]
-        if item["exists"]:
-            log.info("Updating Courier collection '%s' (id=%s)", collection["name"], collection["id"])
-            call(f"{COLLECTIONS_PATH}/{collection['id']}", method="PUT", token=token, body=collection)
-        else:
-            log.info("Creating Courier collection '%s' (id=%s)", collection["name"], collection["id"])
-            call(COLLECTIONS_PATH, method="POST", token=token, body=collection)
+        log.info("%s Courier collection '%s' (id=%s)", "Updating" if item["exists"] else "Creating", collection["name"], collection["id"])
+        _save_collection(call, token, item, force)
         names.append(collection["name"])
 
         for endpoint_item in item["endpoints"]:
             endpoint = endpoint_item["definition"]
-            if endpoint_item["exists"]:
-                log.info("Updating Courier endpoint '%s' (%s %s)", endpoint["name"], endpoint["httpVerb"], endpoint["pathTemplate"])
-                call(f"{ENDPOINTS_PATH}/{endpoint['id']}", method="PUT", token=token, body=endpoint)
-            else:
-                log.info("Creating Courier endpoint '%s' (%s %s)", endpoint["name"], endpoint["httpVerb"], endpoint["pathTemplate"])
-                call(ENDPOINTS_PATH, method="POST", token=token, body=endpoint)
+            log.info("%s Courier endpoint '%s' (%s %s)", "Updating" if endpoint_item["exists"] else "Creating",
+                     endpoint["name"], endpoint["httpVerb"], endpoint["pathTemplate"])
+            # Every header value is sent again, so it is entered for the collection's base URL as it is now.
+            save_definition(call, token, ENDPOINTS_PATH, endpoint["id"], endpoint, endpoint_item["exists"])
     return names
+
+
+def _save_collection(call: FetchFn, token: str, item: Dict[str, Any], force: bool) -> None:
+    collection = item["collection"]
+    try:
+        save_definition(call, token, COLLECTIONS_PATH, collection["id"], collection, item["exists"],
+                        params={FORCE_PARAM: "true"} if force else None)
+    except Exception as error:
+        if status_of(error) == 400 and f"{FORCE_PARAM}=true" in error_text(error):
+            raise CourierConfigError(
+                f"Courier collection '{collection['name']}' moves its baseUrl to another origin (scheme, host or port) "
+                "while its endpoints hold header values entered for the stored one, and CoreHub refused the move. Set "
+                f"\"{FORCE_PARAM}\": true in the 'courier' block to move it: the bootstrapper then enters every header "
+                "value again with its endpoint."
+            ) from error
+        raise
 
 
 def apply_courier_defaults(agent: Dict[str, Any], collection_names: Iterable[str],

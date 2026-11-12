@@ -174,7 +174,7 @@ _ORACLE_AGENT_TAGS: Optional[set[str]] = None
 # The HTTP agent is object-store-like on both sides: as HTTP Target (Courier outbound) no CREATE TABLE
 # and NoSqlEntity targets, as HTTP Source (Courier inbound) NoSqlEntity sources.
 EMBEDDED_AGENT_CATEGORIES: dict[str, str] = {
-    "api-agent-shadow": "Object Store",
+    "courier-agent": "Object Store",
 }
 
 

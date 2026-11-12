@@ -29,7 +29,10 @@ Given a pipeline that is already configured, this:
    function collection first (``FUNCTION_COLLECTION_PATH``);
 3. exports the restored pipeline again;
 4. checks that the restored pipeline is configured like the original
-   (entities, groups, Chronos schedules, function collection) and that the two exports match.
+   (entities, groups, Chronos schedules, function collection, Courier definitions) and that the two exports match.
+
+The Courier definitions of the HTTP agents (``courier_export``) are part of the export: the restore takes them from
+the export, not from the kit's config file, so a definition the export misses fails the ``courier`` check.
 
 Everything lands in ``--output-dir``: both exports, both CoreHub snapshots,
 the restore log, ``report.json``, a per-check diff and a JUnit file.
@@ -54,7 +57,14 @@ from xml.sax.saxutils import escape, quoteattr
 
 import yaml
 
-from commons import admin_credentials_path, fetch_core_hub, load_admin_password, login_password_candidates
+from commons import (
+    admin_credentials_path,
+    fetch_core_hub,
+    load_admin_password,
+    login_password_candidates,
+)
+from courier_export import agent_key, export_pipeline_courier
+from courier_support import is_courier_agent
 from function_collection import fetch_function_collection
 from export_template_from_corehub import (
     fetch_pipeline_entities,
@@ -327,6 +337,7 @@ class Check:
         self.name = name
         self.description = description
         self.passed = True
+        self.skipped = False
         self.message = ""
         self.diff: List[str] = []
 
@@ -336,11 +347,17 @@ class Check:
         if diff:
             self.diff = diff
 
+    def skip(self, message: str) -> None:
+        """Not run, for a reason that is no failure of the round trip (it stays passed)."""
+        self.skipped = True
+        self.message = message
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "name": self.name,
             "description": self.description,
             "passed": self.passed,
+            "skipped": self.skipped,
             "message": self.message,
             "diffLines": len(self.diff),
         }
@@ -488,6 +505,42 @@ def check_export_stable(original: Dict[str, Any], restored: Dict[str, Any]) -> C
     return check
 
 
+def check_courier(original: Dict[str, Any], restored: Dict[str, Any]) -> Check:
+    check = Check("courier", "The restored HTTP agents have the Courier collections and endpoints of the original ones")
+    left, right = original.get("courier") or {}, restored.get("courier") or {}
+    if left == right:
+        check.message = f"{sum(len(b.get('collections') or []) for b in left.values())} Courier collection(s) restored"
+        return check
+    check.fail(
+        "the Courier definitions of the restored pipeline differ from the exported ones",
+        unified_diff(json_lines(left), json_lines(right), "original-courier.json", "restored-courier.json"),
+    )
+    return check
+
+
+def courier_restore_config(config: Dict[str, Any], blocks: Dict[str, Dict[str, Any]], config_dir: Path) -> Dict[str, Any]:
+    """The kit config with the exported ``courier`` block on each HTTP agent (none when none was exported).
+
+    The export is what is restored, not the kit's own block: its tokens are left out (restoring one would revoke the
+    token the kit's clients use). A relative certificate path is made absolute, as the copy lives in another folder.
+    """
+    restored = copy.deepcopy(config)
+    for agent in restored.get("agents") or []:
+        if not isinstance(agent, dict):
+            continue
+        certificate = (agent.get("hostCredentials") or {}).get("certificatePath")
+        if isinstance(certificate, str) and certificate.strip() and not Path(certificate).expanduser().is_absolute():
+            agent["hostCredentials"]["certificatePath"] = str((config_dir / certificate.strip()).resolve())
+        if not is_courier_agent(agent):
+            continue
+        block = blocks.get(agent_key(agent))
+        if block:
+            agent["courier"] = copy.deepcopy(block)
+        else:
+            agent.pop("courier", None)
+    return restored
+
+
 def run_checks(original: Dict[str, Any], restored: Dict[str, Any], expects_schedules: bool = False) -> List[Check]:
     checks = [
         check_entities(original, restored),
@@ -497,6 +550,8 @@ def run_checks(original: Dict[str, Any], restored: Dict[str, Any], expects_sched
     ]
     if original.get("functionCollection") or restored.get("functionCollection"):
         checks.append(check_function_collection(original, restored))
+    if original.get("courier") or restored.get("courier"):
+        checks.append(check_courier(original, restored))
     return checks
 
 
@@ -514,6 +569,8 @@ def junit_xml(suite_name: str, checks: List[Check], duration: float) -> str:
             if len(c.diff) > MAX_DIFF_LINES:
                 body += f"\n... {len(c.diff) - MAX_DIFF_LINES} more lines in {c.name}.diff"
             lines.append(f"    <failure message={quoteattr(c.message)}>{escape(body)}</failure>")
+        elif c.skipped:
+            lines.append(f"    <skipped message={quoteattr(c.message)}/>")
         else:
             lines.append(f"    <system-out>{escape(c.message)}</system-out>")
         lines.append("  </testcase>")
@@ -617,10 +674,13 @@ def snapshot_pipeline(token: str, pipeline_id: str) -> Dict[str, Any]:
     config = fetch_core_hub(f"/pipelines/{pipeline_id}/config", token=token)
     # Only identity: the agent config itself comes from the kit's config file,
     # and its credentials have no place in a test artifact.
+    config_agents = _as_list(config.get("agents") if isinstance(config, dict) else None)
     agents = [
         {k: a.get(k) for k in ("agentId", "agentType", "agentTag", "agentUserTag") if k in a}
-        for a in _as_list(config.get("agents") if isinstance(config, dict) else None)
+        for a in config_agents
     ]
+    # The Courier definitions of its HTTP agents, as the Automator exports them.
+    courier = export_pipeline_courier(token, pipeline_id, config_agents)
     entities = fetch_pipeline_entities(token, pipeline_id)
     try:
         groups = _as_list(fetch_core_hub(f"/pipelines/{pipeline_id}/config/groups", token=token), "groups")
@@ -642,6 +702,7 @@ def snapshot_pipeline(token: str, pipeline_id: str) -> Dict[str, Any]:
         "groups": groups,
         "jobs": jobs,
         "functionCollection": function_collection_sources,
+        "courier": courier,
         "idMap": build_id_map(pipeline_id, agents, entities, groups),
     }
 
@@ -666,11 +727,13 @@ def restore_export(
     out_dir: Path,
     timeout: int,
     function_collection_dir: Optional[Path] = None,
+    config_path: Optional[Path] = None,
 ) -> Tuple[Optional[str], str]:
     """Run main.py on the export; return (restored pipeline id, error).
 
     ``function_collection_dir`` holds the sources of the function collection to publish on the restored pipeline
-    before its entities are created (the YAML alone cannot recreate it).
+    before its entities are created (the YAML alone cannot recreate it). ``config_path`` replaces the kit's config
+    file (its HTTP agents carrying the exported Courier definitions).
 
     The restore counts as done only when main.py exits 0 and reports ``complete``.
     """
@@ -687,6 +750,8 @@ def restore_export(
         env["FUNCTION_COLLECTION_PATH"] = str(function_collection_dir)
     else:
         env.pop("FUNCTION_COLLECTION_PATH", None)  # one left by the caller's environment belongs to another pipeline
+    if config_path is not None:
+        env["FILE_CONF_PATH"] = str(config_path)
     cmd = [sys.executable, str(SCRIPT_DIR / "main.py"), "--pipeline-name", pipeline_name]
     logger.info(f"Restoring {export_path} as pipeline '{pipeline_name}'")
     log_path = out_dir / "restore.log"
@@ -732,6 +797,8 @@ def capture(token: str, pipeline_id: str, out_dir: Path, label: str) -> Dict[str
     """Snapshot and export one pipeline, keeping both as ``<label>-*`` files."""
     side = snapshot_pipeline(token, pipeline_id)
     side["export"] = render_pipeline_export(token, pipeline_id)
+    if side.get("courier"):
+        write_json(out_dir / f"{label}-courier.json", side["courier"])
     (out_dir / f"{label}-export.yaml").write_text(side["export"], encoding="utf-8")
     write_json(out_dir / f"{label}-snapshot.json", {k: v for k, v in side.items() if k != "export"})
     for file_name, code in (side.get("functionCollection") or {}).items():
@@ -739,6 +806,38 @@ def capture(token: str, pipeline_id: str, out_dir: Path, label: str) -> Dict[str
         source.parent.mkdir(parents=True, exist_ok=True)
         source.write_text(code, encoding="utf-8")
     return side
+
+
+class RoundTripSkipped(RoundTripError):
+    """The pipeline cannot be round-tripped on its own Core Hub: reported as skipped, not as a failure."""
+
+
+def refuse_http_source_round_trip(blocks: Dict[str, Dict[str, Any]], pipeline_id: str) -> None:
+    """Raises ``RoundTripSkipped`` when the pipeline has an HTTP Source with inbound endpoints.
+
+    An inbound endpoint serves one pipeline, and two endpoints of a collection cannot share a route: the copy restored
+    next to the original on this Core Hub would take the original's endpoints away (or be refused with a 409 once
+    entities read them). Said up front, before anything is restored, instead of failing halfway or breaking the
+    original pipeline; the kit's own tests still cover the HTTP Source.
+    """
+    sources = sorted(key for key in blocks if key.upper().startswith("SOURCE:"))
+    if sources:
+        raise RoundTripSkipped(
+            f"pipeline {pipeline_id} has an HTTP Source with inbound endpoints ({', '.join(sources)}): an inbound endpoint "
+            "serves one pipeline, so a copy cannot be restored next to the original on the same Core Hub, and the round "
+            "trip does not cover this pipeline (the original is left untouched)."
+        )
+
+
+def write_courier_restore_config(blocks: Dict[str, Dict[str, Any]], out_dir: Path) -> Optional[Path]:
+    """``restore-config.json``: the kit config with the exported Courier blocks; None when there is none to restore."""
+    if not blocks:
+        return None
+    kit_config = Path(os.getenv("FILE_CONF_PATH", str(SCRIPT_DIR / "config.json"))).expanduser().resolve()
+    config = json.loads(kit_config.read_text(encoding="utf-8"))
+    path = out_dir / "restore-config.json"
+    write_json(path, courier_restore_config(config, blocks, kit_config.parent))
+    return path
 
 
 def export_and_restore(
@@ -754,8 +853,10 @@ def export_and_restore(
     pipeline = original["pipeline"] if isinstance(original["pipeline"], dict) else {}
     restore_name = f"{pipeline.get('name') or pipeline_id}{ROUND_TRIP_SUFFIX}"
     collection_dir = out_dir / "original-function-collection" if original.get("functionCollection") else None
+    refuse_http_source_round_trip(original.get("courier") or {}, pipeline_id)
+    config_path = write_courier_restore_config(original.get("courier") or {}, out_dir)
     restored_id, error = restore_export(out_dir / "original-export.yaml", restore_name, out_dir, timeout,
-                                        function_collection_dir=collection_dir)
+                                        function_collection_dir=collection_dir, config_path=config_path)
     if error:
         raise RoundTripError(error)
 
@@ -772,7 +873,11 @@ def write_results(out_dir: Path, pipeline_id: str, suite_name: str, checks: List
     for c in checks:
         if c.diff:
             (out_dir / f"{c.name}.diff").write_text("\n".join(c.diff) + "\n", encoding="utf-8")
-        logger.info(f"[{'PASS' if c.passed else 'FAIL'}] {c.name}: {c.message}")
+        if c.skipped:
+            label = "SKIP"
+        else:
+            label = "PASS" if c.passed else "FAIL"
+        logger.info(f"[{label}] {c.name}: {c.message}")
     write_json(out_dir / "report.json", {
         "pipelineId": pipeline_id,
         "passed": passed,
@@ -791,6 +896,8 @@ def run(pipeline_id: str, out_dir: Path, token_file: str, timeout: int, suite_na
     try:
         original, restored, step.message = export_and_restore(pipeline_id, out_dir, token_file, timeout)
         checks.extend(run_checks(original, restored, kit_declares_schedules()))
+    except RoundTripSkipped as exc:
+        step.skip(str(exc))
     except RoundTripError as exc:
         step.fail(str(exc))
     return write_results(out_dir, pipeline_id, suite_name, checks, time.time() - started)

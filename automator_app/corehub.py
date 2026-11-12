@@ -61,6 +61,8 @@ import create_user_defined_functions
 import function_collection
 import import_options
 import ai_settings
+from courier_export import export_courier_block
+from courier_inbound_support import provision_courier_agent
 from export_template_from_corehub import (
     fetch_pipeline_entities,
     build_entities_maps,
@@ -2114,7 +2116,21 @@ def _backup_agent_entry(agent: Dict[str, Any], identity: Tuple[Any, Any, Any, An
     return agent_payload
 
 
-def _collect_backup_agents(backup: _PipelinesBackup, pipeline_agents: List[Any]) -> List[Dict[str, Any]]:
+def _backup_courier_block(backup: _PipelinesBackup, pipeline_id: str, agent: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The ``courier`` block of an HTTP agent (its Courier collections and endpoints), None for another agent.
+
+    A failure is logged and leaves the agent without a block: the rest of the backup is still worth having.
+    """
+    try:
+        return export_courier_block(backup.token, pipeline_id, agent, fetch=fetch_core_hub,
+                                    include_secrets=backup.include_secrets)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("Failed to export the Courier definitions of agent %s of pipeline %s: %s",
+                       agent.get("agentId") or agent.get("id"), pipeline_id, exc)
+        return None
+
+
+def _collect_backup_agents(backup: _PipelinesBackup, pipeline_agents: List[Any], pipeline_id: str = "") -> List[Dict[str, Any]]:
     """Add the agents of one pipeline to the backup (once each) and return the pipeline's references to them."""
     pipeline_agent_refs: List[Dict[str, Any]] = []
     for agent in pipeline_agents:
@@ -2135,7 +2151,11 @@ def _collect_backup_agents(backup: _PipelinesBackup, pipeline_agents: List[Any])
         if key in backup.seen_agents:
             continue
         backup.seen_agents.add(key)
-        backup.agents.append(_backup_agent_entry(agent, identity, backup.include_secrets))
+        entry = _backup_agent_entry(agent, identity, backup.include_secrets)
+        courier = _backup_courier_block(backup, pipeline_id, agent) if pipeline_id else None
+        if courier:
+            entry["courier"] = courier
+        backup.agents.append(entry)
     return pipeline_agent_refs
 
 
@@ -2148,7 +2168,7 @@ def _add_backup_pipeline_agents(backup: _PipelinesBackup, pipeline_id: str, pipe
         pipeline_agents = []
 
     if isinstance(pipeline_agents, list):
-        pipeline_agent_refs = _collect_backup_agents(backup, pipeline_agents)
+        pipeline_agent_refs = _collect_backup_agents(backup, pipeline_agents, pipeline_id)
         if pipeline_agent_refs:
             pipeline_meta["agents"] = pipeline_agent_refs
 
@@ -4718,6 +4738,8 @@ def _bind_config_agent(
     host_credentials = dict(conf_agent.get("hostCredentials") or {})
     # A masked secret of the backup is no value: Core Hub would store the placeholder as the secret
     custom_host_credentials = drop_masked_custom_secrets(conf_agent.get("customHostCredentials"))
+    # An HTTP agent discovers its Courier definitions: they must exist before it is configured.
+    custom_host_credentials = _restore_courier_block(token, pipeline_id, agent_id, conf_agent, custom_host_credentials)
 
     # Extract certificate path and type (will be handled separately)
     certificate_path = host_credentials.pop("certificatePath", None)
@@ -4748,6 +4770,22 @@ def _bind_config_agent(
     specific_conf = conf_agent.get("specificConfiguration") or {}
     if specific_conf:
         _put_agent_specific_config(token, pipeline_id, agent_id, specific_conf, credentials_pending)
+
+
+def _restore_courier_block(token, pipeline_id, agent_id, conf_agent, custom_host_credentials):
+    """Provisions the ``courier`` block of an HTTP agent, as the bootstrapper does; returns its customHostCredentials.
+
+    The collections and endpoints keep the ids of the backup, so a restore onto the same Core Hub updates them. An
+    HTTP Source endpoint that still serves another pipeline is not taken away from it: the restore is refused instead
+    (a copy of a live pipeline needs its collections renamed). An agent without a block is returned unchanged. A
+    refused block raises ``CourierConfigError`` with what to fix.
+    """
+    if not conf_agent.get("courier"):
+        return custom_host_credentials
+    agent = {**conf_agent, "agentId": str(agent_id), "customHostCredentials": dict(custom_host_credentials or {})}
+    provisioned = provision_courier_agent(token, pipeline_id, agent, fetch=fetch_core_hub, logger=logger,
+                                          keep_other_pipelines=True)
+    return custom_host_credentials if provisioned is None else provisioned
 
 
 def _existing_pipeline_names(token):

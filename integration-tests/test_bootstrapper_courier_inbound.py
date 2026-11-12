@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Unit tests for the HTTP Source (``api-agent-shadow`` as SOURCE, Courier inbound) support of the bootstrapper.
+Unit tests for the HTTP Source (``courier-agent`` as SOURCE, Courier inbound) support of the bootstrapper.
 
 They cover, without a running CoreHub:
 
@@ -34,7 +34,7 @@ import courier_inbound_support  # noqa: E402
 from courier_support import CourierConfigError, stable_id  # noqa: E402
 from courier_inbound_support import (  # noqa: E402
     API_TOKENS_PATH,
-    ENDPOINT_INBOUND_PERMISSION,
+    HTTPS_AGENT_PERMISSION,
     INBOUND_COLLECTIONS_PATH,
     INBOUND_ENDPOINTS_PATH,
     apply_inbound_defaults,
@@ -94,6 +94,16 @@ def inbound_config(token_file=None):
 
 
 
+def corehub_error(status, body=""):
+    """What ``fetch_core_hub`` raises: a RuntimeError caused by the HTTP error that carries the response."""
+    http_error = Exception(f"{status} Client Error")
+    http_error.response = mock.Mock(status_code=status, text=body)
+    try:
+        raise RuntimeError(f"CoreHub request failed: {http_error} | Response: {body}") from http_error
+    except RuntimeError as wrapped:
+        return wrapped
+
+
 class CoreHubFailure(Exception):
     """A CoreHub call that fails with an HTTP status the provisioning does not handle."""
 
@@ -127,9 +137,9 @@ class FakeCoreHub:
 
 class HttpSourceDetectionTests(unittest.TestCase):
     def test_only_the_source_side_of_the_agent_is_the_http_source(self):
-        self.assertTrue(is_http_source_agent({"agentTag": "api-agent-shadow", "agentType": "source"}))
-        self.assertTrue(is_http_source_agent({"agentTag": "my-http", "agentInternalName": "api-agent-shadow", "agentType": "SOURCE"}))
-        self.assertFalse(is_http_source_agent({"agentTag": "api-agent-shadow", "agentType": "TARGET"}))
+        self.assertTrue(is_http_source_agent({"agentTag": "courier-agent", "agentType": "source"}))
+        self.assertTrue(is_http_source_agent({"agentTag": "my-http", "agentInternalName": "courier-agent", "agentType": "SOURCE"}))
+        self.assertFalse(is_http_source_agent({"agentTag": "courier-agent", "agentType": "TARGET"}))
         self.assertFalse(is_http_source_agent({"agentTag": "postgresql-cdc", "agentType": "SOURCE"}))
         self.assertFalse(is_http_source_agent(None))
 
@@ -149,6 +159,7 @@ class InboundPlanTests(unittest.TestCase):
             "tags": [],
             "allowlistEnabled": True,
             "allowedTokenIds": [],
+            "blockedTokenIds": [],
         })
         orders, events, delete = [e["definition"] for e in plan["collections"][0]["endpoints"]]
         self.assertEqual(orders["httpVerb"], "POST")
@@ -238,6 +249,7 @@ class InboundPlanTests(unittest.TestCase):
         message = str(raised.exception)
         self.assertIn("basePath 'same' is used by two collections", message)
         self.assertIn("basePath 'bad path' is not valid", message)
+
         self.assertIn("collection 'c' declares no endpoint", message)
         with self.assertRaises(CourierConfigError):
             plan_inbound_definitions({"collections": []}, PIPELINE, AGENT)
@@ -245,6 +257,24 @@ class InboundPlanTests(unittest.TestCase):
         with self.assertRaises(CourierConfigError):
             plan_inbound_definitions(config, "", AGENT)
 
+
+    def test_a_base_path_is_one_segment_and_a_token_is_not_both_allowed_and_blocked(self):
+        config = {"collections": [
+            {"name": "a", "basePath": "shop/v2", "endpoints": [{"name": "e", "path": "/", "bindings": ["x"]}]},
+            {"name": "b", "allowedTokenIds": ["t1", "t2"], "blockedTokenIds": ["t2"],
+             "endpoints": [{"name": "e", "path": "/", "bindings": ["x"]}]},
+        ]}
+        with self.assertRaises(CourierConfigError) as raised:
+            plan_inbound_definitions(config, PIPELINE, AGENT)
+        message = str(raised.exception)
+        self.assertIn("basePath 'shop/v2' is not valid: one segment", message)
+        self.assertIn("a token cannot be both allowed and blocked: t2", message)
+
+    def test_the_blocklist_is_sent_with_the_collection(self):
+        config = inbound_config()
+        config["collections"][0]["blockedTokenIds"] = ["leaked"]
+        collection = plan_inbound_definitions(config, PIPELINE, AGENT)["collections"][0]["collection"]
+        self.assertEqual(collection["blockedTokenIds"], ["leaked"])
     def test_token_rules(self):
         config = inbound_config()
         config["tokens"] = [{"name": "", "collections": ["nope"], "expiresInDays": 0}]
@@ -288,7 +318,8 @@ class ProvisionInboundTests(unittest.TestCase):
             "name": "shop-client",
             "expiresInDays": 7,
             "scopes": [{"pipelineId": PIPELINE, "agentId": AGENT}],
-            "permissionScopes": [ENDPOINT_INBOUND_PERMISSION],
+            "permissionScopes": [HTTPS_AGENT_PERMISSION],
+            "collectionScopes": [hub.calls[3][2]["id"]],
         })
         collection = hub.calls[3][2]
         self.assertTrue(collection["allowlistEnabled"])
@@ -301,6 +332,23 @@ class ProvisionInboundTests(unittest.TestCase):
             "token": "gsp_plaintext", "tokenId": "token-new", "name": "shop-client", "pipelineId": PIPELINE, "agentId": AGENT,
         })
         self.assertEqual(stat.S_IMODE(os.stat(self.token_file).st_mode), 0o600)
+
+    def test_a_token_is_scoped_to_the_collections_it_is_for_only(self):
+        config = inbound_config(self.token_file)
+        billing = copy.deepcopy(config["collections"][0])
+        billing["name"] = "billing"
+        billing["basePath"] = "billing"
+        config["collections"].append(billing)
+        config["tokens"][0]["collections"] = ["billing"]
+        hub = FakeCoreHub()
+
+        provision_inbound("jwt", config, PIPELINE, AGENT, fetch=hub)
+
+        created = next(body for method, path, body, _ in hub.calls if method == "POST" and path == API_TOKENS_PATH)
+        saved = {body["name"]: body for method, path, body, _ in hub.calls if method == "POST" and path == INBOUND_COLLECTIONS_PATH}
+        self.assertEqual(created["collectionScopes"], [saved["billing"]["id"]])
+        self.assertEqual(saved["billing"]["allowedTokenIds"], ["token-new"])
+        self.assertNotIn("token-new", saved["shop"]["allowedTokenIds"])
 
     def test_plaintext_never_reaches_the_log(self):
         hub = FakeCoreHub()
@@ -362,6 +410,50 @@ class ProvisionInboundTests(unittest.TestCase):
             provision_inbound("jwt", config, PIPELINE, AGENT, fetch=hub)
         self.assertIn('"force": true', str(raised.exception))
 
+    def test_a_409_wrapped_by_fetch_core_hub_also_explains_force(self):
+        hub = FakeCoreHub(
+            collections=[{"id": "stored-shop", "name": "shop"}],
+            endpoints_by_collection={"stored-shop": [{"id": "stored-orders", "name": "orders"}]},
+            refuse_put_with=corehub_error(409, '{"message":"Entity orders reads this endpoint"}'),
+        )
+        config = inbound_config()
+        with self.assertRaises(CourierConfigError) as raised:
+            provision_inbound("jwt", config, PIPELINE, AGENT, fetch=hub)
+        self.assertIn('"force": true', str(raised.exception))
+
+    def test_a_create_of_a_stored_id_is_repeated_as_an_update(self):
+        class Conflicting(FakeCoreHub):
+            def __call__(self, path, method="GET", **kwargs):
+                result = super().__call__(path, method=method, **kwargs)
+                if method == "POST" and path in (INBOUND_COLLECTIONS_PATH, INBOUND_ENDPOINTS_PATH):
+                    raise corehub_error(409, '{"message":"already exists: update it with PUT"}')
+                return result
+
+        hub = Conflicting()
+        provision_inbound("jwt", inbound_config(), PIPELINE, AGENT, fetch=hub)
+
+        collection_id = stable_id("inbound-collection", "shop")
+        orders_id = stable_id("inbound-endpoint", "orders", collection_id)
+        self.assertEqual(hub.methods_and_paths()[1:4], [
+            ("POST", INBOUND_COLLECTIONS_PATH),
+            ("PUT", f"{INBOUND_COLLECTIONS_PATH}/{collection_id}"),
+            ("POST", INBOUND_ENDPOINTS_PATH),
+        ])
+        self.assertEqual(hub.methods_and_paths()[4], ("PUT", f"{INBOUND_ENDPOINTS_PATH}/{orders_id}"))
+
+    def test_a_collection_no_token_can_call_says_to_configure_one(self):
+        class NoToken(FakeCoreHub):
+            def __call__(self, path, method="GET", **kwargs):
+                if method == "POST" and path == INBOUND_COLLECTIONS_PATH:
+                    raise corehub_error(400, '{"message":"This collection needs an active Personal API Token","code":"MISSING_TOKEN"}')
+                return super().__call__(path, method=method, **kwargs)
+
+        config, hub = inbound_config(), NoToken()
+        with self.assertRaises(CourierConfigError) as raised:
+            provision_inbound("jwt", config, PIPELINE, AGENT, fetch=hub)
+        self.assertIn("courier.tokens", str(raised.exception))
+        self.assertIn(HTTPS_AGENT_PERMISSION, str(raised.exception))
+
     def test_other_errors_propagate_unchanged(self):
         failure = CoreHubFailure("500")
         failure.response = mock.Mock(status_code=500)
@@ -404,7 +496,7 @@ class ProvisionInboundTests(unittest.TestCase):
 
 class InboundCollectionDefaultTests(unittest.TestCase):
     def test_single_collection_fills_inbound_collection(self):
-        agent = {"agentTag": "api-agent-shadow"}
+        agent = {"agentTag": "courier-agent"}
         apply_inbound_defaults(agent, ["shop"])
         self.assertEqual(agent["customHostCredentials"], {"inboundCollection": "shop"})
 
@@ -422,7 +514,7 @@ class ProvisionCourierAgentDispatchTests(unittest.TestCase):
     inbound provisioning and a TARGET to the outbound one."""
 
     def test_source_goes_to_inbound(self):
-        agent = {"agentId": AGENT, "agentTag": "api-agent-shadow", "agentType": "SOURCE",
+        agent = {"agentId": AGENT, "agentTag": "courier-agent", "agentType": "SOURCE",
                  "customHostCredentials": {}, "courier": inbound_config()}
         with mock.patch.object(courier_inbound_support, "provision_inbound", return_value=["shop"]) as inbound, \
                 mock.patch.object(courier_inbound_support, "provision_courier") as outbound:
@@ -433,7 +525,7 @@ class ProvisionCourierAgentDispatchTests(unittest.TestCase):
         self.assertEqual(result, {"inboundCollection": "shop"})
 
     def test_target_goes_to_outbound(self):
-        agent = {"agentId": "t", "agentTag": "api-agent-shadow", "agentType": "TARGET",
+        agent = {"agentId": "t", "agentTag": "courier-agent", "agentType": "TARGET",
                  "customHostCredentials": {}, "courier": {"collections": []}}
         with mock.patch.object(courier_inbound_support, "provision_inbound") as inbound, \
                 mock.patch.object(courier_inbound_support, "provision_courier", return_value=["demo-api"]) as outbound:
@@ -444,12 +536,12 @@ class ProvisionCourierAgentDispatchTests(unittest.TestCase):
 
     def test_other_agents_and_missing_block_need_nothing(self):
         self.assertIsNone(provision_courier_agent("jwt", PIPELINE, {"agentTag": "kafka", "agentType": "SOURCE"}))
-        agent = {"agentId": AGENT, "agentTag": "api-agent-shadow", "agentType": "SOURCE", "courier": None}
+        agent = {"agentId": AGENT, "agentTag": "courier-agent", "agentType": "SOURCE", "courier": None}
         self.assertIsNone(provision_courier_agent("jwt", PIPELINE, agent))
 
     def test_invalid_block_raises_before_any_write(self):
         hub = FakeCoreHub()
-        agent = {"agentId": AGENT, "agentTag": "api-agent-shadow", "agentType": "SOURCE",
+        agent = {"agentId": AGENT, "agentTag": "courier-agent", "agentType": "SOURCE",
                  "customHostCredentials": {}, "courier": {"collections": []}}
         with self.assertRaises(CourierConfigError):
             provision_courier_agent("jwt", PIPELINE, agent, fetch=hub)
