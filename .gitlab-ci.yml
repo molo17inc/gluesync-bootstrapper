@@ -26,7 +26,7 @@
 #   build        automator builds, signing, Windows images, Windows smoke
 #   image-smoke  Windows image smoke tests
 #   build-sonar  SonarQube
-#   deploy       publish / image push / Lambda / Budibase
+#   deploy       publish / image push / Lambda / catalog version (Courier)
 # Linux jobs run on the HQ docker runners (default tag), Windows jobs on the HQ Windows shell runners. Images come from
 # the Nexus pull-through (docker-group) or from molo17-local, packages from the Nexus PyPI proxy (PIP_INDEX_URL), and the
 # pip / Python downloads are cached in the Nexus raw repository ui-build-cache (scripts/ci/nexus-cache.sh,
@@ -1130,25 +1130,21 @@ update_budibase_version:
           ;;
       esac
 
-      echo "[INFO] Updating Budibase version: BUILD_TAG=$BUILD_TAG, MODULE_VERSION=$MODULE_VERSION"
+      echo "[INFO] Updating catalog version: BUILD_TAG=$BUILD_TAG, MODULE_VERSION=$MODULE_VERSION"
 
-      SEARCH_PAYLOAD="{
-        \"query\": {
-          \"equal\": {
-            \"internalName\": \"$BUILD_TAG\"
-          }
-        },
-        \"paginate\": false,
-        \"limit\": 1000
-      }"
+      # The AvailableAgents catalog is updated through the Gluesync Courier inbound REST API (HQ network only)
+      COURIER_BACKOFFICE_URL="${COURIER_BACKOFFICE_URL:-https://gluesync.hq.molo17.com/api-inbound/backoffice}"
+      if [ -z "${COURIER_BACKOFFICE_TOKEN:-}" ]; then
+        echo "[ERROR] COURIER_BACKOFFICE_TOKEN is not set"
+        exit 1
+      fi
 
-      SEARCH_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
-        -H "x-budibase-app-id: $BUDIBASE_APP_ID" \
-        -H "Content-Type: application/json" \
+      SEARCH_RESPONSE=$(curl -sS -w "\n%{http_code}" -G \
+        -H "Authorization: Bearer $COURIER_BACKOFFICE_TOKEN" \
         -H "Accept: application/json" \
-        -H "x-budibase-api-key: $BUDIBASE_API_KEY" \
-        -d "$SEARCH_PAYLOAD" \
-        "$BUDIBASE_BASE_URL/tables/datasource_plus_3dbc0976d090472f82658f287ec8ad6d__AvailableAgents/rows/search")
+        --data-urlencode "internalName=$BUILD_TAG" \
+        --data-urlencode "_limit=100" \
+        "$COURIER_BACKOFFICE_URL/available-agents")
 
       SEARCH_BODY=$(printf "%s" "$SEARCH_RESPONSE" | sed -e '$d')
       SEARCH_STATUS=$(printf "%s" "$SEARCH_RESPONSE" | tail -n 1)
@@ -1156,11 +1152,11 @@ update_budibase_version:
       if [ "$SEARCH_STATUS" -ne 200 ]; then
         echo "Failed to search for row. HTTP Status: $SEARCH_STATUS"
         echo "Response: $SEARCH_BODY"
-        echo "Search Payload: $SEARCH_PAYLOAD"
         exit 1
       fi
 
-      ROW_ID=$(echo "$SEARCH_BODY" | jq -r '.data[0]._id // empty')
+      # several rows may share an internalName: take the first one that is not soft-deleted
+      ROW_ID=$(echo "$SEARCH_BODY" | jq -r '[(.rows // [])[] | select(.deleted != "true")][0].id // empty')
 
       if [ -z "$ROW_ID" ]; then
         echo "No matching row found for internalName: $BUILD_TAG"
@@ -1182,24 +1178,24 @@ update_budibase_version:
         UPDATE_PAYLOAD="{\"latestVersionGA\": \"$MODULE_VERSION\"}"
       fi
 
-      UPDATE_RESPONSE=$(curl -s -w "\n%{http_code}" -X PUT \
-        -H "x-budibase-app-id: $BUDIBASE_APP_ID" \
+      UPDATE_RESPONSE=$(curl -sS -w "\n%{http_code}" -X PATCH \
+        -H "Authorization: Bearer $COURIER_BACKOFFICE_TOKEN" \
         -H "Content-Type: application/json" \
         -H "Accept: application/json" \
-        -H "x-budibase-api-key: $BUDIBASE_API_KEY" \
         -d "$UPDATE_PAYLOAD" \
-        "$BUDIBASE_BASE_URL/tables/datasource_plus_3dbc0976d090472f82658f287ec8ad6d__AvailableAgents/rows/$ROW_ID")
+        "$COURIER_BACKOFFICE_URL/available-agents/$ROW_ID")
 
       UPDATE_BODY=$(printf "%s" "$UPDATE_RESPONSE" | sed -e '$d')
       UPDATE_STATUS=$(printf "%s" "$UPDATE_RESPONSE" | tail -n 1)
+      AFFECTED_ROWS=$(echo "$UPDATE_BODY" | jq -r '.affectedRows // empty' 2>/dev/null || true)
 
-      echo "Budibase API update response code: $UPDATE_STATUS"
-      echo "Budibase API update response: $UPDATE_BODY"
+      echo "Courier update response code: $UPDATE_STATUS"
+      echo "Courier update response: $UPDATE_BODY"
 
-      if [ "$UPDATE_STATUS" -ge 200 ] && [ "$UPDATE_STATUS" -lt 300 ]; then
-          echo "Successfully updated version on budibase"
+      if [ "$UPDATE_STATUS" -eq 200 ] && [ "$AFFECTED_ROWS" = "1" ]; then
+          echo "Successfully updated version of row $ROW_ID in the catalog"
       else
-          echo "Failed to update version on budibase. HTTP Status: $UPDATE_STATUS"
+          echo "Failed to update version in the catalog. HTTP Status: $UPDATE_STATUS, affectedRows: ${AFFECTED_ROWS:-none}"
           exit 1
       fi
   rules:
