@@ -1647,6 +1647,32 @@ def _custom_entry_matches(key: str, cfg: Dict[str, Any], table_name: str, ename:
     return False
 
 
+def _custom_entry_by_entity_name(
+    schemas: Dict[str, Dict[str, Any]], ename: str
+) -> Optional[Dict[str, Any]]:
+    """The exported table entry whose ``entityName`` is ``ename``, in whatever schema it lives.
+
+    The entity name is free text: it need not be ``SCHEMA.TABLE`` nor name the source table, so the entry
+    recorded for the entity is the reliable link. Exact match first, then case-insensitive; ``None`` when
+    no entry or more than one carries the name.
+    """
+    if not ename:
+        return None
+    entries = [
+        cfg
+        for schema_cfg in schemas.values()
+        for cfg in ((schema_cfg.get("tables") or {}).get("custom") or {}).values()
+        if isinstance(cfg, dict) and cfg.get("entityName") is not None
+    ]
+    for same in (lambda n: n == ename, lambda n: n.casefold() == ename.casefold()):
+        found = [cfg for cfg in entries if same(str(cfg["entityName"]))]
+        if len(found) == 1:
+            return found[0]
+        if found:
+            return None
+    return None
+
+
 def _find_custom_entry(
     custom_tables: Dict[str, Any], table_name: str, ename: str
 ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
@@ -1691,7 +1717,6 @@ def _attach_entity_job_schedules(
     sched: Dict[str, Any],
     entities_by_id: Dict[str, Dict[str, Any]],
     schemas: Dict[str, Dict[str, Any]],
-    primary_schema: str,
 ) -> None:
     entity_ids = job.get("entity_ids") or []
     if not isinstance(entity_ids, list):
@@ -1704,11 +1729,21 @@ def _attach_entity_job_schedules(
             continue
 
         ename = ent.get("entityName", "") or ""
+        table_cfg = _custom_entry_by_entity_name(schemas, ename)
+        if table_cfg is not None:
+            table_cfg.setdefault("schedules", []).append(sched.copy())
+            continue
+
         parts = ename.split(".", 1)
-        if len(parts) >= 2:
-            schema_name, table_name = parts[0], parts[-1]
-        else:
-            schema_name, table_name = primary_schema, (ename or "unknown")
+        if len(parts) < 2:
+            # The name does not say the schema (e.g. an entity named after a DBMoto replication):
+            # never guess it, a guessed schema/table becomes an entity with no columns on import.
+            logger.warning(
+                f"Schedule job {job.get('id')}: entity {ename!r} is not in the exported tables "
+                f"and its name has no schema. Skipping schedule."
+            )
+            continue
+        schema_name, table_name = parts[0], parts[-1]
 
         _, schema_cfg = _schema_cfg_of(schemas, schema_name)
         if not schema_cfg:
@@ -1754,12 +1789,12 @@ def _group_job_schedule(
 
 
 def _dispatch_schedule_job(
-    job, sched, entities_by_id, schemas, primary_schema,
+    job, sched, entities_by_id, schemas,
     group_id_to_name, pipeline_schedules, group_schedules,
 ):
     task_type = sched.get("task_type") or ""
     if task_type.startswith("entity_"):
-        _attach_entity_job_schedules(job, sched, entities_by_id, schemas, primary_schema)
+        _attach_entity_job_schedules(job, sched, entities_by_id, schemas)
         return
     if task_type.startswith("group_"):
         sched_entry = _group_job_schedule(job, sched, group_id_to_name)
@@ -1788,15 +1823,12 @@ def attach_schedules_from_jobs(
     if not jobs or not schemas:
         return pipeline_schedules, group_schedules
 
-    # Fallback schema name when an entityName has no dotted schema part.
-    primary_schema = min(schemas.keys())
-
     for job in jobs:
         if not isinstance(job, dict) or not job.get("task_type"):
             continue
         _dispatch_schedule_job(
             job, _base_schedule_of_job(job, job["task_type"]), entities_by_id, schemas,
-            primary_schema, group_id_to_name, pipeline_schedules, group_schedules,
+            group_id_to_name, pipeline_schedules, group_schedules,
         )
 
     return pipeline_schedules, group_schedules

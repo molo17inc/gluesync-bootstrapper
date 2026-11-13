@@ -126,6 +126,57 @@ class G2G3EntityScheduleAttach(unittest.TestCase):
         self.assertTrue(schemas["HR"]["tables"]["custom"]["ORDERS"].get("schedules"))
 
 
+class EntityScheduleWithoutSchemaInName(unittest.TestCase):
+    """Entity names that are not SCHEMA.TABLE (e.g. an entity named after a DBMoto replication)."""
+
+    @staticmethod
+    def _schemas():
+        # Two source schemas: min() is "APP", the entity's table lives in "APP_DAT".
+        return {
+            "APP": {
+                "tables": {
+                    "custom": {"CUSTOMERS": {"name": "DBM_CUSTOMERS", "entityName": "REPL_CUSTOMERS"}},
+                    "whitelist": set(["CUSTOMERS"]),
+                }
+            },
+            "APP_DAT": {
+                "tables": {
+                    "custom": {"ORDERS": {"name": "Company$ORDERS", "entityName": "REPL_ORDERS"}},
+                    "whitelist": set(["ORDERS"]),
+                }
+            },
+        }
+
+    @staticmethod
+    def _jobs(entity_id):
+        return [{
+            "id": "j5",
+            "task_type": "entity_snapshot",
+            "name": "refresh 07:30",
+            "entity_ids": [entity_id],
+            "cron_expression": "30 7 * * *",
+        }]
+
+    def test_schedule_lands_on_the_entity_entry_of_its_real_schema(self):
+        schemas = self._schemas()
+        entities = {"e1": {"entityName": "REPL_ORDERS", "entityId": "e1"}}
+        exp.attach_schedules_from_jobs(self._jobs("e1"), entities, schemas, {})
+        self.assertTrue(schemas["APP_DAT"]["tables"]["custom"]["ORDERS"].get("schedules"))
+        # No phantom table named after the entity on the alphabetically-first schema
+        self.assertNotIn("REPL_ORDERS", schemas["APP"]["tables"]["custom"])
+        self.assertNotIn("REPL_ORDERS", schemas["APP"]["tables"]["whitelist"])
+
+    def test_unknown_undotted_entity_is_skipped_not_invented(self):
+        schemas = self._schemas()
+        entities = {"x1": {"entityName": "NOT_EXPORTED", "entityId": "x1"}}
+        with mock.patch.object(exp.logger, "warning") as warning:
+            exp.attach_schedules_from_jobs(self._jobs("x1"), entities, schemas, {})
+        self.assertIn("NOT_EXPORTED", warning.call_args.args[0])
+        for cfg in schemas.values():
+            self.assertNotIn("NOT_EXPORTED", cfg["tables"]["custom"])
+            self.assertNotIn("NOT_EXPORTED", cfg["tables"]["whitelist"])
+
+
 class G4InvertFilter(unittest.TestCase):
     def test_invert_filter_preserves_datatype(self):
         filter_obj = {
