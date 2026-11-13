@@ -1647,6 +1647,37 @@ def _custom_entry_matches(key: str, cfg: Dict[str, Any], table_name: str, ename:
     return False
 
 
+def _custom_entry_by_entity_name(
+    schemas: Dict[str, Dict[str, Any]], ename: str
+) -> Tuple[Optional[Dict[str, Any]], bool]:
+    """``(entry, ambiguous)``: the exported table entry whose ``entityName`` is ``ename``, in whatever schema.
+
+    The entity name is free text: it need not be ``SCHEMA.TABLE`` nor name the source table, so the entry
+    recorded for the entity is the reliable link. Exact match first, then case-insensitive. The tables of one
+    MultiTable chain all carry the entity name: the chain's first table is the entry (import resolves the
+    entity by its first source table). ``(None, True)`` when unrelated entries share the name, ``(None,
+    False)`` when none carries it.
+    """
+    if not ename:
+        return None, False
+    entries = [
+        cfg
+        for schema_cfg in schemas.values()
+        for cfg in ((schema_cfg.get("tables") or {}).get("custom") or {}).values()
+        if isinstance(cfg, dict) and cfg.get("entityName") is not None
+    ]
+    for same in (lambda n: n == ename, lambda n: n.casefold() == ename.casefold()):
+        found = [cfg for cfg in entries if same(str(cfg["entityName"]))]
+        if len(found) == 1:
+            return found[0], False
+        if found:
+            chains = {cfg.get("chainId") for cfg in found}
+            if len(chains) == 1 and None not in chains:
+                return found[0], False
+            return None, True
+    return None, False
+
+
 def _find_custom_entry(
     custom_tables: Dict[str, Any], table_name: str, ename: str
 ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
@@ -1686,12 +1717,54 @@ def _base_schedule_of_job(job: Dict[str, Any], task_type: str) -> Dict[str, Any]
     return sched
 
 
+def _entity_schedule_entry(
+    job_id: Any, ename: str, schemas: Dict[str, Dict[str, Any]]
+) -> Optional[Dict[str, Any]]:
+    """The exported table entry an entity-level schedule goes on, or ``None`` (with a warning) to skip it."""
+    table_cfg, ambiguous = _custom_entry_by_entity_name(schemas, ename)
+    if table_cfg is not None:
+        return table_cfg
+    if ambiguous:
+        logger.warning(
+            f"Schedule job {job_id}: entity {ename!r} names more than one exported table "
+            f"outside a single MultiTable chain. Skipping schedule."
+        )
+        return None
+
+    parts = ename.split(".", 1)
+    if len(parts) < 2:
+        # The name does not say the schema (e.g. an entity named after a DBMoto replication):
+        # never guess it, a guessed schema/table becomes an entity with no columns on import.
+        logger.warning(
+            f"Schedule job {job_id}: entity {ename!r} is not in the exported tables "
+            f"and its name has no schema. Skipping schedule."
+        )
+        return None
+    schema_name, table_name = parts[0], parts[-1]
+
+    _, schema_cfg = _schema_cfg_of(schemas, schema_name)
+    if not schema_cfg:
+        logger.warning(
+            f"Entity {ename} schema {schema_name} not present in schemas map. Skipping schedule."
+        )
+        return None
+
+    custom_tables: Dict[str, Any] = schema_cfg["tables"]["custom"]
+    _, table_cfg = _find_custom_entry(custom_tables, table_name, ename)
+    if table_cfg is None:
+        # Not exported: an entry made up here has no columns and fails on import.
+        logger.warning(
+            f"Schedule job {job_id}: entity {ename!r} is not in the exported tables. "
+            f"Skipping schedule."
+        )
+    return table_cfg
+
+
 def _attach_entity_job_schedules(
     job: Dict[str, Any],
     sched: Dict[str, Any],
     entities_by_id: Dict[str, Dict[str, Any]],
     schemas: Dict[str, Dict[str, Any]],
-    primary_schema: str,
 ) -> None:
     entity_ids = job.get("entity_ids") or []
     if not isinstance(entity_ids, list):
@@ -1702,31 +1775,9 @@ def _attach_entity_job_schedules(
         if not ent:
             logger.warning(f"Schedule job {job.get('id')} references unknown entity ID {eid}")
             continue
-
-        ename = ent.get("entityName", "") or ""
-        parts = ename.split(".", 1)
-        if len(parts) >= 2:
-            schema_name, table_name = parts[0], parts[-1]
-        else:
-            schema_name, table_name = primary_schema, (ename or "unknown")
-
-        _, schema_cfg = _schema_cfg_of(schemas, schema_name)
-        if not schema_cfg:
-            logger.warning(
-                f"Entity {ename} schema {schema_name} not present in schemas map. Skipping schedule."
-            )
-            continue
-
-        custom_tables: Dict[str, Any] = schema_cfg["tables"]["custom"]
-        _, table_cfg = _find_custom_entry(custom_tables, table_name, ename)
-        if table_cfg is None:
-            # Truly missing: create under the entityName table suffix, do not invent whitelist noise
-            # from a rename when an @@ sibling already exists under another key.
-            table_cfg = {"name": table_name}
-            custom_tables[table_name] = table_cfg
-            schema_cfg["tables"]["whitelist"].add(table_name)
-        table_schedules = table_cfg.setdefault("schedules", [])
-        table_schedules.append(sched.copy())
+        table_cfg = _entity_schedule_entry(job.get("id"), ent.get("entityName", "") or "", schemas)
+        if table_cfg is not None:
+            table_cfg.setdefault("schedules", []).append(sched.copy())
 
 
 def _group_job_schedule(
@@ -1754,12 +1805,12 @@ def _group_job_schedule(
 
 
 def _dispatch_schedule_job(
-    job, sched, entities_by_id, schemas, primary_schema,
+    job, sched, entities_by_id, schemas,
     group_id_to_name, pipeline_schedules, group_schedules,
 ):
     task_type = sched.get("task_type") or ""
     if task_type.startswith("entity_"):
-        _attach_entity_job_schedules(job, sched, entities_by_id, schemas, primary_schema)
+        _attach_entity_job_schedules(job, sched, entities_by_id, schemas)
         return
     if task_type.startswith("group_"):
         sched_entry = _group_job_schedule(job, sched, group_id_to_name)
@@ -1788,15 +1839,12 @@ def attach_schedules_from_jobs(
     if not jobs or not schemas:
         return pipeline_schedules, group_schedules
 
-    # Fallback schema name when an entityName has no dotted schema part.
-    primary_schema = min(schemas.keys())
-
     for job in jobs:
         if not isinstance(job, dict) or not job.get("task_type"):
             continue
         _dispatch_schedule_job(
             job, _base_schedule_of_job(job, job["task_type"]), entities_by_id, schemas,
-            primary_schema, group_id_to_name, pipeline_schedules, group_schedules,
+            group_id_to_name, pipeline_schedules, group_schedules,
         )
 
     return pipeline_schedules, group_schedules
