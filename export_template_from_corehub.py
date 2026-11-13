@@ -1717,6 +1717,49 @@ def _base_schedule_of_job(job: Dict[str, Any], task_type: str) -> Dict[str, Any]
     return sched
 
 
+def _entity_schedule_entry(
+    job_id: Any, ename: str, schemas: Dict[str, Dict[str, Any]]
+) -> Optional[Dict[str, Any]]:
+    """The exported table entry an entity-level schedule goes on, or ``None`` (with a warning) to skip it."""
+    table_cfg, ambiguous = _custom_entry_by_entity_name(schemas, ename)
+    if table_cfg is not None:
+        return table_cfg
+    if ambiguous:
+        logger.warning(
+            f"Schedule job {job_id}: entity {ename!r} names more than one exported table "
+            f"outside a single MultiTable chain. Skipping schedule."
+        )
+        return None
+
+    parts = ename.split(".", 1)
+    if len(parts) < 2:
+        # The name does not say the schema (e.g. an entity named after a DBMoto replication):
+        # never guess it, a guessed schema/table becomes an entity with no columns on import.
+        logger.warning(
+            f"Schedule job {job_id}: entity {ename!r} is not in the exported tables "
+            f"and its name has no schema. Skipping schedule."
+        )
+        return None
+    schema_name, table_name = parts[0], parts[-1]
+
+    _, schema_cfg = _schema_cfg_of(schemas, schema_name)
+    if not schema_cfg:
+        logger.warning(
+            f"Entity {ename} schema {schema_name} not present in schemas map. Skipping schedule."
+        )
+        return None
+
+    custom_tables: Dict[str, Any] = schema_cfg["tables"]["custom"]
+    _, table_cfg = _find_custom_entry(custom_tables, table_name, ename)
+    if table_cfg is None:
+        # Not exported: an entry made up here has no columns and fails on import.
+        logger.warning(
+            f"Schedule job {job_id}: entity {ename!r} is not in the exported tables. "
+            f"Skipping schedule."
+        )
+    return table_cfg
+
+
 def _attach_entity_job_schedules(
     job: Dict[str, Any],
     sched: Dict[str, Any],
@@ -1732,48 +1775,9 @@ def _attach_entity_job_schedules(
         if not ent:
             logger.warning(f"Schedule job {job.get('id')} references unknown entity ID {eid}")
             continue
-
-        ename = ent.get("entityName", "") or ""
-        table_cfg, ambiguous = _custom_entry_by_entity_name(schemas, ename)
+        table_cfg = _entity_schedule_entry(job.get("id"), ent.get("entityName", "") or "", schemas)
         if table_cfg is not None:
             table_cfg.setdefault("schedules", []).append(sched.copy())
-            continue
-        if ambiguous:
-            logger.warning(
-                f"Schedule job {job.get('id')}: entity {ename!r} names more than one exported table "
-                f"outside a single MultiTable chain. Skipping schedule."
-            )
-            continue
-
-        parts = ename.split(".", 1)
-        if len(parts) < 2:
-            # The name does not say the schema (e.g. an entity named after a DBMoto replication):
-            # never guess it, a guessed schema/table becomes an entity with no columns on import.
-            logger.warning(
-                f"Schedule job {job.get('id')}: entity {ename!r} is not in the exported tables "
-                f"and its name has no schema. Skipping schedule."
-            )
-            continue
-        schema_name, table_name = parts[0], parts[-1]
-
-        _, schema_cfg = _schema_cfg_of(schemas, schema_name)
-        if not schema_cfg:
-            logger.warning(
-                f"Entity {ename} schema {schema_name} not present in schemas map. Skipping schedule."
-            )
-            continue
-
-        custom_tables: Dict[str, Any] = schema_cfg["tables"]["custom"]
-        _, table_cfg = _find_custom_entry(custom_tables, table_name, ename)
-        if table_cfg is None:
-            # Not exported: an entry made up here has no columns and fails on import.
-            logger.warning(
-                f"Schedule job {job.get('id')}: entity {ename!r} is not in the exported tables. "
-                f"Skipping schedule."
-            )
-            continue
-        table_schedules = table_cfg.setdefault("schedules", [])
-        table_schedules.append(sched.copy())
 
 
 def _group_job_schedule(
