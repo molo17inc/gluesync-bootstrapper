@@ -26,7 +26,7 @@
 #   build        automator builds, signing, Windows images, Windows smoke
 #   image-smoke  Windows image smoke tests
 #   build-sonar  SonarQube
-#   deploy       publish / image push / Lambda / catalog version (Courier)
+#   deploy       publish / image push / Lambda + Azure mirror (deploy:azure) / catalog version (Courier)
 # Linux jobs run on the HQ docker runners (default tag), Windows jobs on the HQ Windows shell runners. Images come from
 # the Nexus pull-through (docker-group) or from molo17-local, packages from the Nexus PyPI proxy (PIP_INDEX_URL), and the
 # pip / Python downloads are cached in the Nexus raw repository ui-build-cache (scripts/ci/nexus-cache.sh,
@@ -1075,6 +1075,77 @@ deploy_lambda:
   environment:
     name: production
     url: $API_ENDPOINT
+
+# Azure mirror of the converter (dbmoto-converter/azure/README.md). Runs on the same dbmoto-* tags as deploy_lambda but
+# does not depend on it, so a release still reaches Azure when the AWS deploy cannot run (and the reverse).
+# Image-only rollout: app configuration and secrets stay as set on the Container Apps.
+deploy:azure:
+  stage: deploy
+  image: mcr.microsoft.com/azure-cli:2.67.0
+  needs:
+    - job: dbmoto_converter_tests
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^dbmoto-/
+      when: always
+  variables:
+    AZ_RG: rg-molo17-dr-weu
+    AZ_ACR: molo17dracr
+    AZ_IMAGE: dbmoto-xml-converter
+    AZ_API_APP: dbmoto-xml-converter-api
+    AZ_WORKER_APP: dbmoto-xml-converter-worker
+  script:
+    - |
+      set -euo pipefail
+      for v in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID AZURE_CLIENT_SECRET; do
+        if [ -z "${!v:-}" ]; then echo "❌ $v is not set (protected variable: tag must be protected)"; exit 1; fi
+      done
+      az login --service-principal -u "$AZURE_CLIENT_ID" -p "$AZURE_CLIENT_SECRET" --tenant "$AZURE_TENANT_ID" -o none
+      az account set -s "$AZURE_SUBSCRIPTION_ID"
+      az extension add --name containerapp --upgrade --only-show-errors -o none
+    - |
+      set -euo pipefail
+      IMAGE="$AZ_ACR.azurecr.io/$AZ_IMAGE:$CI_COMMIT_SHORT_SHA"
+      echo "📦 Building $IMAGE"
+      az acr build -r "$AZ_ACR" -t "$AZ_IMAGE:$CI_COMMIT_SHORT_SHA" --platform linux/amd64 \
+        -f dbmoto-converter/azure/Dockerfile dbmoto-converter -o none
+      for app in "$AZ_API_APP" "$AZ_WORKER_APP"; do
+        echo "🚀 Rolling $app to $IMAGE"
+        az containerapp update -g "$AZ_RG" -n "$app" --image "$IMAGE" -o none --only-show-errors
+      done
+      for app in "$AZ_API_APP" "$AZ_WORKER_APP"; do
+        for i in $(seq 1 60); do
+          read -r latest ready <<<"$(az containerapp show -g "$AZ_RG" -n "$app" --query "[properties.latestRevisionName, properties.latestReadyRevisionName]" -o tsv | tr '\n' ' ')"
+          if [ "$latest" = "$ready" ]; then echo "✅ $app revision $ready is ready"; break; fi
+          if [ "$i" = 60 ]; then echo "❌ $app revision $latest not ready after 10 minutes"; exit 1; fi
+          sleep 10
+        done
+      done
+    - |
+      set -euo pipefail
+      FQDN=$(az containerapp show -g "$AZ_RG" -n "$AZ_API_APP" --query properties.configuration.ingress.fqdn -o tsv)
+      API="https://$FQDN/convert"
+      echo "🧪 Smoke test on $API"
+      code=$(curl -s -o /dev/null -w '%{http_code}' "https://$FQDN/__runner/health")
+      [ "$code" = 200 ] || { echo "❌ health returned $code"; exit 1; }
+      code=$(curl -s -o /dev/null -w '%{http_code}' "https://$FQDN/not-a-route")
+      [ "$code" = 403 ] || { echo "❌ unknown route returned $code (expected 403 like API Gateway)"; exit 1; }
+      # A real conversion of the test fixture through the queue and the worker.
+      job=$(curl -sf -F "xml_file=@dbmoto-converter/tests/data/rrtest.xml" "$API" | jq -r '.job_id')
+      [ -n "$job" ] && [ "$job" != null ] || { echo "❌ submit did not return a job_id"; exit 1; }
+      for i in $(seq 1 36); do
+        status=$(curl -sf "$API?job_id=$job" | jq -r '.job_status')
+        case "$status" in
+          COMPLETED) break ;;
+          FAILED) curl -s "$API?job_id=$job"; echo; echo "❌ conversion job $job failed"; exit 1 ;;
+        esac
+        [ "$i" = 36 ] && { echo "❌ job $job still $status after 3 minutes"; exit 1; }
+        sleep 5
+      done
+      url=$(curl -sf "$API?job_id=$job" | jq -r '.download_url')
+      echo "✅ job $job completed: $url"
+  environment:
+    name: production-azure
+    url: https://dbmoto-xml-converter-api.delightfulmushroom-76d2e0ca.northeurope.azurecontainerapps.io
 
 # Manual cleanup job
 cleanup_lambda:
