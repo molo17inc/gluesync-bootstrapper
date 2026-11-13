@@ -8,7 +8,7 @@ This repository releases three products, each from its own tag on `main`:
 |---|---|---|
 | Bootstrapper | `tag-vX.Y.Z` (annotated, `beta-*` for a beta) | Linux and Windows images, `deploy`, sets `latestVersionGA` in the portal agent catalog |
 | Automator | `automator-X.Y.Z` | builds, signs and publishes `gluesync-automator-linux` and `gluesync-automator-windows.exe` |
-| Syniti Replicate (DBMoto) metadata converter (`dbmoto-converter/`) | `dbmoto-vX.Y.Z` | deploys the converter API |
+| Syniti Replicate (DBMoto) metadata converter (`dbmoto-converter/`) | `dbmoto-vX.Y.Z` | deploys the converter API to AWS Lambda (`deploy_lambda`) and to the Azure mirror |
 
 ## Every release gets release notes in the Gluesync docs
 
