@@ -1649,15 +1649,17 @@ def _custom_entry_matches(key: str, cfg: Dict[str, Any], table_name: str, ename:
 
 def _custom_entry_by_entity_name(
     schemas: Dict[str, Dict[str, Any]], ename: str
-) -> Optional[Dict[str, Any]]:
-    """The exported table entry whose ``entityName`` is ``ename``, in whatever schema it lives.
+) -> Tuple[Optional[Dict[str, Any]], bool]:
+    """``(entry, ambiguous)``: the exported table entry whose ``entityName`` is ``ename``, in whatever schema.
 
     The entity name is free text: it need not be ``SCHEMA.TABLE`` nor name the source table, so the entry
-    recorded for the entity is the reliable link. Exact match first, then case-insensitive; ``None`` when
-    no entry or more than one carries the name.
+    recorded for the entity is the reliable link. Exact match first, then case-insensitive. The tables of one
+    MultiTable chain all carry the entity name: the chain's first table is the entry (import resolves the
+    entity by its first source table). ``(None, True)`` when unrelated entries share the name, ``(None,
+    False)`` when none carries it.
     """
     if not ename:
-        return None
+        return None, False
     entries = [
         cfg
         for schema_cfg in schemas.values()
@@ -1667,10 +1669,13 @@ def _custom_entry_by_entity_name(
     for same in (lambda n: n == ename, lambda n: n.casefold() == ename.casefold()):
         found = [cfg for cfg in entries if same(str(cfg["entityName"]))]
         if len(found) == 1:
-            return found[0]
+            return found[0], False
         if found:
-            return None
-    return None
+            chains = {cfg.get("chainId") for cfg in found}
+            if len(chains) == 1 and None not in chains:
+                return found[0], False
+            return None, True
+    return None, False
 
 
 def _find_custom_entry(
@@ -1729,9 +1734,15 @@ def _attach_entity_job_schedules(
             continue
 
         ename = ent.get("entityName", "") or ""
-        table_cfg = _custom_entry_by_entity_name(schemas, ename)
+        table_cfg, ambiguous = _custom_entry_by_entity_name(schemas, ename)
         if table_cfg is not None:
             table_cfg.setdefault("schedules", []).append(sched.copy())
+            continue
+        if ambiguous:
+            logger.warning(
+                f"Schedule job {job.get('id')}: entity {ename!r} names more than one exported table "
+                f"outside a single MultiTable chain. Skipping schedule."
+            )
             continue
 
         parts = ename.split(".", 1)
@@ -1755,11 +1766,12 @@ def _attach_entity_job_schedules(
         custom_tables: Dict[str, Any] = schema_cfg["tables"]["custom"]
         _, table_cfg = _find_custom_entry(custom_tables, table_name, ename)
         if table_cfg is None:
-            # Truly missing: create under the entityName table suffix, do not invent whitelist noise
-            # from a rename when an @@ sibling already exists under another key.
-            table_cfg = {"name": table_name}
-            custom_tables[table_name] = table_cfg
-            schema_cfg["tables"]["whitelist"].add(table_name)
+            # Not exported: an entry made up here has no columns and fails on import.
+            logger.warning(
+                f"Schedule job {job.get('id')}: entity {ename!r} is not in the exported tables. "
+                f"Skipping schedule."
+            )
+            continue
         table_schedules = table_cfg.setdefault("schedules", [])
         table_schedules.append(sched.copy())
 
