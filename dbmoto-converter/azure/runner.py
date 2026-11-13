@@ -65,6 +65,8 @@ class HttpHandler(BaseHTTPRequestHandler):
     handler = None
 
     def log_message(self, *a):
+        # Silenced on purpose: the runner logs one JSON line per request itself (BaseHTTPRequestHandler would
+        # otherwise print an unstructured access line to stderr).
         pass
 
     def _send(self, status, body=b'', headers=None):
@@ -146,7 +148,8 @@ def run_http():
     HttpHandler.handler = staticmethod(load_handler())
     port = int(os.environ.get('PORT', '8080'))
     log(msg=f'runner http on :{port}', function=FUNCTION_NAME, routes=sorted(f'{m} {p}' for m, p in ROUTES))
-    ThreadingHTTPServer(('0.0.0.0', port), HttpHandler).serve_forever()
+    # Plain HTTP inside the container: Azure Container Apps ingress terminates TLS in front of it.
+    ThreadingHTTPServer(('0.0.0.0', port), HttpHandler).serve_forever()  # NOSONAR python:S5332 TLS ends at the ingress
 
 
 # ── SQS mode ──────────────────────────────────────────────────────────────
