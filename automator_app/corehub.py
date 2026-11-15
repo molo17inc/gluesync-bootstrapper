@@ -99,6 +99,8 @@ _UDF_ENTITIES_FETCH_FAILED_LOG = "Failed to fetch entities for UDF export in pip
 
 # Files of the full CoreHub backup ZIP, one per configuration domain.
 _GLOBAL_CONFIGS_BACKUP_FILE = "global-configs.yaml"
+# Global config sections removed from Core Hub; old backups may still contain them.
+_REMOVED_GLOBAL_CONFIG_KEYS = frozenset({"telemetry"})
 _SMTP_BACKUP_FILE = "smtp.yaml"
 _WEBHOOKS_BACKUP_FILE = "webhooks.yaml"
 _THRESHOLDS_BACKUP_FILE = "thresholds.yaml"
@@ -2573,7 +2575,6 @@ def export_global_configs(
         "grafana": "/global-config/grafana",
         "logging": "/global-config/logging",
         "logging_level": "/global-config/logging/level",
-        "telemetry": "/global-config/logging/telemetry",
         "release_channel": "/global-config/release-channel",
         "license": "/global-config/license",
         "session": "/global-config/session",
@@ -3021,11 +3022,16 @@ def import_global_configs(
         "grafana": "/global-config/grafana",
         "logging": "/global-config/logging",
         "logging_level": "/global-config/logging/level",
-        "telemetry": "/global-config/logging/telemetry",
         "release_channel": "/global-config/release-channel",
         "license": "/global-config/license",
         "session": "/global-config/session",
     }
+
+    # Backups taken before Core Hub dropped telemetry log shipping still carry
+    # these keys: ignore them instead of reporting an unknown section.
+    ignored = sorted(key for key in _REMOVED_GLOBAL_CONFIG_KEYS if key in configs)
+    if ignored:
+        logger.info("Ignoring removed global config section(s) in backup: %s", ", ".join(ignored))
 
     results: Dict[str, Any] = {}
     for key, path in endpoints.items():
