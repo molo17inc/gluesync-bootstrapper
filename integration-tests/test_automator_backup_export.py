@@ -559,7 +559,6 @@ class ExportGlobalConfigsTests(unittest.TestCase):
                 "/global-config/grafana": {"enabled": True, "url": "http://graf"},
                 "/global-config/logging": {"level": "INFO"},
                 "/global-config/logging/level": "INFO",
-                "/global-config/logging/telemetry": {"enabled": False},
                 "/global-config/release-channel": {"channel": "stable"},
                 "/global-config/license": {"key": "ABC-123"},
                 "/global-config/session": {"timeout": 3600},
@@ -574,7 +573,7 @@ class ExportGlobalConfigsTests(unittest.TestCase):
         self.assertIn("grafana", result)
         self.assertIn("logging", result)
         self.assertIn("logging_level", result)
-        self.assertIn("telemetry", result)
+        self.assertNotIn("telemetry", result)
         self.assertIn("release_channel", result)
         self.assertIn("license", result)
         self.assertIn("session", result)
@@ -739,7 +738,6 @@ class ExportFullCorehubBackupTests(unittest.TestCase):
                 "/global-config/grafana": {"enabled": True},
                 "/global-config/logging": {"level": "INFO"},
                 "/global-config/logging/level": "INFO",
-                "/global-config/logging/telemetry": {"enabled": False},
                 "/global-config/release-channel": {"channel": "stable"},
                 "/global-config/license": {"key": "ABC"},
                 "/global-config/session": {"timeout": 3600},
@@ -862,7 +860,6 @@ class ImportGlobalConfigsTests(unittest.TestCase):
             "grafana": {"enabled": True, "url": "http://graf"},
             "logging": {"level": "INFO"},
             "logging_level": {"value": "INFO"},
-            "telemetry": {"enabled": False},
             "release_channel": {"channel": "stable"},
             "license": {"key": "ABC-123"},
             "session": {"timeout": 3600},
@@ -885,6 +882,37 @@ class ImportGlobalConfigsTests(unittest.TestCase):
         # logging_level should be unwrapped from {"value": "INFO"} to "INFO"
         logging_level_body = next(b for p, b in put_calls if p == "/global-config/logging/level")
         self.assertEqual(logging_level_body, "INFO")
+
+    def test_old_backup_with_telemetry_key_restores_cleanly(self):
+        """Backups taken before telemetry log shipping was removed still carry the key."""
+        import automator_app.corehub as corehub
+
+        put_calls: list[str] = []
+
+        def fake_fetch(path, method="GET", **kwargs):
+            if method == "PUT":
+                put_calls.append(path)
+            return {"status": "ok"}
+
+        configs = {
+            "grafana": {"enabled": True},
+            "logging_level": {"value": "INFO"},
+            "telemetry": {"enabled": True},
+        }
+
+        with mock.patch.object(corehub, "fetch_core_hub", side_effect=fake_fetch):
+            result = corehub.import_global_configs(
+                token="tok", base_url="http://test", use_ssl=False, skip_verify=False,
+                configs=configs,
+            )
+
+        self.assertEqual(result["grafana"]["status"], "restored")
+        self.assertEqual(result["logging_level"]["status"], "restored")
+        self.assertNotIn("telemetry", result)
+        self.assertNotIn("/global-config/logging/telemetry", put_calls)
+        self.assertFalse(
+            [r for r in result.values() if r.get("status") == "failed"],
+        )
 
     def test_skips_missing_and_errored_configs(self):
         import automator_app.corehub as corehub
@@ -1062,8 +1090,7 @@ class ImportFullCorehubBackupTests(unittest.TestCase):
                 "grafana": {"enabled": True},
                 "logging": {"level": "INFO"},
                 "logging_level": {"value": "INFO"},
-                "telemetry": {"enabled": False},
-                "release_channel": {"channel": "stable"},
+                    "release_channel": {"channel": "stable"},
                 "license": {"key": "ABC"},
                 "session": {"timeout": 3600},
             }))
