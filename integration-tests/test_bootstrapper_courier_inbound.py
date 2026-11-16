@@ -6,11 +6,13 @@ They cover, without a running CoreHub:
 
 - the normalisation of the ``courier`` block of a SOURCE agent into the payloads CoreHub stores
   (``InboundEndpointCollection`` / ``InboundEndpoint``), including the shorthand defaults;
-- the validation that mirrors ``InboundEndpointValidator`` for pipeline endpoints;
+- the validation that mirrors ``InboundEndpointValidator`` for the free routes of Core Hub 2.3.2.2 (writes, PATCH,
+  reads with response fields, EXECUTE routes with their options);
 - the exact REST calls ``provision_inbound`` issues: tokens first (previous ones revoked), their ids on
   the collection allowlist, collections and endpoints created (POST) or updated in place (PUT);
 - the token file (plaintext written there only, owner-only permissions) and the 409 of a mapped endpoint;
-- the ``inboundCollection`` defaulting and the SOURCE/TARGET dispatch of ``provision_courier_agent``.
+- the ``inboundCollection`` defaulting (the one collection the HTTP Source serves), the listener settings of 2.3.2.1
+  dropped, and the SOURCE/TARGET dispatch of ``provision_courier_agent``.
 """
 
 import copy
@@ -146,9 +148,9 @@ class HttpSourceDetectionTests(unittest.TestCase):
 
 class InboundPlanTests(unittest.TestCase):
     def plan(self, config=None, **kwargs):
-        return plan_inbound_definitions(config or inbound_config(), PIPELINE, AGENT, **kwargs)
+        return plan_inbound_definitions(config or inbound_config(), **kwargs)
 
-    def test_normalises_collection_and_pipeline_endpoints(self):
+    def test_normalises_collection_and_free_routes(self):
         plan = self.plan()
         collection = plan["collections"][0]["collection"]
         self.assertEqual(collection, {
@@ -165,7 +167,10 @@ class InboundPlanTests(unittest.TestCase):
         self.assertEqual(orders["httpVerb"], "POST")
         self.assertEqual(orders["operation"], "CREATE")
         self.assertEqual(orders["bodyType"], "JSON")
-        self.assertEqual((orders["pipelineId"], orders["agentId"]), (PIPELINE, AGENT))
+        self.assertNotIn("pipelineId", orders, "a route names no pipeline")
+        self.assertNotIn("agentId", orders)
+        self.assertEqual(orders["responseFields"], [])
+        self.assertNotIn("routine", orders)
         self.assertEqual(orders["collectionId"], collection["id"])
         self.assertEqual(orders["operationBinding"], "op")
         self.assertEqual(orders["keyBindings"], [])
@@ -179,6 +184,7 @@ class InboundPlanTests(unittest.TestCase):
         self.assertEqual(delete["bodyType"], "NONE")
         self.assertFalse(plan["force"])
         self.assertEqual(plan["tokens"], [])
+        self.assertEqual(plan["attached"], "shop", "the only collection is the one the HTTP Source serves")
 
     def test_base_path_defaults_to_the_name_and_ids_are_stable(self):
         config = inbound_config()
@@ -208,12 +214,12 @@ class InboundPlanTests(unittest.TestCase):
         for fragment in fragments:
             self.assertIn(fragment, str(raised.exception))
 
-    def test_mirrors_the_pipeline_endpoint_rules_of_corehub(self):
-        self.assertRefused(
-            {"name": "e", "httpVerb": "PATCH", "path": "/x/{id}", "bindings": [{"name": "id", "location": "PATH"}]},
-            "PATCH is not available",
-        )
-        self.assertRefused({"name": "e", "httpVerb": "GET", "path": "/", "bindings": [{"name": "a", "location": "QUERY"}]}, "httpVerb 'GET'")
+    def test_mirrors_the_write_rules_of_corehub(self):
+        self.assertRefused({"name": "e", "httpVerb": "PATCH", "path": "/x/{id}", "operationBinding": "op",
+                            "bindings": [{"name": "id", "location": "PATH"}, "op"]}, "takes no operation binding")
+        self.assertRefused({"name": "e", "httpVerb": "HEAD", "path": "/", "operation": "CREATE", "bindings": ["a"]}, "does not fit")
+        self.assertRefused({"name": "e", "path": "/", "bindings": ["_response"]}, "reserved for the answer of a routine")
+        self.assertRefused({"name": "e", "path": "/", "bindings": ["a"], "responseFields": ["a"]}, "response fields are a read's")
         self.assertRefused({"name": "e", "httpVerb": "POST", "operation": "UPDATE", "path": "/", "bindings": ["a"]}, "does not fit")
         self.assertRefused({"name": "e", "path": "/{id}", "bindings": ["a"]}, "'{id}' needs a PATH binding")
         self.assertRefused({"name": "e", "path": "/", "bindings": [{"name": "id", "location": "PATH"}]}, "has no '{id}' placeholder")
@@ -251,11 +257,9 @@ class InboundPlanTests(unittest.TestCase):
         self.assertIn("basePath 'bad path' is not valid", message)
 
         self.assertIn("collection 'c' declares no endpoint", message)
+        self.assertIn("an HTTP Source serves one collection", message)
         with self.assertRaises(CourierConfigError):
-            plan_inbound_definitions({"collections": []}, PIPELINE, AGENT)
-        config = inbound_config()
-        with self.assertRaises(CourierConfigError):
-            plan_inbound_definitions(config, "", AGENT)
+            plan_inbound_definitions({"collections": []})
 
 
     def test_a_base_path_is_one_segment_and_a_token_is_not_both_allowed_and_blocked(self):
@@ -265,7 +269,7 @@ class InboundPlanTests(unittest.TestCase):
              "endpoints": [{"name": "e", "path": "/", "bindings": ["x"]}]},
         ]}
         with self.assertRaises(CourierConfigError) as raised:
-            plan_inbound_definitions(config, PIPELINE, AGENT)
+            plan_inbound_definitions(config, inbound_collection="a")
         message = str(raised.exception)
         self.assertIn("basePath 'shop/v2' is not valid: one segment", message)
         self.assertIn("a token cannot be both allowed and blocked: t2", message)
@@ -273,7 +277,7 @@ class InboundPlanTests(unittest.TestCase):
     def test_the_blocklist_is_sent_with_the_collection(self):
         config = inbound_config()
         config["collections"][0]["blockedTokenIds"] = ["leaked"]
-        collection = plan_inbound_definitions(config, PIPELINE, AGENT)["collections"][0]["collection"]
+        collection = plan_inbound_definitions(config)["collections"][0]["collection"]
         self.assertEqual(collection["blockedTokenIds"], ["leaked"])
     def test_token_rules(self):
         config = inbound_config()
@@ -302,9 +306,9 @@ class ProvisionInboundTests(unittest.TestCase):
     def test_first_run_creates_token_then_collection_with_allowlist_then_endpoints(self):
         hub = FakeCoreHub()
 
-        names = provision_inbound("jwt", inbound_config(self.token_file), PIPELINE, AGENT, fetch=hub)
+        plan = provision_inbound("jwt", inbound_config(self.token_file), PIPELINE, AGENT, fetch=hub)
 
-        self.assertEqual(names, ["shop"])
+        self.assertEqual(plan["attached"], "shop")
         self.assertEqual(hub.methods_and_paths(), [
             ("GET", INBOUND_COLLECTIONS_PATH),
             ("GET", API_TOKENS_PATH),
@@ -342,7 +346,7 @@ class ProvisionInboundTests(unittest.TestCase):
         config["tokens"][0]["collections"] = ["billing"]
         hub = FakeCoreHub()
 
-        provision_inbound("jwt", config, PIPELINE, AGENT, fetch=hub)
+        provision_inbound("jwt", config, PIPELINE, AGENT, fetch=hub, inbound_collection="billing")
 
         created = next(body for method, path, body, _ in hub.calls if method == "POST" and path == API_TOKENS_PATH)
         saved = {body["name"]: body for method, path, body, _ in hub.calls if method == "POST" and path == INBOUND_COLLECTIONS_PATH}
@@ -495,17 +499,18 @@ class ProvisionInboundTests(unittest.TestCase):
 
 
 class InboundCollectionDefaultTests(unittest.TestCase):
-    def test_single_collection_fills_inbound_collection(self):
+    def test_the_served_collection_fills_inbound_collection(self):
         agent = {"agentTag": "courier-agent"}
-        apply_inbound_defaults(agent, ["shop"])
+        apply_inbound_defaults(agent, "shop")
         self.assertEqual(agent["customHostCredentials"], {"inboundCollection": "shop"})
 
-    def test_explicit_value_or_several_collections_leave_it_alone(self):
-        agent = {"customHostCredentials": {"inboundCollection": "other", "inboundPort": 8091}}
-        apply_inbound_defaults(agent, ["shop"])
-        self.assertEqual(agent["customHostCredentials"], {"inboundCollection": "other", "inboundPort": 8091})
+    def test_an_explicit_value_stays_and_the_listener_settings_of_2_3_2_1_go(self):
+        agent = {"customHostCredentials": {"inboundCollection": "other", "inboundPort": 8091,
+                                           "inboundAllowPlainHttp": True, "maxBodyKb": 4}}
+        apply_inbound_defaults(agent, "shop")
+        self.assertEqual(agent["customHostCredentials"], {"inboundCollection": "other", "maxBodyKb": 4})
         agent = {"customHostCredentials": {}}
-        apply_inbound_defaults(agent, ["a", "b"])
+        apply_inbound_defaults(agent, None)
         self.assertEqual(agent["customHostCredentials"], {})
 
 
@@ -516,7 +521,7 @@ class ProvisionCourierAgentDispatchTests(unittest.TestCase):
     def test_source_goes_to_inbound(self):
         agent = {"agentId": AGENT, "agentTag": "courier-agent", "agentType": "SOURCE",
                  "customHostCredentials": {}, "courier": inbound_config()}
-        with mock.patch.object(courier_inbound_support, "provision_inbound", return_value=["shop"]) as inbound, \
+        with mock.patch.object(courier_inbound_support, "provision_inbound", return_value={"attached": "shop"}) as inbound, \
                 mock.patch.object(courier_inbound_support, "provision_courier") as outbound:
             result = provision_courier_agent("jwt", PIPELINE, agent)
         inbound.assert_called_once()
@@ -546,6 +551,153 @@ class ProvisionCourierAgentDispatchTests(unittest.TestCase):
         with self.assertRaises(CourierConfigError):
             provision_courier_agent("jwt", PIPELINE, agent, fetch=hub)
         self.assertEqual(hub.methods_and_paths(), [("GET", INBOUND_COLLECTIONS_PATH)])
+
+
+def routes_config(*endpoints, collections=None):
+    return {"collections": collections or [{"name": "shop", "endpoints": list(endpoints)}]}
+
+
+class FreeRouteTests(unittest.TestCase):
+    """The routes of Core Hub 2.3.2.2 besides the writes: PATCH, reads and EXECUTE."""
+
+    def routes(self, *endpoints, **kwargs):
+        plan = plan_inbound_definitions(routes_config(*endpoints), **kwargs)
+        return [e["definition"] for e in plan["collections"][0]["endpoints"]]
+
+    def assertRefused(self, endpoint, *fragments):
+        with self.assertRaises(CourierConfigError) as raised:
+            self.routes(endpoint)
+        for fragment in fragments:
+            self.assertIn(fragment, str(raised.exception))
+
+    def test_a_patch_is_an_update_and_a_get_a_read_or_a_list_by_its_path(self):
+        patch, read, listing = self.routes(
+            {"name": "patch", "httpVerb": "PATCH", "path": "/orders/{id}",
+             "bindings": [{"name": "id", "location": "PATH", "type": "NUMBER"}, {"name": "status", "required": False}]},
+            {"name": "read", "httpVerb": "GET", "path": "/orders/{id}",
+             "bindings": [{"name": "id", "location": "PATH", "type": "NUMBER"}],
+             "responseFields": [{"name": "id", "type": "number"}, "status"]},
+            {"name": "list", "httpVerb": "GET", "path": "/orders", "maxRows": 50, "keyBindings": ["id"],
+             "bindings": [{"name": "status", "location": "QUERY", "required": False}],
+             "responseFields": [{"name": "id", "type": "NUMBER"}, "status"]},
+        )
+        self.assertEqual((patch["operation"], patch["bodyType"]), ("UPDATE", "JSON"))
+        self.assertEqual((read["operation"], read["bodyType"]), ("READ", "NONE"))
+        self.assertEqual(read["responseFields"], [
+            {"name": "id", "type": "NUMBER", "description": None},
+            {"name": "status", "type": "STRING", "description": None},
+        ])
+        self.assertEqual((listing["operation"], listing["maxRows"]), ("LIST", 50))
+
+    def test_mirrors_the_read_rules_of_corehub(self):
+        self.assertRefused({"name": "r", "httpVerb": "GET", "path": "/orders/{id}",
+                            "bindings": [{"name": "id", "location": "PATH"}]}, "at least one response field")
+        self.assertRefused({"name": "r", "httpVerb": "GET", "path": "/orders", "responseFields": ["id"]}, "needs a key")
+        self.assertRefused({"name": "r", "httpVerb": "GET", "path": "/orders/{id}", "responseFields": ["id"],
+                            "bindings": [{"name": "id", "location": "PATH"}, {"name": "q", "location": "QUERY"}]},
+                           "only a LIST filters on")
+        self.assertRefused({"name": "r", "httpVerb": "GET", "path": "/orders", "keyBindings": ["id"], "responseFields": ["id"],
+                            "bindings": [{"name": "b", "location": "BODY"}]}, "reads PATH and QUERY bindings only")
+        self.assertRefused({"name": "r", "httpVerb": "GET", "operation": "READ", "path": "/orders", "keyBindings": ["id"],
+                            "responseFields": ["id"]}, "READ needs a path placeholder")
+        self.assertRefused({"name": "r", "httpVerb": "GET", "operation": "LIST", "path": "/orders/{id}",
+                            "bindings": [{"name": "id", "location": "PATH"}], "responseFields": ["id"]}, "LIST takes no path placeholder")
+        self.assertRefused({"name": "r", "httpVerb": "GET", "path": "/orders/{id}", "responseFields": [{"name": "id", "type": "NUMBER"}],
+                            "bindings": [{"name": "id", "location": "PATH"}]}, "one column has one type")
+        self.assertRefused({"name": "r", "httpVerb": "GET", "path": "/orders", "keyBindings": ["nope"], "responseFields": ["id"]},
+                           "neither a filter nor a response field")
+        self.assertRefused({"name": "r", "httpVerb": "GET", "path": "/o/{id}", "maxRows": 0, "responseFields": ["id"],
+                            "bindings": [{"name": "id", "location": "PATH"}]}, "maxRows must be between")
+
+    def test_an_execute_route_carries_its_options_and_return_type(self):
+        (route,) = self.routes({"name": "place", "path": "/place-order", "bindings": ["customer"],
+                                "routine": {"timeoutSeconds": 10, "answer": {"body": "rows", "format": "xml"}}})
+        self.assertEqual(route["operation"], "EXECUTE")
+        self.assertEqual(route["routine"], {"readOnly": False, "timeoutSeconds": 10, "ownTransaction": False,
+                                            "answer": {"body": "ROWS", "format": "XML"}})
+        (called,) = self.routes({"name": "total", "httpVerb": "GET", "path": "/total/{customer}",
+                                 "bindings": [{"name": "customer", "location": "PATH"}],
+                                 "routine": {"readOnly": True}, "call": {"schema": "shop", "name": "customer_total"}})
+        self.assertEqual(called["routine"]["answer"], {"body": "ALL", "format": "JSON"}, "the whole answer in JSON by default")
+        self.assertEqual((called["operation"], called["bodyType"]), ("EXECUTE", "NONE"))
+
+    def test_mirrors_the_execute_rules_of_corehub(self):
+        self.assertRefused({"name": "x", "httpVerb": "GET", "path": "/x", "routine": {}}, "does not fit operation EXECUTE")
+        self.assertRefused({"name": "x", "path": "/x", "bodyType": "FORM", "bindings": ["a"], "routine": {}}, "form body")
+        self.assertRefused({"name": "x", "path": "/x", "bindings": ["a.b"], "routine": {}}, "nested value")
+        self.assertRefused({"name": "x", "path": "/x", "routine": {"readOnly": True, "ownTransaction": True}}, "cannot also commit")
+        self.assertRefused({"name": "x", "path": "/x", "routine": {"timeoutSeconds": 3601}}, "timeoutSeconds must be between")
+        self.assertRefused({"name": "x", "path": "/x", "routine": {"answer": {"body": "FIRST"}}}, "answer.body 'FIRST'")
+        self.assertRefused({"name": "x", "path": "/x", "keyBindings": ["a"], "bindings": ["a"], "routine": {}}, "no key or operation binding")
+        self.assertRefused({"name": "x", "path": "/x", "operation": "CREATE", "bindings": ["a"], "routine": {}},
+                           "only an EXECUTE endpoint calls a routine")
+
+    def test_two_routes_on_one_verb_and_path_conflict(self):
+        with self.assertRaises(CourierConfigError) as raised:
+            self.routes({"name": "a", "path": "/o/{id}", "bindings": [{"name": "id", "location": "PATH"}]},
+                        {"name": "b", "path": "/o/{key}", "bindings": [{"name": "key", "location": "PATH"}]})
+        self.assertIn("conflicts with endpoint 'a'", str(raised.exception))
+
+    def test_several_collections_need_the_served_one_named(self):
+        collections = [{"name": "shop", "endpoints": [{"name": "e", "path": "/", "bindings": ["a"]}]},
+                       {"name": "billing", "basePath": "bill", "endpoints": [{"name": "e", "path": "/", "bindings": ["a"]}]}]
+        with self.assertRaises(CourierConfigError) as raised:
+            plan_inbound_definitions(routes_config(collections=collections))
+        self.assertIn("customHostCredentials.inboundCollection", str(raised.exception))
+        self.assertEqual(plan_inbound_definitions(routes_config(collections=collections), inbound_collection="/bill/")["attached"],
+                         "billing", "named by its base path, as the agent resolves it")
+        self.assertIsNone(plan_inbound_definitions(routes_config(collections=collections), inbound_collection="elsewhere")["attached"])
+
+    def test_a_call_belongs_to_the_served_collection(self):
+        collections = [{"name": "shop", "endpoints": [{"name": "e", "path": "/", "bindings": ["a"]}]},
+                       {"name": "other", "endpoints": [{"name": "x", "path": "/x", "call": {"schema": "s", "name": "p"}}]}]
+        with self.assertRaises(CourierConfigError) as raised:
+            plan_inbound_definitions(routes_config(collections=collections), inbound_collection="shop")
+        self.assertIn("routes x cannot have an entity of this pipeline", str(raised.exception))
+
+    def test_routine_calls_lists_the_routes_whose_entity_the_bootstrapper_builds(self):
+        call = {"schema": "shop", "name": "place_order"}
+        agent = {"agentTag": "courier-agent", "agentType": "SOURCE", "courier": routes_config(
+            {"name": "w", "path": "/", "bindings": ["a"]},
+            {"name": "x", "path": "/x", "call": call},
+        )}
+        self.assertEqual(courier_inbound_support.routine_calls(agent),
+                         [{"collection": "shop", "route": agent["courier"]["collections"][0]["endpoints"][1], "call": call}])
+        self.assertEqual(courier_inbound_support.routine_calls({**agent, "agentType": "TARGET"}), [])
+
+
+class AttachedElsewhereTests(unittest.TestCase):
+    """A collection is served by one HTTP Source: Core Hub refuses to attach one another HTTP Source holds."""
+
+    OWNER = {"pipelineId": "original", "agentId": "http-original"}
+
+    def hub(self, live):
+        hub = FakeCoreHub(collections=[{"id": "stored-shop", "name": "shop", "owner": self.OWNER}])
+        original = hub.__call__
+
+        def call(path, method="GET", **kwargs):
+            if method == "GET" and path == courier_inbound_support.PIPELINES_PATH:
+                return [{"pipelineId": "original"}] if live else []
+            return original(path, method=method, **kwargs)
+
+        call.hub = hub
+        return call
+
+    def test_a_restore_refuses_a_collection_a_live_pipeline_holds(self):
+        call = self.hub(live=True)
+        with self.assertRaises(CourierConfigError) as raised:
+            provision_inbound("jwt", inbound_config(), PIPELINE, AGENT, fetch=call, keep_other_pipelines=True)
+        self.assertIn("served by HTTP Source http-original of pipeline original", str(raised.exception))
+        self.assertFalse(any(m != "GET" for m, _ in call.hub.methods_and_paths()), "nothing written")
+
+    def test_a_restore_after_the_original_is_gone_and_a_bootstrapper_run_go_on_with_a_warning(self):
+        logger = logging.getLogger("attached-test")
+        for keep, live in ((True, False), (False, True)):
+            call = self.hub(live=live)
+            with mock.patch.object(logger, "warning") as warning:
+                provision_inbound("jwt", inbound_config(), PIPELINE, AGENT, fetch=call, logger=logger, keep_other_pipelines=keep)
+            self.assertIn("attached to %s", warning.call_args_list[0].args[0])
+            self.assertIn(("PUT", f"{INBOUND_COLLECTIONS_PATH}/stored-shop"), call.hub.methods_and_paths())
 
 
 if __name__ == "__main__":

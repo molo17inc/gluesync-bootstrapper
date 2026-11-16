@@ -813,18 +813,17 @@ class RoundTripSkipped(RoundTripError):
 
 
 def refuse_http_source_round_trip(blocks: Dict[str, Dict[str, Any]], pipeline_id: str) -> None:
-    """Raises ``RoundTripSkipped`` when the pipeline has an HTTP Source with inbound endpoints.
+    """Raises ``RoundTripSkipped`` when the pipeline has an HTTP Source that serves an inbound collection.
 
-    An inbound endpoint serves one pipeline, and two endpoints of a collection cannot share a route: the copy restored
-    next to the original on this Core Hub would take the original's endpoints away (or be refused with a 409 once
-    entities read them). Said up front, before anything is restored, instead of failing halfway or breaking the
-    original pipeline; the kit's own tests still cover the HTTP Source.
+    A collection is served by one HTTP Source, and Core Hub refuses an HTTP Source whose collection another one holds:
+    the copy restored next to the original on this Core Hub could not serve it. Said up front, before anything is
+    restored, instead of failing halfway; the kit's own tests still cover the HTTP Source.
     """
     sources = sorted(key for key in blocks if key.upper().startswith("SOURCE:"))
     if sources:
         raise RoundTripSkipped(
-            f"pipeline {pipeline_id} has an HTTP Source with inbound endpoints ({', '.join(sources)}): an inbound endpoint "
-            "serves one pipeline, so a copy cannot be restored next to the original on the same Core Hub, and the round "
+            f"pipeline {pipeline_id} has an HTTP Source that serves an inbound collection ({', '.join(sources)}): a collection "
+            "is served by one HTTP Source, so a copy cannot be restored next to the original on the same Core Hub, and the round "
             "trip does not cover this pipeline (the original is left untouched)."
         )
 

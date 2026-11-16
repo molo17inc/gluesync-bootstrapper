@@ -40,8 +40,10 @@ Ids are kept, so a restore updates the same definitions instead of creating new 
 - Header values of outbound endpoints, unless ``include_secrets`` (a SUPER_ADMIN only): Core Hub masks them. A
   restore sends the mask back, which keeps the stored value on the Core Hub that stores the endpoint, on the same
   origin; anywhere else Core Hub has no value to keep, so the restore refuses the block until the values are typed in.
-- An HTTP Source endpoint serves one pipeline: the Automator does not restore it into another pipeline while the one
-  it serves still exists, and the round trip does not cover a pipeline with an HTTP Source.
+- An inbound collection is served by one HTTP Source: the Automator does not restore it into another pipeline while
+  the HTTP Source that holds it still exists, and the round trip does not cover a pipeline with an HTTP Source.
+- The entity built on an EXECUTE route (the routine it calls) is the pipeline's, exported with the other entities: the
+  block holds the route only, without its ``call``.
 
 Command line, for every Courier agent of a pipeline (JSON on stdout, ``{agentType:agentTag:agentId: block}``)::
 
@@ -133,7 +135,11 @@ def _inbound_endpoint(endpoint: Dict[str, Any]) -> Dict[str, Any]:
         "bodyType": endpoint.get("bodyType"),
         "operationBinding": endpoint.get("operationBinding"),
         "keyBindings": endpoint.get("keyBindings"),
+        "maxRows": endpoint.get("maxRows") if endpoint.get("operation") == "LIST" else None,
         "bindings": [_binding(b) for b in _list(endpoint.get("bindings"))],
+        "responseFields": [_without_empty({k: f.get(k) for k in ("name", "type", "description")})
+                           for f in _list(endpoint.get("responseFields"))],
+        "routine": endpoint.get("routine") if isinstance(endpoint.get("routine"), dict) else None,
     })
 
 
@@ -153,19 +159,18 @@ def _inbound_collection(collection: Dict[str, Any], endpoints: List[Dict[str, An
 
 
 def export_inbound_block(call: FetchFn, token: str, pipeline_id: str, agent_id: str) -> Optional[Dict[str, Any]]:
-    """The inbound collections holding a pipeline endpoint of HTTP Source ``agent_id``, with those endpoints; None if none."""
+    """The inbound collection HTTP Source ``agent_id`` of ``pipeline_id`` serves (its owner, as Core Hub reports it),
+    with every route of it; None if it serves none."""
     stored_collections = _collections(call, token, INBOUND_COLLECTIONS_PATH)
     if stored_collections is None:
         return None
     collections: List[Dict[str, Any]] = []
     for collection in stored_collections:
+        owner = collection.get("owner") if isinstance(collection.get("owner"), dict) else {}
+        if str(owner.get("pipelineId")) != str(pipeline_id) or str(owner.get("agentId")) != str(agent_id):
+            continue
         stored = _list(call(INBOUND_ENDPOINTS_PATH, method="GET", token=token, params={"collectionId": collection.get("id")}))
-        endpoints = [
-            _inbound_endpoint(e) for e in stored
-            if str(e.get("pipelineId")) == str(pipeline_id) and str(e.get("agentId")) == str(agent_id)
-        ]
-        if endpoints:
-            collections.append(_inbound_collection(collection, endpoints))
+        collections.append(_inbound_collection(collection, [_inbound_endpoint(e) for e in stored]))
     return {"collections": collections} if collections else None
 
 

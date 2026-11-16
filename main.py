@@ -50,6 +50,7 @@ from commons import admin_credentials_path, admin_password_problem, load_admin_p
 from utils.redact import redact
 from courier_support import courier_block, CourierConfigError
 from courier_inbound_support import provision_courier_agent
+from courier_routine_entities import create_routine_entities
 
 def _connect_requested(argv):
     """True for the kit command: python main.py --connect-import PATH --connect-setup."""
@@ -972,6 +973,19 @@ def _prepare_courier_agent(token: str, pipeline_id: str, agent: dict, custom_hos
     return custom_host_credentials if prepared is None else prepared
 
 
+def _create_courier_routine_entities(token, pipeline_id, agents_to_conf):
+    """The entities of the HTTP Source's EXECUTE routes, whose target is a routine (courier_routine_entities): the
+    tables list does not reach them, as discovery lists no routine."""
+    try:
+        names = create_routine_entities(token, pipeline_id, agents_to_conf, fetch=fetch_core_hub, logger=logger)
+    except CourierConfigError as courier_error:
+        log_failure(logger, str(courier_error))
+        lockfile_failure()
+        raise
+    if names:
+        logger.info("Created %d Courier routine entities: %s", len(names), ", ".join(names))
+
+
 def _parse_args():
     """Parse the command line arguments of the bootstrapper."""
     parser = argparse.ArgumentParser(description='Gluesync Bootstrapper')
@@ -1507,6 +1521,8 @@ def main():
             schema_pairs, pipeline_id, token, effective_source_type, effective_target_type
         )
         _fail_on_schema_errors(failed_schemas, pipeline_id, pipeline_name)
+
+    _create_courier_routine_entities(token, pipeline_id, agents_to_conf)
 
     _complete_pipeline(token, pipeline_id, pipeline_name)
 
