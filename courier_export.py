@@ -44,6 +44,10 @@ Ids are kept, so a restore updates the same definitions instead of creating new 
   origin; anywhere else Core Hub has no value to keep, so the restore refuses the block until the values are typed in.
 - An HTTP Source's collection belongs to that one HTTP Source: the Automator round trip restores a renamed copy of it
   (name and base path suffixed) with a token of its own, and maps the names back before comparing.
+- An inbound collection is served by one HTTP Source: the Automator does not restore it into another pipeline while
+  the HTTP Source that holds it still exists.
+- The entity built on an EXECUTE route (the routine it calls) is the pipeline's, exported with the other entities: the
+  block holds the route only, without its ``call``.
 
 Command line, for every Courier agent of a pipeline (JSON on stdout, ``{agentType:agentTag:agentId: block}``)::
 
@@ -136,7 +140,11 @@ def _inbound_endpoint(endpoint: Dict[str, Any]) -> Dict[str, Any]:
         "bodyType": endpoint.get("bodyType"),
         "operationBinding": endpoint.get("operationBinding"),
         "keyBindings": endpoint.get("keyBindings"),
+        "maxRows": endpoint.get("maxRows") if endpoint.get("operation") == "LIST" else None,
         "bindings": [_binding(b) for b in _list(endpoint.get("bindings"))],
+        "responseFields": [_without_empty({k: f.get(k) for k in ("name", "type", "description")})
+                           for f in _list(endpoint.get("responseFields"))],
+        "routine": endpoint.get("routine") if isinstance(endpoint.get("routine"), dict) else None,
     })
 
 
