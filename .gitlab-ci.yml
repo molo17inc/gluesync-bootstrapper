@@ -1263,7 +1263,7 @@ update_budibase_version:
       echo "Courier update response code: $UPDATE_STATUS"
       echo "Courier update response: $UPDATE_BODY"
 
-      if [ "$UPDATE_STATUS" -eq 200 ] && [ "$AFFECTED_ROWS" = "1" ]; then
+      if { [ "$UPDATE_STATUS" -eq 200 ] && [ "$AFFECTED_ROWS" = "1" ]; } || [ "$UPDATE_STATUS" -eq 202 ]; then
           echo "Successfully updated version of row $ROW_ID in the catalog"
       else
           echo "Failed to update version in the catalog. HTTP Status: $UPDATE_STATUS, affectedRows: ${AFFECTED_ROWS:-none}"
