@@ -19,6 +19,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 import automator_roundtrip as rt  # noqa: E402
+import courier_export  # noqa: E402
 from automator_app import corehub  # noqa: E402
 from courier_export import agent_key, export_courier_block, export_pipeline_courier  # noqa: E402
 from courier_inbound_support import (  # noqa: E402
@@ -69,6 +70,10 @@ class StatefulCoreHub:
                 return copy.deepcopy(found)
             if base == COLLECTIONS_PATH:  # Core Hub never returns the auth secret
                 return [{**c, "auth": {k: v for k, v in c["auth"].items() if k not in ("token", "password", "value")}}
+                        for c in copy.deepcopy(list(items.values()))]
+            if base == INBOUND_COLLECTIONS_PATH:  # Core Hub reports the HTTP Source of a pipeline it knows only
+                known = {p["pipelineId"] for p in self.pipelines}
+                return [{**c, "owner": c.get("owner") if (c.get("owner") or {}).get("pipelineId") in known else None}
                         for c in copy.deepcopy(list(items.values()))]
             return copy.deepcopy(list(items.values()))
         stored = items.get(body["id"])
@@ -216,14 +221,35 @@ class InboundExportTests(unittest.TestCase):
         self.assertIn("'shop' is served by HTTP Source http-source-1 of pipeline p1", str(raised.exception))
         self.assertEqual(len(self.hub.writes), writes_before, "refused before anything is written")
 
-    def test_a_restore_after_the_original_pipeline_is_gone_or_a_bootstrapper_run_goes_on_with_a_warning(self):
+    def test_a_restore_or_a_run_after_the_original_pipeline_is_gone_takes_the_collection(self):
         exported = export_courier_block("jwt", PIPELINE, source_agent(), fetch=self.hub)
-        for restore, pipelines in ((True, [{"pipelineId": RESTORED_PIPELINE}]), (False, self.hub.pipelines)):
-            self.hub.pipelines = pipelines
-            log = mock.Mock()
-            custom = self.restore(RESTORED_PIPELINE, RESTORED_AGENT, exported, restore=restore, logger=log)
+        self.hub.pipelines = [{"pipelineId": RESTORED_PIPELINE}]
+        for restore in (True, False):
+            custom = self.restore(RESTORED_PIPELINE, RESTORED_AGENT, exported, restore=restore)
             self.assertEqual(custom["inboundCollection"], "shop")
-            self.assertTrue(any("attached to %s" in c.args[0] for c in log.warning.call_args_list))
+
+    def test_a_bootstrapper_run_never_takes_the_collection_of_a_live_pipeline_either(self):
+        exported = export_courier_block("jwt", PIPELINE, source_agent(), fetch=self.hub)
+        tokens = copy.deepcopy(self.hub.tokens)
+        block = {**copy.deepcopy(exported), "tokens": [{"name": "shop-client", "outputFile": f"{self.tmp.name}/x.json"}]}
+        with self.assertRaises(CourierConfigError):
+            self.restore(RESTORED_PIPELINE, RESTORED_AGENT, block, restore=False)
+        self.assertEqual(self.hub.tokens, tokens, "the live pipeline's token is not revoked")
+
+    def test_a_core_hub_older_than_2_3_2_2_exports_no_inbound_block_and_says_so(self):
+        for collection in self.hub.store[INBOUND_COLLECTIONS_PATH].values():
+            collection.pop("owner", None)
+        hub = self.hub
+
+        def old_hub(path, method="GET", **kwargs):
+            result = hub(path, method=method, **kwargs)
+            if method == "GET" and path == INBOUND_COLLECTIONS_PATH:
+                return [{k: v for k, v in c.items() if k != "owner"} for c in result]
+            return result
+
+        with mock.patch.object(courier_export._logger, "warning") as warning:
+            self.assertIsNone(export_courier_block("jwt", PIPELINE, source_agent(), fetch=old_hub))
+        self.assertIn("predates 2.3.2.2", warning.call_args.args[0])
 
     def test_an_endpoint_renamed_in_the_ui_is_found_by_the_id_of_the_block(self):
         exported = export_courier_block("jwt", PIPELINE, source_agent(), fetch=self.hub)

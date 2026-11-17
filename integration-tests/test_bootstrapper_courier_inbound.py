@@ -667,38 +667,73 @@ class FreeRouteTests(unittest.TestCase):
 
 
 class AttachedElsewhereTests(unittest.TestCase):
-    """A collection is served by one HTTP Source: Core Hub refuses to attach one another HTTP Source holds."""
+    """A collection is served by one HTTP Source: Core Hub refuses an HTTP Source whose collection another one holds,
+    and reports a collection's owner only while that pipeline exists."""
 
-    OWNER = {"pipelineId": "original", "agentId": "http-original"}
+    def test_a_collection_another_pipeline_holds_is_refused_before_anything_is_written(self):
+        for restore in (False, True):
+            hub = FakeCoreHub(collections=[{"id": "stored-shop", "name": "shop",
+                                            "owner": {"pipelineId": "original", "agentId": "http-original"}}])
+            with self.subTest(restore=restore), self.assertRaises(CourierConfigError) as raised:
+                provision_inbound("jwt", inbound_config("/tmp/never-written.json"), PIPELINE, AGENT, fetch=hub,
+                                  keep_other_pipelines=restore)
+            self.assertIn("served by HTTP Source http-original of pipeline original", str(raised.exception))
+            self.assertEqual(hub.methods_and_paths(), [("GET", INBOUND_COLLECTIONS_PATH), ("GET", INBOUND_ENDPOINTS_PATH)],
+                             "no token revoked or created, nothing saved")
 
-    def hub(self, live):
-        hub = FakeCoreHub(collections=[{"id": "stored-shop", "name": "shop", "owner": self.OWNER}])
-        original = hub.__call__
+    def test_a_collection_this_pipeline_or_nobody_holds_is_updated(self):
+        for owner in (None, {"pipelineId": PIPELINE, "agentId": AGENT}):
+            hub = FakeCoreHub(collections=[{"id": "stored-shop", "name": "shop", "owner": owner}])
+            provision_inbound("jwt", inbound_config(), PIPELINE, AGENT, fetch=hub)
+            self.assertIn(("PUT", f"{INBOUND_COLLECTIONS_PATH}/stored-shop"), hub.methods_and_paths())
 
-        def call(path, method="GET", **kwargs):
-            if method == "GET" and path == courier_inbound_support.PIPELINES_PATH:
-                return [{"pipelineId": "original"}] if live else []
-            return original(path, method=method, **kwargs)
 
-        call.hub = hub
-        return call
+class CallAndValueRuleTests(unittest.TestCase):
+    """What Core Hub would refuse only after the pipeline exists is refused at plan time."""
 
-    def test_a_restore_refuses_a_collection_a_live_pipeline_holds(self):
-        call = self.hub(live=True)
+    def refused(self, *endpoints, collections=None):
         with self.assertRaises(CourierConfigError) as raised:
-            provision_inbound("jwt", inbound_config(), PIPELINE, AGENT, fetch=call, keep_other_pipelines=True)
-        self.assertIn("served by HTTP Source http-original of pipeline original", str(raised.exception))
-        self.assertFalse(any(m != "GET" for m, _ in call.hub.methods_and_paths()), "nothing written")
+            plan_inbound_definitions(routes_config(*endpoints, collections=collections))
+        return str(raised.exception)
 
-    def test_a_restore_after_the_original_is_gone_and_a_bootstrapper_run_go_on_with_a_warning(self):
-        logger = logging.getLogger("attached-test")
-        for keep, live in ((True, False), (False, True)):
-            call = self.hub(live=live)
-            with mock.patch.object(logger, "warning") as warning:
-                provision_inbound("jwt", inbound_config(), PIPELINE, AGENT, fetch=call, logger=logger, keep_other_pipelines=keep)
-            self.assertIn("attached to %s", warning.call_args_list[0].args[0])
-            self.assertIn(("PUT", f"{INBOUND_COLLECTIONS_PATH}/stored-shop"), call.hub.methods_and_paths())
+    def test_a_call_needs_an_execute_route_a_schema_a_name_and_a_known_kind(self):
+        message = self.refused(
+            {"name": "w", "operation": "CREATE", "path": "/w", "bindings": ["a"], "call": {"schema": "s", "name": "p"}},
+            {"name": "x", "path": "/x", "call": {"kind": "TRIGGER", "parameters": ["p_a"]}},
+            {"name": "y", "path": "/y", "call": "place_order"},
+        )
+        self.assertIn("endpoint 'w': call: only an EXECUTE route calls a routine (operation CREATE)", message)
+        self.assertIn("endpoint 'x': call needs the routine's 'schema'", message)
+        self.assertIn("endpoint 'x': call needs the routine's 'name'", message)
+        self.assertIn("call.kind 'TRIGGER'", message)
+        self.assertIn("call.parameters must map", message)
+        self.assertIn("endpoint 'y': call must be an object", message)
 
+    def test_a_default_must_fit_the_column_or_the_routine_argument(self):
+        message = self.refused(
+            {"name": "w", "path": "/w", "bindings": [
+                {"name": "n", "type": "NUMBER", "default": "1.234"},
+                {"name": "m", "type": "NUMBER", "default": "12345678901234567"},
+                {"name": "s", "default": "x" * 256},
+            ]},
+        )
+        self.assertIn("'n': defaultValue '1.234' takes at most 2 decimal places", message)
+        self.assertIn("'m': defaultValue '12345678901234567' takes at most 16 integer digits", message)
+        self.assertIn("'s': defaultValue is longer than 255 characters", message)
+        routes = plan_inbound_definitions(routes_config(
+            {"name": "w", "path": "/w", "bindings": [{"name": "n", "type": "NUMBER", "default": "1e2"}, {"name": "s", "default": "x" * 255}]},
+            {"name": "x", "path": "/x", "routine": {}, "bindings": [{"name": "n", "type": "NUMBER", "default": "1.234"},
+                                                                    {"name": "s", "default": "x" * 300}]},
+        ))["collections"][0]["endpoints"]
+        self.assertEqual(len(routes), 2, "1e2 fits NUMERIC(18,2); a routine takes 38 decimal places and long text")
+        self.assertIn("38 integer digits", self.refused({"name": "x", "path": "/x", "routine": {}, "bindings": [
+            {"name": "n", "type": "NUMBER", "default": "1" * 39}]}))
+
+    def test_a_handle_of_another_stored_collection_is_refused(self):
+        stored = [{"id": "other-id", "name": "orders", "basePath": "shop"}]
+        with self.assertRaises(CourierConfigError) as raised:
+            plan_inbound_definitions(routes_config({"name": "w", "path": "/w", "bindings": ["a"]}), existing_collections=stored)
+        self.assertIn("is a handle of stored collection 'orders'", str(raised.exception))
 
 if __name__ == "__main__":
     unittest.main()

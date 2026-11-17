@@ -81,6 +81,7 @@ import json
 import logging
 import os
 import re
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -102,7 +103,6 @@ from courier_support import (
 INBOUND_COLLECTIONS_PATH = "/api-agent/inbound/collections"
 INBOUND_ENDPOINTS_PATH = "/api-agent/inbound/endpoints"
 API_TOKENS_PATH = "/api-tokens"
-PIPELINES_PATH = "/pipelines"
 # The field of a token that narrows it to inbound collections (Core Hub with gluesync-kotlin !2954).
 COLLECTION_SCOPES_KEY = "collectionScopes"
 INBOUND_COLLECTION_KEY = "inboundCollection"
@@ -148,6 +148,13 @@ HEADER_NAME_PATTERN = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 # One segment: the runtime routes match `/{basePath}/...` against the first segment of the request path only.
 BASE_PATH_PATTERN = re.compile(r"^[A-Za-z0-9._~-]+$")
 NUMBER_PATTERN = re.compile(r"^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$")
+# What a binding's value must fit (CourierColumns, InboundValues): a write's or a read's column is VARCHAR(255) or
+# NUMERIC(18,2); a routine's argument a number of at most 38 digits on either side of the point.
+STRING_LENGTH = 255
+NUMBER_SCALE = 2
+NUMBER_INTEGER_DIGITS = 16
+ROUTINE_DIGITS = 38
+ROUTINE_KINDS = ("PROCEDURE", "FUNCTION")
 
 FetchFn = Callable[..., Any]
 
@@ -266,9 +273,7 @@ def normalize_inbound_endpoint(endpoint: Any, collection_id: str, existing_id: O
         "bodyType": _body_type(endpoint, verb, operation),
         "responseFields": [normalize_response_field(f) for f in endpoint.get("responseFields") or []],
     }
-    if operation == "EXECUTE":
-        payload["routine"] = normalize_routine_options(endpoint.get("routine"))
-    elif endpoint.get("routine") is not None:
+    if operation == "EXECUTE" or endpoint.get("routine") is not None:
         payload["routine"] = normalize_routine_options(endpoint.get("routine"))
     return payload
 
@@ -305,14 +310,40 @@ def _path_errors(path: str) -> List[str]:
     ]
 
 
-def _default_value_error(binding: Dict[str, Any]) -> Optional[str]:
+def _number_error(text: str, routine: bool) -> Optional[str]:
+    """Why ``text`` is no value of a NUMBER binding (InboundValues.number, routineNumber); None when it fits."""
+    if not NUMBER_PATTERN.match(text):
+        return "is not a number"
+    try:
+        value = Decimal(text).normalize()
+    except InvalidOperation:
+        return "is not a number"
+    sign, digits, exponent = value.as_tuple()
+    if not isinstance(exponent, int):  # NaN or Infinity: the pattern above lets neither through
+        return "is not a number"
+    scale = max(-exponent, 0)
+    integer_digits = max(len(digits) + exponent, 0)
+    if routine and (scale > ROUTINE_DIGITS or integer_digits > ROUTINE_DIGITS):
+        return f"takes at most {ROUTINE_DIGITS} integer digits and {ROUTINE_DIGITS} decimal places"
+    if not routine and scale > NUMBER_SCALE:
+        return f"takes at most {NUMBER_SCALE} decimal places"
+    if not routine and integer_digits > NUMBER_INTEGER_DIGITS:
+        return f"takes at most {NUMBER_INTEGER_DIGITS} integer digits"
+    return None
+
+
+def _default_value_error(binding: Dict[str, Any], routine: bool = False) -> Optional[str]:
     default = binding.get("defaultValue")
     if default is None:
         return None
-    if binding.get("type") == "NUMBER" and not NUMBER_PATTERN.match(default.strip()):
-        return f"binding '{binding.get('name')}': defaultValue {default!r} is not a number"
+    name = binding.get("name")
+    if binding.get("type") == "NUMBER":
+        problem = _number_error(default.strip(), routine)
+        return f"binding '{name}': defaultValue {default!r} {problem}" if problem else None
     if binding.get("type") == "BOOLEAN" and default.strip().lower() not in ("true", "false"):
-        return f"binding '{binding.get('name')}': defaultValue {default!r} is not true or false"
+        return f"binding '{name}': defaultValue {default!r} is not true or false"
+    if binding.get("type") == "STRING" and not routine and len(default) > STRING_LENGTH:
+        return f"binding '{name}': defaultValue is longer than {STRING_LENGTH} characters"
     return None
 
 
@@ -345,7 +376,7 @@ def _binding_errors(endpoint: Dict[str, Any], binding: Dict[str, Any]) -> List[s
         errors.append(f"HEADER binding '{name}' would write the caller's credentials into the target")
     elif location == "PATH" and not binding.get("required"):
         errors.append(f"PATH binding '{name}' must be required")
-    default_error = _default_value_error(binding)
+    default_error = _default_value_error(binding, routine=endpoint.get("operation") == "EXECUTE")
     if default_error:
         errors.append(default_error)
     return errors
@@ -572,6 +603,42 @@ def _by_id(items: Any) -> Dict[str, Dict[str, Any]]:
     return {str(i["id"]): i for i in items if isinstance(i, dict) and i.get("id") is not None}
 
 
+def _call_errors(endpoint: Dict[str, Any], call: Any) -> List[str]:
+    """What is wrong with the ``call`` of a route (the routine its entity calls, see courier_routine_entities), checked
+    before anything is written: only an EXECUTE route has one, naming the routine's schema and name."""
+    if call is None:
+        return []
+    prefix = f"endpoint '{endpoint.get('name')}': call"
+    if not isinstance(call, dict):
+        return [f"{prefix} must be an object"]
+    errors: List[str] = []
+    if endpoint.get("operation") != "EXECUTE":
+        errors.append(f"{prefix}: only an EXECUTE route calls a routine (operation {endpoint.get('operation')})")
+    errors.extend(f"{prefix} needs the routine's '{key}'" for key in ("schema", "name") if not _text(call.get(key)))
+    kind = _text(call.get("kind")).upper()
+    if kind and kind not in ROUTINE_KINDS:
+        errors.append(f"{prefix}.kind {call.get('kind')!r} is not one of {list(ROUTINE_KINDS)}")
+    if call.get("parameters") is not None and not isinstance(call.get("parameters"), dict):
+        errors.append(f"{prefix}.parameters must map each parameter to a binding name or null")
+    return errors
+
+
+def _handle(value: Any) -> str:
+    """A collection's id, name or base path as an HTTP Source's inboundCollection resolves it: trimmed, no slashes."""
+    return _text(value).strip("/")
+
+
+def _handle_clash_errors(collection: Dict[str, Any], stored_collections: Any) -> List[str]:
+    """InboundEndpointValidator.validateCollection: no handle of this collection is another stored collection's."""
+    others = [c for c in stored_collections or [] if isinstance(c, dict) and c.get("id") != collection["id"]]
+    mine = {_handle(collection["name"]), _handle(collection["basePath"]), _handle(collection["id"])} - {""}
+    return [
+        f"collection '{collection['name']}': its name, basePath or id is a handle of stored collection '{other.get('name')}'"
+        for other in others
+        if mine & ({_handle(other.get("name")), _handle(other.get("basePath")), _handle(other.get("id"))} - {""})
+    ]
+
+
 def _plan_inbound_endpoints(collection_cfg: Dict[str, Any], collection: Dict[str, Any], stored_endpoints: List[Dict[str, Any]],
                             errors: List[str]) -> List[Dict[str, Any]]:
     endpoints: List[Dict[str, Any]] = []
@@ -592,6 +659,7 @@ def _plan_inbound_endpoints(collection_cfg: Dict[str, Any], collection: Dict[str
                           f"endpoint '{shapes[shape]}' of collection '{collection['name']}'")
         shapes[shape] = endpoint["name"]
         errors.extend(validate_inbound_endpoint(endpoint))
+        errors.extend(_call_errors(endpoint, cfg.get("call")))
         endpoints.append({"definition": endpoint, "exists": stored is not None, "call": cfg.get("call")})
     if not endpoints:
         errors.append(f"collection '{collection['name']}' declares no endpoint")
@@ -614,6 +682,7 @@ def _plan_collections(collections_cfg: List[Any], existing_collections: Any,
         names.add(collection["name"])
         base_paths.add(collection["basePath"])
         errors.extend(validate_inbound_collection(collection))
+        errors.extend(_handle_clash_errors(collection, existing_collections))
         stored_endpoints = existing_endpoints_for(collection["id"]) if (existing_endpoints_for and stored) else []
         endpoints = _plan_inbound_endpoints(collection_cfg, collection, stored_endpoints or [], errors)
         owner = stored.get("owner") if stored else None
@@ -801,36 +870,23 @@ def _upsert_collection(call: FetchFn, token: str, item: Dict[str, Any], token_id
     return collection["name"]
 
 
-def _live_pipeline_ids(call: FetchFn, token: str) -> set:
-    pipelines = call(PIPELINES_PATH, method="GET", token=token)
-    if not isinstance(pipelines, list):
-        return set()
-    ids = (p.get("pipelineId") or p.get("id") or p.get("pipeline_id") for p in pipelines if isinstance(p, dict))
-    return {str(pipeline_id) for pipeline_id in ids if pipeline_id is not None}
+def _check_attached_elsewhere(plan: Dict[str, Any], pipeline_id: str) -> None:
+    """A collection is served by one HTTP Source: Core Hub refuses an HTTP Source whose collection another one holds.
 
-
-def _check_attached_elsewhere(call: FetchFn, token: str, plan: Dict[str, Any], pipeline_id: str,
-                              keep_other_pipelines: bool, log: logging.Logger) -> None:
-    """A collection is served by one HTTP Source: attaching it to this one takes it away from the one that holds it.
-
-    Core Hub refuses an HTTP Source whose ``inboundCollection`` another HTTP Source holds. A bootstrapper run creates a
-    new pipeline every time, so a re-run after a failed one finds the collection attached to the pipeline of the failed
-    run (warned about: Core Hub refuses the attachment while that pipeline exists). A restore (``keep_other_pipelines``)
-    refuses before anything is written while the original pipeline still holds it: the restored copy could not serve it.
+    Core Hub reports a collection's ``owner`` only for a pipeline it knows, so an owner other than this pipeline is a
+    live one, and its clients' tokens are those this run would revoke: refused before anything is written, whether a
+    bootstrapper run (a run that failed earlier leaves its pipeline holding the collection) or a restore.
     """
     attached = next((i for i in plan["collections"] if i["collection"]["name"] == plan["attached"]), None)
     owner = attached.get("storedOwner") if attached else None
     if not owner or str(owner.get("pipelineId")) == str(pipeline_id):
         return
-    holder = f"HTTP Source {owner.get('agentId')} of pipeline {owner.get('pipelineId')}"
-    if keep_other_pipelines and not plan["force"] and str(owner.get("pipelineId")) in _live_pipeline_ids(call, token):
-        raise CourierConfigError(
-            f"Inbound collection '{plan['attached']}' is served by {holder}, and an HTTP Source serves one collection that "
-            "no other HTTP Source holds. Restore onto the Core Hub where the original pipeline is gone, or give the "
-            "collection of the 'courier' block another name and basePath."
-        )
-    log.warning("Inbound collection '%s' is attached to %s: Core Hub refuses to attach it here while that agent holds it",
-                plan["attached"], holder)
+    raise CourierConfigError(
+        f"Inbound collection '{plan['attached']}' is served by HTTP Source {owner.get('agentId')} of pipeline "
+        f"{owner.get('pipelineId')}, and Core Hub attaches a collection to one HTTP Source only. Delete that pipeline "
+        "(a run that failed earlier leaves it behind), or give the collection of the 'courier' block another name and "
+        "basePath."
+    )
 
 
 def provision_inbound(token: str, courier_cfg: Dict[str, Any], pipeline_id: str, agent_id: str,
@@ -840,8 +896,9 @@ def provision_inbound(token: str, courier_cfg: Dict[str, Any], pipeline_id: str,
 
     Tokens come first so that their ids can join the allowlist of the collections they are for. Returns the plan
     (``collections``, ``attached``: the name of the collection the HTTP Source serves). Raises ``CourierConfigError`` on
-    an invalid configuration, and whatever ``fetch`` raises on a CoreHub failure. ``keep_other_pipelines`` (a restore)
-    refuses to take a collection away from a pipeline that still exists (see ``_check_attached_elsewhere``).
+    an invalid configuration, and whatever ``fetch`` raises on a CoreHub failure. A collection another live pipeline's
+    HTTP Source holds is refused before anything is written (see ``_check_attached_elsewhere``); ``keep_other_pipelines``
+    (a restore) is accepted for the callers' sake and changes nothing since Core Hub 2.3.2.2.
     """
     log = logger or _logger
     call = fetch or _default_fetch()
@@ -852,7 +909,7 @@ def provision_inbound(token: str, courier_cfg: Dict[str, Any], pipeline_id: str,
         return call(INBOUND_ENDPOINTS_PATH, method="GET", token=token, params={"collectionId": collection_id})
 
     plan = plan_inbound_definitions(courier_cfg, existing_collections, existing_endpoints_for, inbound_collection)
-    _check_attached_elsewhere(call, token, plan, pipeline_id, keep_other_pipelines, log)
+    _check_attached_elsewhere(plan, pipeline_id)
 
     collection_ids_by_name = {item["collection"]["name"]: item["collection"]["id"] for item in plan["collections"]}
     token_ids_by_collection = _rotate_tokens(call, token, plan["tokens"], pipeline_id, agent_id, collection_ids_by_name, log)

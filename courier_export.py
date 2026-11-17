@@ -164,6 +164,10 @@ def export_inbound_block(call: FetchFn, token: str, pipeline_id: str, agent_id: 
     stored_collections = _collections(call, token, INBOUND_COLLECTIONS_PATH)
     if stored_collections is None:
         return None
+    if stored_collections and not any("owner" in c for c in stored_collections):
+        _logger.warning("This Core Hub reports no HTTP Source a collection is attached to (it predates 2.3.2.2): the "
+                        "inbound collections of HTTP Source %s are not exported", agent_id)
+        return None
     collections: List[Dict[str, Any]] = []
     for collection in stored_collections:
         owner = collection.get("owner") if isinstance(collection.get("owner"), dict) else {}
