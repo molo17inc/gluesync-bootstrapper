@@ -179,7 +179,17 @@ automator_smoke_windows:
     - job: automator_build_windows
       artifacts: false
       optional: true
-  rules: *rules_checks
+  rules:
+    # The Windows runners take protected refs only (signing material on the host): elsewhere the job would wait forever
+    - if: $CI_COMMIT_REF_PROTECTED != "true"
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: always
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: always
+    - if: $CI_COMMIT_TAG =~ /^automator-\d+\.\d+\.\d+.*$/
+      when: always
+    - when: never
   before_script:
     - |
       $ErrorActionPreference = 'Stop'
@@ -274,6 +284,9 @@ automator_smoke_windows:
       dotenv: bootstrapper-windows-image.env
     expire_in: 1 week
   rules:
+    # The Windows runners take protected refs only (signing material on the host): elsewhere the job would wait forever
+    - if: $CI_COMMIT_REF_PROTECTED != "true"
+      when: never
     - if: $CI_COMMIT_TAG =~ /^(tag|beta)-/
       interruptible: false
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
@@ -304,6 +317,9 @@ automator_smoke_windows:
   after_script:
     - cmd /c "docker image rm $env:IMAGE_REF >nul 2>nul"
   rules:
+    # The Windows runners take protected refs only (signing material on the host): elsewhere the job would wait forever
+    - if: $CI_COMMIT_REF_PROTECTED != "true"
+      when: never
     - if: $CI_COMMIT_TAG =~ /^(tag|beta)-/
       interruptible: false
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
@@ -359,7 +375,9 @@ fetch_agents:
       when: always
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
       when: always
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    # COURIER_BACKOFFICE_TOKEN is a protected group variable: a merge request from an unprotected branch does not get
+    # it, and its build jobs use the committed agents.json instead (they need fetch_agents only optionally)
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $COURIER_BACKOFFICE_TOKEN
       when: always
     - when: never
   before_script:
@@ -1263,7 +1281,7 @@ update_budibase_version:
       echo "Courier update response code: $UPDATE_STATUS"
       echo "Courier update response: $UPDATE_BODY"
 
-      if [ "$UPDATE_STATUS" -eq 200 ] && [ "$AFFECTED_ROWS" = "1" ]; then
+      if { [ "$UPDATE_STATUS" -eq 200 ] && [ "$AFFECTED_ROWS" = "1" ]; } || [ "$UPDATE_STATUS" -eq 202 ]; then
           echo "Successfully updated version of row $ROW_ID in the catalog"
       else
           echo "Failed to update version in the catalog. HTTP Status: $UPDATE_STATUS, affectedRows: ${AFFECTED_ROWS:-none}"
