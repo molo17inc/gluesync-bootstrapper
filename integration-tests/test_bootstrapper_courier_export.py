@@ -72,6 +72,10 @@ class StatefulCoreHub:
             if base == COLLECTIONS_PATH:  # Core Hub never returns the auth secret
                 return [{**c, "auth": {k: v for k, v in c["auth"].items() if k not in ("token", "password", "value")}}
                         for c in copy.deepcopy(list(items.values()))]
+            if base == INBOUND_COLLECTIONS_PATH:  # Core Hub reports the HTTP Source of a pipeline it knows only
+                known = {p["pipelineId"] for p in self.pipelines}
+                return [{**c, "owner": c.get("owner") if (c.get("owner") or {}).get("pipelineId") in known else None}
+                        for c in copy.deepcopy(list(items.values()))]
             return copy.deepcopy(list(items.values()))
         stored = items.get(body["id"])
         if method == "POST" and stored is not None:
@@ -243,14 +247,20 @@ class InboundExportTests(unittest.TestCase):
         self.assertIn("'shop' is served by HTTP Source http-source-1 of pipeline p1", str(raised.exception))
         self.assertEqual(len(self.hub.writes), writes_before, "refused before anything is written")
 
-    def test_a_restore_after_the_original_pipeline_is_gone_or_a_bootstrapper_run_goes_on_with_a_warning(self):
+    def test_a_restore_or_a_run_after_the_original_pipeline_is_gone_takes_the_collection(self):
         exported = export_courier_block("jwt", PIPELINE, source_agent(collection="shop"), fetch=self.hub)
-        for restore, pipelines in ((True, [{"pipelineId": RESTORED_PIPELINE}]), (False, self.hub.pipelines)):
-            self.hub.pipelines = pipelines
-            log = mock.Mock()
-            custom = self.restore(RESTORED_PIPELINE, RESTORED_AGENT, exported, restore=restore, logger=log)
+        self.hub.pipelines = [{"pipelineId": RESTORED_PIPELINE}]
+        for restore in (True, False):
+            custom = self.restore(RESTORED_PIPELINE, RESTORED_AGENT, exported, restore=restore)
             self.assertEqual(custom["inboundCollection"], "shop")
-            self.assertTrue(any("attached to %s" in c.args[0] for c in log.warning.call_args_list))
+
+    def test_a_bootstrapper_run_never_takes_the_collection_of_a_live_pipeline_either(self):
+        exported = export_courier_block("jwt", PIPELINE, source_agent(collection="shop"), fetch=self.hub)
+        tokens = copy.deepcopy(self.hub.tokens)
+        block = {**copy.deepcopy(exported), "tokens": [{"name": "shop-client", "outputFile": f"{self.tmp.name}/x.json"}]}
+        with self.assertRaises(CourierConfigError):
+            self.restore(RESTORED_PIPELINE, RESTORED_AGENT, block, restore=False)
+        self.assertEqual(self.hub.tokens, tokens, "the live pipeline's token is not revoked")
 
     def test_an_endpoint_renamed_in_the_ui_is_found_by_the_id_of_the_block(self):
         exported = export_courier_block("jwt", PIPELINE, source_agent(collection="shop"), fetch=self.hub)
