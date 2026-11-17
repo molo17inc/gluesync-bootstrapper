@@ -63,6 +63,8 @@ PIECE_COLUMNS = (RESULT_COLUMN, ROWS_COLUMN, VALUE_COLUMN, RETURN_COLUMN)
 ROUTINE_KINDS = ("PROCEDURE", "FUNCTION")
 DEFINITION_PROPERTY = "courierRoutine"
 DEFAULT_GROUP = "_default"
+VALUE_MODES = ("IN", "INOUT")
+RETURN_MODES = ("OUT", "INOUT")
 
 FetchFn = Callable[..., Any]
 
@@ -110,34 +112,51 @@ def _definition(target: Dict[str, Any]) -> Dict[str, Any]:
     return definition
 
 
-def plan_call(route: Dict[str, Any], call_cfg: Dict[str, Any], target: Dict[str, Any]) -> Dict[str, Any]:
-    """``{"inputs": {parameter: binding or None}, "response": output, "warnings": [...]}``: which binding each IN or INOUT
-    parameter takes and which output answers. Pure."""
-    definition = _definition(target)
-    parameters = [p for p in definition.get("parameters") or [] if isinstance(p, dict)]
-    binding_names = [_text(b.get("name") if isinstance(b, dict) else b) for b in route.get("bindings") or []]
-    routine = f"{call_cfg.get('schema')}.{call_cfg.get('name')}"
-    explicit = call_cfg.get("parameters") if isinstance(call_cfg.get("parameters"), dict) else {}
+def _mode(parameter: Dict[str, Any]) -> str:
+    return str(parameter.get("mode") or "IN").upper()
+
+
+def _explicit_errors(route: Dict[str, Any], routine: str, explicit: Dict[str, Any], parameters: List[Dict[str, Any]],
+                     binding_names: List[str]) -> List[str]:
+    """What is wrong with ``call.parameters``: a parameter the routine lacks, a binding the route lacks."""
     errors: List[str] = []
     for parameter, binding in explicit.items():
         if not any(p.get("name") == parameter for p in parameters):
             errors.append(f"routine '{routine}' has no parameter '{parameter}'")
         if binding is not None and binding not in binding_names:
             errors.append(f"route '{route.get('name')}' has no binding '{binding}'")
+    return errors
+
+
+def _inputs(parameters: List[Dict[str, Any]], explicit: Dict[str, Any], binding_names: List[str]) -> Dict[str, Optional[str]]:
+    """The binding each IN or INOUT parameter takes: the one ``call.parameters`` names, else the one of its name."""
     inputs: Dict[str, Optional[str]] = {}
     for parameter in parameters:
-        if str(parameter.get("mode") or "IN").upper() not in ("IN", "INOUT"):
+        if _mode(parameter) not in VALUE_MODES:
             continue
         name = parameter.get("name")
         inputs[name] = explicit[name] if name in explicit else next((b for b in binding_names if binding_matches(b, name)), None)
-    outputs = [
-        c.get("name") for c in _columns_of(target)
-        if c.get("name") in PIECE_COLUMNS
-        or any(p.get("name") == c.get("name") and str(p.get("mode") or "IN").upper() in ("OUT", "INOUT") for p in parameters)
-    ]
-    answer = ((route.get("routine") or {}).get("answer") or {})
-    body = _text(answer.get("body")).upper() or "ALL"
-    response = _text(call_cfg.get("response")) or default_output(body, outputs)
+    return inputs
+
+
+def _outputs(target: Dict[str, Any], parameters: List[Dict[str, Any]]) -> List[str]:
+    """The target's columns that are pieces of the answer: `_result`, `_rows`, `_value`, `_return`, each OUT or INOUT."""
+    returned = {p.get("name") for p in parameters if _mode(p) in RETURN_MODES}
+    return [c.get("name") for c in _columns_of(target) if c.get("name") in PIECE_COLUMNS or c.get("name") in returned]
+
+
+def plan_call(route: Dict[str, Any], call_cfg: Dict[str, Any], target: Dict[str, Any]) -> Dict[str, Any]:
+    """``{"inputs": {parameter: binding or None}, "response": output, "warnings": [...]}``: which binding each IN or INOUT
+    parameter takes and which output answers. Pure."""
+    parameters = [p for p in _definition(target).get("parameters") or [] if isinstance(p, dict)]
+    binding_names = [_text(b.get("name") if isinstance(b, dict) else b) for b in route.get("bindings") or []]
+    routine = f"{call_cfg.get('schema')}.{call_cfg.get('name')}"
+    explicit = call_cfg.get("parameters") if isinstance(call_cfg.get("parameters"), dict) else {}
+    errors = _explicit_errors(route, routine, explicit, parameters, binding_names)
+    inputs = _inputs(parameters, explicit, binding_names)
+    outputs = _outputs(target, parameters)
+    answer = (route.get("routine") or {}).get("answer") or {}
+    response = _text(call_cfg.get("response")) or default_output(_text(answer.get("body")).upper() or "ALL", outputs)
     if response not in outputs:
         errors.append(f"'{response}' is no output of routine '{routine}': choose one of {', '.join(outputs)}")
     if errors:

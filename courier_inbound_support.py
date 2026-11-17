@@ -116,25 +116,34 @@ LISTENER_KEYS = (
     "inboundAllowPlainHttp", "serverThreads", "maxConnections", "acceptQueueSize", "acceptors",
 )
 
+# Operations, verbs, types and body types, as InboundModels.kt names them.
+OP_LIST, OP_READ, OP_CREATE, OP_UPDATE, OP_DELETE, OP_EXECUTE = "LIST", "READ", "CREATE", "UPDATE", "DELETE", "EXECUTE"
+VERB_GET, VERB_POST, VERB_PUT, VERB_PATCH, VERB_DELETE = "GET", "POST", "PUT", "PATCH", "DELETE"
+TYPE_STRING, TYPE_NUMBER, TYPE_BOOLEAN = "STRING", "NUMBER", "BOOLEAN"
+BODY_NONE, BODY_JSON, BODY_FORM = "NONE", "JSON", "FORM_URLENCODED"
+BODY_NEEDS_TYPE = "BODY bindings need a body type"
+NOT_A_NUMBER = "is not a number"
+
 # The verbs each operation fits (InboundEndpointValidator.VERBS_BY_OPERATION); a read-only routine takes GET too.
 VERBS_BY_OPERATION = {
-    "LIST": ("GET",),
-    "READ": ("GET",),
-    "CREATE": ("POST",),
-    "UPDATE": ("PUT", "PATCH"),
-    "DELETE": ("DELETE",),
-    "EXECUTE": ("POST",),
+    OP_LIST: (VERB_GET,),
+    OP_READ: (VERB_GET,),
+    OP_CREATE: (VERB_POST,),
+    OP_UPDATE: (VERB_PUT, VERB_PATCH),
+    OP_DELETE: (VERB_DELETE,),
+    OP_EXECUTE: (VERB_POST,),
 }
-READ_ONLY_ROUTINE_VERBS = ("GET", "POST")
-OPERATION_BY_VERB = {"POST": "CREATE", "PUT": "UPDATE", "PATCH": "UPDATE", "DELETE": "DELETE"}
-READ_OPERATIONS = ("LIST", "READ")
-WRITE_OPERATIONS = ("CREATE", "UPDATE", "DELETE")
-KEYED_ROW_OPERATIONS = ("UPDATE", "DELETE")
-VERBS_WITH_BODY = ("POST", "PUT", "PATCH")
-INBOUND_BODY_TYPES = ("NONE", "JSON", "FORM_URLENCODED")
-BODY_TYPE_ALIASES = {"FORM": "FORM_URLENCODED"}
+READ_ONLY_ROUTINE_VERBS = (VERB_GET, VERB_POST)
+OPERATION_BY_VERB = {VERB_POST: OP_CREATE, VERB_PUT: OP_UPDATE, VERB_PATCH: OP_UPDATE, VERB_DELETE: OP_DELETE}
+READ_OPERATIONS = (OP_LIST, OP_READ)
+WRITE_OPERATIONS = (OP_CREATE, OP_UPDATE, OP_DELETE)
+KEYED_ROW_OPERATIONS = (OP_UPDATE, OP_DELETE)
+VERBS_WITH_BODY = (VERB_POST, VERB_PUT, VERB_PATCH)
+INBOUND_BODY_TYPES = (BODY_NONE, BODY_JSON, BODY_FORM)
+BODY_TYPE_ALIASES = {"FORM": BODY_FORM}
 ROUTINE_BODIES = ("ALL", "ROWS", "VALUE", "OUTPUT")
-ROUTINE_FORMATS = ("JSON", "XML")
+FORMAT_JSON, FORMAT_XML = "JSON", "XML"
+ROUTINE_FORMATS = (FORMAT_JSON, FORMAT_XML)
 MAX_ROUTINE_TIMEOUT_SECONDS = 3600
 DEFAULT_ROUTINE_TIMEOUT_SECONDS = 30
 MAX_ROWS_LIMIT = 10000
@@ -206,16 +215,16 @@ def _operation(endpoint: Dict[str, Any], verb: str, path: str) -> str:
     if explicit:
         return explicit
     if endpoint.get("routine") is not None or endpoint.get("call") is not None:
-        return "EXECUTE"
-    if verb == "GET":
-        return "READ" if _placeholders(path) else "LIST"
+        return OP_EXECUTE
+    if verb == VERB_GET:
+        return OP_READ if _placeholders(path) else OP_LIST
     return OPERATION_BY_VERB.get(verb, "")
 
 
 def _body_type(endpoint: Dict[str, Any], verb: str, operation: str) -> str:
     raw = _text(endpoint.get("bodyType")).upper()
     if not raw:
-        return "JSON" if verb in VERBS_WITH_BODY and operation not in READ_OPERATIONS else "NONE"
+        return BODY_JSON if verb in VERBS_WITH_BODY and operation not in READ_OPERATIONS else BODY_NONE
     return BODY_TYPE_ALIASES.get(raw, raw)
 
 
@@ -227,7 +236,7 @@ def normalize_response_field(field: Any) -> Dict[str, Any]:
         raise CourierConfigError(f"response field must be an object or a name, got {type(field).__name__}")
     return {
         "name": _text(field.get("name")),
-        "type": _text(field.get("type")).upper() or "STRING",
+        "type": _text(field.get("type")).upper() or TYPE_STRING,
         "description": field.get("description"),
     }
 
@@ -243,7 +252,7 @@ def normalize_routine_options(routine: Any) -> Dict[str, Any]:
         "ownTransaction": bool(routine.get("ownTransaction", False)),
         "answer": {
             "body": _text(answer.get("body")).upper() or "ALL",
-            "format": _text(answer.get("format")).upper() or "JSON",
+            "format": _text(answer.get("format")).upper() or FORMAT_JSON,
         },
     }
 
@@ -253,7 +262,7 @@ def normalize_inbound_endpoint(endpoint: Any, collection_id: str, existing_id: O
     if not isinstance(endpoint, dict):
         raise CourierConfigError(f"endpoint must be an object, got {type(endpoint).__name__}")
     name = _text(endpoint.get("name"))
-    verb = _text(endpoint.get("httpVerb", endpoint.get("method"))).upper() or "POST"
+    verb = _text(endpoint.get("httpVerb", endpoint.get("method"))).upper() or VERB_POST
     path = _text(endpoint.get("path", endpoint.get("pathTemplate"))) or "/"
     operation = _operation(endpoint, verb, path)
     operation_binding = _text(endpoint.get("operationBinding")) or None
@@ -273,7 +282,7 @@ def normalize_inbound_endpoint(endpoint: Any, collection_id: str, existing_id: O
         "bodyType": _body_type(endpoint, verb, operation),
         "responseFields": [normalize_response_field(f) for f in endpoint.get("responseFields") or []],
     }
-    if operation == "EXECUTE" or endpoint.get("routine") is not None:
+    if operation == OP_EXECUTE or endpoint.get("routine") is not None:
         payload["routine"] = normalize_routine_options(endpoint.get("routine"))
     return payload
 
@@ -313,14 +322,14 @@ def _path_errors(path: str) -> List[str]:
 def _number_error(text: str, routine: bool) -> Optional[str]:
     """Why ``text`` is no value of a NUMBER binding (InboundValues.number, routineNumber); None when it fits."""
     if not NUMBER_PATTERN.match(text):
-        return "is not a number"
+        return NOT_A_NUMBER
     try:
         value = Decimal(text).normalize()
     except InvalidOperation:
-        return "is not a number"
+        return NOT_A_NUMBER
     sign, digits, exponent = value.as_tuple()
     if not isinstance(exponent, int):  # NaN or Infinity: the pattern above lets neither through
-        return "is not a number"
+        return NOT_A_NUMBER
     scale = max(-exponent, 0)
     integer_digits = max(len(digits) + exponent, 0)
     if routine and (scale > ROUTINE_DIGITS or integer_digits > ROUTINE_DIGITS):
@@ -337,12 +346,12 @@ def _default_value_error(binding: Dict[str, Any], routine: bool = False) -> Opti
     if default is None:
         return None
     name = binding.get("name")
-    if binding.get("type") == "NUMBER":
+    if binding.get("type") == TYPE_NUMBER:
         problem = _number_error(default.strip(), routine)
         return f"binding '{name}': defaultValue {default!r} {problem}" if problem else None
-    if binding.get("type") == "BOOLEAN" and default.strip().lower() not in ("true", "false"):
+    if binding.get("type") == TYPE_BOOLEAN and default.strip().lower() not in ("true", "false"):
         return f"binding '{name}': defaultValue {default!r} is not true or false"
-    if binding.get("type") == "STRING" and not routine and len(default) > STRING_LENGTH:
+    if binding.get("type") == TYPE_STRING and not routine and len(default) > STRING_LENGTH:
         return f"binding '{name}': defaultValue is longer than {STRING_LENGTH} characters"
     return None
 
@@ -376,7 +385,7 @@ def _binding_errors(endpoint: Dict[str, Any], binding: Dict[str, Any]) -> List[s
         errors.append(f"HEADER binding '{name}' would write the caller's credentials into the target")
     elif location == "PATH" and not binding.get("required"):
         errors.append(f"PATH binding '{name}' must be required")
-    default_error = _default_value_error(binding, routine=endpoint.get("operation") == "EXECUTE")
+    default_error = _default_value_error(binding, routine=endpoint.get("operation") == OP_EXECUTE)
     if default_error:
         errors.append(default_error)
     return errors
@@ -416,26 +425,43 @@ def _write_errors(endpoint: Dict[str, Any], bindings: List[Dict[str, Any]]) -> L
     for binding in bindings:
         errors.extend(_binding_errors(endpoint, binding))
     by_name = {b.get("name"): b for b in bindings}
+    errors.extend(_key_binding_errors(endpoint, by_name))
+    errors.extend(_operation_binding_errors(endpoint, by_name))
+    if not _key_names(endpoint) and (endpoint.get("operation") in KEYED_ROW_OPERATIONS or endpoint.get("operationBinding")):
+        errors.append(
+            "needs a key to find the row (a key binding or a required PATH binding): without one every request "
+            f"gets a new '{SEQUENCE_COLUMN}' key and its updates and deletes change nothing"
+        )
+    if _body_without_type(endpoint, bindings):
+        errors.append(BODY_NEEDS_TYPE)
+    return errors
+
+
+def _body_without_type(endpoint: Dict[str, Any], bindings: List[Dict[str, Any]]) -> bool:
+    return endpoint.get("bodyType") == BODY_NONE and any(b.get("location") == "BODY" for b in bindings)
+
+
+def _key_binding_errors(endpoint: Dict[str, Any], by_name: Dict[Any, Dict[str, Any]]) -> List[str]:
+    errors: List[str] = []
     for key in endpoint.get("keyBindings") or []:
         if key not in by_name:
             errors.append(f"key binding '{key}' is not declared")
         elif not by_name[key].get("required"):
             errors.append(f"key binding '{key}' must be required")
+    return errors
+
+
+def _operation_binding_errors(endpoint: Dict[str, Any], by_name: Dict[Any, Dict[str, Any]]) -> List[str]:
     operation_binding = endpoint.get("operationBinding")
-    if operation_binding is not None:
-        if operation_binding not in by_name:
-            errors.append(f"operationBinding '{operation_binding}' is not declared")
-        elif by_name[operation_binding].get("type") != "STRING":
-            errors.append(f"operationBinding '{operation_binding}' must be a STRING binding")
-        if endpoint.get("httpVerb") == "PATCH":
-            errors.append("a PATCH updates the columns its request carries: it takes no operation binding")
-    if not _key_names(endpoint) and (endpoint.get("operation") in KEYED_ROW_OPERATIONS or operation_binding):
-        errors.append(
-            "needs a key to find the row (a key binding or a required PATH binding): without one every request "
-            f"gets a new '{SEQUENCE_COLUMN}' key and its updates and deletes change nothing"
-        )
-    if endpoint.get("bodyType") == "NONE" and any(b.get("location") == "BODY" for b in bindings):
-        errors.append("BODY bindings need a body type")
+    if operation_binding is None:
+        return []
+    errors: List[str] = []
+    if operation_binding not in by_name:
+        errors.append(f"operationBinding '{operation_binding}' is not declared")
+    elif by_name[operation_binding].get("type") != TYPE_STRING:
+        errors.append(f"operationBinding '{operation_binding}' must be a STRING binding")
+    if endpoint.get("httpVerb") == VERB_PATCH:
+        errors.append("a PATCH updates the columns its request carries: it takes no operation binding")
     return errors
 
 
@@ -446,18 +472,26 @@ def _response_field_errors(endpoint: Dict[str, Any]) -> List[str]:
         errors.append(f"{endpoint.get('operation')} needs at least one response field: the fields its answer carries")
     errors.extend(_duplicate_errors([f.get("name") or "" for f in fields], "response field"))
     for field in fields:
-        name = field.get("name") or ""
-        if not NAME_PATTERN.match(name):
-            errors.append(f"response field name {name!r} is not valid")
-        elif name.lower() == SEQUENCE_COLUMN:
-            errors.append(f"response field '{name}' is reserved for the request sequence")
-        if field.get("type") not in BINDING_TYPES:
-            errors.append(f"response field {name!r}: type {field.get('type')!r} is not one of {list(BINDING_TYPES)}")
-        same = next((b for b in endpoint.get("bindings") or [] if (b.get("name") or "").lower() == name.lower()), None)
-        if same is not None and same.get("name") != name:
-            errors.append(f"filter '{same.get('name')}' and response field '{name}' are one column: spell them the same way")
-        elif same is not None and same.get("type") != field.get("type"):
-            errors.append(f"filter '{name}' is a {same.get('type')} and its response field a {field.get('type')}: one column has one type")
+        errors.extend(_one_response_field_errors(endpoint, field))
+    return errors
+
+
+def _one_response_field_errors(endpoint: Dict[str, Any], field: Dict[str, Any]) -> List[str]:
+    name = field.get("name") or ""
+    errors: List[str] = []
+    if not NAME_PATTERN.match(name):
+        errors.append(f"response field name {name!r} is not valid")
+    elif name.lower() == SEQUENCE_COLUMN:
+        errors.append(f"response field '{name}' is reserved for the request sequence")
+    if field.get("type") not in BINDING_TYPES:
+        errors.append(f"response field {name!r}: type {field.get('type')!r} is not one of {list(BINDING_TYPES)}")
+    same = next((b for b in endpoint.get("bindings") or [] if (b.get("name") or "").lower() == name.lower()), None)
+    if same is None:
+        return errors
+    if same.get("name") != name:
+        errors.append(f"filter '{same.get('name')}' and response field '{name}' are one column: spell them the same way")
+    elif same.get("type") != field.get("type"):
+        errors.append(f"filter '{name}' is a {same.get('type')} and its response field a {field.get('type')}: one column has one type")
     return errors
 
 
@@ -467,7 +501,7 @@ def _read_errors(endpoint: Dict[str, Any], bindings: List[Dict[str, Any]]) -> Li
     errors: List[str] = []
     for binding in bindings:
         name = binding.get("name")
-        if binding.get("location") == "QUERY" and operation == "READ":
+        if binding.get("location") == "QUERY" and operation == OP_READ:
             errors.append(f"READ finds its row by the path: '{name}' is a QUERY binding, which only a LIST filters on")
         elif binding.get("location") in ("PATH", "QUERY"):
             errors.extend(_binding_errors(endpoint, binding))
@@ -482,22 +516,20 @@ def _read_errors(endpoint: Dict[str, Any], bindings: List[Dict[str, Any]]) -> Li
     if not _key_names(endpoint):
         errors.append(f"{operation} needs a key: choose the filters or response fields that identify a row (keyBindings)")
     placeholders = _placeholders(endpoint.get("path") or "")
-    if operation == "READ" and not placeholders:
+    if operation == OP_READ and not placeholders:
         errors.append("READ needs a path placeholder for the key, like /{id}")
-    if operation == "LIST" and placeholders:
+    if operation == OP_LIST and placeholders:
         errors.append("LIST takes no path placeholder: filter it with QUERY bindings")
     return errors
 
 
 def _routine_errors(endpoint: Dict[str, Any], bindings: List[Dict[str, Any]]) -> List[str]:
     """An EXECUTE declares its bindings and the options of the call (InboundEndpointValidator.routineErrors)."""
-    options = endpoint.get("routine") or {}
-    answer = options.get("answer") or {}
     errors: List[str] = []
-    if endpoint.get("bodyType") == "FORM_URLENCODED":
+    if endpoint.get("bodyType") == BODY_FORM:
         errors.append("a routine endpoint reads a JSON body: a form body is not available")
-    if endpoint.get("bodyType") == "NONE" and any(b.get("location") == "BODY" for b in bindings):
-        errors.append("BODY bindings need a body type")
+    if _body_without_type(endpoint, bindings):
+        errors.append(BODY_NEEDS_TYPE)
     if endpoint.get("responseFields"):
         errors.append("EXECUTE answers what its routine returns: response fields are a read's")
     if endpoint.get("keyBindings") or endpoint.get("operationBinding") is not None:
@@ -507,6 +539,12 @@ def _routine_errors(endpoint: Dict[str, Any], bindings: List[Dict[str, Any]]) ->
             errors.append(f"BODY binding '{binding.get('name')}' reads a nested value, which a routine endpoint does not")
         else:
             errors.extend(_binding_errors(endpoint, binding))
+    return errors + _routine_option_errors(endpoint.get("routine") or {})
+
+
+def _routine_option_errors(options: Dict[str, Any]) -> List[str]:
+    answer = options.get("answer") or {}
+    errors: List[str] = []
     if options.get("readOnly") and options.get("ownTransaction"):
         errors.append("a read-only routine runs in a transaction rolled back at the end: it cannot also commit by itself")
     if not 1 <= int(options.get("timeoutSeconds") or 0) <= MAX_ROUTINE_TIMEOUT_SECONDS:
@@ -524,7 +562,7 @@ def _verb_errors(endpoint: Dict[str, Any]) -> List[str]:
     if operation not in VERBS_BY_OPERATION:
         return [f"operation {operation!r} is not one of {list(VERBS_BY_OPERATION)}"]
     routine = endpoint.get("routine") or {}
-    allowed = READ_ONLY_ROUTINE_VERBS if operation == "EXECUTE" and routine.get("readOnly") else VERBS_BY_OPERATION[operation]
+    allowed = READ_ONLY_ROUTINE_VERBS if operation == OP_EXECUTE and routine.get("readOnly") else VERBS_BY_OPERATION[operation]
     if verb not in allowed:
         return [f"httpVerb {verb} does not fit operation {operation} (allowed: {', '.join(allowed)})"]
     return []
@@ -544,13 +582,13 @@ def validate_inbound_endpoint(endpoint: Dict[str, Any]) -> List[str]:
     errors.extend(path_errors)
     errors.extend(_duplicate_errors([b.get("name") or "" for b in bindings], "binding"))
     operation = endpoint.get("operation")
-    if operation == "EXECUTE":
+    if operation == OP_EXECUTE:
         errors.extend(_routine_errors(endpoint, bindings))
     elif operation in READ_OPERATIONS:
         errors.extend(_read_errors(endpoint, bindings))
     elif operation in WRITE_OPERATIONS:
         errors.extend(_write_errors(endpoint, bindings))
-    if operation != "EXECUTE" and endpoint.get("routine") is not None:
+    if operation != OP_EXECUTE and endpoint.get("routine") is not None:
         errors.append("only an EXECUTE endpoint calls a routine")
     if not path_errors:
         errors.extend(_placeholder_errors(endpoint, bindings))
@@ -612,7 +650,7 @@ def _call_errors(endpoint: Dict[str, Any], call: Any) -> List[str]:
     if not isinstance(call, dict):
         return [f"{prefix} must be an object"]
     errors: List[str] = []
-    if endpoint.get("operation") != "EXECUTE":
+    if endpoint.get("operation") != OP_EXECUTE:
         errors.append(f"{prefix}: only an EXECUTE route calls a routine (operation {endpoint.get('operation')})")
     errors.extend(f"{prefix} needs the routine's '{key}'" for key in ("schema", "name") if not _text(call.get(key)))
     kind = _text(call.get("kind")).upper()
@@ -683,12 +721,18 @@ def _plan_collections(collections_cfg: List[Any], existing_collections: Any,
         base_paths.add(collection["basePath"])
         errors.extend(validate_inbound_collection(collection))
         errors.extend(_handle_clash_errors(collection, existing_collections))
-        stored_endpoints = existing_endpoints_for(collection["id"]) if (existing_endpoints_for and stored) else []
-        endpoints = _plan_inbound_endpoints(collection_cfg, collection, stored_endpoints or [], errors)
-        owner = stored.get("owner") if stored else None
-        plan.append({"collection": collection, "exists": stored is not None, "endpoints": endpoints,
-                     "storedOwner": owner if isinstance(owner, dict) else None})
+        plan.append(_plan_collection_item(collection_cfg, collection, stored, existing_endpoints_for, errors))
     return plan
+
+
+def _plan_collection_item(collection_cfg: Dict[str, Any], collection: Dict[str, Any], stored: Optional[Dict[str, Any]],
+                          existing_endpoints_for: Optional[Callable[[str], Any]], errors: List[str]) -> Dict[str, Any]:
+    """One planned collection: its routes, whether Core Hub stores it, and the HTTP Source Core Hub reports holding it."""
+    stored_endpoints = existing_endpoints_for(collection["id"]) if (existing_endpoints_for and stored) else []
+    endpoints = _plan_inbound_endpoints(collection_cfg, collection, stored_endpoints or [], errors)
+    owner = stored.get("owner") if stored else None
+    return {"collection": collection, "exists": stored is not None, "endpoints": endpoints,
+            "storedOwner": owner if isinstance(owner, dict) else None}
 
 
 def _attached_collection(collections: List[Dict[str, Any]], inbound_collection: str, errors: List[str]) -> Optional[str]:
@@ -778,7 +822,7 @@ def _create_token(call: FetchFn, auth: str, body: Dict[str, Any], log: logging.L
     allowlist of those collections is all that keeps it out of the others. A refusal is never retried without the
     scopes: on a Core Hub that has them, a 400 is a real error, and dropping the scopes would widen the token.
     """
-    created = call(API_TOKENS_PATH, method="POST", token=auth, body=body)
+    created = call(API_TOKENS_PATH, method=VERB_POST, token=auth, body=body)
     if isinstance(created, dict) and COLLECTION_SCOPES_KEY not in created:
         log.warning(
             "This Core Hub does not scope Personal API Tokens to collections: token '%s' can also call the inbound "
@@ -792,7 +836,7 @@ def _rotate_token(call: FetchFn, auth: str, token: Dict[str, Any], existing_toke
     for stale in existing_tokens if isinstance(existing_tokens, list) else []:
         if isinstance(stale, dict) and stale.get("name") == token["name"] and stale.get("active"):
             log.info("Revoking the previous Personal API Token '%s' (id=%s)", token["name"], stale.get("id"))
-            call(f"{API_TOKENS_PATH}/{stale['id']}/revoke", method="POST", token=auth)
+            call(f"{API_TOKENS_PATH}/{stale['id']}/revoke", method=VERB_POST, token=auth)
     created = _create_token(call, auth, {
         "name": token["name"],
         "expiresInDays": token["expiresInDays"],
@@ -839,7 +883,7 @@ def _rotate_tokens(call: FetchFn, token: str, token_defs: List[Dict[str, Any]], 
     token_ids_by_collection: Dict[str, List[str]] = {}
     if not token_defs:
         return token_ids_by_collection
-    existing_tokens = call(API_TOKENS_PATH, method="GET", token=token)
+    existing_tokens = call(API_TOKENS_PATH, method=VERB_GET, token=token)
     for token_def in token_defs:
         collection_ids = [collection_ids_by_name[name] for name in token_def["collections"]]
         token_id = _rotate_token(call, token, token_def, existing_tokens, pipeline_id, agent_id, collection_ids, log)
@@ -903,10 +947,10 @@ def provision_inbound(token: str, courier_cfg: Dict[str, Any], pipeline_id: str,
     log = logger or _logger
     call = fetch or _default_fetch()
 
-    existing_collections = call(INBOUND_COLLECTIONS_PATH, method="GET", token=token)
+    existing_collections = call(INBOUND_COLLECTIONS_PATH, method=VERB_GET, token=token)
 
     def existing_endpoints_for(collection_id: str) -> Any:
-        return call(INBOUND_ENDPOINTS_PATH, method="GET", token=token, params={"collectionId": collection_id})
+        return call(INBOUND_ENDPOINTS_PATH, method=VERB_GET, token=token, params={"collectionId": collection_id})
 
     plan = plan_inbound_definitions(courier_cfg, existing_collections, existing_endpoints_for, inbound_collection)
     _check_attached_elsewhere(plan, pipeline_id)
