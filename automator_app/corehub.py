@@ -4789,8 +4789,7 @@ def _restore_courier_block(token, pipeline_id, agent_id, conf_agent, custom_host
     if not conf_agent.get("courier"):
         return custom_host_credentials
     agent = {**conf_agent, "agentId": str(agent_id), "customHostCredentials": dict(custom_host_credentials or {})}
-    provisioned = provision_courier_agent(token, pipeline_id, agent, fetch=fetch_core_hub, logger=logger,
-                                          keep_other_pipelines=True)
+    provisioned = provision_courier_agent(token, pipeline_id, agent, fetch=fetch_core_hub, logger=logger)
     return custom_host_credentials if provisioned is None else provisioned
 
 

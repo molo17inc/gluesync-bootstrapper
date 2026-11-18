@@ -96,9 +96,11 @@ class PlanCallTests(unittest.TestCase):
         self.assertEqual(plan["response"], "p_total")
 
     def test_a_parameter_a_binding_or_an_output_that_does_not_exist_is_refused(self):
+        call = {"schema": "shop", "name": "place_order", "response": "p_customer",
+                "parameters": {"p_x": "customer", "p_note": "nope"}}
+        routine = target()
         with self.assertRaises(CourierConfigError) as raised:
-            plan_call(ROUTE, {"schema": "shop", "name": "place_order", "response": "p_customer",
-                              "parameters": {"p_x": "customer", "p_note": "nope"}}, target())
+            plan_call(ROUTE, call, routine)
         message = str(raised.exception)
         self.assertIn("has no parameter 'p_x'", message)
         self.assertIn("has no binding 'nope'", message)
@@ -143,8 +145,9 @@ class BuildEntityTests(unittest.TestCase):
                             for e in routine["entityType"]["columnsMappingMatrix"]))
 
     def test_a_route_the_http_source_does_not_list_is_refused(self):
+        routine = target()
         with self.assertRaises(CourierConfigError) as raised:
-            build_entity(ROUTE, {"schema": "shop", "name": "place_order"}, "shop", SOURCE, [], TARGET, target())
+            build_entity(ROUTE, {"schema": "shop", "name": "place_order"}, "shop", SOURCE, [], TARGET, routine)
         self.assertIn("does not list route 'Place order'", str(raised.exception))
 
 

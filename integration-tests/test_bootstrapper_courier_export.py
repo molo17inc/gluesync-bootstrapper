@@ -171,9 +171,9 @@ class InboundExportTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def restore(self, pipeline_id, agent_id, block, restore=True, logger=None):
+    def restore(self, pipeline_id, agent_id, block, logger=None):
         agent = source_agent(agent_id, courier=copy.deepcopy(block))
-        return provision_courier_agent("jwt", pipeline_id, agent, fetch=self.hub, logger=logger, keep_other_pipelines=restore)
+        return provision_courier_agent("jwt", pipeline_id, agent, fetch=self.hub, logger=logger)
 
     def test_the_export_is_the_served_collection_with_its_routes_ids_and_without_tokens(self):
         block = export_courier_block("jwt", PIPELINE, source_agent(), fetch=self.hub)
@@ -224,16 +224,15 @@ class InboundExportTests(unittest.TestCase):
     def test_a_restore_or_a_run_after_the_original_pipeline_is_gone_takes_the_collection(self):
         exported = export_courier_block("jwt", PIPELINE, source_agent(), fetch=self.hub)
         self.hub.pipelines = [{"pipelineId": RESTORED_PIPELINE}]
-        for restore in (True, False):
-            custom = self.restore(RESTORED_PIPELINE, RESTORED_AGENT, exported, restore=restore)
-            self.assertEqual(custom["inboundCollection"], "shop")
+        custom = self.restore(RESTORED_PIPELINE, RESTORED_AGENT, exported)
+        self.assertEqual(custom["inboundCollection"], "shop")
 
     def test_a_bootstrapper_run_never_takes_the_collection_of_a_live_pipeline_either(self):
         exported = export_courier_block("jwt", PIPELINE, source_agent(), fetch=self.hub)
         tokens = copy.deepcopy(self.hub.tokens)
         block = {**copy.deepcopy(exported), "tokens": [{"name": "shop-client", "outputFile": f"{self.tmp.name}/x.json"}]}
         with self.assertRaises(CourierConfigError):
-            self.restore(RESTORED_PIPELINE, RESTORED_AGENT, block, restore=False)
+            self.restore(RESTORED_PIPELINE, RESTORED_AGENT, block)
         self.assertEqual(self.hub.tokens, tokens, "the live pipeline's token is not revoked")
 
     def test_a_core_hub_older_than_2_3_2_2_exports_no_inbound_block_and_says_so(self):
@@ -454,7 +453,6 @@ class AutomatorCourierTests(unittest.TestCase):
 
         self.assertEqual(custom, {"outboundCollection": "demo-api"})
         self.assertEqual(provision.call_args.args[2]["agentId"], "new-id")
-        self.assertTrue(provision.call_args.kwargs["keep_other_pipelines"], "a restore never takes a live pipeline's endpoints")
 
     def test_an_agent_without_a_block_is_left_as_it_is(self):
         with mock.patch.object(corehub, "provision_courier_agent") as provision:

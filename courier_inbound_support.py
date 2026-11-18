@@ -327,7 +327,7 @@ def _number_error(text: str, routine: bool) -> Optional[str]:
         value = Decimal(text).normalize()
     except InvalidOperation:
         return NOT_A_NUMBER
-    sign, digits, exponent = value.as_tuple()
+    _, digits, exponent = value.as_tuple()
     if not isinstance(exponent, int):  # NaN or Infinity: the pattern above lets neither through
         return NOT_A_NUMBER
     scale = max(-exponent, 0)
@@ -935,14 +935,13 @@ def _check_attached_elsewhere(plan: Dict[str, Any], pipeline_id: str) -> None:
 
 def provision_inbound(token: str, courier_cfg: Dict[str, Any], pipeline_id: str, agent_id: str,
                       fetch: Optional[FetchFn] = None, logger: Optional[logging.Logger] = None,
-                      keep_other_pipelines: bool = False, inbound_collection: str = "") -> Dict[str, Any]:
+                      inbound_collection: str = "") -> Dict[str, Any]:
     """Creates or updates the inbound collections, routes and tokens of an HTTP Source in CoreHub.
 
     Tokens come first so that their ids can join the allowlist of the collections they are for. Returns the plan
     (``collections``, ``attached``: the name of the collection the HTTP Source serves). Raises ``CourierConfigError`` on
     an invalid configuration, and whatever ``fetch`` raises on a CoreHub failure. A collection another live pipeline's
-    HTTP Source holds is refused before anything is written (see ``_check_attached_elsewhere``); ``keep_other_pipelines``
-    (a restore) is accepted for the callers' sake and changes nothing since Core Hub 2.3.2.2.
+    HTTP Source holds is refused before anything is written (see ``_check_attached_elsewhere``), on a restore as on a run.
     """
     log = logger or _logger
     call = fetch or _default_fetch()
@@ -1000,8 +999,7 @@ def routine_calls(agent: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 def provision_courier_agent(token: str, pipeline_id: str, agent: Dict[str, Any], fetch: Optional[FetchFn] = None,
-                            logger: Optional[logging.Logger] = None,
-                            keep_other_pipelines: bool = False) -> Optional[Dict[str, Any]]:
+                            logger: Optional[logging.Logger] = None) -> Optional[Dict[str, Any]]:
     """Creates the Courier definitions of an HTTP Source or HTTP Target agent entry and fills its defaults.
 
     The agent discovers them (collection = schema, route or endpoint = table, binding = column), so they must
@@ -1027,7 +1025,6 @@ def provision_courier_agent(token: str, pipeline_id: str, agent: Dict[str, Any],
     if source:
         custom = agent.get("customHostCredentials") if isinstance(agent.get("customHostCredentials"), dict) else {}
         plan = provision_inbound(token, agent["courier"], pipeline_id, agent["agentId"], fetch=fetch, logger=log,
-                                 keep_other_pipelines=keep_other_pipelines,
                                  inbound_collection=_text(custom.get(INBOUND_COLLECTION_KEY)))
         apply_inbound_defaults(agent, plan["attached"], logger=log)
     else:
