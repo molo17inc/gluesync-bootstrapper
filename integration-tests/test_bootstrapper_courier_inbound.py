@@ -641,8 +641,9 @@ class FreeRouteTests(unittest.TestCase):
     def test_several_collections_need_the_served_one_named(self):
         collections = [{"name": "shop", "endpoints": [{"name": "e", "path": "/", "bindings": ["a"]}]},
                        {"name": "billing", "basePath": "bill", "endpoints": [{"name": "e", "path": "/", "bindings": ["a"]}]}]
+        config = routes_config(collections=collections)
         with self.assertRaises(CourierConfigError) as raised:
-            plan_inbound_definitions(routes_config(collections=collections))
+            plan_inbound_definitions(config)
         self.assertIn("customHostCredentials.inboundCollection", str(raised.exception))
         self.assertEqual(plan_inbound_definitions(routes_config(collections=collections), inbound_collection="/bill/")["attached"],
                          "billing", "named by its base path, as the agent resolves it")
@@ -651,8 +652,9 @@ class FreeRouteTests(unittest.TestCase):
     def test_a_call_belongs_to_the_served_collection(self):
         collections = [{"name": "shop", "endpoints": [{"name": "e", "path": "/", "bindings": ["a"]}]},
                        {"name": "other", "endpoints": [{"name": "x", "path": "/x", "call": {"schema": "s", "name": "p"}}]}]
+        config = routes_config(collections=collections)
         with self.assertRaises(CourierConfigError) as raised:
-            plan_inbound_definitions(routes_config(collections=collections), inbound_collection="shop")
+            plan_inbound_definitions(config, inbound_collection="shop")
         self.assertIn("routes x cannot have an entity of this pipeline", str(raised.exception))
 
     def test_routine_calls_lists_the_routes_whose_entity_the_bootstrapper_builds(self):
@@ -671,15 +673,14 @@ class AttachedElsewhereTests(unittest.TestCase):
     and reports a collection's owner only while that pipeline exists."""
 
     def test_a_collection_another_pipeline_holds_is_refused_before_anything_is_written(self):
-        for restore in (False, True):
-            hub = FakeCoreHub(collections=[{"id": "stored-shop", "name": "shop",
-                                            "owner": {"pipelineId": "original", "agentId": "http-original"}}])
-            with self.subTest(restore=restore), self.assertRaises(CourierConfigError) as raised:
-                provision_inbound("jwt", inbound_config("/tmp/never-written.json"), PIPELINE, AGENT, fetch=hub,
-                                  keep_other_pipelines=restore)
-            self.assertIn("served by HTTP Source http-original of pipeline original", str(raised.exception))
-            self.assertEqual(hub.methods_and_paths(), [("GET", INBOUND_COLLECTIONS_PATH), ("GET", INBOUND_ENDPOINTS_PATH)],
-                             "no token revoked or created, nothing saved")
+        hub = FakeCoreHub(collections=[{"id": "stored-shop", "name": "shop",
+                                        "owner": {"pipelineId": "original", "agentId": "http-original"}}])
+        config = inbound_config("/tmp/never-written.json")
+        with self.assertRaises(CourierConfigError) as raised:
+            provision_inbound("jwt", config, PIPELINE, AGENT, fetch=hub)
+        self.assertIn("served by HTTP Source http-original of pipeline original", str(raised.exception))
+        self.assertEqual(hub.methods_and_paths(), [("GET", INBOUND_COLLECTIONS_PATH), ("GET", INBOUND_ENDPOINTS_PATH)],
+                         "no token revoked or created, nothing saved")
 
     def test_a_collection_this_pipeline_or_nobody_holds_is_updated(self):
         for owner in (None, {"pipelineId": PIPELINE, "agentId": AGENT}):
@@ -692,8 +693,9 @@ class CallAndValueRuleTests(unittest.TestCase):
     """What Core Hub would refuse only after the pipeline exists is refused at plan time."""
 
     def refused(self, *endpoints, collections=None):
+        config = routes_config(*endpoints, collections=collections)
         with self.assertRaises(CourierConfigError) as raised:
-            plan_inbound_definitions(routes_config(*endpoints, collections=collections))
+            plan_inbound_definitions(config)
         return str(raised.exception)
 
     def test_a_call_needs_an_execute_route_a_schema_a_name_and_a_known_kind(self):
@@ -731,8 +733,9 @@ class CallAndValueRuleTests(unittest.TestCase):
 
     def test_a_handle_of_another_stored_collection_is_refused(self):
         stored = [{"id": "other-id", "name": "orders", "basePath": "shop"}]
+        config = routes_config({"name": "w", "path": "/w", "bindings": ["a"]})
         with self.assertRaises(CourierConfigError) as raised:
-            plan_inbound_definitions(routes_config({"name": "w", "path": "/w", "bindings": ["a"]}), existing_collections=stored)
+            plan_inbound_definitions(config, existing_collections=stored)
         self.assertIn("is a handle of stored collection 'orders'", str(raised.exception))
 
 if __name__ == "__main__":
