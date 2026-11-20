@@ -4,7 +4,8 @@
 # It used to download the Python zip from python.org and get-pip.py from bootstrap.pypa.io on every run. Now each
 # download is looked up in this order and stored back on a miss:
 #   1. the runner host:  C:\ci-cache\downloads   (survives between jobs on the shell runner)
-#   2. Nexus raw cache:  ui-build-cache/gluesync-bootstrapper/shared/windows-python   (skipped when $env:NEXUS_REPO_PASSWORD is empty)
+#   2. the HQ build cache ($env:BUILD_CACHE_URL, scripts/ci/build-cache.ps1), keyed on the download URL. These jobs run on
+#      protected refs only, so they read and write the trusted ci-cache path (group variable BUILD_CACHE_PASSWORD).
 #   3. the origin (python.org, bootstrap.pypa.io)
 # pip uses the Nexus PyPI proxy through $env:PIP_INDEX_URL (set globally in .gitlab-ci.yml) and a persistent wheel cache
 # on the runner host, C:\ci-cache\pip. A cache that cannot be created or written never fails the job.
@@ -20,16 +21,45 @@ $ProgressPreference = 'SilentlyContinue'   # the progress bar slows Invoke-WebRe
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch { }
 
 $pythonVersion = '3.11.9'
-$nexusCache = 'https://nexus.hq.molo17.com/repository/ui-build-cache/gluesync-bootstrapper/shared/windows-python'
 $cacheRoot = 'C:\ci-cache'
 
-function Get-NexusHeaders {
-  if (-not $env:NEXUS_REPO_PASSWORD) { return $null }
-  $token = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("gluesync:$($env:NEXUS_REPO_PASSWORD)"))
-  return @{ Authorization = "Basic $token" }
+. (Join-Path $PSScriptRoot 'build-cache.ps1')
+
+# Build cache entries are tgz files of .bc-downloads\<name> under the job dir. The helpers run with
+# ErrorActionPreference Continue: Windows PowerShell 5.1 turns the stderr of curl.exe (a miss) into a terminating error
+# under Stop, and a cache problem must never fail the job.
+function Get-DownloadCacheKey([string]$OriginUrl) {
+  $ErrorActionPreference = 'Continue'
+  $extra = $env:BC_KEY_EXTRA
+  try { $env:BC_KEY_EXTRA = $OriginUrl; return "download-$(Get-BcKey)" } finally { $env:BC_KEY_EXTRA = $extra }
 }
 
-# Fetch-Cached <name> <origin url> <out file>: host cache, then Nexus, then the origin (and store it back).
+function Restore-Download([string]$Name, [string]$OriginUrl, [string]$OutFile) {
+  $ErrorActionPreference = 'Continue'
+  try {
+    if (Restore-BuildCache (Get-DownloadCacheKey $OriginUrl) $env:CI_PROJECT_DIR) {
+      $cached = Join-Path (Join-Path $env:CI_PROJECT_DIR '.bc-downloads') $Name
+      if ((Test-Path $cached) -and ((Get-Item $cached).Length -gt 0)) { Move-Item $cached $OutFile -Force; return $true }
+    }
+  } catch { Write-Host "build-cache: restore of $Name failed (ignored): $($_.Exception.Message)" }
+  $global:LASTEXITCODE = 0
+  return $false
+}
+
+function Save-Download([string]$Name, [string]$OriginUrl, [string]$File) {
+  $ErrorActionPreference = 'Continue'
+  try {
+    $dir = Join-Path $env:CI_PROJECT_DIR '.bc-downloads'
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    Copy-Item $File (Join-Path $dir $Name) -Force
+    Push-Location $env:CI_PROJECT_DIR
+    try { Save-BuildCache (Get-DownloadCacheKey $OriginUrl) ".bc-downloads/$Name" } finally { Pop-Location }
+    Remove-Item (Join-Path $dir $Name) -Force -ErrorAction SilentlyContinue
+  } catch { Write-Host "build-cache: save of $Name failed (ignored): $($_.Exception.Message)" }
+  $global:LASTEXITCODE = 0
+}
+
+# Fetch-Cached <name> <origin url> <out file>: host cache, then the build cache, then the origin (and store it back).
 function Fetch-Cached([string]$Name, [string]$OriginUrl, [string]$OutFile) {
   $hostFile = $null
   try {
@@ -44,26 +74,9 @@ function Fetch-Cached([string]$Name, [string]$OriginUrl, [string]$OutFile) {
     return
   }
 
-  $headers = Get-NexusHeaders
-  $fromNexus = $false
-  if ($headers) {
-    try {
-      Invoke-WebRequest -UseBasicParsing -Headers $headers -Uri "$nexusCache/$Name" -OutFile $OutFile
-      if ((Get-Item $OutFile).Length -gt 0) { $fromNexus = $true; Write-Host "cache $Name <- nexus" }
-    } catch {
-      Write-Host "cache ${Name}: miss"
-      Remove-Item $OutFile -Force -ErrorAction SilentlyContinue
-    }
-  }
-
-  if (-not $fromNexus) {
+  if (-not (Restore-Download $Name $OriginUrl $OutFile)) {
     Invoke-WebRequest -UseBasicParsing -Uri $OriginUrl -OutFile $OutFile
-    if ($headers) {
-      try {
-        Invoke-WebRequest -UseBasicParsing -Headers $headers -Method Put -InFile $OutFile -Uri "$nexusCache/$Name" | Out-Null
-        Write-Host "cache $Name -> nexus"
-      } catch { Write-Host "cache ${Name}: upload skipped" }
-    }
+    Save-Download $Name $OriginUrl $OutFile
   }
 
   if ($hostFile) {

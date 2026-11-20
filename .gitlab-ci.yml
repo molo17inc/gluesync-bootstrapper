@@ -29,8 +29,9 @@
 #   deploy       publish / image push / Lambda + Azure mirror (deploy:azure) / catalog version (Courier)
 # Linux jobs run on the HQ docker runners (default tag), Windows jobs on the HQ Windows shell runners. Images come from
 # the Nexus pull-through (docker-group) or from molo17-local, packages from the Nexus PyPI proxy (PIP_INDEX_URL), and the
-# pip / Python downloads are cached in the Nexus raw repository ui-build-cache (scripts/ci/nexus-cache.sh,
-# scripts/ci/setup-windows-python.ps1).
+# pip / Python downloads are cached in the HQ build cache ($BUILD_CACHE_URL, scripts/ci/build-cache.sh and .ps1, vendored
+# from k8s-gitops apps/build-cache/client): protected refs read and write ci-cache, other refs read ci-cache then
+# ci-cache-mr and write only ci-cache-mr.
 stages:
   - prepare
   - validate
@@ -68,14 +69,28 @@ variables:
 .python311:
   image: nexus.hq.molo17.com/docker-group/library/python:3.11-bookworm
 
-# Python job with the packages of $PIP_INSTALL_ARGS installed; the pip cache comes from (and on a miss goes to) the Nexus
-# raw cache, keyed on the hash of the requirements files, see scripts/ci/nexus-cache.sh
+# Python job with the packages of $PIP_INSTALL_ARGS installed. The pip wheel cache (.pip-cache) comes from (and on a miss
+# goes to) the HQ build cache, keyed on the content of the requirements files in $PIP_INSTALL_ARGS, the arguments, the
+# Python build and the job image. pip still resolves against the index, so unpinned packages stay current. A cache
+# outage only means a cold install (scripts/ci/build-cache.sh never fails the job).
 .python_with_deps:
   extends: .python311
   before_script:
     - python3 --version
-    - . scripts/ci/nexus-cache.sh
-    - pip_install_cached $PIP_INSTALL_ARGS
+    - |
+      . scripts/ci/build-cache.sh
+      export PIP_CACHE_DIR="$CI_PROJECT_DIR/.pip-cache"
+      pip_files=""
+      for a in $PIP_INSTALL_ARGS; do if [ -f "$a" ]; then pip_files="$pip_files $a"; fi; done
+      BC_KEY_EXTRA="$(python3 -VV) $CI_JOB_IMAGE $PIP_INSTALL_ARGS"
+      pip_key=$(bc_key $pip_files)
+      unset BC_KEY_EXTRA
+      if bc_restore "pip-$pip_key"; then
+        pip install $PIP_INSTALL_ARGS
+      else
+        pip install $PIP_INSTALL_ARGS
+        bc_save "pip-$pip_key" .pip-cache
+      fi
 
 # The jobs that check every merge request, the default branch and the automator release tags
 .rules_checks: &rules_checks
