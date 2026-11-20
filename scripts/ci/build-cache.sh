@@ -61,11 +61,16 @@ bc_save() {
   [ -n "$_pw" ] || { echo "build-cache: upload of $_key skipped (no credentials for $_r)"; return 0; }
   _url="$BUILD_CACHE_URL/$_r/$_bc_project/$_key.tgz"
   if curl -fsS -I --connect-timeout 10 "$_url" >/dev/null 2>&1; then echo "build-cache: $_key already in $_r"; return 0; fi
-  _tmp="${TMPDIR:-/tmp}/bc-$$-$_key.tgz"
-  { tar -cf - "$@" | gzip -1 > "$_tmp" \
+  # Never upload an entry that is missing a path or was not written completely: a bad trusted entry would be
+  # restored by every later build. tar writes to a file (no pipe, so a tar failure is seen even without pipefail).
+  for _p in "$@"; do
+    [ -e "$_p" ] || { echo "build-cache: upload of $_key skipped ($_p missing)"; return 0; }
+  done
+  _tmp="${TMPDIR:-/tmp}/bc-$$-$_key.tar"
+  { tar -cf "$_tmp" "$@" && gzip -1 -f "$_tmp" && _tmp="$_tmp.gz" && gzip -t "$_tmp" \
     && curl -fsS --retry 2 --connect-timeout 10 -u "$_u:$_pw" --upload-file "$_tmp" "$_url" \
     && echo "build-cache: saved $_key to $_r ($(du -h "$_tmp" | cut -f1))"; } \
     || echo "build-cache: upload of $_key failed (ignored)"
-  rm -f "$_tmp"
+  rm -f "${TMPDIR:-/tmp}/bc-$$-$_key.tar" "${TMPDIR:-/tmp}/bc-$$-$_key.tar.gz"
   return 0
 }
