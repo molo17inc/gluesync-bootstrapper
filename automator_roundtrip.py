@@ -107,6 +107,14 @@ TABLE_ID_REFERENCE_KEYS = {
     "targetTableObjectId": "TARGET",
 }
 
+# Fields that list columns by id, and the side the listed columns belong to. A NoSQL entity's
+# columns have no catalog behind them: the ids are made up when the entity is created and again
+# when a restore creates it, so they differ between two pipelines with the same configuration.
+COLUMN_ID_LIST_KEYS = {
+    "sourceColumnIds": "SOURCE",
+    "targetColumnIds": "TARGET",
+}
+
 MAX_DIFF_LINES = 400
 RESTORE_ERROR_LINES = 3
 _ANSI_ESCAPES = re.compile(r"\x1b\[[0-9;]*m")
@@ -256,6 +264,11 @@ def normalize_table_ids(entity: Dict[str, Any], agent_sides: Dict[str, str]) -> 
     the placeholder of the table that id belongs to on the matching side. This is done per
     entity and per side because CoreHub gives the source and the target table the same id
     when they have the same name. An id that matches no table is left as it is.
+
+    Column ids get the same treatment: a column of an agent entity gives
+    ``<column:SIDE:table.name>``, as do the ids in the mapping matrix's ``sourceColumnIds`` /
+    ``targetColumnIds``. A NoSQL entity's columns have no catalog, so their ids are made up
+    anew by every restore and say nothing about the configuration, the column's name does.
     """
     result = copy.deepcopy(entity)
     agent_entities = [(ae, _agent_entity_side(ae, agent_sides)) for ae in result.get("agentEntities") or []
@@ -266,7 +279,76 @@ def normalize_table_ids(entity: Dict[str, Any], agent_sides: Dict[str, str]) -> 
             tables[side].setdefault(str(ref["id"]), f"<table:{side}:{_table_ref_name(ref)}>")
     for agent_entity, side in agent_entities:
         _replace_table_ids(agent_entity, side, tables)
+    columns = _column_placeholders(agent_entities)
+    for agent_entity, side in agent_entities:
+        _replace_column_ids(agent_entity, side, columns)
     return result
+
+
+def _is_column_ref(node: Any) -> bool:
+    """A dict that names a column and carries its id and its table: ``{id, name, tableId}``."""
+    return (
+        isinstance(node, dict)
+        and isinstance(node.get("id"), (int, str))
+        and not isinstance(node.get("id"), bool)
+        and isinstance(node.get("name"), str)
+        and "tableId" in node
+    )
+
+
+def _walk_column_refs(node: Any):
+    if _is_column_ref(node):
+        yield node
+    if isinstance(node, dict):
+        for child in node.values():
+            yield from _walk_column_refs(child)
+    elif isinstance(node, list):
+        for child in node:
+            yield from _walk_column_refs(child)
+
+
+def _column_placeholders(agent_entities: List[Any]) -> Dict[str, Dict[str, str]]:
+    """side -> {column id: ``<column:SIDE:table.name>``} for the columns of an entity's agent entities.
+
+    Expects the table ids already replaced. An id that stands for two different columns of one
+    side is left out: its placeholder would hide a real difference.
+    """
+    columns: Dict[str, Dict[str, str]] = {"SOURCE": {}, "TARGET": {}, "?": {}}
+    ambiguous: Dict[str, set] = {"SOURCE": set(), "TARGET": set(), "?": set()}
+    for agent_entity, side in agent_entities:
+        for ref in _walk_column_refs(agent_entity.get("columns")):
+            table = ref.get("tableId")
+            qualified = f"{table}.{ref['name']}" if isinstance(table, str) and table.startswith("<table:") else ref["name"]
+            placeholder = f"<column:{side}:{qualified}>"
+            known = columns[side].setdefault(str(ref["id"]), placeholder)
+            if known != placeholder:
+                ambiguous[side].add(str(ref["id"]))
+    for side, ids in ambiguous.items():
+        for column_id in ids:
+            columns[side].pop(column_id, None)
+    return columns
+
+
+def _replace_column_ids(node: Any, side: str, columns: Dict[str, Dict[str, str]]) -> None:
+    """Replace, in place, the id of every column of an agent entity and every id in its column id lists."""
+    if isinstance(node, list):
+        for child in node:
+            _replace_column_ids(child, side, columns)
+        return
+    if not isinstance(node, dict):
+        return
+    if _is_column_ref(node):
+        placeholder = columns.get(side, {}).get(str(node["id"]))
+        if placeholder:
+            node["id"] = placeholder
+    for key, child in node.items():
+        list_side = COLUMN_ID_LIST_KEYS.get(key)
+        if list_side and isinstance(child, list):
+            node[key] = [columns.get(list_side, {}).get(str(item), item)
+                         if isinstance(item, (int, str)) and not isinstance(item, bool) else item
+                         for item in child]
+        else:
+            _replace_column_ids(child, side, columns)
 
 
 def drop_computed_partitions(entity: Dict[str, Any]) -> Dict[str, Any]:
