@@ -32,7 +32,10 @@ Given a pipeline that is already configured, this:
    (entities, groups, Chronos schedules, function collection, Courier definitions) and that the two exports match.
 
 The Courier definitions of the HTTP agents (``courier_export``) are part of the export: the restore takes them from
-the export, not from the kit's config file, so a definition the export misses fails the ``courier`` check.
+the export, not from the kit's config file, so a definition the export misses fails the ``courier`` check. An HTTP
+Source's collection belongs to that one HTTP Source, so the copy is restored with the collection's name and base path
+suffixed (``-roundtrip``), under a token of its own whose plaintext never reaches ``--output-dir``; the restored side is
+mapped back to the original names before the comparison (Core Hub 2.3.2.2+).
 
 Everything lands in ``--output-dir``: both exports, both CoreHub snapshots,
 the restore log, ``report.json``, a per-check diff and a JUnit file.
@@ -48,8 +51,10 @@ import difflib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -64,6 +69,7 @@ from commons import (
     login_password_candidates,
 )
 from courier_export import agent_key, export_pipeline_courier
+from courier_inbound_support import INBOUND_COLLECTION_KEY, is_http_source_agent
 from courier_support import is_courier_agent
 from function_collection import fetch_function_collection
 from export_template_from_corehub import (
@@ -77,6 +83,12 @@ log_file = create_log_file()
 logger = get_logger(log_file)
 
 ROUND_TRIP_SUFFIX = " [automator round-trip]"
+# Appended to the name and base path of an HTTP Source's collection in the restored copy: a collection belongs to one
+# HTTP Source, so the copy next to the original needs its own. Distinctive, so the restored side maps it back by replace.
+COPY_SUFFIX = "-roundtrip"
+# Courier fields that differ between two Core Hub definitions of the same configuration (ids derive from names, and a
+# token is a credential: never exported, never restored).
+COURIER_VOLATILE_KEYS = frozenset({"id", "allowedTokenIds", "blockedTokenIds"})
 DEFAULT_TOKEN_FILE = "/opt/config/auth_token.json"
 SCRIPT_DIR = Path(__file__).resolve().parent
 
@@ -571,10 +583,28 @@ def check_schedules(original: Dict[str, Any], restored: Dict[str, Any], expects_
     return compare_keyed(check, left, right, "schedules")
 
 
+def _drop_export_column_ids(document: Any) -> Any:
+    """The export document without the ``id`` of its custom table columns, in place.
+
+    The id of a column of a source without a catalog (an HTTP Source's, a NoSQL entity's) is made up by Core Hub anew
+    for every pipeline; the column is identified by its ``source`` and ``target`` names, which stay compared.
+    """
+    if not isinstance(document, dict):
+        return document
+    for section in document.values():
+        tables = section.get("tables") if isinstance(section, dict) else None
+        custom = tables.get("custom") if isinstance(tables, dict) else None
+        for table in (custom or {}).values():
+            for column in (table.get("columns") if isinstance(table, dict) else None) or []:
+                if isinstance(column, dict):
+                    column.pop("id", None)
+    return document
+
+
 def check_export_stable(original: Dict[str, Any], restored: Dict[str, Any]) -> Check:
     check = Check("export-is-stable", "Exporting the restored pipeline gives back the same YAML")
-    left = normalize(yaml.safe_load(strip_export_header(original["export"])) or {}, original["idMap"])
-    right = normalize(yaml.safe_load(strip_export_header(restored["export"])) or {}, restored["idMap"])
+    left = normalize(_drop_export_column_ids(yaml.safe_load(strip_export_header(original["export"])) or {}), original["idMap"])
+    right = normalize(_drop_export_column_ids(yaml.safe_load(strip_export_header(restored["export"])) or {}), restored["idMap"])
     if left == right:
         check.message = "both exports are identical"
         return check
@@ -587,9 +617,34 @@ def check_export_stable(original: Dict[str, Any], restored: Dict[str, Any]) -> C
     return check
 
 
+def _courier_comparable(value: Any) -> Any:
+    """A Courier block without its ids and token ids."""
+    if isinstance(value, dict):
+        return {k: _courier_comparable(v) for k, v in value.items() if k not in COURIER_VOLATILE_KEYS}
+    if isinstance(value, list):
+        return [_courier_comparable(v) for v in value]
+    return value
+
+
+def _courier_sorted(value: Any) -> Any:
+    """Collections and endpoints in name order: Core Hub lists them in no promised order."""
+    if isinstance(value, dict):
+        result = {}
+        for key, item in value.items():
+            item = _courier_sorted(item)
+            if key in ("collections", "endpoints") and isinstance(item, list) and all(isinstance(i, dict) for i in item):
+                item = sorted(item, key=lambda i: str(i.get("name")))
+            result[key] = item
+        return result
+    if isinstance(value, list):
+        return [_courier_sorted(v) for v in value]
+    return value
+
+
 def check_courier(original: Dict[str, Any], restored: Dict[str, Any]) -> Check:
     check = Check("courier", "The restored HTTP agents have the Courier collections and endpoints of the original ones")
-    left, right = original.get("courier") or {}, restored.get("courier") or {}
+    left = _courier_sorted(_courier_comparable(original.get("courier") or {}))
+    right = _courier_sorted(_courier_comparable(restored.get("courier") or {}))
     if left == right:
         check.message = f"{sum(len(b.get('collections') or []) for b in left.values())} Courier collection(s) restored"
         return check
@@ -600,11 +655,43 @@ def check_courier(original: Dict[str, Any], restored: Dict[str, Any]) -> Check:
     return check
 
 
-def courier_restore_config(config: Dict[str, Any], blocks: Dict[str, Dict[str, Any]], config_dir: Path) -> Dict[str, Any]:
+def inbound_collection_names(blocks: Dict[str, Dict[str, Any]]) -> List[str]:
+    """Names of the inbound collections of the HTTP Source blocks (``SOURCE:...`` keys), in block order."""
+    return [
+        str(collection["name"])
+        for key, block in blocks.items() if key.upper().startswith("SOURCE:")
+        for collection in (block or {}).get("collections") or []
+        if isinstance(collection, dict) and collection.get("name")
+    ]
+
+
+def _copy_inbound_block(block: Dict[str, Any]) -> Dict[str, Any]:
+    """The block as a renamed copy: name and base path suffixed, no ids, no token ids, no tokens."""
+    copied = copy.deepcopy(block)
+    copied.pop("tokens", None)
+    for collection in copied.get("collections") or []:
+        base_path = collection.get("basePath") or collection["name"]
+        collection["name"] = f"{collection['name']}{COPY_SUFFIX}"
+        collection["basePath"] = f"{base_path}{COPY_SUFFIX}"
+        collection.pop("id", None)
+        collection.pop("allowedTokenIds", None)
+        collection.pop("blockedTokenIds", None)
+        for endpoint in collection.get("endpoints") or []:
+            endpoint.pop("id", None)
+    return copied
+
+
+def courier_restore_config(config: Dict[str, Any], blocks: Dict[str, Dict[str, Any]], config_dir: Path,
+                           pipeline_id: str = "", token_dir: Optional[Path] = None) -> Dict[str, Any]:
     """The kit config with the exported ``courier`` block on each HTTP agent (none when none was exported).
 
     The export is what is restored, not the kit's own block: its tokens are left out (restoring one would revoke the
     token the kit's clients use). A relative certificate path is made absolute, as the copy lives in another folder.
+
+    An HTTP Source gets a renamed copy of its collection (:data:`COPY_SUFFIX` on the name and base path, no ids, so the
+    original keeps its own), ``inboundCollection`` pointing at it, and a token of its own: Core Hub saves a collection
+    only while an active token can call it. The token's plaintext goes to ``token_dir``, which has to be outside the
+    artifacts folder.
     """
     restored = copy.deepcopy(config)
     for agent in restored.get("agents") or []:
@@ -616,11 +703,84 @@ def courier_restore_config(config: Dict[str, Any], blocks: Dict[str, Dict[str, A
         if not is_courier_agent(agent):
             continue
         block = blocks.get(agent_key(agent))
-        if block:
-            agent["courier"] = copy.deepcopy(block)
-        else:
+        if not block:
             agent.pop("courier", None)
+        elif is_http_source_agent(agent):
+            if token_dir is None:
+                raise ValueError("an HTTP Source needs a token_dir outside the artifacts folder for its token")
+            agent["courier"] = _copy_inbound_block(block)
+            names = [c["name"] for c in agent["courier"].get("collections") or []]
+            if not isinstance(agent.get("customHostCredentials"), dict):
+                agent["customHostCredentials"] = {}
+            if names:
+                agent["customHostCredentials"][INBOUND_COLLECTION_KEY] = names[0]
+            token_name = f"roundtrip-{agent.get('agentTag')}-{pipeline_id}".strip("-")
+            agent["courier"]["tokens"] = [{
+                "name": token_name,
+                "expiresInDays": 1,
+                "collections": names,
+                "outputFile": str(Path(token_dir) / f"{token_name}.json"),
+            }]
+        else:
+            agent["courier"] = copy.deepcopy(block)
     return restored
+
+
+def _rename_in(value: Any, mapping: Dict[str, str]) -> Any:
+    """A copy of ``value`` with every occurrence of a mapping key replaced in its keys and strings."""
+    if isinstance(value, dict):
+        return {_rename_str(k, mapping) if isinstance(k, str) else k: _rename_in(v, mapping) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_rename_in(v, mapping) for v in value]
+    return _rename_str(value, mapping) if isinstance(value, str) else value
+
+
+def _rename_str(text: str, mapping: Dict[str, str]) -> str:
+    for old, new in mapping.items():
+        text = text.replace(old, new)
+    return text
+
+
+def rename_export_collections(export_text: str, names: List[str]) -> str:
+    """The export YAML with the HTTP Source collections ``names`` renamed to their copy (:data:`COPY_SUFFIX`).
+
+    A collection is the source schema: the top-level key of its tables, and the schema part of the ``entityName`` of
+    each custom table (``shop.events``). Only those places are touched. The comment header is dropped.
+    """
+    renamed = set(names)
+    document = yaml.safe_load(export_text) or {}
+    result: Dict[str, Any] = {}
+    for key, section in document.items():
+        if key in renamed and isinstance(section, dict):
+            tables = section.get("tables")
+            custom = tables.get("custom") if isinstance(tables, dict) else None
+            for table in (custom or {}).values():
+                entity_name = table.get("entityName") if isinstance(table, dict) else None
+                if isinstance(entity_name, str) and entity_name.startswith(f"{key}."):
+                    table["entityName"] = f"{key}{COPY_SUFFIX}{entity_name[len(key):]}"
+            key = f"{key}{COPY_SUFFIX}"
+        result[key] = section
+    return yaml.safe_dump(result, sort_keys=False, allow_unicode=True)
+
+
+def restore_original_names(side: Dict[str, Any], names: List[str]) -> Dict[str, Any]:
+    """The restored side with the copy names of the collections ``names`` mapped back, and its ``idMap`` recomputed.
+
+    The suffix is distinctive, so every key and string of the snapshot and of the export text holding
+    ``<name>-roundtrip`` gets ``<name>``. The id map is built again from the renamed entities: its placeholders carry
+    entity names, and ``<entity:shop-roundtrip.events>`` would never match the original's ``<entity:shop.events>``.
+    """
+    if not names:
+        return side
+    mapping = {f"{name}{COPY_SUFFIX}": name for name in names}
+    renamed = _rename_in({k: v for k, v in side.items() if k not in ("export", "idMap")}, mapping)
+    if isinstance(side.get("export"), str):
+        renamed["export"] = _rename_str(side["export"], mapping)
+    renamed["idMap"] = build_id_map(
+        str(renamed.get("pipelineId") or ""), renamed.get("agents") or [], renamed.get("entities") or [],
+        renamed.get("groups") or [],
+    )
+    return renamed
 
 
 def run_checks(original: Dict[str, Any], restored: Dict[str, Any], expects_schedules: bool = False) -> List[Check]:
@@ -890,42 +1050,37 @@ def capture(token: str, pipeline_id: str, out_dir: Path, label: str) -> Dict[str
     return side
 
 
-class RoundTripSkipped(RoundTripError):
-    """The pipeline cannot be round-tripped on its own Core Hub: reported as skipped, not as a failure."""
-
-
-def refuse_http_source_round_trip(blocks: Dict[str, Dict[str, Any]], pipeline_id: str) -> None:
-    """Raises ``RoundTripSkipped`` when the pipeline has an HTTP Source with inbound endpoints.
-
-    An inbound endpoint serves one pipeline, and two endpoints of a collection cannot share a route: the copy restored
-    next to the original on this Core Hub would take the original's endpoints away (or be refused with a 409 once
-    entities read them). Said up front, before anything is restored, instead of failing halfway or breaking the
-    original pipeline; the kit's own tests still cover the HTTP Source.
-    """
-    sources = sorted(key for key in blocks if key.upper().startswith("SOURCE:"))
-    if sources:
-        raise RoundTripSkipped(
-            f"pipeline {pipeline_id} has an HTTP Source with inbound endpoints ({', '.join(sources)}): an inbound endpoint "
-            "serves one pipeline, so a copy cannot be restored next to the original on the same Core Hub, and the round "
-            "trip does not cover this pipeline (the original is left untouched)."
-        )
-
-
-def write_courier_restore_config(blocks: Dict[str, Dict[str, Any]], out_dir: Path) -> Optional[Path]:
+def write_courier_restore_config(blocks: Dict[str, Dict[str, Any]], out_dir: Path, pipeline_id: str = "",
+                                 token_dir: Optional[Path] = None) -> Optional[Path]:
     """``restore-config.json``: the kit config with the exported Courier blocks; None when there is none to restore."""
     if not blocks:
         return None
     kit_config = Path(os.getenv("FILE_CONF_PATH", str(SCRIPT_DIR / "config.json"))).expanduser().resolve()
     config = json.loads(kit_config.read_text(encoding="utf-8"))
     path = out_dir / "restore-config.json"
-    write_json(path, courier_restore_config(config, blocks, kit_config.parent))
+    write_json(path, courier_restore_config(config, blocks, kit_config.parent, pipeline_id, token_dir))
+    return path
+
+
+def write_restore_export(original_export: Path, names: List[str], out_dir: Path) -> Path:
+    """The export to restore: ``original_export`` itself, or ``restore-export.yaml`` with the HTTP Source collections
+    ``names`` renamed to their copy when there are any."""
+    if not names:
+        return original_export
+    path = out_dir / "restore-export.yaml"
+    path.write_text(rename_export_collections(original_export.read_text(encoding="utf-8"), names), encoding="utf-8")
     return path
 
 
 def export_and_restore(
     pipeline_id: str, out_dir: Path, token_file: str, timeout: int,
 ) -> Tuple[Dict[str, Any], Dict[str, Any], str]:
-    """Return the original side, the restored side and what happened."""
+    """Return the original side, the restored side and what happened.
+
+    An HTTP Source is restored as a renamed copy of its collection with a token of its own, whose plaintext lives in a
+    temporary folder outside ``out_dir`` for the length of the restore; the restored side is then mapped back to the
+    original names, so that the two sides compare.
+    """
     try:
         token = authenticate(token_file)
         original = capture(token, pipeline_id, out_dir, "original")
@@ -935,15 +1090,22 @@ def export_and_restore(
     pipeline = original["pipeline"] if isinstance(original["pipeline"], dict) else {}
     restore_name = f"{pipeline.get('name') or pipeline_id}{ROUND_TRIP_SUFFIX}"
     collection_dir = out_dir / "original-function-collection" if original.get("functionCollection") else None
-    refuse_http_source_round_trip(original.get("courier") or {}, pipeline_id)
-    config_path = write_courier_restore_config(original.get("courier") or {}, out_dir)
-    restored_id, error = restore_export(out_dir / "original-export.yaml", restore_name, out_dir, timeout,
-                                        function_collection_dir=collection_dir, config_path=config_path)
+    blocks = original.get("courier") or {}
+    names = inbound_collection_names(blocks)
+    token_dir = Path(tempfile.mkdtemp(prefix="roundtrip-tokens-")) if names else None
+    try:
+        config_path = write_courier_restore_config(blocks, out_dir, pipeline_id, token_dir)
+        export_path = write_restore_export(out_dir / "original-export.yaml", names, out_dir)
+        restored_id, error = restore_export(export_path, restore_name, out_dir, timeout,
+                                            function_collection_dir=collection_dir, config_path=config_path)
+    finally:
+        if token_dir is not None:
+            shutil.rmtree(token_dir, ignore_errors=True)
     if error:
         raise RoundTripError(error)
 
     try:
-        restored = capture(token, restored_id, out_dir, "restored")
+        restored = restore_original_names(capture(token, restored_id, out_dir, "restored"), names)
     except Exception as exc:  # pylint: disable=broad-except
         raise RoundTripError(f"export of restored pipeline {restored_id} failed: {exc}") from exc
     return original, restored, f"pipeline {pipeline_id} exported and restored as {restored_id}"
@@ -978,8 +1140,6 @@ def run(pipeline_id: str, out_dir: Path, token_file: str, timeout: int, suite_na
     try:
         original, restored, step.message = export_and_restore(pipeline_id, out_dir, token_file, timeout)
         checks.extend(run_checks(original, restored, kit_declares_schedules()))
-    except RoundTripSkipped as exc:
-        step.skip(str(exc))
     except RoundTripError as exc:
         step.fail(str(exc))
     return write_results(out_dir, pipeline_id, suite_name, checks, time.time() - started)
