@@ -316,7 +316,7 @@ class TableIdTests(unittest.TestCase):
         self.assertEqual(normalised, again)
         self.assertEqual(normalised["agentEntities"][0]["tables"][0]["id"], "<table:TARGET:demo.T1>")
         self.assertEqual(normalised["agentEntities"][0]["columns"][1][0]["tableId"], "<table:TARGET:demo.T1>")
-        self.assertEqual(normalised["agentEntities"][0]["columns"][1][0]["id"], 5)
+        self.assertEqual(normalised["agentEntities"][0]["columns"][1][0]["id"], "<column:TARGET:<table:TARGET:demo.T1>.ID>")
 
     def test_nosql_target_sharing_the_source_table_id_after_restore_passes(self):
         """CoreHub gives a source and a target table of the same name the same id."""
@@ -332,6 +332,43 @@ class TableIdTests(unittest.TestCase):
         restored = _table_side("c0ffee00", "b", entity(77))
         check = rt.check_entities(original, restored)
         self.assertTrue(check.passed, check.message + "\n".join(check.diff[:20]))
+
+    def test_nosql_column_ids_made_up_anew_by_a_restore_pass(self):
+        """The columns of a NoSQL entity have no catalog: their ids differ after every restore."""
+        def entity(source_ids, target_ids):
+            def columns(side_ids, table_id):
+                return [{"id": side_ids[0], "name": "n", "tableId": table_id}, {"id": side_ids[1], "name": "s", "tableId": table_id}]
+            return {"entityId": "e1", "entityName": "_default.docs", "agentEntities": [
+                {"agentId": "srcX", "type": "NoSqlEntity", "customProperties": {},
+                 "entityObject": {"collection": "docs", "scope": "_default", "id": 77},
+                 "columns": columns(source_ids, 77), "entityType": {"type": "Source"}},
+                {"agentId": "tgtX", "type": "NoSqlEntity", "customProperties": {},
+                 "entityObject": {"collection": "docs", "scope": "_default", "id": 77},
+                 "columns": columns(target_ids, 77),
+                 "entityType": {"type": "Target", "columnsMappingMatrix": [
+                     {"sourceColumnIds": [source_ids[0]], "targetColumnIds": [target_ids[0]]},
+                     {"sourceColumnIds": [source_ids[1]], "targetColumnIds": [target_ids[1]]}]}}]}
+        original = _table_side("a5d110b3", "a", entity([-6302379491323964057, -971021202871125315],
+                                                       [-6302379491323964057, -971021202871125315]))
+        restored = _table_side("c0ffee00", "b", entity([-6302379491323964057, -971021202871125315],
+                                                       [-4275337055179045683, 3288513861393381336]))
+        check = rt.check_entities(original, restored)
+        self.assertTrue(check.passed, check.message + "\n".join(check.diff[:20]))
+
+    def test_a_renamed_column_is_still_a_difference(self):
+        def entity(name):
+            return {"entityId": "e1", "entityName": "_default.docs", "agentEntities": [
+                {"agentId": "tgtX", "type": "NoSqlEntity", "entityObject": {"collection": "docs", "scope": "_default", "id": 77},
+                 "columns": [{"id": 9, "name": name, "tableId": 77}],
+                 "entityType": {"type": "Target", "columnsMappingMatrix": [{"targetColumnIds": [9]}]}}]}
+        check = rt.check_entities(_table_side("a5d110b3", "a", entity("n")), _table_side("c0ffee00", "b", entity("m")))
+        self.assertFalse(check.passed)
+
+    def test_an_id_shared_by_two_different_columns_is_left_alone(self):
+        entity = {"agentEntities": [{"agentId": "tgtX", "table": {"id": 77, "name": "T", "schema": "s"},
+                                     "columns": [{"id": 9, "name": "a", "tableId": 77}, {"id": 9, "name": "b", "tableId": 77}]}]}
+        out = rt.normalize_table_ids(entity, {"tgtX": "TARGET"})
+        self.assertEqual([c["id"] for c in out["agentEntities"][0]["columns"]], [9, 9])
 
     def test_table_ids_match_by_exact_value_only(self):
         entity = {"agentEntities": [{"agentId": "tgtX", "table": {"id": 123456789, "name": "T", "schema": "s"},
