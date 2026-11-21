@@ -24,8 +24,10 @@ The block has the shape ``config.json`` takes (see ``courier_support`` and ``cou
 export can be pasted into a configuration, or restored by the bootstrapper and the Automator, which provision it
 as they provision a hand-written one:
 
-- HTTP Source (``courier-agent`` as SOURCE): the inbound collections that hold a pipeline endpoint of the agent,
-  with those endpoints only, their allowlist and blocklist;
+- HTTP Source (``courier-agent`` as SOURCE): the inbound collection the agent is attached to
+  (``customHostCredentials.inboundCollection``, matched by id, name or base path) with all its endpoints, its
+  allowlist and blocklist. Core Hub 2.3.2.2+ lets a collection belong to one HTTP Source only, and its endpoints are
+  free routes, not tied to a pipeline or an agent;
 - HTTP Target (``courier-agent`` as TARGET): the outbound collection the agent sends to
   (``customHostCredentials.outboundCollection``), or every outbound collection when it names none, with their
   endpoints.
@@ -40,8 +42,8 @@ Ids are kept, so a restore updates the same definitions instead of creating new 
 - Header values of outbound endpoints, unless ``include_secrets`` (a SUPER_ADMIN only): Core Hub masks them. A
   restore sends the mask back, which keeps the stored value on the Core Hub that stores the endpoint, on the same
   origin; anywhere else Core Hub has no value to keep, so the restore refuses the block until the values are typed in.
-- An HTTP Source endpoint serves one pipeline: the Automator does not restore it into another pipeline while the one
-  it serves still exists, and the round trip does not cover a pipeline with an HTTP Source.
+- An HTTP Source's collection belongs to that one HTTP Source: the Automator round trip restores a renamed copy of it
+  (name and base path suffixed) with a token of its own, and maps the names back before comparing.
 
 Command line, for every Courier agent of a pipeline (JSON on stdout, ``{agentType:agentTag:agentId: block}``)::
 
@@ -68,6 +70,7 @@ from courier_support import (
     status_of,
 )
 from courier_inbound_support import (
+    INBOUND_COLLECTION_KEY,
     INBOUND_COLLECTIONS_PATH,
     INBOUND_ENDPOINTS_PATH,
     is_http_source_agent,
@@ -152,21 +155,23 @@ def _inbound_collection(collection: Dict[str, Any], endpoints: List[Dict[str, An
     return exported
 
 
-def export_inbound_block(call: FetchFn, token: str, pipeline_id: str, agent_id: str) -> Optional[Dict[str, Any]]:
-    """The inbound collections holding a pipeline endpoint of HTTP Source ``agent_id``, with those endpoints; None if none."""
+def export_inbound_block(call: FetchFn, token: str, agent: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The inbound collection ``agent`` is attached to (``inboundCollection``), with all its endpoints; None if none.
+
+    ``inboundCollection`` is the collection's id on Core Hub 2.3.2.2+; its name or base path are accepted too, as a
+    config names it. None when the agent names no collection, or Core Hub stores no such one.
+    """
+    wanted = str(custom_credentials_of(agent).get(INBOUND_COLLECTION_KEY) or "").strip()
+    if not wanted:
+        return None
     stored_collections = _collections(call, token, INBOUND_COLLECTIONS_PATH)
     if stored_collections is None:
         return None
-    collections: List[Dict[str, Any]] = []
     for collection in stored_collections:
-        stored = _list(call(INBOUND_ENDPOINTS_PATH, method="GET", token=token, params={"collectionId": collection.get("id")}))
-        endpoints = [
-            _inbound_endpoint(e) for e in stored
-            if str(e.get("pipelineId")) == str(pipeline_id) and str(e.get("agentId")) == str(agent_id)
-        ]
-        if endpoints:
-            collections.append(_inbound_collection(collection, endpoints))
-    return {"collections": collections} if collections else None
+        if wanted in (collection.get("id"), collection.get("name"), collection.get("basePath")):
+            stored = _list(call(INBOUND_ENDPOINTS_PATH, method="GET", token=token, params={"collectionId": collection.get("id")}))
+            return {"collections": [_inbound_collection(collection, [_inbound_endpoint(e) for e in stored])]}
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -239,8 +244,7 @@ def export_courier_block(token: str, pipeline_id: str, agent: Dict[str, Any], fe
         from commons import fetch_core_hub  # pylint: disable=import-outside-toplevel
         fetch = fetch_core_hub
     if is_http_source_agent(agent):
-        agent_id = agent.get("agentId") or agent.get("id")
-        return export_inbound_block(fetch, token, pipeline_id, str(agent_id)) if agent_id is not None else None
+        return export_inbound_block(fetch, token, agent)
     return export_outbound_block(fetch, token, agent, include_secrets=include_secrets)
 
 
