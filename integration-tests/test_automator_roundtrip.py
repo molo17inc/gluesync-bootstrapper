@@ -216,6 +216,16 @@ class RunChecksTests(unittest.TestCase):
         self.assertFalse(check.passed)
         self.assertTrue(any(line.startswith("-") and "vehicles" in line for line in check.diff))
 
+    def test_made_up_column_ids_of_the_export_do_not_count_but_the_columns_do(self):
+        def export(column_id, target):
+            return ("shop:\n  tables:\n    custom:\n      orders:\n        columns:\n"
+                    f"        - source: id\n          target: {target}\n          id: {column_id}\n")
+        original, restored = _side("a5d110b3", "a"), _side("c0ffee00", "b")
+        original["export"], restored["export"] = export(-824178807598858643, "id"), export(-3326013039792863454, "id")
+        self.assertTrue(rt.check_export_stable(original, restored).passed)
+        restored["export"] = export(-3326013039792863454, "key")
+        self.assertFalse(rt.check_export_stable(original, restored).passed)
+
     def test_empty_pipeline_is_a_failure(self):
         check = rt.check_entities(_side("a5d110b3", "a", entities=[]), _side("c0ffee00", "b", entities=[]))
         self.assertFalse(check.passed)

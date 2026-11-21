@@ -583,10 +583,28 @@ def check_schedules(original: Dict[str, Any], restored: Dict[str, Any], expects_
     return compare_keyed(check, left, right, "schedules")
 
 
+def _drop_export_column_ids(document: Any) -> Any:
+    """The export document without the ``id`` of its custom table columns, in place.
+
+    The id of a column of a source without a catalog (an HTTP Source's, a NoSQL entity's) is made up by Core Hub anew
+    for every pipeline; the column is identified by its ``source`` and ``target`` names, which stay compared.
+    """
+    if not isinstance(document, dict):
+        return document
+    for section in document.values():
+        tables = section.get("tables") if isinstance(section, dict) else None
+        custom = tables.get("custom") if isinstance(tables, dict) else None
+        for table in (custom or {}).values():
+            for column in (table.get("columns") if isinstance(table, dict) else None) or []:
+                if isinstance(column, dict):
+                    column.pop("id", None)
+    return document
+
+
 def check_export_stable(original: Dict[str, Any], restored: Dict[str, Any]) -> Check:
     check = Check("export-is-stable", "Exporting the restored pipeline gives back the same YAML")
-    left = normalize(yaml.safe_load(strip_export_header(original["export"])) or {}, original["idMap"])
-    right = normalize(yaml.safe_load(strip_export_header(restored["export"])) or {}, restored["idMap"])
+    left = normalize(_drop_export_column_ids(yaml.safe_load(strip_export_header(original["export"])) or {}), original["idMap"])
+    right = normalize(_drop_export_column_ids(yaml.safe_load(strip_export_header(restored["export"])) or {}), restored["idMap"])
     if left == right:
         check.message = "both exports are identical"
         return check
