@@ -32,6 +32,7 @@ import yaml
 
 from commons import fetch_core_hub, get_table_columns, is_length_type, is_temporal_type, catalog_type_for_agent_tag, \
     embedded_agent_categories, agent_types_by_tag, sql_or_nosql
+import transactions_audit
 from field_function_utils import apply_field_functions_to_column_mappings, normalize_expression_for_yaml
 from entity_mapping import read_entry, relations_of, yaml_rows
 from utils.chronos_client import ChronosClient
@@ -2208,6 +2209,7 @@ def render_pipeline_export(token: str, pipeline_id: str) -> str:
         logger.info(f"Enriched null column types for {enriched} table(s) via live discovery")
 
     yaml_data = build_yaml_structure(schemas, groups_by_name, pipe_scheds, grp_scheds)
+    transactions_audit.export_into(yaml_data, token, pipeline_id)
 
     # Build provenance header and prepend it to the YAML
     header = build_export_header(token, pipeline_id)

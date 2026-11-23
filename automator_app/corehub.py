@@ -61,6 +61,7 @@ import create_user_defined_functions
 import function_collection
 import import_options
 import ai_settings
+import transactions_audit
 from courier_export import export_courier_block
 from courier_inbound_support import provision_courier_agent
 from export_template_from_corehub import (
@@ -1928,6 +1929,7 @@ def export_pipeline_yaml(
         # Note: sourceTableName is preserved as it's needed during import
 
     yaml_data = build_yaml_structure(schemas, groups_by_name, pipe_scheds, grp_scheds)
+    transactions_audit.export_into(yaml_data, token, pipeline_id)
 
     # Embed pipeline identity as a first-class YAML key so imports can
     # resolve the original pipeline without parsing the backup filename.

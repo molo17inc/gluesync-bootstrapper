@@ -1132,41 +1132,29 @@ Object-store / streaming / NoSQL targets still skip create-table (same as Import
 
 ### Transactions Auditing
 
-The bootstrapper supports configuring the **Transactions Auditing** feature via YAML. This feature allows you to track every transaction synchronized by Gluesync into a dedicated `GLUESYNC.TRANSACTIONS_AUDIT` table on a target agent of your choice.
+Backup, restore and import carry the **transactions audit configuration** of each pipeline (Gluesync 2.3.4.0 and later): the store (the target agent that holds the ledger), the level, the failure policy, the scope, the schema and the table layout. They never carry the ledger itself (its rows live in the store), nor the gaps, sessions and activity of the audit.
 
-#### Configuration
-
-To enable auditing for a pipeline, add the `transactionsAudit` block to your schema configuration in `table-list-template.yaml`:
+An export writes a `transactionsAudit` section into the pipeline YAML: inside the schema when the YAML has one schema, at the root when it has several (as the pipeline schedules). The section names things instead of pointing at ids, because ids change on a restore:
 
 ```yaml
 transactionsAudit:
-  enabled: true
-  targetAgentId: "target-db-alias" # Can be the UUID or the agentTag (alias)
-  deepTrace: false                # Optional: log full query statements (default: false)
+  state: RECORDING            # informational: what it was at backup time
+  store:
+    own: true                 # the target agent of this pipeline; or pipelineId/pipelineName of another one
+    agentTag: mssql
+  level: TRACE
+  onStoreFailure: HOLD
+  scope: {mode: SELECTED, entities: [orders, items]}   # entity names
+  schema: GLUESYNC_AUDIT
+  layout: SINGLE_TABLE
+  tableName: TRANSACTIONS_LEDGER
 ```
 
-#### Target Agent Resolution
+A restore sets the configuration (`PUT /pipelines/{id}/transactions-audit`) once **every pipeline of the backup exists** (the store may be the target agent of another pipeline), and **never starts a recording**: a start creates tables in the store and needs its statements confirmed. Start it again from the Web UI, the API or a Chronos task; the ledger tables are appended to. What cannot be restored (the store pipeline or agent is missing, an entity of the scope is missing, Core Hub refuses, Core Hub older than 2.3.4.0) is a warning of the restore and leaves the audit unconfigured; the rest of the restore goes on. When the export itself could not read the audit, the YAML carries `transactionsAuditError` and the restore says so, instead of passing for "no audit".
 
-When auditing is enabled, the bootstrapper resolves the `targetAgentId` using the following logic:
+The older shape of the key (`enabled`, `targetAgentId` as agent id or tag, `deepTrace`) is still read: it becomes a store on that target agent of the pipeline (or its only target agent), at Trace. `enabled: false` configures nothing.
 
-1.  **By UUID**: Matches against the unique internal identifier of the agent.
-2.  **By Alias (agentTag)**: Matches against the human-readable tag (e.g., `mssql-target`) defined in your configuration.
-3.  **Automatic Fallback**: If `targetAgentId` is missing or not found, but the pipeline has exactly **one** target agent, that agent is automatically selected as the audit target.
-
-#### What is Audited?
-
-When enabled, Gluesync records the following for every transaction:
-- Timestamp (nanoseconds)
-- Pipeline and Entity IDs/Names
-- Source and Target table names
-- Number of records processed
-- End-to-end duration (latency)
-- Affected keys
-- Detailed performance metrics (JSON)
-- Success status and error details (if any)
-- Full SQL query (if `deepTrace` is enabled)
-
-The `GLUESYNC.TRANSACTIONS_AUDIT` table is automatically provisioned on the target database during the bootstrap process.
+The round-trip check (`automator_roundtrip.py`) compares the configuration of the original and of the restored pipeline (state and ids aside).
 
 Parameters:
 
