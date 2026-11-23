@@ -43,6 +43,47 @@ CORE_HUB_URL = os.getenv('CORE_HUB_URL', 'https://localhost:1717')
 ENABLE_SCHEDULING = os.getenv('ENABLE_SCHEDULING', 'true').lower() == 'true'
 CHRONOS_URL = os.getenv('CHRONOS_URL', 'http://gluesync-chronos:1717')
 
+# Chronos endpoint that answered last, keyed by (CoreHub URL, CHRONOS_URL): later entities reuse it
+# instead of probing again.
+_CHRONOS_BASE_URL_CACHE: Dict[Tuple[str, str], str] = {}
+
+
+def _chronos_candidate_urls() -> List[str]:
+    """Where to look for Chronos, in order.
+
+    CoreHub's /chronos route first: it is what the Automator and the Hub UI use, and the only
+    one reachable when the import runs outside the Docker network (the Windows/macOS Automator,
+    where the ``gluesync-chronos`` container name does not resolve). Then CHRONOS_URL, for
+    setups with a Chronos container of its own that the Hub does not route to (the demo kits).
+    """
+    hub = (getattr(core_hub_client, "base_url", None) or os.getenv('CORE_HUB_URL') or CORE_HUB_URL).rstrip('/')
+    urls = [f"{hub}/chronos/"]
+    explicit = os.getenv('CHRONOS_URL') or CHRONOS_URL
+    if explicit and explicit.rstrip('/') + '/' not in urls:
+        urls.append(explicit.rstrip('/') + '/')
+    return urls
+
+
+def _connect_chronos(token, max_rounds: int = 30, retry_delay: int = 2) -> Optional[ChronosClient]:
+    """A ChronosClient on the first candidate URL that answers, or None after max_rounds rounds."""
+    urls = _chronos_candidate_urls()
+    key = (urls[0], urls[-1])
+    cached = _CHRONOS_BASE_URL_CACHE.get(key)
+    if cached:
+        return ChronosClient(base_url=cached, token=token)
+    clients = [ChronosClient(base_url=url, token=token) for url in urls]
+    for attempt in range(1, max_rounds + 1):
+        for client in clients:
+            if client.wait_for_chronos(max_retries=1):
+                _CHRONOS_BASE_URL_CACHE[key] = client.base_url
+                return client
+        if attempt < max_rounds:
+            logger.info(f"Chronos not reachable at {', '.join(str(c.base_url) for c in clients)} "
+                        f"(round {attempt}/{max_rounds}), retrying in {retry_delay} seconds...")
+            time.sleep(retry_delay)
+    logger.error(f"Chronos is not available at any of: {', '.join(str(c.base_url) for c in clients)}")
+    return None
+
 # Initialize the CoreHub client
 core_hub_client = CoreHubClient(CORE_HUB_URL)
 
@@ -812,10 +853,8 @@ def create_entity_schedules(token, pipeline_id, entity_id, entity_name, schedule
 
     logger.info(f"Creating schedules for entity {entity_name} (ID: {entity_id})")
 
-    chronos_client = ChronosClient(base_url=CHRONOS_URL, corehub_url=CORE_HUB_URL, token=chronos_token or token)
-    
-    # Wait for Chronos to be available before attempting to create schedules
-    if not chronos_client.wait_for_chronos():
+    chronos_client = _connect_chronos(chronos_token or token)
+    if chronos_client is None:
         logger.error(f"Chronos is not available. Skipping schedule creation for entity {entity_name}")
         record_schedule_failure(f"{len(schedules_config)} schedule(s) of entity {entity_name} "
                                 "(scheduler not reachable)")
@@ -881,10 +920,8 @@ def create_group_schedules(token, pipeline_id, group_schedules, chronos_token=No
 
     logger.info(f"Creating group-level schedules for pipeline {pipeline_id}")
 
-    chronos_client = ChronosClient(base_url=CHRONOS_URL, corehub_url=CORE_HUB_URL, token=chronos_token or token)
-    
-    # Wait for Chronos to be available before attempting to create schedules
-    if not chronos_client.wait_for_chronos():
+    chronos_client = _connect_chronos(chronos_token or token)
+    if chronos_client is None:
         logger.error(f"Chronos is not available. Skipping group schedule creation for pipeline {pipeline_id}")
         record_schedule_failure(f"{len(group_schedules)} group schedule(s) (scheduler not reachable)")
         return
@@ -989,10 +1026,8 @@ def create_pipeline_schedules(token, pipeline_id, pipeline_schedules, chronos_to
 
     logger.info(f"Creating pipeline-level schedules for pipeline {pipeline_id}")
 
-    chronos_client = ChronosClient(base_url=CHRONOS_URL, corehub_url=CORE_HUB_URL, token=chronos_token or token)
-    
-    # Wait for Chronos to be available before attempting to create schedules
-    if not chronos_client.wait_for_chronos():
+    chronos_client = _connect_chronos(chronos_token or token)
+    if chronos_client is None:
         logger.error(f"Chronos is not available. Skipping pipeline schedule creation for pipeline {pipeline_id}")
         record_schedule_failure(f"{len(pipeline_schedules)} pipeline schedule(s) (scheduler not reachable)")
         return

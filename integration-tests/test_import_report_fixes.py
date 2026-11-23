@@ -72,6 +72,49 @@ class ScheduleFailureTests(unittest.TestCase):
 
     def setUp(self):
         commons.take_schedule_failures()
+        commons._CHRONOS_BASE_URL_CACHE.clear()
+        sleep = mock.patch.object(commons.time, "sleep")
+        sleep.start()
+        self.addCleanup(sleep.stop)
+        self.addCleanup(commons._CHRONOS_BASE_URL_CACHE.clear)
+
+    def test_chronos_is_reached_through_corehub_when_container_name_does_not_resolve(self):
+        hub = mock.Mock(base_url="https://gluesync.customer.local:1717")
+        answering = {"https://gluesync.customer.local:1717/chronos/": True,
+                     "http://gluesync-chronos:1717/": False}
+        made = []
+
+        def fake_client(base_url=None, token=None):
+            client = mock.Mock(base_url=base_url)
+            client.wait_for_chronos.return_value = answering[base_url]
+            made.append(base_url)
+            return client
+
+        with mock.patch.object(commons, "core_hub_client", hub), \
+                mock.patch.dict("os.environ", {"CHRONOS_URL": "http://gluesync-chronos:1717"}), \
+                mock.patch.object(commons, "ChronosClient", side_effect=fake_client):
+            first = commons._connect_chronos("t")
+            second = commons._connect_chronos("t")
+        self.assertEqual(first.base_url, "https://gluesync.customer.local:1717/chronos/")
+        self.assertEqual(second.base_url, first.base_url)
+        # the second entity reuses the endpoint found for the first, without probing again
+        self.assertEqual(made[-1], first.base_url)
+        second.wait_for_chronos.assert_not_called()
+
+    def test_chronos_falls_back_to_chronos_url_when_hub_does_not_route_it(self):
+        hub = mock.Mock(base_url="http://localhost:1717")
+        answering = {"http://localhost:1717/chronos/": False, "http://gluesync-chronos:8000/": True}
+
+        def fake_client(base_url=None, token=None):
+            client = mock.Mock(base_url=base_url)
+            client.wait_for_chronos.return_value = answering[base_url]
+            return client
+
+        with mock.patch.object(commons, "core_hub_client", hub), \
+                mock.patch.dict("os.environ", {"CHRONOS_URL": "http://gluesync-chronos:8000"}), \
+                mock.patch.object(commons, "ChronosClient", side_effect=fake_client):
+            client = commons._connect_chronos("t")
+        self.assertEqual(client.base_url, "http://gluesync-chronos:8000/")
 
     def _chronos(self, available):
         client = mock.Mock()
