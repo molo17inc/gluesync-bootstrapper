@@ -949,6 +949,86 @@ def snapshot_pipeline(token: str, pipeline_id: str) -> Dict[str, Any]:
     }
 
 
+# A pipeline of many tables is round-tripped on a sample of its entities when the kit asks for one (the 1000 tables of
+# as400-mssql-TRUNCATE took 13 of the kit's 67 minutes, 23 Nov 2026). 0 or unset: every entity.
+SAMPLE_ENV = "AUTOMATOR_ROUNDTRIP_SAMPLE"
+
+
+def sample_size_from_env() -> int:
+    raw = os.getenv(SAMPLE_ENV, "").strip()
+    if not raw:
+        return 0
+    value = int(raw)
+    if value < 0:
+        raise ValueError(f"{SAMPLE_ENV} must be 0 (every entity) or a positive number, not {raw!r}")
+    return value
+
+
+def pick_sample(names: List[str], size: int) -> List[str]:
+    """``size`` names spread evenly over the sorted ``names``, the first and the last included; all of them when there
+    are not more than ``size``. Always the same for the same names, so a failure can be run again."""
+    ordered = sorted(set(names))
+    if size <= 0 or len(ordered) <= size:
+        return ordered
+    if size == 1:
+        return ordered[:1]
+    step = (len(ordered) - 1) / (size - 1)
+    return sorted({ordered[round(i * step)] for i in range(size)})
+
+
+def sample_export(export_text: str, keep: set) -> Optional[Dict[str, Any]]:
+    """The export restricted to the entities named in ``keep``, or None when its shape is not one this can cut safely.
+
+    Only plain single-table entities are cut: every schema block lists its tables in ``tables.whitelist`` and gives each
+    one a ``tables.custom`` entry with its ``entityName``. Anything else (chains, multi-table entities, a group listing
+    its entities, another top-level block) keeps the whole export.
+    """
+    doc = yaml.safe_load(strip_export_header(export_text)) or {}
+    if not isinstance(doc, dict):
+        return None
+    out: Dict[str, Any] = {}
+    for key, block in doc.items():
+        if key == "groups":
+            if not isinstance(block, dict) or any(
+                    not isinstance(g, dict) or any(isinstance(v, (list, dict)) for v in g.values())
+                    for g in block.values()):
+                return None
+            out[key] = block
+            continue
+        if not isinstance(block, dict) or not isinstance(block.get("tables"), dict):
+            return None
+        tables = block["tables"]
+        whitelist, custom = tables.get("whitelist"), tables.get("custom")
+        if not isinstance(whitelist, list) or not isinstance(custom, dict) or set(map(str, whitelist)) != set(map(str, custom)):
+            return None
+        if any(not isinstance(c, dict) or not c.get("entityName") for c in custom.values()):
+            return None
+        kept = [t for t in whitelist if custom[t]["entityName"] in keep]
+        out[key] = {**block, "tables": {**tables, "whitelist": kept, "custom": {t: custom[t] for t in kept}}}
+    return out
+
+
+def apply_sample(original: Dict[str, Any], size: int, out_dir: Path) -> Optional[str]:
+    """Cut ``original`` down to a sample of ``size`` entities and write ``sampled-export.yaml``; return a note for the
+    report, or None when the whole pipeline is round-tripped (no sample asked, few entities, or a shape it cannot cut)."""
+    names = [str(e.get("entityName")) for e in original.get("entities") or [] if isinstance(e, dict)]
+    if size <= 0 or len(names) <= size:
+        return None
+    keep = set(pick_sample(names, size))
+    sampled = sample_export(original["export"], keep)
+    if sampled is None:
+        logger.warning(f"{SAMPLE_ENV}={size}: the export of this pipeline cannot be cut safely, round-tripping all "
+                       f"{len(names)} entities")
+        return None
+    note = f"sample of {len(keep)} of {len(names)} entities ({SAMPLE_ENV}={size})"
+    text = f"# Automator round trip: {note}\n" + yaml.safe_dump(sampled, sort_keys=False, allow_unicode=True)
+    (out_dir / "sampled-export.yaml").write_text(text, encoding="utf-8")
+    original["export"] = text
+    original["entities"] = [e for e in original["entities"] if isinstance(e, dict) and str(e.get("entityName")) in keep]
+    logger.info(f"Round-tripping a {note}")
+    return note
+
+
 def restore_error_lines(log_path: Path, limit: int = RESTORE_ERROR_LINES) -> str:
     """The last ERROR / FATAL / Traceback lines of a restore log, joined for one message."""
     try:
@@ -1073,7 +1153,7 @@ def write_restore_export(original_export: Path, names: List[str], out_dir: Path)
 
 
 def export_and_restore(
-    pipeline_id: str, out_dir: Path, token_file: str, timeout: int,
+    pipeline_id: str, out_dir: Path, token_file: str, timeout: int, sample: int = 0,
 ) -> Tuple[Dict[str, Any], Dict[str, Any], str]:
     """Return the original side, the restored side and what happened.
 
@@ -1086,6 +1166,7 @@ def export_and_restore(
         original = capture(token, pipeline_id, out_dir, "original")
     except Exception as exc:  # pylint: disable=broad-except
         raise RoundTripError(f"export of pipeline {pipeline_id} failed: {exc}") from exc
+    sample_note = apply_sample(original, sample, out_dir)
 
     pipeline = original["pipeline"] if isinstance(original["pipeline"], dict) else {}
     restore_name = f"{pipeline.get('name') or pipeline_id}{ROUND_TRIP_SUFFIX}"
@@ -1095,7 +1176,8 @@ def export_and_restore(
     token_dir = Path(tempfile.mkdtemp(prefix="roundtrip-tokens-")) if names else None
     try:
         config_path = write_courier_restore_config(blocks, out_dir, pipeline_id, token_dir)
-        export_path = write_restore_export(out_dir / "original-export.yaml", names, out_dir)
+        source_export = out_dir / ("sampled-export.yaml" if sample_note else "original-export.yaml")
+        export_path = write_restore_export(source_export, names, out_dir)
         restored_id, error = restore_export(export_path, restore_name, out_dir, timeout,
                                             function_collection_dir=collection_dir, config_path=config_path)
     finally:
@@ -1108,7 +1190,8 @@ def export_and_restore(
         restored = restore_original_names(capture(token, restored_id, out_dir, "restored"), names)
     except Exception as exc:  # pylint: disable=broad-except
         raise RoundTripError(f"export of restored pipeline {restored_id} failed: {exc}") from exc
-    return original, restored, f"pipeline {pipeline_id} exported and restored as {restored_id}"
+    done = f"pipeline {pipeline_id} exported and restored as {restored_id}"
+    return original, restored, f"{done}, {sample_note}" if sample_note else done
 
 
 def write_results(out_dir: Path, pipeline_id: str, suite_name: str, checks: List[Check], duration: float) -> int:
@@ -1132,13 +1215,13 @@ def write_results(out_dir: Path, pipeline_id: str, suite_name: str, checks: List
     return 0 if passed else 1
 
 
-def run(pipeline_id: str, out_dir: Path, token_file: str, timeout: int, suite_name: str) -> int:
+def run(pipeline_id: str, out_dir: Path, token_file: str, timeout: int, suite_name: str, sample: int = 0) -> int:
     started = time.time()
     out_dir.mkdir(parents=True, exist_ok=True)
     step = Check("export-and-restore", "The pipeline exports and the export restores as a new pipeline")
     checks = [step]
     try:
-        original, restored, step.message = export_and_restore(pipeline_id, out_dir, token_file, timeout)
+        original, restored, step.message = export_and_restore(pipeline_id, out_dir, token_file, timeout, sample)
         checks.extend(run_checks(original, restored, kit_declares_schedules()))
     except RoundTripError as exc:
         step.fail(str(exc))
@@ -1155,8 +1238,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="Seconds the restore may take (default 1800)")
     parser.add_argument("--suite-name", default=os.getenv("TEST_NAME", "automator-roundtrip"),
                         help="JUnit suite name (default $TEST_NAME)")
+    parser.add_argument("--sample", type=int, default=None,
+                        help=f"Round-trip only this many entities, spread over the pipeline; 0 for all "
+                             f"(default ${SAMPLE_ENV}, else all)")
     args = parser.parse_args(argv)
-    return run(args.pipeline, Path(args.output_dir), args.token_file, args.restore_timeout, args.suite_name)
+    sample = sample_size_from_env() if args.sample is None else args.sample
+    return run(args.pipeline, Path(args.output_dir), args.token_file, args.restore_timeout, args.suite_name, sample)
 
 
 if __name__ == "__main__":
