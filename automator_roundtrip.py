@@ -72,6 +72,7 @@ from courier_export import agent_key, export_pipeline_courier
 from courier_inbound_support import INBOUND_COLLECTION_KEY, is_http_source_agent
 from courier_support import is_courier_agent
 from function_collection import fetch_function_collection
+import transactions_audit
 from export_template_from_corehub import (
     fetch_pipeline_entities,
     read_pipeline_jobs,
@@ -601,10 +602,49 @@ def _drop_export_column_ids(document: Any) -> Any:
     return document
 
 
+# What a restore cannot keep of the audit section: it never starts a recording, and the ids and the name of the
+# pipeline that holds the ledger differ on a restored copy (its agent tag and whether it is the pipeline itself stay).
+AUDIT_VOLATILE_KEYS = ("state", "agentId")
+AUDIT_VOLATILE_STORE_KEYS = ("pipelineId", "pipelineName", "agentId")
+
+
+def comparable_audit(section: Any) -> Any:
+    """A ``transactionsAudit`` section without what differs between a pipeline and its restore (state, ids)."""
+    if not isinstance(section, dict):
+        return section
+    cleaned = {k: v for k, v in section.items() if k not in AUDIT_VOLATILE_KEYS}
+    if isinstance(cleaned.get("store"), dict):
+        cleaned["store"] = {k: v for k, v in cleaned["store"].items() if k not in AUDIT_VOLATILE_STORE_KEYS}
+    return cleaned
+
+
+def _drop_audit_volatile(document: Any) -> Any:
+    """The export document with its audit section reduced to what a restore keeps, in place."""
+    section, _error = transactions_audit.find_section(document)
+    if isinstance(section, dict):
+        cleaned = comparable_audit(section)
+        section.clear()
+        section.update(cleaned)
+    return document
+
+
+def check_transactions_audit(original: Dict[str, Any], restored: Dict[str, Any]) -> Check:
+    check = Check("transactions-audit", "The restored pipeline has the transactions audit configuration of the original")
+    left, right = comparable_audit(original.get("transactionsAudit")), comparable_audit(restored.get("transactionsAudit"))
+    if left == right:
+        check.message = "the audit configuration matches" if left else "no audit"
+        return check
+    check.fail("the transactions audit configuration differs after restore (a restore never starts a recording)",
+               unified_diff(left, right, "original/transactionsAudit", "restored/transactionsAudit"))
+    return check
+
+
 def check_export_stable(original: Dict[str, Any], restored: Dict[str, Any]) -> Check:
     check = Check("export-is-stable", "Exporting the restored pipeline gives back the same YAML")
-    left = normalize(_drop_export_column_ids(yaml.safe_load(strip_export_header(original["export"])) or {}), original["idMap"])
-    right = normalize(_drop_export_column_ids(yaml.safe_load(strip_export_header(restored["export"])) or {}), restored["idMap"])
+    left = normalize(_drop_audit_volatile(_drop_export_column_ids(
+        yaml.safe_load(strip_export_header(original["export"])) or {})), original["idMap"])
+    right = normalize(_drop_audit_volatile(_drop_export_column_ids(
+        yaml.safe_load(strip_export_header(restored["export"])) or {})), restored["idMap"])
     if left == right:
         check.message = "both exports are identical"
         return check
@@ -794,6 +834,8 @@ def run_checks(original: Dict[str, Any], restored: Dict[str, Any], expects_sched
         checks.append(check_function_collection(original, restored))
     if original.get("courier") or restored.get("courier"):
         checks.append(check_courier(original, restored))
+    if original.get("transactionsAudit") or restored.get("transactionsAudit"):
+        checks.append(check_transactions_audit(original, restored))
     return checks
 
 
@@ -938,6 +980,7 @@ def snapshot_pipeline(token: str, pipeline_id: str) -> Dict[str, Any]:
     }
     return {
         "pipelineId": pipeline_id,
+        "transactionsAudit": transactions_audit.export_section(token, pipeline_id),
         "pipeline": pipeline,
         "agents": agents,
         "entities": entities,

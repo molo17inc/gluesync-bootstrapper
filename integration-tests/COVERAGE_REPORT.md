@@ -246,7 +246,7 @@ These features are present in integration test YAMLs but have **no dedicated uni
 1. **`unchangedDataFilterType`** — Used in ~56 integration tests at source customProperties level. Tested implicitly via payload generation but not explicitly asserted.
 2. **`blacklist`** — Only implicitly present; no explicit exclusion test.
 3. **`sourceType` / `targetType`** at schema level — Not tested in schema-level type hinting.
-4. **`transactionsAudit`** — Only in template; not tested.
+4. **`transactionsAudit`** — Backup/restore round trip tested (`test_transactions_audit_backup.py`).
 5. **Top-level `groups:` definition** — Only in template; not tested.
 6. **`columns` with full object format** (`id`, `ordinalPosition`, negative IDs) — Used by `pgsqlwal-cassandra` and `pgsqlwal-couchbase`; tests use shorthand only.
 7. **Multi-schema YAML** (`schemas:` wrapper) — Only in template; not tested.

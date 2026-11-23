@@ -39,10 +39,20 @@ dbo:
   # SQL ~ RDBMS, NoSQL for document / non-relational targets, ObjectStore for file storage targets (FTP, FTPS, SFTP, WebDAV, SMB, NFS)
   sourceType: SQL
   targetType: NoSQL
+  # Transactions audit of the pipeline (Gluesync 2.3.4.0+). Set by the restore, never started by it: start it from
+  # the Web UI, the API or a Chronos task. A backup writes this section by itself.
   transactionsAudit:
-    enabled: true
-    targetAgentId: "target-agent-alias" # Can be the UUID or the agentTag (alias)
-    deepTrace: false
+    store:
+      own: true                  # the ledger goes to this pipeline's target agent; or name another pipeline:
+      # pipelineName: "Ledger host"   (with pipelineId: its id in the backup)
+      agentTag: "target-agent-alias"  # the target agent of that pipeline
+    level: TRACE                 # PULSE | TRACE
+    onStoreFailure: CONTINUE_WITH_GAP  # or HOLD
+    scope:
+      mode: ALL                  # or SELECTED with entities: [table names]
+    schema: GLUESYNC_AUDIT
+    layout: SINGLE_TABLE         # or TABLE_PER_ENTITY
+    tableName: TRANSACTIONS_LEDGER
   customProperties:
     source:
       maxItemsCountPerIteration: 1000

@@ -69,6 +69,7 @@ from commons import (extract_all_schemas_from_yaml, extract_schema_types_from_ya
 from . import corehub
 from .gs1_routes import register_gs1_routes
 import ai_settings
+import transactions_audit
 from .corehub import PipelineInMaintenanceError
 from .state import state
 from .version import get_version
@@ -3416,6 +3417,7 @@ def _archive_pipeline_members(contents: bytes, errors: Optional[list[str]] = Non
 def _import_archive_pipelines(job: _ArchiveImport) -> None:
     """Second pass: process each per-pipeline YAML and recreate pipeline + entities (or resume one pipeline)."""
     members = _archive_pipeline_members(job.contents, job.errors)
+    audit_sources: list = []
 
     if job.resume_pipeline_id:
         members = _resume_candidates(job, members)
@@ -3435,6 +3437,29 @@ def _import_archive_pipelines(job: _ArchiveImport) -> None:
             created = job.created_pipelines[-1]
             outcome = _outcome(job, created.get("pipelineId"), created.get("pipelineName"))
             outcome["errors"] += len(job.errors) - errors_before
+            audit_sources.append((name, _resolve_pipeline_identity(yaml_text, stem_no_ext)[0], created, yaml_text))
+    _restore_transactions_audits(job, audit_sources)
+
+
+def _restore_transactions_audits(job: _ArchiveImport, sources: list) -> None:
+    """Last step of the pipelines: set the transactions audit configuration each restored pipeline had.
+
+    It goes after every pipeline exists, since the ledger may be held by the target agent of another pipeline of the
+    backup. It only sets the configuration (never starts a recording) and never fails the import: what could not be
+    restored is a warning."""
+    id_map = {str(old): str(created.get("pipelineId")) for _name, old, created, _text in sources if old is not None}
+    for name, _old, created, yaml_text in sources:
+        try:
+            config = yaml.safe_load(yaml_text)
+        except yaml.YAMLError:
+            continue
+        result = transactions_audit.restore_from_yaml(state.token, created.get("pipelineId"), config, id_map)
+        if result is None:
+            continue
+        label = created.get("pipelineName") or name
+        if result["status"] == transactions_audit.STATUS_RESTORED:
+            job.notes.append(f"{label}: transactions audit configuration restored (not started)")
+        _merge_warnings(job, [f"{label}: {w}" for w in result["warnings"]])
 
 
 def _outcome_line(outcome: Dict[str, Any]) -> str:

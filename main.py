@@ -42,7 +42,7 @@ from urllib.parse import urlparse
 from utils.log import get_logger, create_log_file, log_success, log_failure, lockfile_failure, exit_on_fail, lockfile_complete
 from utils.gluesync_sdk_client import initialize_gluesync_sdk, get_token, get_gluesync_client
 from utils.core_hub_client import CoreHubClient
-from utils.transactions_audit_client import TransactionsAuditClient
+import transactions_audit
 from commons import extract_schemas_from_yaml, extract_all_schemas_from_yaml, extract_schema_types_from_yaml, configure_core_hub, catalog_type_for_agent_tag, \
     embedded_agent_categories, agent_types_by_tag, sql_or_nosql
 from commons import sign_in_required_warnings
@@ -1430,30 +1430,17 @@ def _fail_on_schema_errors(failed_schemas, pipeline_id, pipeline_name):
     sys.exit(1)
 
 
-def _find_transactions_audit_config(yaml_content):
-    """Return the YAML section holding transactionsAudit: the top level or the first schema that has it."""
-    if not isinstance(yaml_content, dict):
-        return None
-    if 'transactionsAudit' in yaml_content:
-        return yaml_content
-    # Check inside schemas
-    for value in yaml_content.values():
-        if isinstance(value, dict) and 'transactionsAudit' in value:
-            return value
-    return None
-
-
 def _configure_transactions_audit(token, pipeline_id):
-    """Configure transactions auditing if present in YAML."""
+    """Set the transactions audit configuration the TABLE_LIST YAML carries (it never starts a recording)."""
     try:
         with open(TABLE_LIST_YAML, 'r') as file:
             yaml_content = yaml.safe_load(file)
-            audit_config = _find_transactions_audit_config(yaml_content)
-
-            if audit_config:
-                logger.info("Transactions audit configuration found in YAML, applying...")
-                audit_client = TransactionsAuditClient(get_core_hub_client())
-                audit_client.configure_from_yaml(pipeline_id, token, audit_config)
+        result = transactions_audit.restore_from_yaml(token, pipeline_id, yaml_content)
+        if result is None:
+            return
+        logger.info(f"Transactions audit of pipeline {pipeline_id}: {result['status']}")
+        for warning in result['warnings']:
+            logger.warning(f"Transactions audit: {warning}")
     except Exception as e:
         logger.warning(f"Could not process transactions audit configuration from YAML: {e}")
 

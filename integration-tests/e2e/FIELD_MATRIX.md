@@ -80,7 +80,7 @@ Live Mac hub (`GS_E2E_HUB_URL`) still required for rows marked gated/UNVERIFIED.
 | tables.custom.<T>.schedules / schema schedules / group_schedules | YAML Chronos | none | groups/schedules shape; --no-scheduling | PASS shape; live Chronos UNVERIFIED | — |
 | tables.custom.<T>.documentKey.* | YAML | none | template examples | PARTIAL (shape only) | — |
 | tables.custom.<T>.whereClause / chainId / unlockedSchema / targetOnlyColumns | YAML | none | template + 2.3 units | PARTIAL | — |
-| tables.custom.<T>.transactionsAudit (schema-level) | YAML | off | README; unit if present | PARTIAL | — |
+| transactionsAudit (schema-level, or root with schemas:) | YAML | off | test_transactions_audit_backup.py | PASS | — |
 | 2.3 column-relation source/destination forms | YAML columns | n/a | test_source_destination_form; test_source_target_list_form | PASS offline | — |
 | agents-config hostCredentials.* | agents-config.yaml in ZIP | from export | overrides apply; password masking | PASS; passwords via env only on import | — |
 | config.json / example-config.json agents[] | main.py pipeline bootstrap | n/a | existing main/bootstrap tests | PASS existing suite | — |
