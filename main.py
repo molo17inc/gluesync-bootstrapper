@@ -854,8 +854,21 @@ if True:
 
         return entities
     
-    def get_snapshot_write_method_from_yaml(entity_name, yaml_path):
-        """Extract snapshotWriteMethod for a specific entity from YAML configuration."""
+    def load_table_list_yaml(yaml_path):
+        """The parsed TABLE_LIST YAML, or None when it cannot be read: callers then fall back to UPSERT."""
+        try:
+            with open(yaml_path, 'r') as file:
+                return yaml.safe_load(file)
+        except Exception as e:
+            logger.debug(f"Could not read TABLE_LIST YAML {yaml_path}: {e}")
+            return None
+
+    def get_snapshot_write_method_from_yaml(entity_name, yaml_path, yaml_content=None):
+        """Extract snapshotWriteMethod for a specific entity from YAML configuration.
+
+        Pass ``yaml_content`` (from :func:`load_table_list_yaml`) when looking up many entities: parsing the YAML once
+        per entity made starting a 1000-table pipeline quadratic (about a second per entity, 20+ minutes in all).
+        """
         try:
             # Parse entity name to get schema and table
             # Split at first dot only so table names containing dots
@@ -867,10 +880,11 @@ if True:
             
             schema_name, table_name = parts
             
-            # Load YAML configuration
-            with open(yaml_path, 'r') as file:
-                yaml_content = yaml.safe_load(file)
-            
+            if yaml_content is None:
+                yaml_content = load_table_list_yaml(yaml_path)
+            if not isinstance(yaml_content, dict):
+                return 'UPSERT'
+
             # Navigate to the table configuration
             if schema_name in yaml_content:
                 schema_config = yaml_content[schema_name]
@@ -929,12 +943,14 @@ if True:
         
         # Get YAML path from environment or use default
         yaml_path = os.environ.get('TABLE_LIST_YAML', '/opt/config/TABLE_LIST.yaml')
+        # Parsed once for the whole loop, not once per entity
+        yaml_content = load_table_list_yaml(yaml_path)
 
         for entity in entities:
             entityId = entity['entityId']
             entityName = entity['entityName']
             
-            snapshot_write_method = get_snapshot_write_method_from_yaml(entityName, yaml_path)
+            snapshot_write_method = get_snapshot_write_method_from_yaml(entityName, yaml_path, yaml_content)
             if snapshot_write_method != 'UPSERT':
                 logger.info(f"Using snapshotWriteMethod '{snapshot_write_method}' for entity {entityName}")
 
