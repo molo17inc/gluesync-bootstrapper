@@ -22,11 +22,29 @@ import os
 import requests
 import json
 import time
+from typing import List
 from urllib.parse import urljoin, urlparse, urlunparse
 from utils.log import get_logger, log_success, log_failure
 
 # Initialize logger
 logger = get_logger()
+
+
+def chronos_candidate_urls(corehub_url, chronos_url) -> List[str]:
+    """Where to look for Chronos, in order.
+
+    CoreHub's ``<hub>/chronos/`` first (keeps any path prefix of the Hub URL), then the
+    explicit Chronos URL when set and different.
+    """
+    urls: List[str] = []
+    if corehub_url:
+        urls.append(f"{corehub_url.rstrip('/')}/chronos/")
+    if chronos_url:
+        explicit = chronos_url.rstrip('/') + '/'
+        if explicit not in urls:
+            urls.append(explicit)
+    return urls
+
 
 class ChronosClient:
     """Client for interacting with the Chronos scheduling service."""
@@ -94,8 +112,15 @@ class ChronosClient:
                 response = requests.get(url, verify=verify, timeout=5, params={'limit': 1}, headers=headers)
                 # Accept 200 (success) as a sign that Chronos is available
                 if response.status_code == 200:
-                    logger.info(f"Chronos is available (attempt {attempt}/{max_retries})")
-                    return True
+                    try:
+                        body = response.json()
+                    except ValueError:
+                        body = None
+                    if isinstance(body, (list, dict)):
+                        logger.info(f"Chronos is available (attempt {attempt}/{max_retries})")
+                        return True
+                    logger.warning(f"{url} answered 200 but not with a Chronos JSON body "
+                                   f"(attempt {attempt}/{max_retries})")
                 else:
                     logger.warning(f"Chronos returned status {response.status_code} (attempt {attempt}/{max_retries})")
             except requests.exceptions.ConnectionError as e:

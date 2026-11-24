@@ -34,7 +34,7 @@ from pathlib import Path
 import yaml
 from typing import Callable, Dict, List, Optional, Tuple, Union, Any
 from utils.log import get_logger, log_success, log_failure
-from utils.chronos_client import ChronosClient
+from utils.chronos_client import ChronosClient, chronos_candidate_urls
 from utils.core_hub_client import CoreHubClient
 from utils.redact import redact
 import zlib
@@ -47,6 +47,17 @@ CHRONOS_URL = os.getenv('CHRONOS_URL', 'http://gluesync-chronos:1717')
 # instead of probing again.
 _CHRONOS_BASE_URL_CACHE: Dict[Tuple[str, str], str] = {}
 
+# Same key -> time.monotonic() when no candidate answered. While it is recent, later entities do not
+# wait for the unreachable Chronos again.
+_CHRONOS_UNREACHABLE_AT: Dict[Tuple[str, str], float] = {}
+_CHRONOS_UNREACHABLE_TTL = 300  # seconds
+
+
+def reset_chronos_endpoint_cache() -> None:
+    """Forget the Chronos endpoint found and any remembered failure (used by tests)."""
+    _CHRONOS_BASE_URL_CACHE.clear()
+    _CHRONOS_UNREACHABLE_AT.clear()
+
 
 def _chronos_candidate_urls() -> List[str]:
     """Where to look for Chronos, in order.
@@ -56,12 +67,8 @@ def _chronos_candidate_urls() -> List[str]:
     where the ``gluesync-chronos`` container name does not resolve). Then CHRONOS_URL, for
     setups with a Chronos container of its own that the Hub does not route to (the demo kits).
     """
-    hub = (getattr(core_hub_client, "base_url", None) or os.getenv('CORE_HUB_URL') or CORE_HUB_URL).rstrip('/')
-    urls = [f"{hub}/chronos/"]
-    explicit = os.getenv('CHRONOS_URL') or CHRONOS_URL
-    if explicit and explicit.rstrip('/') + '/' not in urls:
-        urls.append(explicit.rstrip('/') + '/')
-    return urls
+    hub = getattr(core_hub_client, "base_url", None) or os.getenv('CORE_HUB_URL') or CORE_HUB_URL
+    return chronos_candidate_urls(hub, os.getenv('CHRONOS_URL') or CHRONOS_URL)
 
 
 def _connect_chronos(token, max_rounds: int = 30, retry_delay: int = 2) -> Optional[ChronosClient]:
@@ -71,16 +78,26 @@ def _connect_chronos(token, max_rounds: int = 30, retry_delay: int = 2) -> Optio
     cached = _CHRONOS_BASE_URL_CACHE.get(key)
     if cached:
         return ChronosClient(base_url=cached, token=token)
+    failed_at = _CHRONOS_UNREACHABLE_AT.get(key)
+    if failed_at is not None:
+        age = time.monotonic() - failed_at
+        if age < _CHRONOS_UNREACHABLE_TTL:
+            logger.info(f"Chronos was found unreachable {int(age)} seconds ago at {', '.join(urls)}: "
+                        f"probing is skipped")
+            return None
+        _CHRONOS_UNREACHABLE_AT.pop(key, None)
     clients = [ChronosClient(base_url=url, token=token) for url in urls]
     for attempt in range(1, max_rounds + 1):
         for client in clients:
             if client.wait_for_chronos(max_retries=1):
                 _CHRONOS_BASE_URL_CACHE[key] = client.base_url
+                _CHRONOS_UNREACHABLE_AT.pop(key, None)
                 return client
         if attempt < max_rounds:
             logger.info(f"Chronos not reachable at {', '.join(str(c.base_url) for c in clients)} "
                         f"(round {attempt}/{max_rounds}), retrying in {retry_delay} seconds...")
             time.sleep(retry_delay)
+    _CHRONOS_UNREACHABLE_AT[key] = time.monotonic()
     logger.error(f"Chronos is not available at any of: {', '.join(str(c.base_url) for c in clients)}")
     return None
 

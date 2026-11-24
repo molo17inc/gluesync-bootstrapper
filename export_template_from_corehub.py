@@ -34,7 +34,7 @@ from commons import fetch_core_hub, get_table_columns, is_length_type, is_tempor
     embedded_agent_categories, agent_types_by_tag, sql_or_nosql
 from field_function_utils import apply_field_functions_to_column_mappings, normalize_expression_for_yaml
 from entity_mapping import read_entry, relations_of, yaml_rows
-from utils.chronos_client import ChronosClient
+from utils.chronos_client import ChronosClient, chronos_candidate_urls
 from utils.log import create_log_file, get_logger, log_failure, log_success
 
 
@@ -244,14 +244,13 @@ def fetch_groups_map(token: str, pipeline_id: str) -> Tuple[Dict[str, str], Dict
 def _chronos_clients(token: Optional[str]) -> List[ChronosClient]:
     """The Chronos endpoints to read from, in order.
 
-    CoreHub's /chronos path first, as before; then CHRONOS_URL, where the import
+    CoreHub's /chronos path first (same address as the import); then CHRONOS_URL, where the import
     writes schedules (a Chronos container of its own, as in the demo kits).
     """
-    clients = [ChronosClient(corehub_url=os.getenv("CORE_HUB_URL"), token=token)]
-    chronos_url = os.getenv("CHRONOS_URL")
-    if chronos_url and chronos_url.rstrip("/") + "/" != clients[0].base_url:
-        clients.append(ChronosClient(base_url=chronos_url, token=token))
-    return clients
+    urls = chronos_candidate_urls(os.getenv("CORE_HUB_URL"), os.getenv("CHRONOS_URL"))
+    if not urls:
+        return [ChronosClient(token=token)]  # default http://gluesync-chronos:1717
+    return [ChronosClient(base_url=url, token=token) for url in urls]
 
 
 def _jobs_from_response(jobs_response: Any) -> Optional[List[Dict[str, Any]]]:

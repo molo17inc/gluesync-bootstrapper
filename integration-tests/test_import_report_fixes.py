@@ -72,11 +72,11 @@ class ScheduleFailureTests(unittest.TestCase):
 
     def setUp(self):
         commons.take_schedule_failures()
-        commons._CHRONOS_BASE_URL_CACHE.clear()
+        commons.reset_chronos_endpoint_cache()
         sleep = mock.patch.object(commons.time, "sleep")
         sleep.start()
         self.addCleanup(sleep.stop)
-        self.addCleanup(commons._CHRONOS_BASE_URL_CACHE.clear)
+        self.addCleanup(commons.reset_chronos_endpoint_cache)
 
     def test_chronos_is_reached_through_corehub_when_container_name_does_not_resolve(self):
         hub = mock.Mock(base_url="https://gluesync.customer.local:1717")
@@ -115,6 +115,38 @@ class ScheduleFailureTests(unittest.TestCase):
                 mock.patch.object(commons, "ChronosClient", side_effect=fake_client):
             client = commons._connect_chronos("t")
         self.assertEqual(client.base_url, "http://gluesync-chronos:8000/")
+
+    def test_unreachable_chronos_is_not_probed_again_within_window(self):
+        hub = mock.Mock(base_url="http://localhost:1717")
+        client = mock.Mock(base_url="x")
+        client.wait_for_chronos.return_value = False
+        clock = [1000.0]
+        with mock.patch.object(commons, "core_hub_client", hub), \
+                mock.patch.dict("os.environ", {"CHRONOS_URL": "http://gluesync-chronos:8000"}), \
+                mock.patch.object(commons.time, "monotonic", side_effect=lambda: clock[0]), \
+                mock.patch.object(commons, "ChronosClient", return_value=client) as ctor:
+            self.assertIsNone(commons._connect_chronos("t", max_rounds=2))
+            built, probed = ctor.call_count, client.wait_for_chronos.call_count
+            clock[0] += 10
+            self.assertIsNone(commons._connect_chronos("t", max_rounds=2))
+            self.assertEqual(ctor.call_count, built)
+            self.assertEqual(client.wait_for_chronos.call_count, probed)
+            clock[0] += commons._CHRONOS_UNREACHABLE_TTL
+            self.assertIsNone(commons._connect_chronos("t", max_rounds=2))
+            self.assertGreater(ctor.call_count, built)
+            self.assertGreater(client.wait_for_chronos.call_count, probed)
+
+    def test_success_clears_remembered_failure(self):
+        hub = mock.Mock(base_url="http://localhost:1717")
+        client = mock.Mock(base_url="http://localhost:1717/chronos/")
+        client.wait_for_chronos.return_value = True
+        with mock.patch.object(commons, "core_hub_client", hub), \
+                mock.patch.dict("os.environ", {"CHRONOS_URL": ""}):
+            key = (commons._chronos_candidate_urls()[0], commons._chronos_candidate_urls()[-1])
+            commons._CHRONOS_UNREACHABLE_AT[key] = commons.time.monotonic() - commons._CHRONOS_UNREACHABLE_TTL - 1
+            with mock.patch.object(commons, "ChronosClient", return_value=client):
+                self.assertIs(commons._connect_chronos("t"), client)
+        self.assertNotIn(key, commons._CHRONOS_UNREACHABLE_AT)
 
     def _chronos(self, available):
         client = mock.Mock()
@@ -170,6 +202,53 @@ class ScheduleFailureTests(unittest.TestCase):
         commons.record_schedule_failure("stale, from an earlier run")
         job = self._job_after_run([])
         self.assertEqual(app.import_status(job), "full")
+
+
+class WaitForChronosTests(unittest.TestCase):
+    def _wait(self, response):
+        from utils.chronos_client import ChronosClient
+        with mock.patch("utils.chronos_client.requests.get", return_value=response):
+            return ChronosClient(base_url="http://c:1717").wait_for_chronos(max_retries=1)
+
+    def test_json_list_is_chronos(self):
+        self.assertTrue(self._wait(mock.Mock(status_code=200, json=lambda: [])))
+
+    def test_items_dict_is_chronos(self):
+        self.assertTrue(self._wait(mock.Mock(status_code=200, json=lambda: {"items": []})))
+
+    def test_html_200_is_not_chronos(self):
+        def not_json():
+            raise ValueError("no json")
+        self.assertFalse(self._wait(mock.Mock(status_code=200, json=not_json, text="<html>")))
+
+    def test_json_scalar_is_not_chronos(self):
+        self.assertFalse(self._wait(mock.Mock(status_code=200, json=lambda: "ok")))
+
+
+class ChronosCandidateUrlTests(unittest.TestCase):
+    def test_hub_prefix_kept(self):
+        from utils.chronos_client import chronos_candidate_urls
+        self.assertEqual(chronos_candidate_urls("https://h:1717/gs", None), ["https://h:1717/gs/chronos/"])
+        self.assertEqual(chronos_candidate_urls("https://h:1717/", "http://c:1717"),
+                         ["https://h:1717/chronos/", "http://c:1717/"])
+
+    def test_dedupe_and_empty_inputs(self):
+        from utils.chronos_client import chronos_candidate_urls
+        self.assertEqual(chronos_candidate_urls("https://h/", "https://h/chronos"), ["https://h/chronos/"])
+        self.assertEqual(chronos_candidate_urls(None, "http://c:1/"), ["http://c:1/"])
+        self.assertEqual(chronos_candidate_urls("", ""), [])
+
+    def test_exporter_uses_shared_helper(self):
+        import export_template_from_corehub as exp
+        with mock.patch.dict("os.environ", {"CORE_HUB_URL": "https://h:1717/gs", "CHRONOS_URL": "http://c:1717"}):
+            clients = exp._chronos_clients("tok")
+        self.assertEqual([c.base_url for c in clients], ["https://h:1717/gs/chronos/", "http://c:1717/"])
+        self.assertTrue(all(c.token == "tok" for c in clients))
+        with mock.patch.dict("os.environ", {"CORE_HUB_URL": "", "CHRONOS_URL": "http://c:1717"}):
+            self.assertEqual([c.base_url for c in exp._chronos_clients("t")], ["http://c:1717/"])
+        env = {k: v for k, v in os.environ.items() if k not in ("CORE_HUB_URL", "CHRONOS_URL")}
+        with mock.patch.dict("os.environ", env, clear=True):
+            self.assertEqual([c.base_url for c in exp._chronos_clients("t")], ["http://gluesync-chronos:1717/"])
 
 
 class UdfTypeTests(unittest.TestCase):
