@@ -167,7 +167,8 @@ class TargetPositionTests(unittest.TestCase):
         self.assertEqual(
             list(row),
             ["source", "target", "type", "dataLength", "numericPrecision", "numericScale", "isNullable", "isPK",
-             "id", "ordinalPosition", "charSet", "targetPosition", "targetIsNullable", "targetNumericPrecision"],
+             "id", "ordinalPosition", "charSet", "sourceDataType", "targetPosition", "targetIsNullable",
+             "targetNumericPrecision"],
         )
 
     def test_a_column_that_feeds_nothing_has_no_target_position(self):

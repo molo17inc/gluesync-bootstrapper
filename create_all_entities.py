@@ -63,7 +63,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Metadata-only fields used in the export format {source: ..., target: ..., type: ..., ...}
 # These are never column names in the explicit export format.
-_EXPORT_METADATA_FIELDS = {"source", "target", "type", "dataLength", "numericPrecision", "numericScale", "isNullable", "id", "ordinalPosition", "targetPosition", "targetIsNullable", "targetDataType", "targetDataLength", "targetNumericPrecision", "targetNumericScale", "charSet", "expression"}
+_EXPORT_METADATA_FIELDS = {"source", "target", "type", "dataLength", "numericPrecision", "numericScale", "isNullable", "id", "ordinalPosition", "targetPosition", "targetIsNullable", "targetDataType", "targetDataLength", "targetNumericPrecision", "targetNumericScale", "charSet", "sourceDataType", "expression"}
 
 # Tells "the YAML declared charSet: null" apart from "the YAML said nothing about charSet".
 # The first must clear the character set discovered on the column, the second must leave it
@@ -194,6 +194,81 @@ def _apply_char_set_override(col, override, where):
     else:
         col['charSet'] = override
         logger.info(f"Column '{col.get('name')}'{where}: charSet overridden to '{override}' by YAML")
+
+
+def _build_source_data_type_overrides(yaml_columns, names=None):
+    """The ``sourceDataType`` the YAML rows declare, by source column name (the name as ``names.key`` gives it).
+
+    The export writes on every row the type the entity stores for its source column (``type`` is the target
+    column's), so a restore puts the source column back as it was backed up: a source with no schema infers the
+    type of a column from a sample of its data, and a column may have been retyped by hand. A row without the key
+    (an older backup) or with a null one says nothing, and its column keeps the type discovery reports. A row of
+    several sources (N:1) carries no per-source metadata.
+    """
+    key = (names or ColumnNames(())).key
+    overrides = {}
+    if not isinstance(yaml_columns, list):
+        return overrides
+    for entry in yaml_columns:
+        if not isinstance(entry, dict) or entry.get('sourceDataType') in (None, ''):
+            continue
+        source = _yaml_row_source_name(entry)
+        if isinstance(source, str) and source:
+            overrides[key(source)] = str(entry['sourceDataType'])
+    return overrides
+
+
+def _source_type_to_apply(declared, discovered_type, source_node_info, where, noted):
+    """The type to give a source column that declares ``declared``, None to keep ``discovered_type``.
+
+    ``where`` is ``(table, column)``; ``noted`` is the set the messages of the run are remembered in, so a table read
+    several times is reported once. A type the source agent's ``dataTypesMatrix`` does not know is refused with a
+    warning; with no matrix to check against (no node info) the declared type is taken as it is.
+    """
+    table, column = where
+    canonical = declared
+    if (source_node_info or {}).get('dataTypesMatrix'):
+        canonical = canonicalize_target_type(declared, source_node_info)
+    if canonical is None:
+        note = ('warning', table, column, declared)
+        if note not in noted:
+            noted.add(note)
+            logger.warning(f"Table {table}: column '{column}' declares sourceDataType '{declared}', which the source "
+                           f"agent does not know: keeping the type discovery reports ('{discovered_type}')")
+        return None
+    if str(canonical).lower() == str(discovered_type).lower():
+        return None
+    note = ('info', table, column, canonical)
+    if note not in noted:
+        noted.add(note)
+        logger.info(f"Table {table}: column '{column}' restored as '{canonical}' (sourceDataType of the YAML), "
+                    f"not '{discovered_type}' as discovery reports it")
+    return canonical
+
+
+def _apply_source_data_types(columns, custom_config, table_name, source_node_info, noted):
+    """The source discovery ``columns`` with the ``sourceDataType`` the YAML rows of the table declare.
+
+    Done on the discovery itself, before any column or key is built from it, so every shape the source side is
+    built in (explicit mappings, whitelist, plain discovery, keys, MultiTable components) and the target type
+    mapping that reads the same columns agree on the type. Columns the YAML says nothing about stay as discovered.
+    Returns ``columns`` itself when nothing changes, else a copy.
+    """
+    discovered = (columns or {}).get('columns') or []
+    if not discovered:
+        return columns
+    names = ColumnNames(c.get('name') for c in discovered if isinstance(c, dict) and c.get('name') is not None)
+    overrides = _build_source_data_type_overrides((custom_config or {}).get('columns'), names)
+    if not overrides:
+        return columns
+    patched, changed = [], False
+    for col in discovered:
+        declared = overrides.get(names.key(col.get('name', ''))) if isinstance(col, dict) else None
+        new_type = None if declared is None else _source_type_to_apply(
+            declared, col.get('dataType'), source_node_info, (table_name, col.get('name')), noted)
+        changed = changed or new_type is not None
+        patched.append({**col, 'dataType': new_type} if new_type is not None else col)
+    return {**columns, 'columns': patched} if changed else columns
 
 
 def _is_target_known_type(data_type, target_node_info):
@@ -2827,6 +2902,8 @@ class _EntityRun:
         self.last_col = None
         # Source discovery by casefolded table name: the pre-write validation and the entity build read it once.
         self.columns_cache = {}
+        # The sourceDataType messages already logged (a table is read several times, see _apply_source_data_types).
+        self.source_type_notes = set()
         # Source tables whose entity was built from the YAML, not from discovery.
         self.offline_tables = set()
         self.untyped_tables = set()
@@ -2862,6 +2939,9 @@ class _EntityRun:
             self.columns_cache[cache_key] = copy.deepcopy(columns)
         if ctx.source_is_nosql and custom_config:
             columns = _with_exported_source_positions(columns, custom_config, table_name)
+        if custom_config:
+            columns = _apply_source_data_types(columns, custom_config, table_name, ctx.source_node_info,
+                                               self.source_type_notes)
         return columns
 
     def queue_partition_request(self, entity_name, partition_settings, max_partitions):
