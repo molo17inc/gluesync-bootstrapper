@@ -19,7 +19,6 @@
 # Copyright (C) 2025 MOLO17. All rights reserved.
 
 import os
-import re
 import json
 from dataclasses import dataclass
 import urllib.parse
@@ -586,16 +585,29 @@ def _normalize_data_length(col_type: str, data_length: int) -> int:
     return length_value
 
 
+def _type_size(data_type):
+    """The one size a date/time type carries (``datetime2(3)``, ``timestamp(6) with time zone``), else None.
+
+    An interval type's sizes are not a precision. Parsed without a regular expression: a type name comes from a file.
+    """
+    text = str(data_type or '').strip().lower()
+    open_at = text.find('(')
+    close_at = text.find(')', open_at + 1)
+    if text.startswith('interval') or open_at <= 0 or close_at < 0:
+        return None
+    size = text[open_at + 1:close_at].strip()
+    return int(size) if size.isdigit() else None
+
+
 def _temporal_precision(data_type, *stated):
     """The fractional-seconds precision of a date/time column of type ``data_type``, None when none is stated.
 
     A size the type carries (``datetime2(3)``) wins over the first of ``stated`` that is a number; 0 is a precision.
     An interval type's sizes are not a precision.
     """
-    text = str(data_type or '')
-    sized = re.match(r'^\s*[A-Za-z][A-Za-z0-9 ]*\(\s*(\d+)\s*\)\s*(?:with(?:out)? time zone)?\s*$', text, re.IGNORECASE)
-    if sized and not text.strip().lower().startswith('interval'):
-        return int(sized.group(1))
+    sized = _type_size(data_type)
+    if sized is not None:
+        return sized
     for value in stated:
         precision = None if value is None else _to_int(value, default=None)
         if precision is not None and precision >= 0:
