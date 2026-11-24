@@ -596,6 +596,10 @@ def _source_column_fields(scol: Dict[str, Any], ordinal: Optional[int]) -> Dict[
         # so leaving it out would silently restore a column the source's way
         # instead of the way it was backed up.
         "charSet": scol.get("charSet"),
+        # The type of the source column as the entity stores it, which `type` (the target column's) does not say. A
+        # source with no schema infers it from a data sample, and the user may have retyped a column by hand, so a
+        # restore that took it from discovery would give another one. Always written, null included, as charSet is.
+        "sourceDataType": _column_data_type(scol),
     }
 
 
@@ -1438,6 +1442,8 @@ def _multitable_column_metadata(columns: List[Dict[str, Any]]) -> List[Dict[str,
             # See the single table export above: written even when null so the
             # restore puts the column back exactly as it was backed up
             "charSet": col.get("charSet"),
+            # See _source_column_fields: the type of the source column, for the restore to give it back
+            "sourceDataType": _column_data_type(col),
         }
         column_metadata.append(col_meta)
     return column_metadata
