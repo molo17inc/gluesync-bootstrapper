@@ -234,7 +234,7 @@ EXPECTED_ORDER_RESULT = [
     ("ORDER_NUMBER", "NUMBER", 0, 10, 0, True, False),
     ("TAX_ID", "VARCHAR2", 1024, 9, 0, False, True),
     ("STATUS_CODE", "VARCHAR2", 1, 0, 0, False, True),
-    ("RECEIVED_DATE", "TIMESTAMP", 0, 8, 0, False, True),
+    ("RECEIVED_DATE", "TIMESTAMP", 0, 0, 0, False, True),
     ("CREATED_BY", "VARCHAR2", 10, 0, 0, False, True),
     ("CHANGE_MARK", "VARCHAR2", 1024, 0, 0, False, True),
     ("LAST_MODIFIED_DATE", "TIMESTAMP", 0, 0, 0, False, True),

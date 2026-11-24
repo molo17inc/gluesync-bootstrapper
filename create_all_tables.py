@@ -30,7 +30,7 @@ from utils.log import get_logger, create_log_file, log_success, log_failure, loc
 from utils.core_hub_client import CoreHubClient
 from commons import get_node_info, get_table_columns, fetch_core_hub, get_pipeline_config, get_pipeline_agents, \
     get_agent_tables, map_data_type, load_yaml_config, create_group, \
-    process_filter_clauses, canonicalize_target_type, is_length_type, coerce_document_key_config
+    process_filter_clauses, canonicalize_target_type, is_length_type, is_temporal_type, coerce_document_key_config
 from entity_mapping import ColumnNames, EntityMappingError, find_by_name, is_column_mappings, yaml_relations
 from pydantic import BaseModel, Field, PrivateAttr
 from typing import Optional
@@ -585,6 +585,36 @@ def _normalize_data_length(col_type: str, data_length: int) -> int:
     return length_value
 
 
+def _type_size(data_type):
+    """The one size a date/time type carries (``datetime2(3)``, ``timestamp(6) with time zone``), else None.
+
+    An interval type's sizes are not a precision. Parsed without a regular expression: a type name comes from a file.
+    """
+    text = str(data_type or '').strip().lower()
+    open_at = text.find('(')
+    close_at = text.find(')', open_at + 1)
+    if text.startswith('interval') or open_at <= 0 or close_at < 0:
+        return None
+    size = text[open_at + 1:close_at].strip()
+    return int(size) if size.isdigit() else None
+
+
+def _temporal_precision(data_type, *stated):
+    """The fractional-seconds precision of a date/time column of type ``data_type``, None when none is stated.
+
+    A size the type carries (``datetime2(3)``) wins over the first of ``stated`` that is a number; 0 is a precision.
+    An interval type's sizes are not a precision.
+    """
+    sized = _type_size(data_type)
+    if sized is not None:
+        return sized
+    for value in stated:
+        precision = None if value is None else _to_int(value, default=None)
+        if precision is not None and precision >= 0:
+            return precision
+    return None
+
+
 class _KeyLookup:
     """The key names of a table (and their alias), matched as given or case-insensitively."""
 
@@ -641,10 +671,18 @@ def _target_only_column_dto(idx: int, target_col, key_lookup: _KeyLookup, source
     )
     raw_length = col_data_length
     col_data_length = _normalize_data_length(mapped_type, col_data_length)
+    datetime_precision = None
+    if is_temporal_type(mapped_type):
+        # The precision of a date/time column is its fractional seconds, not a number of digits
+        stated = [target_col.get(key) for key in ('datetimePrec', 'numericPrecision', 'numPrec')] \
+            if isinstance(target_col, dict) else []
+        datetime_precision = _temporal_precision(mapped_type, *stated)
+        col_numeric_precision = col_numeric_scale = None
 
     return _mark_max(raw_length, Column(
         name=col_name,
-        dataType=format_column_type(mapped_type, col_data_length, col_numeric_precision, col_numeric_scale),
+        dataType=format_column_type(mapped_type, col_data_length, col_numeric_precision or 0, col_numeric_scale or 0),
+        datetimePrec=datetime_precision,
         id=idx,  # Use sequential IDs for target-only columns
         tableId=0,
         position=idx,
@@ -718,6 +756,12 @@ def _metadata_column_dto(idx: int, col_meta: dict, key_lookup: _KeyLookup, sourc
     raw_length = col_data_length
     col_data_length = _normalize_data_length(mapped_type, col_data_length)
     resolved_target_type = mapped_type
+    datetime_precision = None
+    if is_temporal_type(resolved_target_type):
+        # The plain numericPrecision of a date/time column is its fractional-seconds precision, 0 included
+        datetime_precision = _temporal_precision(
+            resolved_target_type, col_meta.get('datetimePrec'), _raw_prec)
+        col_numeric_precision = col_numeric_scale = None
 
     # YAML-defined keys are the bootstrapper source of truth for
     # target table creation.  When source metadata says a column is
@@ -726,7 +770,9 @@ def _metadata_column_dto(idx: int, col_meta: dict, key_lookup: _KeyLookup, sourc
     col_is_pk = key_lookup.is_primary_key(col_name) or bool(col_meta.get('isPK', col_meta.get('is_primary_key')))
     return _mark_max(raw_length, Column(
         name=col_name,
-        dataType=format_column_type(resolved_target_type, col_data_length, col_numeric_precision, col_numeric_scale),
+        dataType=format_column_type(resolved_target_type, col_data_length, col_numeric_precision or 0,
+                                    col_numeric_scale or 0),
+        datetimePrec=datetime_precision,
         id=column_id,
         tableId=0,
 
@@ -865,6 +911,14 @@ def _exported_column_dto(target_name: str, relation: dict, source_col, key_looku
     if numeric_precision == 0:
         numeric_precision = None
         numeric_scale = None
+    datetime_precision = None
+    if is_temporal_type(data_type):
+        # A date/time column has a fractional-seconds precision, which is the row's targetNumericPrecision; a row no
+        # source feeds states its own as numericPrecision; else it is the precision of the source column
+        datetime_precision = _temporal_precision(
+            data_type, row.get('targetNumericPrecision'),
+            row.get('numericPrecision') if source_col is None else None, source.get('datetimePrec'))
+        numeric_precision = numeric_scale = None
     is_pk = _to_bool(row.get('isPK'), default=False) or key_lookup.is_primary_key(target_name) \
         or any(key_lookup.is_primary_key(source_name) for source_name in relation['sources'])
     return _mark_max(raw_length, Column(
@@ -877,7 +931,8 @@ def _exported_column_dto(target_name: str, relation: dict, source_col, key_looku
         isNullable=_exported_nullable(row, source_col),
         charMaxLength=data_length,
         numPrec=numeric_precision,
-        numScale=numeric_scale
+        numScale=numeric_scale,
+        datetimePrec=datetime_precision
     ))
 
 
