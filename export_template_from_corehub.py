@@ -73,10 +73,17 @@ _COLUMN_DIMENSIONS = (
 )
 
 
+def _datetime_precision(col: Optional[Dict[str, Any]]) -> Optional[int]:
+    """The fractional-seconds precision a date/time column states, 0 included; None when it states none."""
+    value = _stated_column_attr(col or {}, "datetimePrec", "datetimePrecision")
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
 def _dimensions_of_type(tcol: Dict[str, Any]) -> Tuple[Tuple[str, str, str], ...]:
     """The dimensions that mean something for the type of the target column: the length for a length type, the
     precision and scale for a type that is neither that nor a temporal one. A target reports others for every column
-    (an Oracle NUMBER has a byte length of 22, a TIMESTAMP(6) a length of 11 and a scale of 6)."""
+    (an Oracle NUMBER has a byte length of 22, a TIMESTAMP(6) a length of 11 and a scale of 6). A temporal type has
+    none of them: its one dimension is the fractional-seconds precision (see :func:`_datetime_precision`)."""
     data_type = _column_data_type(tcol)
     if is_length_type(data_type):
         return _COLUMN_DIMENSIONS[:1]
@@ -85,14 +92,21 @@ def _dimensions_of_type(tcol: Dict[str, Any]) -> Tuple[Tuple[str, str, str], ...
     return _COLUMN_DIMENSIONS[1:]
 
 
-def _target_dimensions(row: Dict[str, Any], tcol: Dict[str, Any]) -> Dict[str, Any]:
+def _target_dimensions(row: Dict[str, Any], tcol: Dict[str, Any],
+                       scol: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """The ``target...`` keys for the dimensions of its type the target column states and the source side of ``row``
-    does not."""
+    does not. For a date/time column that is ``targetNumericPrecision``, its fractional-seconds precision, unless the
+    source column (``scol``) is a date/time one with the same."""
     differing = {}
     for row_key, new_key, legacy_key in _dimensions_of_type(tcol):
         stated = _stated_column_attr(tcol, new_key, legacy_key)
         if stated is not None and stated != row[row_key]:
             differing["target" + row_key[0].upper() + row_key[1:]] = stated
+    if is_temporal_type(_column_data_type(tcol)):
+        precision = _datetime_precision(tcol)
+        source_precision = _datetime_precision(scol) if is_temporal_type(_column_data_type(scol or {})) else None
+        if precision is not None and precision != source_precision:
+            differing["targetNumericPrecision"] = precision
     return differing
 
 
@@ -573,6 +587,8 @@ def _unfed_column_fields(tcol: Dict[str, Any]) -> Dict[str, Any]:
     needs, and its position, as for a column a source feeds."""
     fields = {key: value for key, new_key, legacy_key in _dimensions_of_type(tcol)
               if (value := _column_attr(tcol, new_key, legacy_key, 0))}
+    if is_temporal_type(_column_data_type(tcol)) and _datetime_precision(tcol) is not None:
+        fields["numericPrecision"] = _datetime_precision(tcol)
     target_position = _target_position(tcol)
     if target_position is not None:
         fields["targetPosition"] = target_position
@@ -599,7 +615,8 @@ def _source_column_fields(scol: Dict[str, Any], ordinal: Optional[int]) -> Dict[
     }
 
 
-def _target_column_fields(row: Dict[str, Any], tcol: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def _target_column_fields(row: Dict[str, Any], tcol: Optional[Dict[str, Any]],
+                          scol: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """The fields of the target column ``tcol`` a mapping row carries next to those of its source column."""
     fields: Dict[str, Any] = {}
     # The position of the target column, which is not the one of its source column when the entity was created from
@@ -613,9 +630,10 @@ def _target_column_fields(row: Dict[str, Any], tcol: Optional[Dict[str, Any]]) -
     if isinstance(target_nullable, bool):
         fields["targetIsNullable"] = target_nullable
     # The length, precision and scale of the target column, when they are not the ones of its source column: they
-    # are those of the column a restore creates in a table that does not exist yet.
+    # are those of the column a restore creates in a table that does not exist yet. A date/time column states its
+    # fractional-seconds precision instead (targetNumericPrecision).
     if tcol:
-        fields.update(_target_dimensions(row, tcol))
+        fields.update(_target_dimensions(row, tcol, scol))
     return fields
 
 
@@ -635,7 +653,7 @@ def _mapping_row(scol: Optional[Dict[str, Any]], tcol: Optional[Dict[str, Any]],
             f"or re-create the entity to populate the type."
         )
     row.update(_source_column_fields(scol, ordinal))
-    row.update(_target_column_fields(row, tcol))
+    row.update(_target_column_fields(row, tcol, scol))
     return row
 
 
