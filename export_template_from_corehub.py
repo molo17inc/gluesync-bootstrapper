@@ -33,6 +33,7 @@ import yaml
 from commons import fetch_core_hub, get_table_columns, is_length_type, is_temporal_type, catalog_type_for_agent_tag, \
     embedded_agent_categories, agent_types_by_tag, sql_or_nosql
 import transactions_audit
+from courier_routine_entities import ROUTINE_TABLE_TYPE
 from field_function_utils import apply_field_functions_to_column_mappings, normalize_expression_for_yaml
 from entity_mapping import read_entry, relations_of, yaml_rows
 from utils.chronos_client import ChronosClient, chronos_candidate_urls
@@ -521,6 +522,12 @@ def build_schemas_from_entities(
         source_ae, target_ae = extract_source_and_target(ent)
         if not source_ae or not target_ae:
             logger.warning(f"Entity {entity_name} missing source/target agent entities. Skipping.")
+            continue
+
+        if (target_ae.get("table") or {}).get("type") == ROUTINE_TABLE_TYPE:
+            # The target is a stored procedure or function: the table list cannot express it. The route's ``call`` in
+            # the HTTP Source's courier block carries this entity (courier_export), and a restore builds it from there.
+            logger.info(f"Entity {entity_name} is built on an EXECUTE route: exported as the call of its route, not as a table")
             continue
 
         # Track effective source/target *schema* type based on entity type

@@ -62,6 +62,7 @@ RETURN_COLUMN = "_return"
 PIECE_COLUMNS = (RESULT_COLUMN, ROWS_COLUMN, VALUE_COLUMN, RETURN_COLUMN)
 ROUTINE_KINDS = ("PROCEDURE", "FUNCTION")
 DEFINITION_PROPERTY = "courierRoutine"
+ROUTINE_TABLE_TYPE = "ROUTINE"
 DEFAULT_GROUP = "_default"
 VALUE_MODES = ("IN", "INOUT")
 RETURN_MODES = ("OUT", "INOUT")
@@ -216,6 +217,67 @@ def build_entity(route: Dict[str, Any], call_cfg: Dict[str, Any], collection: st
     }
     return {"entityId": entity_id, "entityName": name, "agentEntities": [source, target_entity], "groupId": DEFAULT_GROUP,
             "warnings": plan["warnings"]}
+
+
+def _matrix_names(source: Dict[str, Any], target: Dict[str, Any]) -> List[tuple]:
+    """``(source column, target column)`` names of the columns an entity's mapping matrix connects."""
+    source_names = {c.get("id"): c.get("name") for c in _columns_of(source)}
+    target_names = {c.get("id"): c.get("name") for c in _columns_of(target)}
+    pairs = []
+    for row in (target.get("entityType") or {}).get("columnsMappingMatrix") or []:
+        for source_id in (row.get("sourceColumnIds") or [])[:1]:
+            pairs.extend((source_names.get(source_id), target_names.get(target_id)) for target_id in row.get("targetColumnIds") or [])
+    return pairs
+
+
+def entity_call(entity: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """``{"collection": ..., "route": ..., "call": ...}`` of an entity built on an EXECUTE route, read back from the
+    entity Core Hub stores (its target is a table of type ROUTINE); None for any other entity. The ``call`` is the one
+    :func:`build_entity` was given, with every parameter's binding stated, so that a restore builds the same entity. Pure."""
+    sides = {(a.get("entityType") or {}).get("type"): a for a in entity.get("agentEntities") or [] if isinstance(a, dict)}
+    source, target = sides.get("Source"), sides.get("Target")
+    table = (target or {}).get("table") or {}
+    if not source or table.get("type") != ROUTINE_TABLE_TYPE:
+        return None
+    try:
+        definition = _definition(target)
+    except CourierConfigError as error:
+        _logger.warning("Entity '%s': %s", entity.get("entityName"), error)
+        return None
+    location = source.get("entityObject") or {}
+    pairs = _matrix_names(source, target)
+    fed = {t: s for s, t in pairs if s != RESPONSE_COLUMN and t}
+    response = next((t for s, t in pairs if s == RESPONSE_COLUMN and t), None)
+    call_cfg: Dict[str, Any] = {
+        "schema": table.get("schema"),
+        "name": table.get("name"),
+        "kind": _text(definition.get("kind")).upper() or ROUTINE_KINDS[0],
+        "parameters": {p.get("name"): fed.get(p.get("name")) for p in definition.get("parameters") or []
+                       if isinstance(p, dict) and _mode(p) in VALUE_MODES},
+    }
+    if response:
+        call_cfg["response"] = response
+    if entity.get("entityName") and entity.get("entityName") != location.get("collection"):
+        call_cfg["entityName"] = entity["entityName"]
+    return {"collection": location.get("scope"), "route": location.get("collection"), "call": call_cfg}
+
+
+def attach_calls(block: Dict[str, Any], entities: List[Dict[str, Any]]) -> int:
+    """Puts the ``call`` of each EXECUTE route of an exported HTTP Source ``block`` onto the route, from the pipeline's
+    ``entities``; returns how many routes got one. A route with no entity built on it keeps none."""
+    calls = {}
+    for entity in entities:
+        found = entity_call(entity) if isinstance(entity, dict) else None
+        if found:
+            calls[(found["collection"], found["route"])] = found["call"]
+    attached = 0
+    for collection in block.get("collections") or []:
+        for endpoint in collection.get("endpoints") or []:
+            call_cfg = calls.get((collection.get("name"), endpoint.get("name"))) if isinstance(endpoint.get("routine"), dict) else None
+            if call_cfg:
+                endpoint["call"] = call_cfg
+                attached += 1
+    return attached
 
 
 def _kind(call: FetchFn, token: str, pipeline_id: str, target_agent_id: str, call_cfg: Dict[str, Any]) -> str:
