@@ -23,10 +23,12 @@ if str(PROJECT_ROOT) not in sys.path:
 from courier_routine_entities import (  # noqa: E402
     ROUTINE_TARGET_PATH,
     ROUTINES_PATH,
+    attach_calls,
     binding_matches,
     build_entity,
     create_routine_entities,
     default_output,
+    entity_call,
     plan_call,
 )
 from courier_support import CourierConfigError  # noqa: E402
@@ -149,6 +151,67 @@ class BuildEntityTests(unittest.TestCase):
         with self.assertRaises(CourierConfigError) as raised:
             build_entity(ROUTE, {"schema": "shop", "name": "place_order"}, "shop", SOURCE, [], TARGET, routine)
         self.assertIn("does not list route 'Place order'", str(raised.exception))
+
+
+class EntityCallTests(unittest.TestCase):
+    """The ``call`` is read back from the entity Core Hub stores, so that an export carries it and a restore rebuilds it."""
+
+    def stored(self, call, definition=None, route=ROUTE):
+        return build_entity(route, call, "shop", SOURCE, SOURCE_COLUMNS, TARGET, target(definition), entity_id="e1")
+
+    def test_the_call_states_the_routine_every_binding_and_the_response(self):
+        found = entity_call(self.stored({"schema": "shop", "name": "place_order"}))
+
+        self.assertEqual(found["collection"], "shop")
+        self.assertEqual(found["route"], "Place order")
+        self.assertEqual(found["call"], {
+            "schema": "shop", "name": "place_order", "kind": "PROCEDURE",
+            "parameters": {"p_customer": "customer", "p_amount": "AMOUNT", "p_note": None}, "response": "_result",
+        })
+
+    def test_building_the_entity_from_the_call_read_back_gives_the_same_entity(self):
+        for call, definition in [
+            ({"schema": "shop", "name": "place_order"}, None),
+            ({"schema": "shop", "name": "place_order", "entityName": "Orders", "response": "p_total",
+              "parameters": {"p_note": "X-Tenant", "p_amount": None}}, None),
+            ({"schema": "shop", "name": "place_order", "kind": "FUNCTION"}, {"kind": "FUNCTION", "parameters": [
+                {"name": "p_customer"}, {"name": "p_status", "mode": "INOUT"}]}),
+        ]:
+            with self.subTest(call=call):
+                route = {**ROUTE, "routine": {"answer": {"body": "OUTPUT"}}}
+                stored = self.stored(call, definition, route)
+                read_back = entity_call(stored)["call"]
+                self.assertEqual(self.stored(read_back, definition, route), stored)
+
+    def test_a_function_and_a_renamed_entity_are_read_back(self):
+        definition = {"kind": "FUNCTION", "parameters": [{"name": "p_customer"}]}
+        route = {**ROUTE, "routine": {"answer": {"body": "OUTPUT"}}}
+        call = entity_call(self.stored({"schema": "shop", "name": "place_order", "entityName": "Orders"}, definition, route))["call"]
+        self.assertEqual((call["kind"], call["response"], call["entityName"]), ("FUNCTION", "_return", "Orders"))
+
+    def test_an_ordinary_entity_or_an_unreadable_routine_has_no_call(self):
+        stored = self.stored({"schema": "shop", "name": "place_order"})
+        ordinary = copy.deepcopy(stored)
+        ordinary["agentEntities"][1]["table"]["type"] = "TABLE"
+        broken = copy.deepcopy(stored)
+        broken["agentEntities"][1]["customProperties"]["courierRoutine"] = "{nope"
+        self.assertIsNone(entity_call(ordinary))
+        self.assertIsNone(entity_call(broken))
+        self.assertIsNone(entity_call({"entityName": "alone", "agentEntities": []}))
+
+    def test_a_call_goes_onto_the_execute_route_of_its_collection_only(self):
+        stored = self.stored({"schema": "shop", "name": "place_order"})
+        block = {"collections": [
+            {"name": "shop", "endpoints": [{"name": "Place order", "routine": {}}, {"name": "plain"}]},
+            {"name": "other", "endpoints": [{"name": "Place order", "routine": {}}]},
+        ]}
+
+        self.assertEqual(attach_calls(block, [stored, {"entityName": "x"}]), 1)
+
+        shop, other = block["collections"]
+        self.assertEqual(shop["endpoints"][0]["call"]["name"], "place_order")
+        self.assertNotIn("call", shop["endpoints"][1])
+        self.assertNotIn("call", other["endpoints"][0])
 
 
 class FakeCoreHub:
