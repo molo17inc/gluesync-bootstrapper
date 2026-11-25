@@ -754,9 +754,13 @@ The primary key of the endpoint, as discovered by the pipeline, is the first req
 
 ### HTTP Source agent (Courier inbound)
 
-The same agent (`agentTag: "courier-agent"`) also runs as a **source**: the **HTTP Source**. It serves Courier *inbound* write endpoints on its own listener (`inboundPort`, 8090 by default, inside the CoreHub container). Every `POST`, `PUT` or `DELETE` request is bound into one pipeline row, queued on disk and answered `202 Accepted`; the pipeline then delivers it to the target. CoreHub exposes the endpoints to the pipeline as schema = inbound collection, table = endpoint, column = binding, so the usual YAML table configuration applies with the collection as source schema.
+The same agent (`agentTag: "courier-agent"`) also runs as a **source**: the **HTTP Source**. Since Core Hub 2.3.2.2 an inbound **route** is defined free of any pipeline (verb, path, bindings) in a **collection**, and the collection is attached to exactly one HTTP Source, the one whose `customHostCredentials.inboundCollection` names it. Core Hub serves every route on its own inbound server (`GLUESYNC_COURIER_PORT`, 8090 by default) under `/api-inbound/<basePath><path>`, and the pipeline of the HTTP Source decides what each route does:
 
-An inbound *pipeline endpoint* names the pipeline and the HTTP Source agent that serve it, so it can only exist once the agent has been added to the pipeline: the bootstrapper creates it right after that, from the `courier` block of the SOURCE agent entry. It can also create the **Personal API Tokens** clients call the endpoints with.
+- a **write** (`POST` = CREATE, `PUT` = UPDATE, `PATCH` = partial UPDATE, `DELETE`) becomes one row of every entity built on it, queued on disk and answered `202 Accepted`; the pipeline then delivers it to its target;
+- a **read** (`GET`: READ when the path has a placeholder, LIST otherwise) answers from the target table of the one entity built on it, each `responseFields` entry under its own name;
+- an **EXECUTE** calls the stored procedure or function that is the target of the one entity built on it (see *Stored procedures* below).
+
+Every route is a table of the HTTP Source (schema = collection, table = route, columns = a write's bindings, a read's filters and response fields), so the usual YAML table configuration maps writes and reads onto target tables. The bootstrapper creates the collections and routes from the `courier` block of the SOURCE agent entry, and the **Personal API Tokens** clients call them with. The listener settings of Core Hub 2.3.2.1 and older (`inboundPort`, `inboundAllowPlainHttp`, `inboundTls*`, `serverThreads`, …) are no longer read: the bootstrapper drops them, with a warning.
 
 #### Configuration example
 
@@ -765,7 +769,7 @@ An inbound *pipeline endpoint* names the pipeline and the HTTP Source agent that
   "agentType": "SOURCE",
   "agentTag": "courier-agent",
   "hostCredentials": { "connectionName": "HTTP Source" },
-  "customHostCredentials": { "inboundPort": 8090 },
+  "customHostCredentials": { "inboundCollection": "shop", "maxBodyKb": 64 },
   "courier": {
     "collections": [
       {
@@ -787,13 +791,19 @@ An inbound *pipeline endpoint* names the pipeline and the HTTP Source agent that
             ]
           },
           {
-            "name": "events",
-            "path": "/events",
-            "bodyType": "FORM_URLENCODED",
-            "bindings": [
-              { "name": "kind", "location": "BODY" },
-              { "name": "X-Source", "location": "HEADER", "required": false }
-            ]
+            "name": "order",
+            "httpVerb": "GET",
+            "path": "/orders/{id}",
+            "bindings": [{ "name": "id", "location": "PATH", "type": "NUMBER" }],
+            "responseFields": [{ "name": "id", "type": "NUMBER" }, "status", { "name": "amount", "type": "NUMBER" }]
+          },
+          {
+            "name": "place_order",
+            "httpVerb": "POST",
+            "path": "/place-order",
+            "bindings": [{ "name": "customer" }, { "name": "amount", "type": "NUMBER" }],
+            "routine": { "timeoutSeconds": 30, "answer": { "body": "ALL", "format": "JSON" } },
+            "call": { "schema": "shop", "name": "place_order", "kind": "PROCEDURE" }
           }
         ]
       }
@@ -805,7 +815,7 @@ An inbound *pipeline endpoint* names the pipeline and the HTTP Source agent that
 }
 ```
 
-With the table configuration (source schema = collection, source table = endpoint, source column = binding):
+With the table configuration (source schema = collection, source table = route, source column = binding or response field):
 
 ```yaml
 shop:
@@ -813,7 +823,7 @@ shop:
   tables:
     whitelist:
       - orders
-      - events
+      - order
     custom:
       orders:
         keys:
@@ -824,25 +834,34 @@ shop:
           - amount: amount
           - customer.city: city   # nested body field
           # `op` only chooses the operation: leave it unmapped
-      events:
+      order:                      # the read: its filters and response fields onto the columns they answer from
+        name: orders
         keys:
-          - _seq                  # no key binding: the request sequence is the key
+          - id
         columns:
-          - _seq: seq
-          - kind: kind
-          - X-Source: source
+          - id: id
+          - status: status
+          - amount: amount
 ```
 
-Clients then call `http://<corehub-host>:8090/api-inbound/shop/orders/42?op=Update` with `Authorization: Bearer <token>`.
+Clients then call `http://<corehub-host>:8090/api-inbound/shop/orders/42?op=Update` (or `GET .../orders/42`, `POST .../place-order`) with `Authorization: Bearer <token>`.
 
 #### What the bootstrapper does
 
 1. After adding the agent to the pipeline and before configuring it, it creates the **tokens** of `courier.tokens` (`POST /api-tokens`, permission scope `gluesync.https_agent`, scoped to this pipeline and this agent, and to the collections the token is for, so that it calls no other inbound collection). Active tokens with the same name are revoked first, so each run rotates them. The plaintext is written **only** to `outputFile` (JSON `{"token", "tokenId", "name", "pipelineId", "agentId"}`, owner-only permissions), never to the log: CoreHub shows it only once.
-2. It creates or updates the **collections** (`/api-agent/inbound/collections`) and their **pipeline endpoints** (`/api-agent/inbound/endpoints`), matched by name, with `pipelineId` and `agentId` set to this pipeline and this HTTP Source. A collection with `"allowlist": true` admits only the tokens listed in its `allowedTokenIds` plus the tokens of this run that name it; `blockedTokenIds` are never admitted. CoreHub saves a collection only while an active token with the `gluesync.https_agent` scope, admitted by its lists, can call it: the tokens of this run are created first for that reason, and a collection with no token in `courier.tokens` is saved only if such a token already exists (otherwise the bootstrapper stops and says so). A create whose id CoreHub already stores (409, a definition renamed in the UI) is repeated as an update.
-3. It fills `customHostCredentials.inboundCollection` with the collection name when exactly one collection is configured and the property is not set.
+2. It creates or updates the **collections** (`/api-agent/inbound/collections`) and their **routes** (`/api-agent/inbound/endpoints`), matched by name; a route names no pipeline or agent. A collection with `"allowlist": true` admits only the tokens listed in its `allowedTokenIds` plus the tokens of this run that name it; `blockedTokenIds` are never admitted. CoreHub saves a collection only while an active token with the `gluesync.https_agent` scope, admitted by its lists, can call it: the tokens of this run are created first for that reason, and a collection with no token in `courier.tokens` is saved only if such a token already exists (otherwise the bootstrapper stops and says so). A create whose id CoreHub already stores (409, a definition renamed in the UI) is repeated as an update.
+3. It sets `customHostCredentials.inboundCollection` to the collection the HTTP Source serves: the one the configuration names, else the only collection of the block. A block with several collections must name one; the others are created attached to nothing (their routes answer 404). Core Hub attaches a collection to one HTTP Source only: when the HTTP Source of another pipeline holds it (a run that failed earlier leaves its pipeline behind), the bootstrapper stops before writing anything, and the restore does the same.
 4. Source entities are created as `NoSqlEntity` (the agent is object-store-like, see `EMBEDDED_AGENT_CATEGORIES`); `SOURCE_TYPE=NoSQL` remains the recommended explicit setting in kits.
+5. Once the entities of the tables list exist, and before the pipeline starts, it creates the entity of every EXECUTE route with a `call` (`courier_routine_entities.py`).
 
-The `courier` block is validated first with the rules CoreHub applies to pipeline endpoints, so a wrong configuration fails before anything is sent.
+The `courier` block is validated first with the rules CoreHub applies to routes, so a wrong configuration fails before anything is sent.
+
+#### Stored procedures (EXECUTE routes)
+
+An EXECUTE route is the API's contract: its bindings (a JSON body, top-level keys only; PATH, QUERY and HEADER bindings too) and `routine`, the options of the call and its return type. The entity built on it is the implementation: its target is the routine, each IN or INOUT parameter takes the binding mapped onto it (none: NULL), and one output of the routine is mapped onto the route's `_response` column and returned as it is (no field function, no mapping function). Discovery lists no routine, so the bootstrapper builds that entity from the route's `call`, not from the tables list: it reads the routine on the pipeline's target agent (`GET /api-agent/inbound/routines/target`), the route's table from the HTTP Source's discovery, and saves the entity (`PUT /pipelines/<id>/config/entities`; an entity of the tables list with the same name is replaced, so give it another one). Core Hub checks the call when it saves it: a binding onto an OUT parameter, or an output that does not give the route's return type, is refused.
+
+- `routine`: `{"readOnly" (false; GET is then allowed too and the call is rolled back), "timeoutSeconds" (30, 1 to 3600), "ownTransaction" (false; autocommit for a routine that commits by itself), "answer": {"body": "ALL"|"ROWS"|"VALUE"|"OUTPUT" (ALL), "format": "JSON"|"XML" (JSON)}}`. A route with `routine` or `call` is an EXECUTE (`POST` only, `GET` too when read-only); a form body is refused.
+- `call`: `{"schema" (required; on MySQL and MariaDB the database), "name" (required), "kind": "PROCEDURE"|"FUNCTION" (read from the catalog when left out), "parameters": {"<parameter>": "<binding>"|null} (by default each parameter takes the binding of its name, ignoring case and a `p_` prefix), "response": "_result"|"_rows"|"_value"|"_return"|"<OUT parameter>" (by default the one the return type names: `_result` for ALL, `_rows` for ROWS, `_value` for VALUE, `_return` or the only OUT parameter for OUTPUT), "entityName" (the route's name)}`. Only a route of the collection the HTTP Source serves can have one.
 
 #### Courier inbound block reference
 
@@ -850,19 +869,22 @@ The `courier` block is validated first with the rules CoreHub applies to pipelin
   - `name` (required): the collection name, used as the source **schema** of the pipeline.
   - `basePath` (defaults to the name): the first URL segment, `/api-inbound/<basePath>/...`; one segment of letters, digits, `.`, `_`, `~`, `-` (no `/`), unique across collections.
   - `allowlist` (defaults to `false`), `allowedTokenIds` (token ids admitted on top of the tokens of this run), `blockedTokenIds` (token ids never admitted; a token cannot be on both lists), `description`, `tags`.
-  - `endpoints[]`:
-    - `name` (required): the endpoint name, used as the source **table** of the pipeline.
-    - `httpVerb` (alias `method`, defaults to `POST`): `POST`, `PUT` or `DELETE`. `PATCH` is refused: a row carries every binding and replaces the target row.
-    - `operation` (defaults from the verb): `CREATE` (POST), `UPDATE` (PUT), `DELETE` (DELETE).
-    - `path` (alias `pathTemplate`, defaults to `/`): each `{placeholder}` is a whole segment and has a required PATH binding with the same name.
-    - `bodyType` (defaults to `JSON` for POST/PUT, `NONE` otherwise): `JSON`, `FORM_URLENCODED` (alias `FORM`) or `NONE`.
-    - `bindings[]`: `{"name", "location": "PATH"|"QUERY"|"HEADER"|"BODY" (defaults to BODY), "type": "STRING"|"NUMBER"|"BOOLEAN" (defaults to STRING), "required" (defaults to true), "defaultValue", "description"}`. Every binding becomes a source column. A dotted BODY name (`customer.city`) reads a nested field; an object or array arrives as raw JSON text. Names are unique ignoring case, `_seq` is reserved, `Authorization`, `Proxy-Authorization` and `Cookie` cannot be bound, BODY bindings need POST or PUT.
-    - `keyBindings`: the bindings forming the row key (each required). Defaults to the required PATH bindings; without any, the synthetic `_seq` column (the request sequence) is the key, so every request is a new row. `UPDATE`, `DELETE` and an operation binding need a real key.
-    - `operationBinding`: a STRING binding whose value (`Insert`, `Update`, `Delete`, any case) overrides the operation of the endpoint.
+  - `endpoints[]` (the routes):
+    - `name` (required): the route name, used as the source **table** of the pipeline.
+    - `httpVerb` (alias `method`, defaults to `POST`): `POST`, `PUT`, `PATCH`, `DELETE` or `GET`.
+    - `operation` (defaults from the verb): `CREATE` (POST), `UPDATE` (PUT, PATCH), `DELETE` (DELETE), `READ` (GET with a path placeholder), `LIST` (GET without), `EXECUTE` (a route with `routine` or `call`). Two routes of a collection cannot share a verb and a path shape.
+    - `path` (alias `pathTemplate`, defaults to `/`): each `{placeholder}` is a whole segment and has a required PATH binding with the same name. A READ needs one, a LIST takes none.
+    - `bodyType` (defaults to `JSON` for POST/PUT/PATCH, `NONE` otherwise): `JSON`, `FORM_URLENCODED` (alias `FORM`) or `NONE`.
+    - `bindings[]`: `{"name", "location": "PATH"|"QUERY"|"HEADER"|"BODY" (defaults to BODY), "type": "STRING"|"NUMBER"|"BOOLEAN" (defaults to STRING), "required" (defaults to true), "defaultValue", "description"}`. Every binding becomes a source column. A dotted BODY name (`customer.city`) reads a nested field; an object or array arrives as raw JSON text. Names are unique ignoring case, `_seq` and `_response` are reserved, `Authorization`, `Proxy-Authorization` and `Cookie` cannot be bound, BODY bindings need POST, PUT or PATCH. A read takes PATH and QUERY bindings only (its filters; a READ PATH only). A `defaultValue` must fit its binding: a STRING at most 255 characters and a NUMBER a NUMERIC(18,2) on a write or a read, a number of at most 38 digits on either side of the point on an EXECUTE.
+    - `responseFields[]` (reads only, at least one): `{"name", "type" (STRING)}` or a bare name; a filter and a response field of the same name are one column, spelled and typed alike.
+    - `keyBindings`: the bindings forming the row key (each required). Defaults to the required PATH bindings; without any, the synthetic `_seq` column (the request sequence) is the key of a write, so every request is a new row. `UPDATE`, `DELETE` and an operation binding need a real key, and so does a read (a filter or response field: it also orders a LIST).
+    - `operationBinding`: a STRING binding whose value (`Insert`, `Update`, `Delete`, any case) overrides the operation of the write; a PATCH takes none.
+    - `maxRows` (defaults to 200, 1 to 10000): the rows a LIST answers at most.
+    - `routine`, `call`: see *Stored procedures*.
 - `tokens[]`: `{"name" (required), "outputFile" (required), "expiresInDays", "collections" (defaults to every collection of the block)}`. A token joins the allowlist of its `collections` and is scoped to them (`collectionScopes`, CoreHub 2.3.2.1 with gluesync-kotlin !2954): it is refused on every other collection.
 
-**Export.** `python courier_export.py --pipeline <id> [--include-secrets]` prints the `courier` block of every HTTP agent of a pipeline, in this same shape and with the ids of the stored definitions, ready for `config.json`. The Gluesync Automator's backup carries the same block in `agents-config.yaml`, and its restore provisions it before configuring the agent. Personal API Tokens aren't exported: restoring one would revoke the token the clients use. A restore onto another Core Hub needs a `tokens` entry, or a token created there first. The auth secret of an outbound collection is never returned by Core Hub: a restore onto the Core Hub that stores the collection keeps it, onto another one it has to be written into the block. Outbound header values are masked unless `--include-secrets` (SUPER_ADMIN). A masked value sent back keeps the stored one only on the Core Hub that stores the endpoint, while the collection stays on the same origin; anywhere else the block is refused before anything is written, naming each header whose value has to be typed in. An HTTP Source exports the one collection it is attached to (`customHostCredentials.inboundCollection`) with all its endpoints. Restoring a block next to the original needs its collection renamed, name and `basePath` (the Automator round trip does it); the Automator's restore refuses, before writing anything, to take an endpoint away from a pipeline that still exists (`"force": true` moves them anyway), while a bootstrapper run, which always creates a new pipeline, moves them and logs a warning. If the Courier export of an agent fails, the Automator's backup logs a warning and goes on without its `courier` block.
-- `force` (defaults to `false`): CoreHub refuses (409) to change an endpoint that entities of another pipeline read; `true` changes it anyway, and those entities break.
+**Export.** `python courier_export.py --pipeline <id> [--include-secrets]` prints the `courier` block of every HTTP agent of a pipeline, in this same shape and with the ids of the stored definitions, ready for `config.json`; for an HTTP Source, the collection it is attached to (`customHostCredentials.inboundCollection`) with all its routes (without `call`: the routine an EXECUTE route calls is its entity's, exported with the other entities). The Gluesync Automator's backup carries the same block in `agents-config.yaml`, and its restore provisions it before configuring the agent. Personal API Tokens aren't exported: restoring one would revoke the token the clients use. A restore onto another Core Hub needs a `tokens` entry, or a token created there first. The auth secret of an outbound collection is never returned by Core Hub: a restore onto the Core Hub that stores the collection keeps it, onto another one it has to be written into the block. Outbound header values are masked unless `--include-secrets` (SUPER_ADMIN). A masked value sent back keeps the stored one only on the Core Hub that stores the endpoint, while the collection stays on the same origin; anywhere else the block is refused before anything is written, naming each header whose value has to be typed in. A collection is served by one HTTP Source: the Automator's restore refuses, before writing anything, to attach a collection that the HTTP Source of a pipeline that still exists holds (a copy next to the original needs its collection renamed, name and `basePath`, as the Automator round trip does). The HTTP Source provisioning needs Core Hub 2.3.2.2 or later. If the Courier export of an agent fails, the Automator's backup logs a warning and goes on without its `courier` block.
+- `force` (defaults to `false`): CoreHub refuses (409) to change a route in a way that breaks an entity built on it; `true` changes it anyway, and those entities break. It never takes a collection away from the HTTP Source that holds it.
 
 The entity of an endpoint that only deletes (a `DELETE` endpoint binding just its key) must map only the key columns: the relational targets refuse a row that does not cover every target column of the entity. An endpoint that writes all three operations through an operation binding does not have the problem.
 

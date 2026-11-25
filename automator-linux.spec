@@ -24,6 +24,7 @@ hiddenimports = [
     'commons',
     'courier_support',
     'courier_inbound_support',
+    'courier_routine_entities',
     'courier_export',
     'utils.log',
     'utils.core_hub_client',

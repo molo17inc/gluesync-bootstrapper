@@ -5,6 +5,7 @@ restored from the export and exported again, as the Automator and its round trip
 """
 
 import copy
+import json
 import logging
 import sys
 import tempfile
@@ -29,6 +30,16 @@ from courier_inbound_support import (  # noqa: E402
     INBOUND_ENDPOINTS_PATH,
     provision_courier_agent,
 )
+from export_template_from_corehub import build_schemas_from_entities  # noqa: E402
+from courier_routine_entities import (  # noqa: E402
+    DISCOVERY_COLUMNS_PATH,
+    ENTITIES_CONFIG_PATH,
+    ROUTINE_TARGET_PATH,
+    build_entity,
+    create_routine_entities,
+    entity_call,
+)
+from courier_inbound_support import routine_calls  # noqa: E402
 from courier_support import COLLECTIONS_PATH, ENDPOINTS_PATH, CourierConfigError  # noqa: E402
 
 PIPELINE, AGENT = "p1", "http-source-1"
@@ -46,6 +57,7 @@ class StatefulCoreHub:
         self.tokens = []
         self.endpoint_params = []
         self.pipelines = [{"pipelineId": PIPELINE}, {"pipelineId": RESTORED_PIPELINE}]
+        self.entities = []  # what GET /pipelines/{id}/entities answers
         self.writes = []
 
     def __call__(self, path, method="GET", token=None, body=None, params=None, headers=None):
@@ -54,6 +66,8 @@ class StatefulCoreHub:
             self.writes.append((method, path))
         if path == "/pipelines":
             return copy.deepcopy(self.pipelines)
+        if path.startswith("/pipelines/") and path.endswith("/entities"):
+            return [{"entity": copy.deepcopy(e)} for e in self.entities]
         if path == API_TOKENS_PATH:
             if method == "GET":
                 return copy.deepcopy(self.tokens)
@@ -72,6 +86,10 @@ class StatefulCoreHub:
             if base == COLLECTIONS_PATH:  # Core Hub never returns the auth secret
                 return [{**c, "auth": {k: v for k, v in c["auth"].items() if k not in ("token", "password", "value")}}
                         for c in copy.deepcopy(list(items.values()))]
+            if base == INBOUND_COLLECTIONS_PATH:  # Core Hub reports the HTTP Source of a pipeline it knows only
+                known = {p["pipelineId"] for p in self.pipelines}
+                return [{**c, "owner": c.get("owner") if (c.get("owner") or {}).get("pipelineId") in known else None}
+                        for c in copy.deepcopy(list(items.values()))]
             return copy.deepcopy(list(items.values()))
         stored = items.get(body["id"])
         if method == "POST" and stored is not None:
@@ -84,6 +102,8 @@ class StatefulCoreHub:
             for header in saved.get("headers") or []:
                 if header["valueTemplate"] == self.MASK:
                     header["valueTemplate"] = old.get(header["name"], "")
+        if stored is not None and "owner" in stored:
+            saved["owner"] = stored["owner"]  # computed by Core Hub from the HTTP Sources, never sent
         items[body["id"]] = saved
         return saved
 
@@ -105,6 +125,11 @@ def inbound_config(output_dir):
                     {"name": "op", "location": "QUERY", "required": False, "defaultValue": "Insert"},
                     {"name": "status", "location": "BODY", "required": False},
                 ]},
+                {"name": "order", "httpVerb": "GET", "path": "/orders/{id}",
+                 "bindings": [{"name": "id", "location": "PATH", "type": "NUMBER"}],
+                 "responseFields": [{"name": "id", "type": "NUMBER"}, "status"]},
+                {"name": "place", "path": "/place-order", "bindings": ["customer"],
+                 "routine": {"answer": {"body": "OUTPUT"}}, "call": {"schema": "shop", "name": "place_order"}},
             ]},
             {"name": "billing", "basePath": "billing", "endpoints": [
                 {"name": "invoices", "httpVerb": "POST", "path": "/invoices/{id}",
@@ -139,28 +164,49 @@ def outbound_config():
     ]}
 
 
+def attach(hub, pipeline_id, agent):
+    """Provisions an HTTP Source entry and configures the agent, as main.py does: Core Hub then reports the collection
+    its ``inboundCollection`` names as attached to it (the collection's ``owner``)."""
+    custom = provision_courier_agent("jwt", pipeline_id, agent, fetch=hub)
+    handle = custom["inboundCollection"]
+    for collection in hub.store[INBOUND_COLLECTIONS_PATH].values():
+        if collection.get("owner") == {"pipelineId": pipeline_id, "agentId": agent["agentId"]}:
+            collection["owner"] = None
+        if handle in (collection["name"], collection["basePath"], collection["id"]):
+            collection["owner"] = {"pipelineId": pipeline_id, "agentId": agent["agentId"]}
+    return custom
+
+
 class InboundExportTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.hub = StatefulCoreHub()
-        provision_courier_agent("jwt", PIPELINE, source_agent(courier=inbound_config(self.tmp.name)), fetch=self.hub)
+        attach(self.hub, PIPELINE, source_agent(courier=inbound_config(self.tmp.name), collection="shop"))
 
     def tearDown(self):
         self.tmp.cleanup()
 
-    def test_the_export_is_the_config_with_ids_and_without_tokens(self):
+    def restore(self, pipeline_id, agent_id, block, logger=None):
+        agent = source_agent(agent_id, courier=copy.deepcopy(block))
+        return provision_courier_agent("jwt", pipeline_id, agent, fetch=self.hub, logger=logger)
+
+    def test_the_export_is_the_served_collection_with_its_routes_ids_and_without_tokens(self):
         block = export_courier_block("jwt", PIPELINE, source_agent(collection="shop"), fetch=self.hub)
 
         self.assertNotIn("tokens", block)
         (shop,) = block["collections"]
         self.assertEqual((shop["name"], shop["basePath"], shop["allowlist"]), ("shop", "shop", True))
         self.assertEqual(shop["allowedTokenIds"], ["token-1"])
-        orders = shop["endpoints"][0]
+        orders, order, place = shop["endpoints"]
         self.assertEqual(orders["path"], "/orders/{id}")
         self.assertEqual(orders["operationBinding"], "op")
         self.assertEqual(orders["bindings"][1], {"name": "op", "location": "QUERY", "type": "STRING", "required": False,
                                                  "defaultValue": "Insert"})
         self.assertEqual(orders["bindings"][0], {"name": "id", "location": "PATH", "type": "NUMBER"})
+        self.assertNotIn("routine", orders)
+        self.assertEqual(order["responseFields"], [{"name": "id", "type": "NUMBER"}, {"name": "status", "type": "STRING"}])
+        self.assertEqual(place["routine"]["answer"], {"body": "OUTPUT", "format": "JSON"})
+        self.assertNotIn("call", place, "the routine an EXECUTE route calls is its entity's")
         self.assertTrue(shop["id"] and orders["id"])
 
     def test_the_attached_collection_is_exported_with_all_its_endpoints_whoever_they_serve(self):
@@ -174,7 +220,7 @@ class InboundExportTests(unittest.TestCase):
         block = export_courier_block("jwt", "another-pipeline", source_agent(collection="shop"), fetch=self.hub)
 
         self.assertEqual([c["name"] for c in block["collections"]], ["shop"], "only the collection it is attached to")
-        self.assertEqual([e["name"] for e in block["collections"][0]["endpoints"]], ["orders", "free"])
+        self.assertEqual([e["name"] for e in block["collections"][0]["endpoints"]], ["orders", "order", "place", "free"])
         self.assertEqual(self.hub.endpoint_params[-1], {"collectionId": block["collections"][0]["id"]})
 
     def test_the_attached_collection_is_found_by_id_name_or_base_path(self):
@@ -198,63 +244,155 @@ class InboundExportTests(unittest.TestCase):
     def test_a_restore_onto_the_pipeline_it_was_exported_from_gives_the_same_export_and_creates_no_token(self):
         exported = export_courier_block("jwt", PIPELINE, source_agent(collection="shop"), fetch=self.hub)
 
-        provision_courier_agent("jwt", PIPELINE, source_agent(courier=copy.deepcopy(exported)), fetch=self.hub,
-                                keep_other_pipelines=True)
+        custom = self.restore(PIPELINE, AGENT, exported)
 
+        self.assertEqual(custom["inboundCollection"], "shop")
         self.assertEqual(export_courier_block("jwt", PIPELINE, source_agent(collection="shop"), fetch=self.hub), exported)
         self.assertEqual(len(self.hub.tokens), 2, "the restore creates no token and revokes none")
         self.assertEqual(len(self.hub.store[INBOUND_COLLECTIONS_PATH]), 2, "the same collections are updated in place")
 
-    def test_a_restore_into_another_pipeline_never_takes_the_endpoints_of_a_live_one(self):
+    def test_a_restore_into_another_pipeline_never_takes_the_collection_of_a_live_one(self):
         exported = export_courier_block("jwt", PIPELINE, source_agent(collection="shop"), fetch=self.hub)
         writes_before = len(self.hub.writes)
-        restored = source_agent(RESTORED_AGENT, courier=copy.deepcopy(exported))
 
         with self.assertRaises(CourierConfigError) as raised:
-            provision_courier_agent("jwt", RESTORED_PIPELINE, restored, fetch=self.hub, keep_other_pipelines=True)
+            self.restore(RESTORED_PIPELINE, RESTORED_AGENT, exported)
 
-        self.assertIn("'shop/orders' (pipeline p1)", str(raised.exception))
+        self.assertIn("'shop' is served by HTTP Source http-source-1 of pipeline p1", str(raised.exception))
         self.assertEqual(len(self.hub.writes), writes_before, "refused before anything is written")
-        self.assertEqual(export_courier_block("jwt", PIPELINE, source_agent(collection="shop"), fetch=self.hub), exported,
-                         "the original pipeline keeps its endpoints")
 
-    def test_a_restore_takes_the_endpoints_of_a_deleted_pipeline_or_of_a_live_one_with_force(self):
+    def test_a_restore_or_a_run_after_the_original_pipeline_is_gone_takes_the_collection(self):
         exported = export_courier_block("jwt", PIPELINE, source_agent(collection="shop"), fetch=self.hub)
-        served_by = lambda: {e["pipelineId"] for e in self.hub.store[INBOUND_ENDPOINTS_PATH].values()
-                             if e["collectionId"] == exported["collections"][0]["id"]}
         self.hub.pipelines = [{"pipelineId": RESTORED_PIPELINE}]
+        custom = self.restore(RESTORED_PIPELINE, RESTORED_AGENT, exported)
+        self.assertEqual(custom["inboundCollection"], "shop")
 
-        provision_courier_agent("jwt", RESTORED_PIPELINE, source_agent(RESTORED_AGENT, courier=copy.deepcopy(exported)),
-                                fetch=self.hub, keep_other_pipelines=True)
-        self.assertEqual(served_by(), {RESTORED_PIPELINE})
-
-        self.hub.pipelines = [{"pipelineId": PIPELINE}, {"pipelineId": RESTORED_PIPELINE}]
-        back = copy.deepcopy(exported)
-        back["force"] = True
-        provision_courier_agent("jwt", PIPELINE, source_agent(courier=back), fetch=self.hub, keep_other_pipelines=True)
-        self.assertEqual(served_by(), {PIPELINE})
-        self.assertEqual(export_courier_block("jwt", PIPELINE, source_agent(collection="shop"), fetch=self.hub), exported)
-
-    def test_a_bootstrapper_run_moves_the_endpoints_to_its_new_pipeline_and_says_so(self):
+    def test_a_bootstrapper_run_never_takes_the_collection_of_a_live_pipeline_either(self):
         exported = export_courier_block("jwt", PIPELINE, source_agent(collection="shop"), fetch=self.hub)
-
-        log = mock.Mock()
-        provision_courier_agent("jwt", RESTORED_PIPELINE, source_agent(RESTORED_AGENT, courier=copy.deepcopy(exported)),
-                                fetch=self.hub, logger=log)
-
-        moved = [c.args for c in log.warning.call_args_list if "moves from pipeline" in c.args[0]]
-        self.assertEqual([(a[1], a[2], a[3]) for a in moved], [("shop", "orders", PIPELINE)])
-        self.assertEqual(export_courier_block("jwt", RESTORED_PIPELINE, source_agent(RESTORED_AGENT, collection="shop"), fetch=self.hub), exported)
+        tokens = copy.deepcopy(self.hub.tokens)
+        block = {**copy.deepcopy(exported), "tokens": [{"name": "shop-client", "outputFile": f"{self.tmp.name}/x.json"}]}
+        with self.assertRaises(CourierConfigError):
+            self.restore(RESTORED_PIPELINE, RESTORED_AGENT, block)
+        self.assertEqual(self.hub.tokens, tokens, "the live pipeline's token is not revoked")
 
     def test_an_endpoint_renamed_in_the_ui_is_found_by_the_id_of_the_block(self):
         exported = export_courier_block("jwt", PIPELINE, source_agent(collection="shop"), fetch=self.hub)
         orders_id = exported["collections"][0]["endpoints"][0]["id"]
         self.hub.store[INBOUND_ENDPOINTS_PATH][orders_id]["name"] = "orders-renamed"
-        restored = source_agent(RESTORED_AGENT, courier=copy.deepcopy(exported))
 
-        with self.assertRaises(CourierConfigError):
-            provision_courier_agent("jwt", RESTORED_PIPELINE, restored, fetch=self.hub, keep_other_pipelines=True)
-        self.assertEqual(self.hub.store[INBOUND_ENDPOINTS_PATH][orders_id]["pipelineId"], PIPELINE)
+        self.restore(PIPELINE, AGENT, exported)
+
+        self.assertEqual(self.hub.store[INBOUND_ENDPOINTS_PATH][orders_id]["name"], "orders")
+        self.assertEqual(len(self.hub.store[INBOUND_ENDPOINTS_PATH]), 4, "updated in place, not duplicated")
+
+
+ROUTINE_DEFINITION = {"parameters": [{"name": "p_customer", "mode": "IN"}, {"name": "p_total", "mode": "OUT"}]}
+ROUTINE_TARGET = {
+    "table": {"id": 900, "schema": "shop", "name": "place_order", "type": "ROUTINE"},
+    "columns": [{"id": 901 + i, "tableId": 900, "name": n} for i, n in enumerate(["p_customer", "p_total", "_result"])],
+    "customProperties": {"courierRoutine": json.dumps(ROUTINE_DEFINITION)},
+}
+ROUTE_COLUMNS = [{"id": 801 + i, "tableId": 800, "name": n} for i, n in enumerate(["customer", "_response", "_seq"])]
+
+
+class RoutineEntityHub:
+    """The routine-entity endpoints of Core Hub for the restored pipeline: it answers the routine, the route's table and
+    the entities already there, and keeps what is saved."""
+
+    def __init__(self, collection):
+        self.collection = collection
+        self.saved = []
+
+    def __call__(self, path, method="GET", token=None, body=None, params=None, headers=None):
+        if method == "PUT":
+            self.saved.extend(body["entities"])
+            return body
+        if path == ROUTINE_TARGET_PATH:
+            return copy.deepcopy(ROUTINE_TARGET)
+        if path.endswith("/discovery/columns"):
+            self.discovery = params
+            return {"columns": copy.deepcopy(ROUTE_COLUMNS)}
+        return []
+
+
+class ExecuteRouteRoundTripTests(unittest.TestCase):
+    """An EXECUTE route's entity is exported as the route's ``call`` and restored from it, under a renamed collection."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.hub = StatefulCoreHub()
+        attach(self.hub, PIPELINE, source_agent(courier=inbound_config(self.tmp.name), collection="shop"))
+        route = {"name": "place", "bindings": [{"name": "customer"}], "routine": {"answer": {"body": "OUTPUT"}}}
+        original_call = {"schema": "shop", "name": "place_order"}
+        self.entity = build_entity(route, original_call, "shop", "src", ROUTE_COLUMNS, "tgt", ROUTINE_TARGET, entity_id="e1")
+        self.entity.pop("warnings")
+        self.expected = {"schema": "shop", "name": "place_order", "kind": "PROCEDURE",
+                         "parameters": {"p_customer": "customer"}, "response": "p_total"}
+        self.hub.entities = [self.entity]
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def exported_place(self):
+        block = export_courier_block("jwt", PIPELINE, source_agent(collection="shop"), fetch=self.hub)
+        return block, next(e for e in block["collections"][0]["endpoints"] if e["name"] == "place")
+
+    def test_the_export_gives_the_route_the_call_read_back_from_its_entity(self):
+        block, place = self.exported_place()
+
+        self.assertEqual(place["call"], self.expected)
+        others = [e for e in block["collections"][0]["endpoints"] if e["name"] != "place"]
+        self.assertTrue(others and all("call" not in e for e in others), "only an EXECUTE route has a call")
+
+    def test_a_route_without_an_entity_is_exported_without_a_call(self):
+        self.hub.entities = []
+        self.assertNotIn("call", self.exported_place()[1])
+
+    def test_a_pipeline_without_an_execute_route_reads_no_entities(self):
+        hub = StatefulCoreHub()
+        config = inbound_config(self.tmp.name)
+        config["collections"][0]["endpoints"].pop()
+        attach(hub, PIPELINE, source_agent(courier=config, collection="shop"))
+        seen = []
+        export_courier_block("jwt", PIPELINE, source_agent(collection="shop"),
+                             fetch=lambda path, **kwargs: seen.append(path) or hub(path, **kwargs))
+        self.assertFalse([p for p in seen if p.endswith("/entities")])
+
+    def test_the_restore_of_the_renamed_copy_builds_the_entity_on_the_routine_and_exports_the_same_call(self):
+        block, _ = self.exported_place()
+        copied = rt._copy_inbound_block(block)  # the Automator round trip's `<name>-roundtrip` copy
+        renamed = copied["collections"][0]["name"]
+        self.assertNotEqual(renamed, "shop")
+        agent = source_agent(RESTORED_AGENT, courier=copied)
+
+        calls = routine_calls(agent)
+        self.assertEqual([(c["collection"], c["route"]["name"], c["call"]) for c in calls], [(renamed, "place", self.expected)])
+
+        restored = RoutineEntityHub(renamed)
+        names = create_routine_entities("jwt", RESTORED_PIPELINE, [{**agent, "agentId": "src2"}, {"agentId": "tgt2", "agentType": "TARGET"}],
+                                        fetch=restored)
+
+        self.assertEqual(names, ["place"])
+        (saved,) = restored.saved
+        source, routine = saved["agentEntities"]
+        self.assertEqual(source["entityObject"]["scope"], renamed)
+        self.assertEqual((routine["table"]["type"], routine["table"]["name"]), ("ROUTINE", "place_order"))
+        self.assertEqual(restored.discovery, {"tableschema": renamed, "tablename": "place"})
+        self.assertEqual(entity_call(saved)["call"], self.expected, "exporting the restored pipeline gives the call back")
+
+
+    def test_the_table_list_export_leaves_the_routine_entity_to_the_call_of_its_route(self):
+        ordinary = {"entityId": "e2", "entityName": "events", "agentEntities": [
+            {"type": "SingleTable", "entityType": {"type": "Source"}, "table": {"schema": "shop", "name": "events"}, "columns": []},
+            {"type": "SingleTable", "entityType": {"type": "Target"}, "table": {"schema": "public", "name": "events", "type": "TABLE"},
+             "columns": []}]}
+
+        schemas = build_schemas_from_entities([self.entity, ordinary], {})
+
+        tables = [t for schema in schemas.values() for t in schema["tables"]["whitelist"]]
+        self.assertNotIn("place", tables)
+        self.assertNotIn("place_order", tables)
+        self.assertIn("events", tables)
 
 
 class OutboundExportTests(unittest.TestCase):
@@ -449,7 +587,6 @@ class AutomatorCourierTests(unittest.TestCase):
 
         self.assertEqual(custom, {"outboundCollection": "demo-api"})
         self.assertEqual(provision.call_args.args[2]["agentId"], "new-id")
-        self.assertTrue(provision.call_args.kwargs["keep_other_pipelines"], "a restore never takes a live pipeline's endpoints")
 
     def test_an_agent_without_a_block_is_left_as_it_is(self):
         with mock.patch.object(corehub, "provision_courier_agent") as provision:

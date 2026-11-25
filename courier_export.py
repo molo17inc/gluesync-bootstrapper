@@ -44,6 +44,11 @@ Ids are kept, so a restore updates the same definitions instead of creating new 
   origin; anywhere else Core Hub has no value to keep, so the restore refuses the block until the values are typed in.
 - An HTTP Source's collection belongs to that one HTTP Source: the Automator round trip restores a renamed copy of it
   (name and base path suffixed) with a token of its own, and maps the names back before comparing.
+- An inbound collection is served by one HTTP Source: the Automator does not restore it into another pipeline while
+  the HTTP Source that holds it still exists.
+- The entity built on an EXECUTE route (the routine it calls) is not exported with the pipeline's other entities (the
+  table list cannot express a routine as a target): the route carries it as its ``call``, read back from the entity, and a
+  restore builds the entity from it as provisioning does (``courier_routine_entities``).
 
 Command line, for every Courier agent of a pipeline (JSON on stdout, ``{agentType:agentTag:agentId: block}``)::
 
@@ -62,6 +67,7 @@ import os
 import sys
 from typing import Any, Callable, Dict, List, Optional
 
+from courier_routine_entities import attach_calls
 from courier_support import (
     COLLECTIONS_PATH,
     ENDPOINTS_PATH,
@@ -136,7 +142,11 @@ def _inbound_endpoint(endpoint: Dict[str, Any]) -> Dict[str, Any]:
         "bodyType": endpoint.get("bodyType"),
         "operationBinding": endpoint.get("operationBinding"),
         "keyBindings": endpoint.get("keyBindings"),
+        "maxRows": endpoint.get("maxRows") if endpoint.get("operation") == "LIST" else None,
         "bindings": [_binding(b) for b in _list(endpoint.get("bindings"))],
+        "responseFields": [_without_empty({k: f.get(k) for k in ("name", "type", "description")})
+                           for f in _list(endpoint.get("responseFields"))],
+        "routine": endpoint.get("routine") if isinstance(endpoint.get("routine"), dict) else None,
     })
 
 
@@ -232,6 +242,15 @@ def export_outbound_block(call: FetchFn, token: str, agent: Dict[str, Any], incl
 # Entry points
 # ---------------------------------------------------------------------------
 
+def _attach_routine_calls(call: FetchFn, token: str, pipeline_id: str, block: Dict[str, Any]) -> None:
+    """Gives each EXECUTE route of ``block`` the ``call`` of the entity built on it (none read when no route is EXECUTE)."""
+    if not any(isinstance(e.get("routine"), dict) for c in block["collections"] for e in c.get("endpoints") or []):
+        return
+    stored = call(f"/pipelines/{pipeline_id}/entities", method="GET", token=token)
+    entities = [item.get("entity", item) for item in stored if isinstance(item, dict)] if isinstance(stored, list) else []
+    attach_calls(block, entities)
+
+
 def export_courier_block(token: str, pipeline_id: str, agent: Dict[str, Any], fetch: Optional[FetchFn] = None,
                          include_secrets: bool = False) -> Optional[Dict[str, Any]]:
     """The ``courier`` block of ``agent`` (a Core Hub or config.json agent entry of ``pipeline_id``), or None.
@@ -244,7 +263,10 @@ def export_courier_block(token: str, pipeline_id: str, agent: Dict[str, Any], fe
         from commons import fetch_core_hub  # pylint: disable=import-outside-toplevel
         fetch = fetch_core_hub
     if is_http_source_agent(agent):
-        return export_inbound_block(fetch, token, agent)
+        block = export_inbound_block(fetch, token, agent)
+        if block is not None:
+            _attach_routine_calls(fetch, token, pipeline_id, block)
+        return block
     return export_outbound_block(fetch, token, agent, include_secrets=include_secrets)
 
 
